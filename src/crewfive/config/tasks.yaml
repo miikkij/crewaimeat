@@ -1,0 +1,37 @@
+# =====================================================================
+# Taskit. Hierarkisessa prosessissa taskeja EI sidota agenttiin –
+# CEO-manageri delegoi osat sopiville osastopäälliköille.
+# {request} korvautuu CLI:stä annetulla tehtävällä (kickoff inputs).
+# =====================================================================
+
+company_directive:
+  description: >
+    Yrityksen hallitus on antanut johtoryhmälle seuraavan direktiivin:
+
+    "{request}"
+
+    Toimi johtoryhmän vetäjänä. Analysoi direktiivi, pilko se relevantteihin
+    osa-alueisiin (teknologia, markkinointi, talous, operaatiot) ja delegoi
+    kunkin osan oikealle osastopäällikölle:
+      - Teknologia ja toteutettavuus  -> CTO
+      - Markkinointi ja go-to-market  -> CMO
+      - Talous, budjetti, kannattavuus -> CFO
+      - Operaatiot ja toteutus         -> COO
+    Pyydä jokaiselta konkreettinen tuotos. Jos tarvitaan ajantasaista
+    markkina-, kilpailija- tai faktatietoa, käytä web-hakutyökalua.
+    Haasta osastojen vastaukset ja yhdistä ne yhdeksi yhtenäiseksi
+    johtoryhmän raportiksi. Vältä epämääräisyyttä: jokaisella toimella
+    on oltava omistaja, aikataulu ja arvioitu kustannus tai vaikutus.
+  expected_output: >
+    Viimeistelty johtoryhmän raportti Markdown-muodossa, jossa on osiot:
+
+    1. **Tiivistelmä** (Executive Summary) – 3–5 lauseen ydin.
+    2. **Strateginen analyysi** – mitä direktiivi tarkoittaa, mahdollisuudet
+       ja keskeiset oletukset.
+    3. **Osastosuunnitelmat** – erikseen Teknologia (CTO), Markkinointi (CMO),
+       Talous (CFO) ja Operaatiot (COO), kukin konkreettisine toimineen.
+    4. **Riskit ja niiden lieventäminen** – taulukkona (riski | vaikutus | toimenpide).
+    5. **90 päivän toimintasuunnitelma** – taulukkona (toimenpide | omistaja | aikataulu).
+    6. **Mittarit (KPI:t)** – mitä seurataan onnistumisen arvioimiseksi.
+
+    Kirjoita raportti samalla kielellä kuin direktiivi oli annettu.

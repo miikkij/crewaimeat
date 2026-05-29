@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+dist/
+
+# Salaisuudet
+.env
+
+# Crew-ajojen tulokset (säilytetään kansio, ei tiedostoja)
+output/*
+!output/.gitkeep
+
+# CrewAI / työkalujen välimuistit
+.crewai/
+db/
+*.log
