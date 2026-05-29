@@ -1,7 +1,7 @@
-"""Kertakäyttöinen koe: AIMEAT Liaison Agent -pattern crewfive-LLM:llä.
+"""Kanoninen AIMEAT Liaison Agent -kruu (aimeat-crewai 0.2.2, Step 3 -mallin mukaan).
 
-Ajaa liaison-agentin, joka hoitaa Hello Integrationin company-crew-identiteetillä
-AIMEAT-noden MCP-pinnan kautta (stdio: spawnaa `aimeat connect serve --agent company-crew`).
+Liaison + domain-agentit (researcher, writer). Liaison hoitaa Hello Integrationin
+ja kirjoittaa lopputuloksen AIMEATin muistiin. Domain-agentit eivät tiedä AIMEATista.
 """
 
 from __future__ import annotations
@@ -16,53 +16,74 @@ for s in (sys.stdout, sys.stderr):
     if r:
         r(encoding="utf-8")
 
-import os  # noqa: E402
-
-from crewai import Crew, Task  # noqa: E402
+from crewai import Agent, Crew, Task  # noqa: E402
 from aimeat_crewai import create_liaison_agent, stdio_params  # noqa: E402
+
+from crewfive.crew import _web_tools  # noqa: E402
 from crewfive.llm import get_llm  # noqa: E402
 
+AGENT_NAME = "demo-crew"
 llm = get_llm()
 
-# Windows-workaround: stdio_params(command="aimeat") kaatuu WinError 193:een,
-# koska npm-asennettu `aimeat` on .cmd-shim jota mcp:n stdio_client ei osaa
-# CreateProcessata suoraan. Ajetaan se cmd.exe:n kautta.
-if os.name == "nt":
-    from mcp import StdioServerParameters
+with create_liaison_agent(
+    mcp_server_params=stdio_params(agent_name=AGENT_NAME),
+    agent_name=AGENT_NAME,
+    llm=llm,
+    verbose=True,
+) as liaison:
+    # 0.2.2-verifiointi
+    sk = getattr(liaison, "skills", None)
+    print(f"=== agent.skills: {[getattr(x,'name',x) for x in (sk or [])]} (None? {sk is None}) ===", file=sys.stderr)
+    print(f"=== backstory length: {len(liaison.backstory or '')} chars ===", file=sys.stderr)
 
-    params = StdioServerParameters(
-        command="cmd",
-        args=["/c", "aimeat", "connect", "serve", "--agent", "company-crew"],
+    researcher = Agent(
+        role="Researcher",
+        goal="Find concrete, current facts on the requested topic",
+        backstory="Perusteellinen tutkija joka käyttää web-hakua faktojen varmistamiseen.",
+        tools=_web_tools(),
+        llm=llm,
+        verbose=True,
     )
-else:
-    params = stdio_params(agent_name="company-crew")
-
-with create_liaison_agent(mcp_server_params=params, llm=llm, verbose=True) as liaison:
-    # Listaa mitä MCP-työkaluja liaison sai (vastaa kysymykseen tool_filteristä)
-    tool_names = [t.name for t in liaison.tools]
-    print("=== LIAISON TOOLS (" + str(len(tool_names)) + ") ===", file=sys.stderr)
-    print(", ".join(sorted(tool_names)), file=sys.stderr)
-
-    onboard = Task(
-        description=(
-            "Complete AIMEAT Hello Integration for this crew. "
-            "Call aimeat_onboarding_status first. Finish any missing onboarding "
-            "steps in the correct order (identify_platform with platform='crewai', "
-            "confirm_skill_installed, capabilities_report, memory_write for "
-            "publish_config, confirm_directives_read). Then use aimeat_task_list to "
-            "find the queued 'Onboarding verification' test task and complete it via "
-            "aimeat_task_complete with a short summary. Finally call "
-            "aimeat_onboarding_status again and report the final state."
-        ),
-        expected_output=(
-            "A short report listing which onboarding steps are now 'passed' and "
-            "confirmation that the test task was completed."
-        ),
-        agent=liaison,
+    writer = Agent(
+        role="Writer",
+        goal="Write a tight, useful summary from the research",
+        backstory="Ammattikirjoittaja joka tiivistää olennaisen.",
+        llm=llm,
+        verbose=True,
     )
 
-    crew = Crew(agents=[liaison], tasks=[onboard], verbose=True)
+    crew = Crew(
+        agents=[liaison, researcher, writer],
+        tasks=[
+            Task(
+                description=(
+                    "Check AIMEAT onboarding status. Complete any pending step via the "
+                    "matching aimeat_onboarding_* tool. Report the final state."
+                ),
+                expected_output="Final onboarding state and list of passed steps.",
+                agent=liaison,
+            ),
+            Task(
+                description="Find 2 concrete facts about budgeting apps for students.",
+                expected_output="Two concrete facts with brief sources.",
+                agent=researcher,
+            ),
+            Task(
+                description="Write a 2-sentence summary from the research findings.",
+                expected_output="A 2-sentence summary.",
+                agent=writer,
+            ),
+            Task(
+                description=(
+                    "Write the final crew output (the writer's summary) to AIMEAT memory "
+                    f"under the key 'demo.{AGENT_NAME}.latest_output' with visibility owner."
+                ),
+                expected_output="Confirmation of the memory write (key + status).",
+                agent=liaison,
+            ),
+        ],
+    )
+
     result = crew.kickoff()
-
-    print("\n=== LIAISON RESULT ===")
-    print(result.raw)
+    print("\n=== CREW RESULT ===")
+    print(result.raw if hasattr(result, "raw") else result)

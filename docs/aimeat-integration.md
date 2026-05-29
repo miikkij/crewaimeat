@@ -1,124 +1,104 @@
-# AIMEAT-integraatio: crewfive task-runnerina
+# crewfive ↔ AIMEAT -integraatio
 
-Tämä dokumentti kuvaa, miten crewfive-kruut kytketään **AIMEATiin** task-runnereina.
+Miten crewfive-kruut kytketään **AIMEAT**-noodiin. Kaksi tapaa; **Liaison Agent**
+on suositeltu.
 
-## Mitä integraatio tekee
+> Syvempi teoria ja framework-agnostinen vastaavuuskartta: AIMEATin oma
+> [`docs/integrations/crewai.md`](https://github.com/miikkij/aimeat-protocol/blob/main/docs/integrations/crewai.md).
 
-`aimeat connect serve` voi käynnistää crewfive-kruun **aliprosessina** kun agentille
-saapuu tehtävä. Serve antaa tehtävän env-muuttujina, kruu ajaa, tulostaa lopputuloksen
-yhtenäisenä **Deliverable-JSON:na**, ja serve postaa sen takaisin AIMEATiin tehtävän
-valmistumiseksi. Käyttäjä (esim. Claude Desktopissa) näkee vain alun ja lopputuloksen –
-ei CrewAI:n sisäistä agenttikeskustelua.
+## crewfiven rakenne
 
-## Miksi ei Python-pakettia
+| Kruu | Entrypoint | Prosessi | Agentit |
+|------|-----------|----------|---------|
+| **Company** | `crewfive.runner` | hierarkinen | CEO (manageri) + CTO, CMO, CFO, COO |
+| **Kevyt** | `crewfive.demo` | sekventiaalinen | researcher → analyst → writer |
 
-Integraatio **ei** vaadi AIMEAT-Python-pakettia eikä riippuvuutta crewfiveen.
-Pelkkä **subprocess + CLI** riittää:
-- Serve → kruu: env-muuttujat ja stdout/tiedosto.
-- Kruu → AIMEAT (valinnainen): komentorivikutsu `aimeat connect call <tool> --json '{...}'`.
+Roolit: [src/crewfive/config/agents.yaml](../src/crewfive/config/agents.yaml). LLM:
+OpenRouter/xAI ([src/crewfive/llm.py](../src/crewfive/llm.py)). Web-haku: Tavily.
 
-## Env-sopimus
+## Tapa A — AIMEAT Liaison Agent (suositus)
 
-Serve asettaa aliprosessille nämä muuttujat (crewfive lukee ne moduulissa
-[src/crewfive/aimeat.py](../src/crewfive/aimeat.py) funktiolla `read_runner_env()`):
+`aimeat-crewai`-paketti tarjoaa **liaison-agentin**, joka lisätään kruuhun. Se hoitaa
+KAIKEN AIMEAT-kommunikaation (Hello Integration, capabilities, task-elinkaari,
+memory, telemetria) MCP-pinnan kautta — muut agentit tekevät vain domain-työnsä.
 
-| Muuttuja | Merkitys |
-|----------|----------|
-| `AIMEAT_TASK_PROMPT` | Tehtävän kuvaus (käytetään kruun inputtina) |
-| `AIMEAT_TASK_ID` | Tehtävän id (käytetään muistiinpanon avaimissa) |
-| `AIMEAT_AGENT_NAME` | Agentin nimi |
-| `AIMEAT_TOKEN` | Token (varattu tulevaa käyttöä varten) |
+```python
+from crewai import Crew, Task
+from aimeat_crewai import create_liaison_agent, stdio_params
+from crewfive.llm import get_llm
 
-Jos `AIMEAT_TASK_PROMPT` puuttuu, skriptit käyttävät CLI-argumenttia tai oletustehtävää,
-joten ne ovat ajettavissa myös standalone-testinä.
-
-## Deliverable-muoto
-
-Molemmat kruut tulostavat saman JSON-rakenteen:
-
-```json
-{
-  "title": "...",
-  "summary": "...",
-  "sections": [{ "heading": "...", "content": "..." }],
-  "recommendations": ["..."]
-}
+params = stdio_params(agent_name="company-crew")   # spawnaa `aimeat connect serve`
+with create_liaison_agent(mcp_server_params=params, agent_name="company-crew",
+                          llm=get_llm(), verbose=True) as liaison:
+    crew = Crew(agents=[liaison, ...], tasks=[...])
+    crew.kickoff()
 ```
 
-- `CREW_OUTPUT_FILE`-env asetettuna → JSON kirjoitetaan myös tuohon tiedostoon
-  (`output_capture: file:<path>`).
-- JSON tulostuu aina myös stdoutin viimeiseksi (`output_capture: stdout`).
+Toimiva esimerkki: [try_liaison.py](../try_liaison.py).
 
-## Kaksi kruua
-
-| Kruu | Entrypoint | Prosessi | Avaimet | output_capture |
-|------|-----------|----------|---------|----------------|
-| **Kevyt** (3 agenttia) | `python -m crewfive.demo` | sequential | OpenRouter + Tavily (crewfiven `.env`) | `stdout` |
-| **Company** (5 agenttia) | `python -m crewfive.runner` | hierarchical (CEO delegoi) | OpenRouter + Tavily (crewfiven `.env`) | `file:<path>` |
-
-Molemmat ovat aitoja toteutuksia: oikea LLM (`get_llm()`) ja oikea Tavily-haku (jos
-`TAVILY_API_KEY` asetettu). Kevyt kruu on suoraviivainen sekventiaalinen putki
-(researcher → analyst → writer); company-kruu on hierarkinen ja tuottaa runsaammin
-välitulostetta → suositellaan tiedostokaappausta puhtaan JSON:n saamiseksi.
-
-### Standalone-testaus (ilman serveä)
+### Ajo tyhjästä asennuksesta
 
 ```powershell
-# Kevyt 3 agentin kruu (lukee avaimet crewfiven .env:stä):
-$env:AIMEAT_TASK_PROMPT="Tee pieni markkinointisuunnitelma"
-uv run python -m crewfive.demo
+# 1) crewfive-riippuvuudet + liaison-paketti
+python -m uv sync
+python -m uv pip install aimeat-crewai
 
-# Company-kruu:
-$env:AIMEAT_TASK_PROMPT="Laadi Q3 go-to-market-suunnitelma"
-$env:CREW_OUTPUT_FILE="output/deliverable.json"
-uv run python -m crewfive.runner
+# 2) AIMEAT-connector (globaali)
+npm install -g aimeat@latest
+
+# 3) Rekisteröi kruu AIMEAT-agentiksi task-runner-moodissa
+aimeat connect add --agent company-crew --mode task-runner --url https://aimeat.io --owner <owner>
+#   -> hyväksy selaimessa: <node>/v1/agents/verify  (Profile -> Agents)
+
+# 4) Täytä avaimet
+copy .env.example .env   # OPENROUTER_API_KEY, TAVILY_API_KEY
+
+# 5) Aja liaison-demo
+uv run python try_liaison.py
 ```
 
-## Per-agent config (serve)
+Verifioi serveriltä: `aimeat connect call aimeat_onboarding_status --agent company-crew --json '{}'`
+→ `status: completed`, 7 askelta passed.
 
-Esimerkit kansiossa [examples/aimeat/](../examples/aimeat/):
-- [demo-crew.config.yaml](../examples/aimeat/demo-crew.config.yaml)
-- [marketing-crew.config.yaml](../examples/aimeat/marketing-crew.config.yaml)
+### Mitä liaison kirjoittaa AIMEATiin
 
-Sijoitetaan tiedostoon `~/.aimeat/agents/<agent>/config.yaml` (kun serven
-task-runner-moodi on julkaistu). **Turvavaroitus:** `runner.command` exec'ataan
-sellaisenaan – luota vain omaan `~/.aimeat/`-sisältöösi (sama foot-gun kuin
-`wake.command`).
+| Avain / kohde | Sisältö |
+|---------------|---------|
+| `agents.config.<agent>.runtime` | `{ runtime: "crewai", version: <crewai-versio> }` (publish_config-askel) |
+| Onboarding test task | merkitään `done` (accept + complete) |
+| (capabilities, telemetria) | raportoidaan onboardingin yhteydessä |
 
-## Miten kruu kutsuu AIMEATia takaisin
+> `crewfive.runner` (task-runner-subprocess, ks. Tapa B) kirjoittaa lisäksi
+> best-effort -muistiinpanot avaimiin `crews/company/tasks/<task_id>/started`
+> ja `.../result` ([src/crewfive/aimeat.py](../src/crewfive/aimeat.py)).
 
-Kesken ajon kruu voi kirjoittaa muistiinpanon AIMEATiin (best-effort) funktiolla
-`write_memory_note()` ([aimeat.py](../src/crewfive/aimeat.py)), joka ajaa:
+### Suositukset (tuotanto)
+- **`tool_filter`**: liaison saa oletuksena ~95 MCP-työkalua (mm. wallet/admin/consent).
+  Rajaa tarpeellisiin: `create_liaison_agent(..., tool_filter=[...])`.
+- Merkitse yksi agentti `primary: true` (`~/.aimeat/agents/<agent>/config.yaml`)
+  poistaaksesi serven "no primary" -varoituksen.
 
-```bash
-aimeat connect call aimeat_memory_write --json '{"key":"...","value":{...},"visibility":"private","tags":[...]}'
-```
+## Tapa B — task-runner-subprocess
 
-`aimeat_memory_write`-parametrit: pakolliset `key` (string) ja `value` (mikä tahansa
-JSON), valinnaiset `visibility` (`private|owner|group|public`), `ttl_hours` (number),
-`tags` (array). Jos `aimeat`-CLI:tä ei löydy PATHista tai kutsu epäonnistuu, se
-ohitetaan eikä kruun ajoa kaadeta. Autentikointi tapahtuu AIMEAT-CLI:n omasta
-konfiguraatiosta (`~/.aimeat/`), ei tästä prosessista.
+`aimeat connect serve` käynnistää crewfive-kruun aliprosessina kun tehtävä saapuu;
+kruu lukee env-muuttujat, ajaa, tulostaa JSON-deliverablen stdoutiin. Per-agent
+config + env-sopimus: ks. [examples/aimeat/](../examples/aimeat/). Tämä sopii
+yksinkertaisiin fire-and-forget -keisseihin; LLM-pohjaisille kruuille Liaison
+(Tapa A) on parempi.
 
-## Useamman kruun rekisteröinti
+## CrewAI ↔ AIMEAT -käsitevastaavuudet (tiivis)
 
-Jokainen kruu on **oma AIMEAT-agenttinsa**. Liitä lisää agentteja, anna kullekin oma
-`~/.aimeat/agents/<agent>/config.yaml`, ja osoita `runner.args` haluttuun entrypointiin
-(`crewfive.demo`, `crewfive.runner`, tai oma `crewfive.<moduuli>`).
-
-## Troubleshooting
-
-| Oire | Syy / korjaus |
-|------|---------------|
-| stdout sisältää JSON:n lisäksi kohinaa | Käytä `output_capture: file:<path>` (company-kruu) tai aseta `CREW_VERBOSE=0`. |
-| `OPENROUTER_API_KEY puuttuu` | Täytä crewfiven `.env` (tai aseta `USE_XAI=1` + `XAI_API_KEY`). |
-| `'aimeat'-CLI ei löydy` (stderr) | Vain best-effort-muistiinpano ohittui; ei estä lopputulosta. Asenna/kytke `aimeat` jos haluat takaisinkutsut. |
-| Ääkköset rikki konsolissa | Skriptit pakottavat stdoutin UTF-8:ksi; tiedostot kirjoitetaan aina UTF-8:na. |
-| Exit-koodi ≠ 0 | Kruu kaatui; serve merkitsee tehtävän epäonnistuneeksi (`aimeat_task_fail`). Katso stderr. |
+| CrewAI | AIMEAT |
+|--------|--------|
+| Tools | toiminta-MCP-työkalut (task_*, message_*, board_*, capabilities_invoke, action_execute …) |
+| Knowledge (RAG) | memory_read/search, knowledge_get/list, storage_download, handbook_get (custom `BaseKnowledgeSource`) |
+| Memory | `memory_*` (pysyvä jaettu muisti) |
+| Skills (SKILL.md) | skill-bundle `~/.aimeat/<agent>/SKILL.md` + handbook (ks. tilahuomio alla) |
+| Crew / Flow | task- ja work-elinkaari (`task_*`, `work_*`) |
+| Delegointi | `capabilities_invoke`, `organism_*`, `catalogue_*` |
 
 ## Tila
-
-`aimeat connect serve`:n **task-runner-moodia ei ole vielä julkaistu** AIMEATissa
-(spec: `aimeat-protocol/docs/.../2026-05-29-crewai-task-runner-and-multi-agent-serve.md`).
-crewfiven puoli on kuitenkin valmis sitä varten, ja takaisinkutsu (`aimeat connect call`)
-toimii jo nyt nykyisellä `aimeat connect serve`:llä.
+- ✅ Liaison-pattern toimii päästä päähän (AIMEAT 1.13.2+, aimeat-crewai 0.1.2+).
+- 🚧 Natiivi CrewAI **Skills** -tuki (`Agent(skills=[SKILL.md])`) odottaa AIMEATin
+  skill-bundlen frontmatter- ja hakemistorakenteen yhteensopivuutta (työn alla,
+  aimeat-crewai 0.2.0).
