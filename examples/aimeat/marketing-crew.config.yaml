@@ -1,0 +1,30 @@
+# =====================================================================
+# AIMEAT per-agent config snippet – 5 agentin hierarkinen COMPANY-kruu
+# (crewfive.runner: CEO-manageri + CTO/CMO/CFO/COO).
+#
+# Sijoita tiedostoon:  ~/.aimeat/agents/marketing-crew/config.yaml
+# (kun aimeat connect serve:n task-runner-moodi on julkaistu)
+#
+# TURVAVAROITUS: runner.command exec'ataan sellaisenaan. Luota vain omaan
+# ~/.aimeat/-sisältöösi. Sama foot-gun kuin wake.command.
+# =====================================================================
+
+agent: marketing-crew
+owner: <oma-aimeat-owner>
+mode: task-runner
+
+runner:
+  command: uv
+  args: ["run", "python", "-m", "crewfive.runner"]
+  cwd: e:/dev/GitHub/crewfive       # crewfive-repon juuri
+
+  # Hierarkinen kruu tuottaa runsaasti välitulostetta -> käytä file-capturea,
+  # jotta serve lukee puhtaan JSON:n tiedostosta (ei stdout-kohinasta).
+  output_capture: file:e:/dev/GitHub/crewfive/output/deliverable.json
+  timeout_seconds: 3600
+  on_failure: report
+
+  # Env-muuttujat asettaa serve automaattisesti:
+  #   AIMEAT_TASK_PROMPT, AIMEAT_TASK_ID, AIMEAT_AGENT_NAME, AIMEAT_TOKEN
+  # LLM-avaimet (OPENROUTER_API_KEY ym.) tulevat crewfiven OMASTA .env:stä
+  # (runner ajaa load_dotenv()), EI tästä AIMEAT-configista.

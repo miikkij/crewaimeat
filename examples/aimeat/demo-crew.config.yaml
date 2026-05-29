@@ -1,0 +1,27 @@
+# =====================================================================
+# AIMEAT per-agent config snippet – kevyt 3 agentin kruu (crewfive.demo).
+#
+# Sijoita tiedostoon:  ~/.aimeat/agents/demo-crew/config.yaml
+# (kun aimeat connect serve:n task-runner-moodi on julkaistu)
+#
+# TURVAVAROITUS: runner.command exec'ataan sellaisenaan. Luota vain omaan
+# ~/.aimeat/-sisältöösi. Sama foot-gun kuin wake.command.
+# =====================================================================
+
+agent: demo-crew
+owner: <oma-aimeat-owner>
+mode: task-runner
+
+runner:
+  command: uv
+  args: ["run", "python", "-m", "crewfive.demo"]
+  cwd: e:/dev/GitHub/crewfive       # crewfive-repon juuri
+
+  # Kruu on hiljainen ja tulostaa pelkän JSON:n -> stdout-capture riittää.
+  output_capture: stdout
+  timeout_seconds: 1800
+  on_failure: report
+
+  # Env-muuttujat asettaa serve automaattisesti:
+  #   AIMEAT_TASK_PROMPT, AIMEAT_TASK_ID, AIMEAT_AGENT_NAME, AIMEAT_TOKEN
+  # LLM- ja Tavily-avaimet tulevat crewfiven OMASTA .env:stä (load_dotenv()).

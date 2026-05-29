@@ -35,9 +35,14 @@ class CrewFive:
     agents_config = "config/agents.yaml"
     tasks_config = "config/tasks.yaml"
 
-    def __init__(self) -> None:
+    def __init__(self, verbose: bool | None = None) -> None:
         self.llm = get_llm()
         self.tools = _web_tools()
+        # Verbose: paikallinen CLI haluaa näkyvyyttä (oletus True), mutta
+        # AIMEAT-runner ajaa hiljaisena (CREW_VERBOSE=0) jotta stdout pysyy puhtaana.
+        if verbose is None:
+            verbose = os.getenv("CREW_VERBOSE", "1").lower() not in ("0", "false", "")
+        self.verbose = verbose
 
     # ---- Manageri (EI @agent-koristetta -> ei mukana agents-listassa) ----
     def manager(self) -> Agent:
@@ -46,7 +51,7 @@ class CrewFive:
             config=self.agents_config["ceo"],
             llm=self.llm,
             allow_delegation=True,
-            verbose=True,
+            verbose=self.verbose,
         )
 
     # ---- Työntekijät (osastopäälliköt) -----------------------------------
@@ -56,7 +61,7 @@ class CrewFive:
             config=self.agents_config["cto"],
             llm=self.llm,
             tools=self.tools,
-            verbose=True,
+            verbose=self.verbose,
         )
 
     @agent
@@ -65,7 +70,7 @@ class CrewFive:
             config=self.agents_config["cmo"],
             llm=self.llm,
             tools=self.tools,
-            verbose=True,
+            verbose=self.verbose,
         )
 
     @agent
@@ -74,7 +79,7 @@ class CrewFive:
             config=self.agents_config["cfo"],
             llm=self.llm,
             tools=self.tools,
-            verbose=True,
+            verbose=self.verbose,
         )
 
     @agent
@@ -83,7 +88,7 @@ class CrewFive:
             config=self.agents_config["coo"],
             llm=self.llm,
             tools=self.tools,
-            verbose=True,
+            verbose=self.verbose,
         )
 
     # ---- Taski (ei sidota agenttiin -> manageri delegoi) -----------------
@@ -99,5 +104,5 @@ class CrewFive:
             tasks=self.tasks,  # @task-koristellut kerätään automaattisesti
             process=Process.hierarchical,
             manager_agent=self.manager(),
-            verbose=True,
+            verbose=self.verbose,
         )

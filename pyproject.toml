@@ -12,6 +12,8 @@ dependencies = [
 
 [project.scripts]
 crew = "crewfive.main:run"
+crew-runner = "crewfive.runner:run"
+crew-demo = "crewfive.demo:run"
 
 [build-system]
 requires = ["hatchling"]

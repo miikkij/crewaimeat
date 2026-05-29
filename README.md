@@ -105,6 +105,27 @@ crewfive/
    pyytää tarvittaessa web-hakua (Tavily) ja koostaa lopputuloksen.
 4. Lopputulos + osatuotokset tallennetaan `output/`-kansioon.
 
+## AIMEAT-integraatio (task-runner)
+
+crewfive-kruut voidaan ajaa **AIMEAT task-runnereina**: `aimeat connect serve`
+käynnistää kruun aliprosessina, antaa tehtävän env-muuttujina ja saa takaisin
+`Deliverable`-JSON:n. Kaksi entrypointia:
+
+```powershell
+# Kevyt 3 agentin kruu (sequential) – oikea LLM + Tavily (.env):
+$env:AIMEAT_TASK_PROMPT="Tee pieni markkinointisuunnitelma"
+uv run python -m crewfive.demo
+
+# Company (5 agenttia, hierarkinen) – oikea OpenRouter + Tavily (.env):
+$env:AIMEAT_TASK_PROMPT="Laadi Q3 go-to-market-suunnitelma"
+uv run python -m crewfive.runner
+```
+
+Env-sopimus: `AIMEAT_TASK_PROMPT`, `AIMEAT_TASK_ID`, `AIMEAT_AGENT_NAME`, `AIMEAT_TOKEN`.
+Lopputulos: `{ title, summary, sections, recommendations }` stdoutiin ja/tai
+`CREW_OUTPUT_FILE`-tiedostoon. Täydet ohjeet, config-snippetit ja troubleshooting:
+[docs/aimeat-integration.md](docs/aimeat-integration.md).
+
 ## Lähteet
 
 - CrewAI – LLMs: https://docs.crewai.com/en/concepts/llms
