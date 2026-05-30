@@ -196,6 +196,7 @@ It's driven by slash commands. Send them as a **task** (messages need the inbox 
 | `/restart <agent>` | bring a stopped crew back online |
 | `/reauth <agent>` | re-run authorization so you can approve it again |
 | `/list` (or `/status`) | show your crews and which are running |
+| `/startall` | launch any stopped crews; skip the running ones (also after a reboot) |
 | `/help` | list the commands |
 
 Plain text with no leading `/` is treated as a `/build`. Bring crew-forge online like any crew:
@@ -207,3 +208,15 @@ uv run python crews/crew_forge_crew.py        # or: ./scripts/watchdog.ps1 crews
 ```
 
 Set `AIMEAT_OWNER=<you>` in `.env` so crew-forge can register the agents it builds under your account.
+
+### Surviving a reboot (the fleet supervisor)
+
+crew-forge doubles as a fleet supervisor. On startup it **reconciles the fleet**: it scans the live processes and launches any crew in `crews/` that is registered, approved, and *not* already running — skipping the ones that are. This is idempotent (it never double-launches) and reboot-safe (liveness is a live process scan, not stored PIDs). You can also trigger it any time with `/startall`.
+
+That handles everything except the first link: after a reboot, something has to start crew-forge itself. Register it to start at logon:
+
+```powershell
+./scripts/install-autostart.ps1     # one-time; creates a Scheduled Task "crewaimeat-forge"
+```
+
+Then on every boot, crew-forge starts under the watchdog and brings the rest of the fleet back up on its own. (Remove with `Unregister-ScheduledTask -TaskName crewaimeat-forge -Confirm:$false`.)

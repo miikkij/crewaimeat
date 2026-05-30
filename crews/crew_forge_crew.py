@@ -40,6 +40,7 @@ HELP = (
     "  /restart <agent>       bring a stopped crew back online\n"
     "  /reauth <agent>        re-run authorization so you can approve it again\n"
     "  /list   (or /status)   show your crews and which are running\n"
+    "  /startall              launch any stopped crews (skip running ones; good after a reboot)\n"
     "  /help                  show this list\n"
     "Plain text with no leading '/' is treated as a /build request."
 )
@@ -51,6 +52,7 @@ COMMANDS = [
     {"name": "/reauth", "description": "Re-run authorization so you can approve an agent again: /reauth <agent>", "category": "fleet"},
     {"name": "/list", "description": "Show your crews and which are running", "category": "fleet"},
     {"name": "/status", "description": "Alias of /list: crews and their running state", "category": "fleet"},
+    {"name": "/startall", "description": "Launch any stopped crews; skip running ones (also after a reboot)", "category": "fleet"},
     {"name": "/help", "description": "List crew-forge's slash commands", "category": "meta"},
 ]
 
@@ -75,6 +77,7 @@ Example: `/build an agent that drafts release notes from a changelog`
 _BUILD_CMDS = {"build", "new", "make", "create"}
 _RESTART_CMDS = {"restart", "relaunch", "reboot", "start"}
 _LIST_CMDS = {"list", "ls", "status"}
+_RECONCILE_CMDS = {"startall", "start-all", "reconcile", "up"}
 _HELP_CMDS = {"help", "commands", "?"}
 
 # Declared at onboarding (aimeat_onboarding_declare_services) so other agents and the owner
@@ -84,6 +87,7 @@ COMMAND_SERVICES = [
     {"name": "restart-agent", "description": "/restart <agent> — bring a stopped crew back online"},
     {"name": "reauth-agent", "description": "/reauth <agent> — re-run authorization so the owner can approve it again"},
     {"name": "list-agents", "description": "/list (or /status) — show the crews and which are running"},
+    {"name": "start-all-agents", "description": "/startall — launch any stopped crews (skip running ones; good after a reboot)"},
     {"name": "help", "description": "/help — show crew-forge's command list"},
 ]
 
@@ -116,6 +120,8 @@ def _command_domain(ctx: BuildContext, cmd: str, arg: str) -> tuple[list[Agent],
 
     if cmd in _LIST_CMDS:
         instr = "Call list_crews and report its result verbatim."
+    elif cmd in _RECONCILE_CMDS:
+        instr = "Call start_all_crews and report its result verbatim."
     elif cmd in _RESTART_CMDS:
         instr = (
             f"Call restart_crew with agent_name='{arg}' and report the result."
@@ -230,6 +236,16 @@ def _build_domain(ctx: BuildContext, request: str | None = None) -> tuple[list[A
 
 
 def run() -> None:
+    # On startup (e.g. after a machine reboot, when crew-forge is the one thing the OS
+    # auto-starts) bring the rest of the fleet back: launch any stopped crews, skip the
+    # running ones. Idempotent, so a normal crew-forge restart is a harmless no-op.
+    import sys
+
+    from crewaimeat.forge import reconcile_fleet
+
+    print("[crew-forge] reconciling fleet on startup ...", file=sys.stderr)
+    print(reconcile_fleet(), file=sys.stderr)
+
     run_crew(
         CrewSpec(
             agent_name=AGENT_NAME,
@@ -240,7 +256,7 @@ def run() -> None:
             # palette to agents.crew-forge.commands (owner) so the Messages UI surfaces it.
             services=COMMAND_SERVICES,
             commands=COMMANDS,
-            # README tab — the [[LLM]] logo is generated at publish time.
+            # README tab — FIGLET logo + AVAILABLE_COMMANDS table, expanded at publish time.
             readme_md=README,
         )
     )

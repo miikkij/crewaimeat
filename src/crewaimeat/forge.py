@@ -20,9 +20,13 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from crewai.tools import tool
+
+# Reads `AGENT_NAME = "..."` from a generated crew file (to check its token/approval).
+_AGENT_NAME_RE = re.compile(r'^\s*AGENT_NAME\s*=\s*["\']([^"\']+)["\']', re.M)
 
 # How the assembled crew file looks. The LLM supplies only build_domain (+ optional
 # helper defs and extra imports); everything else is fixed scaffold wiring.
@@ -203,6 +207,80 @@ def launch_crew(rel_path: str) -> tuple[int | None, str]:
         return None, f"launch failed: {exc}"
 
 
+def _agent_name_of(path: Path) -> str | None:
+    """Read AGENT_NAME from a crew file (without importing it)."""
+    try:
+        m = _AGENT_NAME_RE.search(path.read_text(encoding="utf-8"))
+        return m.group(1) if m else None
+    except OSError:
+        return None
+
+
+def _crew_files() -> list[Path]:
+    """All crew files in crews/ (skipping helpers/probes prefixed with '_')."""
+    crews = _project_root() / "crews"
+    if not crews.is_dir():
+        return []
+    return [p for p in sorted(crews.glob("*_crew.py")) if not p.name.startswith("_")]
+
+
+def reconcile_fleet() -> str:
+    """Ensure every approved crew in crews/ is running: launch the stopped ones, skip the
+    running ones. Idempotent and reboot-safe — liveness is a live process scan (not stored
+    PIDs), so after a restart every crew reads as down and is relaunched exactly once. Only
+    crews that are registered AND approved (have a token) are auto-started; others are reported.
+    """
+    from crewaimeat.aimeat_crew import _token_exists  # local import avoids any import cycle
+
+    root = _project_root()
+    owner = os.getenv("AIMEAT_OWNER", "").strip() or None
+    files = _crew_files()
+    if not files:
+        return "No crews in crews/ to reconcile."
+
+    # Crude lock so two overlapping reconciles can't double-launch the same crew.
+    logs = root / "logs"
+    logs.mkdir(exist_ok=True)
+    lock = logs / ".fleet.lock"
+    try:
+        if lock.is_file() and (time.time() - lock.stat().st_mtime) < 90:
+            return "A fleet reconcile is already in progress; try again shortly."
+        lock.write_text(str(time.time()), encoding="utf-8")
+    except OSError:
+        pass
+
+    launched, already, needs_approval = [], [], []
+    try:
+        for path in files:
+            name = path.name
+            if _is_running_file(name):
+                already.append(name)
+                continue
+            agent = _agent_name_of(path)
+            if agent and not _token_exists(agent, owner):
+                needs_approval.append(agent)
+                continue
+            pid, log = launch_crew(f"crews/{name}")
+            launched.append(f"{agent or name} (pid {pid})" if pid else f"{name} (FAILED: {log})")
+    finally:
+        try:
+            lock.unlink()
+        except OSError:
+            pass
+
+    out = [
+        f"Fleet reconcile: {len(launched)} launched, {len(already)} already running, "
+        f"{len(needs_approval)} need approval."
+    ]
+    if launched:
+        out.append("Launched: " + ", ".join(launched))
+    if already:
+        out.append("Already running: " + ", ".join(already))
+    if needs_approval:
+        out.append("Need registration/approval (not started): " + ", ".join(needs_approval))
+    return "\n".join(out)
+
+
 # --------------------------------------------------------------------------- #
 # CrewAI tools handed to the builder agent
 # --------------------------------------------------------------------------- #
@@ -334,11 +412,20 @@ def reauth_crew(agent_name: str) -> str:
     )
 
 
+@tool("start_all_crews")
+def start_all_crews() -> str:
+    """Ensure every approved crew in crews/ is running: launch the stopped ones and skip the
+    ones already running. Idempotent and safe to call any time (never double-launches), including
+    right after a machine restart to bring the whole fleet back online. Use for /startall, /up.
+    """
+    return reconcile_fleet()
+
+
 def make_forge_tools() -> list:
     """The tools the crew-forge builder agent uses to materialize a new crew."""
     return [write_and_validate_crew, register_and_launch_crew]
 
 
 def make_manage_tools() -> list:
-    """The tools crew-forge uses to operate the fleet (restart a downed crew, report status, re-auth)."""
-    return [restart_crew, list_crews, reauth_crew]
+    """The tools crew-forge uses to operate the fleet: restart, re-auth, list, and start-all."""
+    return [restart_crew, list_crews, reauth_crew, start_all_crews]
