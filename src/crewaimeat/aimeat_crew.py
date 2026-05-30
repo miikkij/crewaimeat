@@ -105,6 +105,8 @@ class CrewSpec:
     listen_for: Iterable[str] = ("tasks",)  # add "messages" to also act on inbox messages
     wait_for_approval_seconds: int | None = 900  # wait this long for the token to be approved
     #   before onboarding, then exit for re-auth (None = wait indefinitely)
+    services: list[dict] | None = None    # {name, description} services to declare at onboarding
+    #   (e.g. the commands the agent answers to), published via aimeat_onboarding_declare_services
 
 
 # --------------------------------------------------------------------------- #
@@ -249,13 +251,21 @@ def _memory_key(agent_name: str, prefix: str | None, task: dict) -> str:
     return f"{base}.{token}.latest_output"
 
 
-def _run_onboarding_only(agent_name: str) -> None:
+def _run_onboarding_only(agent_name: str, services: list[dict] | None = None) -> None:
     """One-shot Hello Integration (liaison alone, no domain work)."""
     print(
         f"[{agent_name}] Hello Integration not done -> running ONBOARDING ONLY "
         "(liaison alone, no domain work).",
         file=sys.stderr,
     )
+    if services:
+        services_step = (
+            "3. Declare this agent's services so they are discoverable: call "
+            f"aimeat_onboarding_declare_services with services={json.dumps(services, ensure_ascii=False)} "
+            "(do this even if it is not listed as a pending step).\n"
+        )
+    else:
+        services_step = ""
     with create_liaison_agent(
         mcp_server_params=stdio_params(agent_name=agent_name),
         agent_name=agent_name,
@@ -269,11 +279,12 @@ def _run_onboarding_only(agent_name: str) -> None:
                 "rush, and do NOT fire several tool calls in the same turn.\n"
                 "1. aimeat_onboarding_status to see pending steps.\n"
                 "2. Complete each pending step with its matching aimeat_onboarding_* tool.\n"
-                "3. Test task: aimeat_task_propose_todos ONCE, then mark TODOs done with "
+                f"{services_step}"
+                "4. Test task: aimeat_task_propose_todos ONCE, then mark TODOs done with "
                 "aimeat_task_todo ONE AT A TIME (wait for each result). Then you MUST call "
                 "aimeat_task_complete with the test task's id to complete it. Do NOT re-mark "
                 "done TODOs.\n"
-                "4. aimeat_onboarding_status once more and report. No domain work."
+                "5. aimeat_onboarding_status once more and report. No domain work."
             ),
             expected_output="All onboarding steps passed; test task completed.",
             agent=liaison,
@@ -358,7 +369,7 @@ def run_crew(spec: CrewSpec) -> None:
 
     # 1) Ensure Hello Integration once (one-shot) before the daemon.
     if not _onboarding_completed(spec.agent_name):
-        _run_onboarding_only(spec.agent_name)
+        _run_onboarding_only(spec.agent_name, services=spec.services)
 
     # 2) Per-task crew builder handed to the daemon.
     def _build(task: dict, liaison: Agent) -> Crew:

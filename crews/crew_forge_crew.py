@@ -48,6 +48,16 @@ _RESTART_CMDS = {"restart", "relaunch", "reboot", "start"}
 _LIST_CMDS = {"list", "ls", "status"}
 _HELP_CMDS = {"help", "commands", "?"}
 
+# Declared at onboarding (aimeat_onboarding_declare_services) so other agents and the owner
+# can discover how to drive crew-forge.
+COMMAND_SERVICES = [
+    {"name": "build-agent", "description": "/build <description> — design, register, and launch a new AIMEAT agent"},
+    {"name": "restart-agent", "description": "/restart <agent> — bring a stopped crew back online"},
+    {"name": "reauth-agent", "description": "/reauth <agent> — re-run authorization so the owner can approve it again"},
+    {"name": "list-agents", "description": "/list (or /status) — show the crews and which are running"},
+    {"name": "help", "description": "/help — show crew-forge's command list"},
+]
+
 
 def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     text = (ctx.prompt or "").strip()
@@ -197,6 +207,8 @@ def run() -> None:
             build_domain=build_domain,
             # Act on inbox messages too, so the fleet can be operated by messaging crew-forge.
             listen_for=("tasks", "messages"),
+            # Publish the command list at onboarding so the commands are discoverable.
+            services=COMMAND_SERVICES,
         )
     )
 
