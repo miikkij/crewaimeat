@@ -41,9 +41,10 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 from zoneinfo import ZoneInfo
 
 for _s in (sys.stdout, sys.stderr):
@@ -100,6 +101,9 @@ class CrewSpec:
     manager_agent: Any = None             # only for Process.hierarchical
     owner: str | None = None              # AIMEAT owner; set only if the agent name is ambiguous
     max_idle_auth_failures: int = 10      # idle cycles with a rejected token before exiting for re-auth
+    listen_for: Iterable[str] = ("tasks",)  # add "messages" to also act on inbox messages
+    wait_for_approval_seconds: int | None = None  # wait this long for the token to be approved
+    #   before onboarding (None = wait indefinitely; right for an unattended service)
 
 
 # --------------------------------------------------------------------------- #
@@ -150,6 +154,43 @@ def _auth_alive(agent_name: str, owner: str | None) -> bool | None:
         return None
     except Exception:  # noqa: BLE001 — transient; treat as unknown
         return None
+
+
+def _wait_for_auth(agent_name: str, owner: str | None, max_wait_seconds: int | None, interval: int = 30) -> None:
+    """Block until the agent's token is accepted by the node (the owner has approved it).
+
+    A crew launched BEFORE approval would otherwise crash-loop in onboarding (every call
+    401s) until the watchdog gives up. Instead we wait patiently here and continue the
+    moment the token is accepted — so an unattended crew comes online by itself when the
+    owner approves it, with no console needed.
+
+    Proceeds immediately if the token is already accepted, or if auth cannot be probed
+    (no probe helper / transient). With max_wait_seconds=None it waits indefinitely.
+    """
+    waited = 0
+    announced = False
+    while True:
+        alive = _auth_alive(agent_name, owner)
+        if alive is not False:  # True (approved) or None (cannot probe) -> proceed
+            if announced:
+                print(f"[{agent_name}] token accepted — continuing.", file=sys.stderr)
+            return
+        if not announced:
+            print(
+                f"[{agent_name}] waiting for approval: the token is not accepted yet. Approve "
+                "the agent on AIMEAT (Profile -> Agents) and the crew continues on its own.",
+                file=sys.stderr,
+            )
+            announced = True
+        if max_wait_seconds is not None and waited >= max_wait_seconds:
+            print(
+                f"[{agent_name}] still not approved after {waited}s — continuing anyway; "
+                "onboarding will surface any remaining issue.",
+                file=sys.stderr,
+            )
+            return
+        time.sleep(interval)
+        waited += interval
 
 
 def _aimeat_call(agent_name: str, tool: str, payload: dict) -> dict | None:
@@ -249,6 +290,33 @@ def _finalize_task(agent_name: str, tid: str, mem_key: str, liaison: Agent) -> T
     )
 
 
+def _finalize_message_task(agent_name: str, mem_key: str, sender: str | None, liaison: Agent) -> Task:
+    """Finalize for a run triggered by an inbox MESSAGE (no real task to complete).
+
+    A message arrives as a synthetic task (id 'msg-...'), so there are no todos and
+    nothing to aimeat_task_complete. Instead: publish the result to memory and, if the
+    sender is known, reply to them with a short summary.
+    """
+    reply_step = (
+        f"2. Reply to the sender '{sender}' with aimeat_message_send: a short summary of what "
+        "was done (one or two sentences)."
+        if sender
+        else "2. No sender to reply to; skip messaging."
+    )
+    return Task(
+        description=(
+            "The crew has handled a request that arrived as an AIMEAT inbox message (NOT a task), "
+            "so there are no todos and no task to complete. Work in order, one tool call at a time.\n"
+            f"1. Write the previous agent's final result to AIMEAT memory under the EXACT key "
+            f"'{mem_key}' with visibility owner (aimeat_memory_write).\n"
+            f"{reply_step}\n"
+            "Do NOT call aimeat_task_complete or aimeat_task_todo — this was a message, not a task."
+        ),
+        expected_output=f"Result written to memory '{mem_key}'" + (f" and a reply sent to '{sender}'." if sender else "."),
+        agent=liaison,
+    )
+
+
 def run_crew(spec: CrewSpec) -> None:
     """Entry point: ensure onboarding once, then run the daemon forever.
 
@@ -257,6 +325,11 @@ def run_crew(spec: CrewSpec) -> None:
     runs it. Stop with Ctrl+C.
     """
     progress = install_progress(spec.agent_name)
+
+    # 0) If launched before the owner approved the agent, wait patiently for the token
+    #    to be accepted rather than crash-looping in onboarding. Lets an unattended crew
+    #    come online by itself once approved (no console needed).
+    _wait_for_auth(spec.agent_name, spec.owner, spec.wait_for_approval_seconds)
 
     # 1) Ensure Hello Integration once (one-shot) before the daemon.
     if not _onboarding_completed(spec.agent_name):
@@ -275,7 +348,12 @@ def run_crew(spec: CrewSpec) -> None:
 
         ctx = BuildContext(task=task, prompt=prompt, llm=llm, today=_now_context())
         agents, tasks = spec.build_domain(ctx)
-        finalize = _finalize_task(spec.agent_name, tid, mem_key, liaison)
+        if task.get("_source") == "message":
+            original = task.get("_original") or {}
+            sender = original.get("from") or original.get("sender") or original.get("from_agent")
+            finalize = _finalize_message_task(spec.agent_name, mem_key, sender, liaison)
+        else:
+            finalize = _finalize_task(spec.agent_name, tid, mem_key, liaison)
 
         crew_kwargs: dict[str, Any] = {
             "agents": [liaison, *agents],
@@ -322,7 +400,7 @@ def run_crew(spec: CrewSpec) -> None:
         agent_name=spec.agent_name,
         build_crew=_build,
         poll_interval_seconds=spec.poll_seconds,
-        listen_for=("tasks",),
+        listen_for=tuple(spec.listen_for),
         llm=get_llm(),
         owner=spec.owner,
         on_idle=_on_idle,
