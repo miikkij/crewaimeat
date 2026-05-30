@@ -14,9 +14,6 @@ dependencies = [
 
 [project.scripts]
 crewfive = "crewfive.scaffold:main"
-crew = "crewfive.main:run"
-crew-runner = "crewfive.runner:run"
-crew-demo = "crewfive.demo:run"
 research-crew = "crewfive.research_crew:run"
 
 [build-system]
