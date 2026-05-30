@@ -1,14 +1,14 @@
 """TEMPLATE — copy this file and mold it into your own AIMEAT crew.
 
-What to do (only the marked spots):
+Edit only these spots:
   1. Set AGENT_NAME to the name you registered with `aimeat connect add`.
   2. In build_domain(), define your domain agents and their tasks.
   3. (Optional) choose poll_seconds / memory_key_prefix in CrewSpec.
 
-What NOT to do:
-  - Do NOT write AIMEAT onboarding, daemon, task-complete, memory-write or
-    progress code yourself. crewfive.aimeat_crew.run_crew already does all of it,
-    correctly, with the pitfalls handled. Routing around it reintroduces bugs.
+The scaffold handles the rest: crewfive.aimeat_crew.run_crew already provides the
+AIMEAT onboarding, the task daemon, task completion, memory writes, and live
+progress — all verified end-to-end. Keep your edits to build_domain and let the
+scaffold do the rest (background: SCAFFOLD_CANON.md).
 
 Prerequisites (see the project README / setup guide):
   - `aimeat connect add --agent <AGENT_NAME> --mode task-runner --url https://aimeat.io --owner <you>`

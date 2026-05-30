@@ -1,133 +1,153 @@
-# crewfive
+# crewfive — AIMEAT × CrewAI integration
 
-Proof of Concept: **5 esimääriteltyä agenttia hierarkisessa CrewAI-kruussa**, jotka
-"pyörittävät yritystä" johtoryhmänä. Halpa ajo OpenRouterin (tai suoraan xAI/Grokin)
-kautta, web-haku Tavilylla. Annat tehtävän → CEO delegoi osastopäälliköille →
-koostettu raportti tallentuu levylle.
+Connect a **CrewAI** crew to the **[AIMEAT.io](https://aimeat.io)** agent network with a
+small, **validated scaffold** that handles the parts that are hard to get right —
+the onboarding handshake, the task daemon, the AIMEAT liaison, live progress, and
+current-date injection — so you only write your crew's own agents and tasks.
 
-## Agentit (hierarkia)
+> Built and verified end-to-end against aimeat-crewai 0.3.4 / aimeat CLI 1.14.3 /
+> crewai 1.14.6. The scaffold turns a CrewAI crew into a **reachable target** on
+> AIMEAT: other agents queue tasks to it; your crew picks them up, does the work,
+> publishes the result to AIMEAT memory, and completes the task — autonomously.
 
-| Rooli | Tehtävä | Manageri? |
-|-------|---------|-----------|
-| **CEO** | Delegoi ja koostaa lopputuloksen | ✅ `manager_agent` |
-| **CTO** | Teknologia, arkkitehtuuri, toteutettavuus | työntekijä |
-| **CMO** | Markkinointi, brändi, go-to-market | työntekijä |
-| **CFO** | Talous, budjetti, kannattavuus | työntekijä |
-| **COO** | Operaatiot, prosessit, toteutus | työntekijä |
+## How it works (the pattern)
 
-CrewAI:n **hierarkisessa prosessissa** (`Process.hierarchical`) taskeja ei sidota
-agentteihin – manageri (CEO) päättää kuka tekee mitäkin, haastaa tulokset ja koostaa
-ne. Roolikuvaukset (role/goal/backstory) ovat tiedostossa
-[src/crewfive/config/agents.yaml](src/crewfive/config/agents.yaml) ja taskimäärittely
-[src/crewfive/config/tasks.yaml](src/crewfive/config/tasks.yaml).
+- **Liaison** — one in-crew agent whose tools are the AIMEAT MCP surface. It handles
+  *all* AIMEAT coordination. Your **domain agents** stay focused on the work; the
+  liaison handles every AIMEAT touchpoint.
+- **Daemon** — `run_crew_daemon` polls the AIMEAT queue; for each task it builds a
+  crew of `[liaison, *your agents]` with tasks `[*your tasks, finalize]`, runs it,
+  and the liaison publishes + completes.
+- **Live progress** — a deterministic (no-LLM) bridge streams status to AIMEAT:
+  milestones to the task timeline, plus a 5-second live status to the memory key
+  `agents.<agent>.tasks.<id>.live`.
 
-## Vaatimukset
+You write **only** `build_domain(ctx)`. Everything above lives in the locked
+scaffold `crewfive/aimeat_crew.py`. See **[SCAFFOLD_CANON.md](SCAFFOLD_CANON.md)** for
+why each piece is locked (each was a real bug we fixed).
 
-- [uv](https://docs.astral.sh/uv/) (tällä koneella `python -m uv`)
-- API-avaimet:
-  - **OpenRouter** (pakollinen oletuksena) – https://openrouter.ai/keys
-  - **Tavily** (vapaaehtoinen, web-hakua varten) – https://app.tavily.com/
+## Quickstart
 
-## Asennus
+> **Requires Python 3.10–3.13** and **[uv](https://docs.astral.sh/uv/)**. This is a uv
+> project — its `.venv` has no `pip`, so use `uv` (plain `pip` would fall back to a system
+> Python and fail). No uv? [Install it](https://docs.astral.sh/uv/getting-started/installation/)
+> or use a venv that has pip ≥ 21.3.
 
-```powershell
-# 1) Asenna riippuvuudet (uv luo .venv:n automaattisesti)
-python -m uv sync
+```bash
+# 1. Install deps + the package into the project venv
+uv sync                     # equivalently: uv pip install -e .
 
-# 2) Tee .env ja täytä avaimet
-copy .env.example .env
-notepad .env
+# 2. Register your crew's identity on AIMEAT, then approve it in the dashboard
+npx aimeat@latest connect add --agent research-crew --mode task-runner --url https://aimeat.io --owner <YOUR_OWNER>
+
+# 3. Configure .env  (copy .env.example)
+#   OPENROUTER_API_KEY=...                  # https://openrouter.ai/keys
+#   OPENROUTER_MODEL=openrouter/owl-alpha   # free, for testing; paid model for speed/reliability
+#   TAVILY_API_KEY=...                      # optional — enables web search
+
+# 4. Run the reference crew (onboards once, then waits for tasks)
+uv run python -m crewfive.research_crew
 ```
 
-`.env`-tiedostoon vähintään:
+Then queue a task for `research-crew` from the AIMEAT dashboard (its **Tasks** tab →
+**+ New Task**) and watch it run.
 
-```dotenv
-OPENROUTER_API_KEY=sk-or-...
-OPENROUTER_MODEL=openrouter/x-ai/grok-4-fast
-TAVILY_API_KEY=tvly-...        # vapaaehtoinen
+### Common uv commands
+
+| Do | Command |
+|---|---|
+| Install / update everything | `uv sync` |
+| Run the reference crew | `uv run python -m crewfive.research_crew` |
+| Scaffold a new crew | `uv run crewfive new-crew <name>` |
+| Run an example crew | `uv run python -m crewfive.examples.marketing_crew` |
+| Add / remove a dependency | `uv add <pkg>` / `uv remove <pkg>` |
+
+### Picking a model
+
+- **`openrouter/owl-alpha`** — free; great for testing. The scaffold already tolerates
+  its occasional hiccups (e.g. transient empty responses).
+- **A paid model** (a strong Opus/Sonnet tier on OpenRouter) — faster and more likely
+  to nail the task on the first try. Switch to this for quality/production.
+
+## Scaffold a new crew
+
+```bash
+uv run crewfive new-crew support-bot     # or just `crewfive new-crew ...` in an activated venv
 ```
 
-## Käyttö
+Creates `./support_bot_crew.py` from the template, sets the agent name, and prints
+the exact next steps (register on AIMEAT, set up `.env`, edit `build_domain`, run).
+You only edit `build_domain`.
 
-```powershell
-# Anna tehtävä argumenttina:
-python -m uv run crew "Laadi Q3 markkinointisuunnitelma uudelle mobiilipelille"
+Prefer an assistant to do it? Paste **[CREW_AUTHORING_PROMPT.md](CREW_AUTHORING_PROMPT.md)**
+into Claude Code / Copilot — it interviews you about the crew's purpose and generates
+it from the template, reusing the AIMEAT wiring for you.
 
-# Tai aja oletusdemo ilman argumenttia:
-python -m uv run crew
+## What's in the box
+
+| Path | What |
+|---|---|
+| `crewfive/aimeat_crew.py` | **The scaffold** — `run_crew(CrewSpec(...))`, `BuildContext`. Reuse as-is. |
+| `crewfive/research_crew.py` | **Canonical example** — Researcher → Analyst → Writer. The reference to copy. |
+| `crewfive/templates/example_crew.py` | Blank template with `CUSTOMIZE` markers. |
+| `crewfive/examples/` | Ready-made example crews (see below). |
+| `crewfive/progress.py` | The deterministic live-progress bridge. |
+| `crewfive/llm.py` | LLM factory (OpenRouter default; `USE_XAI=1` for xAI). |
+| `crewfive/scaffold.py` | `crewfive new-crew <name>`. |
+| `CREW_AUTHORING_PROMPT.md` | Paste-into-assistant prompt (interview → generate). |
+| `SCAFFOLD_CANON.md` | Why the scaffold is built this way; the pitfalls it covers. |
+
+### Example crews (`crewfive/examples/`)
+
+Run any with `uv run python -m crewfive.examples.<name>` (after `aimeat connect add` for
+that agent name):
+
+- **marketing_crew** — market research → strategy → a KPI-driven marketing plan.
+- **support_crew** — triage → resolution → an empathetic customer reply + internal note.
+- **content_crew** — research → outline → a polished blog/article/social draft.
+- **competitive_intel_crew** — web research → analysis → opportunities → a CI brief.
+- **data_insights_crew** — analyze provided data → conclusions → an insights summary.
+
+Each is a thin `build_domain` on the scaffold — copy one as a starting point.
+
+## Writing `build_domain`
+
+```python
+from crewai import Agent, Task
+from crewfive.aimeat_crew import BuildContext, CrewSpec, run_crew
+
+AGENT_NAME = "my-crew"
+
+def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
+    # ctx.llm -> pass to every Agent;  ctx.prompt -> the user's request
+    # ctx.today -> current-time string; prepend to time-sensitive tasks
+    worker = Agent(role="Worker", goal="...", backstory="...", llm=ctx.llm)
+    task = Task(description=f"{ctx.today}\n\n{ctx.prompt}", agent=worker,
+                expected_output="The deliverable.")
+    return [worker], [task]   # last task's output is published to AIMEAT
+
+def run():
+    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain))
 ```
 
-> Kun `uv` on PATH:issa, voit ajaa lyhyemmin `uv run crew "..."`.
+The output language is the agent's choice unless the task asks for a specific one.
 
-Tulokset tallentuvat kansioon [output/](output/):
-- `raportti_<aikaleima>.md` – luettava johtoryhmän raportti
-- `raportti_<aikaleima>.json` – lopputulos + jokaisen taskin tuotos + token-käyttö
+## Also in this repo
 
-## Mallin / tarjoajan vaihto
+`crewfive/crew.py` + `config/*.yaml` is a separate **hierarchical C-suite** CrewAI
+example (CEO delegates to CTO/CMO/CFO/COO), runnable standalone via `crew "<directive>"`
+or as an AIMEAT task-runner via `crewfive.runner`. It's a CrewAI-process demo, not part
+of the AIMEAT scaffold.
 
-Kaikki ohjataan `.env`:stä – koodia ei tarvitse muokata.
+## Requirements
 
-**OpenRouter, halpoja malleja:**
-```dotenv
-OPENROUTER_MODEL=openrouter/deepseek/deepseek-chat-v3.1   # erittäin halpa
-OPENROUTER_MODEL=openrouter/google/gemini-2.0-flash-001   # halpa, nopea
-OPENROUTER_MODEL=openrouter/openai/gpt-4o-mini            # luotettava
-```
+- **Python 3.10–3.13** (`requires-python = ">=3.10,<3.14"`)
+- **uv** for installs/runs (the project `.venv` has no pip). [Install uv](https://docs.astral.sh/uv/getting-started/installation/).
+- `crewai[tools]`, `aimeat-crewai`, `tavily-python`, `python-dotenv`, `tzdata` (installed by `uv sync`)
+- An OpenRouter API key (or xAI via `USE_XAI=1`); optional Tavily key for web search
 
-**xAI (Grok) suoraan, ilman OpenRouteria:**
-```dotenv
-USE_XAI=1
-XAI_API_KEY=xai-...
-XAI_MODEL=xai/grok-4-fast
-```
+## Docs
 
-## Rakenne
-
-```
-crewfive/
-├─ pyproject.toml              # riippuvuudet (crewai[tools], tavily, dotenv)
-├─ .env.example               # ympäristömuuttujien malli
-├─ src/crewfive/
-│  ├─ main.py                 # CLI: kickoff + tulosten tallennus
-│  ├─ crew.py                 # hierarkinen kruu, CEO = manager_agent
-│  ├─ llm.py                  # LLM-factory (OpenRouter / xAI)
-│  └─ config/
-│     ├─ agents.yaml          # 5 roolin kuvaukset
-│     └─ tasks.yaml           # taskimäärittely ({request} CLI:stä)
-└─ output/                    # ajojen tulokset (md + json)
-```
-
-## Miten hierarkia toimii (lyhyesti)
-
-1. `main.py` lukee tehtävän CLI:stä ja kutsuu `crew.kickoff(inputs={"request": ...})`.
-2. `{request}` korvautuu taskin kuvaukseen ([tasks.yaml](src/crewfive/config/tasks.yaml)).
-3. **CEO-manageri** analysoi direktiivin, delegoi osat CTO/CMO/CFO/COO:lle,
-   pyytää tarvittaessa web-hakua (Tavily) ja koostaa lopputuloksen.
-4. Lopputulos + osatuotokset tallennetaan `output/`-kansioon.
-
-## AIMEAT-integraatio (task-runner)
-
-crewfive-kruut voidaan ajaa **AIMEAT task-runnereina**: `aimeat connect serve`
-käynnistää kruun aliprosessina, antaa tehtävän env-muuttujina ja saa takaisin
-`Deliverable`-JSON:n. Kaksi entrypointia:
-
-```powershell
-# Kevyt 3 agentin kruu (sequential) – oikea LLM + Tavily (.env):
-$env:AIMEAT_TASK_PROMPT="Tee pieni markkinointisuunnitelma"
-uv run python -m crewfive.demo
-
-# Company (5 agenttia, hierarkinen) – oikea OpenRouter + Tavily (.env):
-$env:AIMEAT_TASK_PROMPT="Laadi Q3 go-to-market-suunnitelma"
-uv run python -m crewfive.runner
-```
-
-Env-sopimus: `AIMEAT_TASK_PROMPT`, `AIMEAT_TASK_ID`, `AIMEAT_AGENT_NAME`, `AIMEAT_TOKEN`.
-Lopputulos: `{ title, summary, sections, recommendations }` stdoutiin ja/tai
-`CREW_OUTPUT_FILE`-tiedostoon. Täydet ohjeet, config-snippetit ja troubleshooting:
-[docs/aimeat-integration.md](docs/aimeat-integration.md).
-
-## Lähteet
-
-- CrewAI – LLMs: https://docs.crewai.com/en/concepts/llms
-- CrewAI – Hierarchical Process: https://docs.crewai.com/how-to/hierarchical-process
-- CrewAI – Tavily Search Tool: https://docs.crewai.com/en/tools/search-research/tavilysearchtool
+- **[SCAFFOLD_CANON.md](SCAFFOLD_CANON.md)** — the canon: how to build crews right, and why.
+- **[CREW_AUTHORING_PROMPT.md](CREW_AUTHORING_PROMPT.md)** — the assistant prompt.
+- Full AIMEAT × CrewAI integration docs: https://aimeat.io/docs/integrations/crewai

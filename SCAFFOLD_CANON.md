@@ -1,10 +1,10 @@
 # AIMEAT × CrewAI scaffold — canon & pitfalls
 
 **The authoritative "why it's built this way" reference.** The scaffold
-(`crewfive/aimeat_crew.py`, plus `progress.py` and `llm.py`) locks down everything
-below. If you — human or AI assistant — feel like rewriting any of it, read the
-matching **Why**: each item is a real failure we diagnosed and fixed end-to-end
-against https://aimeat.io. **You customize only `build_domain`.**
+(`crewfive/aimeat_crew.py`, plus `progress.py` and `llm.py`) provides everything
+below. Reuse it as-is and keep your work in `build_domain`; the **Why** column
+explains each piece — every one is a real failure we diagnosed and fixed end-to-end
+against https://aimeat.io, so reusing the scaffold keeps it fixed.
 
 Validated 2026-05-30 against: aimeat-crewai **0.3.4**, aimeat CLI **1.14.3**,
 crewai **1.14.6** (native providers, no litellm), model `openrouter/owl-alpha`,
@@ -18,8 +18,8 @@ progress feed updates every 5s. ✅
 
 - **Liaison** = one in-crew CrewAI agent whose tools are the AIMEAT MCP surface. It
   handles **all** AIMEAT coordination: Hello Integration, capability reporting,
-  memory writes, task lifecycle. Your **domain agents** never touch AIMEAT — they
-  focus on their work.
+  memory writes, task lifecycle. Your **domain agents** stay focused on their own
+  work; the liaison handles every AIMEAT touchpoint.
 - **Per task** the daemon builds a crew of `[liaison, *domain_agents]` with tasks
   `[*domain_tasks, finalize]`. The domain agents produce the deliverable; the
   liaison's `finalize` task publishes it and closes the AIMEAT task.
@@ -44,9 +44,9 @@ run_crew_daemon  ──poll──►  PROPOSE: queued tasks → propose todos, a
   todos**. That's full autonomy. (If you need a todo plan, the task must travel
   `queued → propose → owner approves → active`.)
 
-## 3. Locked machinery — and why (do not reinvent)
+## 3. Built-in machinery — and why to reuse it
 
-| # | Locked behavior | Why (the failure it prevents) | Where |
+| # | Built-in behavior | Why (the failure it prevents) | Where |
 |---|---|---|---|
 | 1 | **Deterministic onboarding gate** (plain CLI call, no LLM) | An LLM gate looped to "max iterations" reading a cached status; a cheap check is robust | `_onboarding_completed`, `_run_onboarding_only` |
 | 2 | **Pass `llm=` to the daemon/liaison** | Without it the liaison fell back to OpenAI → `OPENAI_API_KEY required` crash → task never completed | `run_crew_daemon(llm=...)` (upstream 0.3.4) |
@@ -57,33 +57,36 @@ run_crew_daemon  ──poll──►  PROPOSE: queued tasks → propose todos, a
 | 7 | **Current-date injection** (`ctx.today`) | The model hallucinated dates (produced "18.6.2025" on a 2026 run) with no grounding | `_now_context()` |
 | 8 | **Deterministic progress bridge** (no LLM): milestones → `aimeat_task_event`, 5s live status → memory key | UI needs "what's happening now"; todos are the wrong tool, and auto-activated tasks have none | `crewfive/progress.py` |
 | 9 | **Windows: `cmd /c` + UTF-8 reconfigure** | `aimeat` is an extensionless npm shim (WinError 193); console cp1252 breaks accents/emojis | `_aimeat_call`, module top |
+| 10 | **Idle auth-guard** (probe on idle; exit `78` after N rejections) | `_poll_tasks` swallows a 401 → a stale token looks like an empty queue, so the daemon would idle silently forever. The guard notices and exits so you re-approve the agent | `run_crew` `on_idle` + `_auth_alive`; watchdog stops on exit 78 |
 
 Items marked *(upstream)* are now shipped in the packages — listed so you know the
-scaffold relies on them and you should keep `aimeat-crewai>=0.3.4`.
+scaffold relies on them; keep `aimeat-crewai>=0.3.4`.
 
-## 4. The contract: customize vs locked
+## 4. The contract: what you write vs what the scaffold provides
 
 - **You write:** `build_domain(ctx)` (your `Agent`s and `Task`s), `AGENT_NAME`, and
-  optional `CrewSpec` fields (`process`, `poll_seconds`, `memory_key_prefix`).
+  optional `CrewSpec` fields (`process`, `poll_seconds`, `memory_key_prefix`, `owner`,
+  `max_idle_auth_failures`).
   - Pass `llm=ctx.llm` to every agent. Prepend `ctx.today` to time-sensitive tasks.
     Give the user's request (`ctx.prompt`) to the agent(s) that need it. The **last
     task's output is what gets published**.
-- **Locked (do not edit/copy into your crew):** `aimeat_crew.py` (onboarding,
-  daemon, `finalize`, date), `progress.py`, the `llm.py` wiring.
+- **Provided by the scaffold (reuse as-is):** `aimeat_crew.py` (onboarding, daemon,
+  `finalize`, date, auth-guard), `progress.py`, the `llm.py` wiring.
 
 ## 5. Rules
 
-1. **Do not reimplement the AIMEAT wiring.** Use `run_crew(CrewSpec(...))`.
+1. **Reuse the AIMEAT wiring through `run_crew(CrewSpec(...))`** — it is already built
+   and verified.
 2. **Interview before generating** (assistants): purpose, roster, order, tools,
    deliverable, output target, language, agent name. See `CREW_AUTHORING_PROMPT.md`.
-3. **If it breaks, report — don't route around it.** Give the exact step, the error
-   text, and which AIMEAT tool returned it. A regression in the liaison persona or
-   the scaffold is a bug to fix in the package, not an improvisation target.
-4. **Language is the agent's call** unless the task asks for one — the scaffold does
-   not force an output language.
+3. **If it breaks, report it and pause for guidance** — give the exact step, the error
+   text, and which AIMEAT tool returned it. The scaffold and the liaison persona are
+   the source of truth, so a regression there is best fixed in the package.
+4. **Language follows the agent's judgment** unless the task asks for a specific one —
+   the scaffold leaves output language to the agent.
 
 ## 6. See also
 
 - `CREW_AUTHORING_PROMPT.md` — paste-into-assistant prompt that drives Steps 0–3.
 - `src/crewfive/research_crew.py` — the canonical worked example.
-- `src/crewfive/templates/example_crew.py` — the blank template to copy.
+- `crewfive new-crew <name>` — scaffolds `crews/<name>_crew.py` from the template.

@@ -1,9 +1,9 @@
 """Reusable AIMEAT crew scaffold — the validated, pitfall-covered base.
 
-DO NOT reimplement the AIMEAT wiring in your own crew. Define only your DOMAIN
-agents + tasks (a `build_domain` function) and hand them to `run_crew(CrewSpec(...))`.
-This module locks down everything that was hard to get right and verified
-end-to-end against https://aimeat.io:
+Reuse the AIMEAT wiring as-is: define only your DOMAIN agents + tasks (a
+`build_domain` function) and hand them to `run_crew(CrewSpec(...))`. This module
+provides everything that was hard to get right, verified end-to-end against
+https://aimeat.io:
 
 - deterministic onboarding gate + one-shot Hello Integration (no LLM in the gate)
 - run_crew_daemon wiring with the right LLM (two-phase: propose on queued /
@@ -14,9 +14,9 @@ end-to-end against https://aimeat.io:
   5s live status -> memory key agents.<agent>.tasks.<id>.live
 - current-date injection so the crew never hallucinates "today"
 
-Why this is locked: each item above was a real failure we diagnosed and fixed
-(tool-call races losing todo writes, OpenRouter empty-choices crashes, date
-hallucination, onboarding cache loops). Routing around it reintroduces those bugs.
+Why reuse it: each item above was a real failure we diagnosed and fixed (tool-call
+races losing todo writes, OpenRouter empty-choices crashes, date hallucination,
+onboarding cache loops). Reusing the scaffold keeps them fixed.
 
 Minimal usage:
 
@@ -51,12 +51,23 @@ for _s in (sys.stdout, sys.stderr):
     if _r:
         _r(encoding="utf-8")
 
+import requests  # noqa: E402 — ships with aimeat-crewai
+
 from crewai import Agent, Crew, Process, Task  # noqa: E402
 from aimeat_crewai import create_liaison_agent, run_crew_daemon, stdio_params  # noqa: E402
 from aimeat_crewai.daemon import DAEMON_DEFAULT_TOOL_FILTER  # noqa: E402
 
+try:  # private helper; degrade gracefully if a future version moves it
+    from aimeat_crewai.daemon import _read_token as _aimeat_read_token  # noqa: E402
+except Exception:  # pragma: no cover
+    _aimeat_read_token = None
+
 from crewfive.llm import get_llm  # noqa: E402
 from crewfive.progress import install_progress  # noqa: E402
+
+# run_crew() exits with this code when the agent's token is no longer accepted by the
+# node (needs re-approval). The watchdog scripts treat it as "stop, don't restart".
+AUTH_EXIT_CODE = 78
 
 
 # --------------------------------------------------------------------------- #
@@ -87,10 +98,12 @@ class CrewSpec:
     poll_seconds: int = 30                # daemon poll interval
     memory_key_prefix: str | None = None  # default: crews.<agent_name>
     manager_agent: Any = None             # only for Process.hierarchical
+    owner: str | None = None              # AIMEAT owner; set only if the agent name is ambiguous
+    max_idle_auth_failures: int = 10      # idle cycles with a rejected token before exiting for re-auth
 
 
 # --------------------------------------------------------------------------- #
-# Locked machinery — do not copy/reimplement this into your crew
+# Built-in machinery — the scaffold provides this; your crew reuses it
 # --------------------------------------------------------------------------- #
 def _now_context() -> str:
     """Deterministic current-time context (no LLM). Without it the model
@@ -108,10 +121,35 @@ def _now_context() -> str:
         pass
     return (
         f"CURRENT TIME (reference for anything time/date related): "
-        f"{now_utc:%Y-%m-%d %H:%M} UTC{local_part}. Use THIS date for "
-        f"'today'/'now' references; do not assume any other date. "
+        f"{now_utc:%Y-%m-%d %H:%M} UTC{local_part}. Treat THIS as the single source "
+        f"of truth for 'today'/'now' references. "
         f"Verify up-to-date facts with web search."
     )
+
+
+def _auth_alive(agent_name: str, owner: str | None) -> bool | None:
+    """Probe whether the agent's stored token still authenticates with the node.
+
+    Returns True (accepted), False (rejected 401/403 -> needs re-approval), or None
+    (unknown / transient network or 5xx -> do not act on it). Light: one GET, reusing
+    the connector's stored token (no subprocess, no LLM)."""
+    if _aimeat_read_token is None:
+        return None
+    try:
+        token, node_url = _aimeat_read_token(agent_name, owner=owner)
+        r = requests.get(
+            f"{node_url.rstrip('/')}/v1/agents/{agent_name}/tasks",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"status": "active"},
+            timeout=15,
+        )
+        if r.status_code in (401, 403):
+            return False
+        if r.status_code == 200:
+            return True
+        return None
+    except Exception:  # noqa: BLE001 — transient; treat as unknown
+        return None
 
 
 def _aimeat_call(agent_name: str, tool: str, payload: dict) -> dict | None:
@@ -204,7 +242,7 @@ def _finalize_task(agent_name: str, tid: str, mem_key: str, liaison: Agent) -> T
             "Only proceed once all todos are verified done.\n"
             f"4. Finally call aimeat_task_complete for task '{tid}', using the result as the "
             "completion summary.\n"
-            "Do not repeat an already-verified successful write."
+            "Once a call succeeds and you have verified it, move on to the next step."
         ),
         expected_output=f"Memory written to '{mem_key}'; ALL todos verified done; task '{tid}' completed.",
         agent=liaison,
@@ -250,7 +288,35 @@ def run_crew(spec: CrewSpec) -> None:
             crew_kwargs["manager_agent"] = spec.manager_agent
         return Crew(**crew_kwargs)
 
-    # 3) Daemon: poll the queue, execute the per-task crew. llm=get_llm() keeps the
+    # 3) Idle auth-guard: run_crew_daemon's _poll_tasks swallows a 401 and returns []
+    #    (a dead token looks exactly like an empty queue), so the daemon would idle
+    #    forever. On each idle cycle we probe auth; after `max_idle_auth_failures`
+    #    consecutive rejections we exit with AUTH_EXIT_CODE so the user re-approves the
+    #    agent on AIMEAT. (SystemExit escapes the daemon's `except Exception` on_idle
+    #    guard, so this cleanly stops the loop.)
+    auth = {"fails": 0}
+
+    def _on_idle() -> None:
+        alive = _auth_alive(spec.agent_name, spec.owner)
+        if alive is True:
+            auth["fails"] = 0
+        elif alive is False:
+            auth["fails"] += 1
+            print(
+                f"[{spec.agent_name}] token rejected by the node "
+                f"({auth['fails']}/{spec.max_idle_auth_failures} consecutive idle checks)",
+                file=sys.stderr,
+            )
+            if auth["fails"] >= spec.max_idle_auth_failures:
+                print(
+                    f"\n[{spec.agent_name}] The agent's token is no longer valid. Re-approve / "
+                    "re-authenticate it on AIMEAT (Profile -> Agents), then start the crew again.",
+                    file=sys.stderr,
+                )
+                raise SystemExit(AUTH_EXIT_CODE)
+        # alive is None -> unknown/transient; leave the counter unchanged.
+
+    # 4) Daemon: poll the queue, execute the per-task crew. llm=get_llm() keeps the
     #    daemon's liaison on the configured model (not CrewAI's OpenAI default).
     run_crew_daemon(
         agent_name=spec.agent_name,
@@ -258,4 +324,6 @@ def run_crew(spec: CrewSpec) -> None:
         poll_interval_seconds=spec.poll_seconds,
         listen_for=("tasks",),
         llm=get_llm(),
+        owner=spec.owner,
+        on_idle=_on_idle,
     )

@@ -3,8 +3,24 @@ revision = 3
 requires-python = ">=3.10, <3.14"
 resolution-markers = [
     "python_full_version >= '3.13'",
-    "python_full_version >= '3.11' and python_full_version < '3.13'",
+    "python_full_version == '3.12.*'",
+    "python_full_version == '3.11.*'",
     "python_full_version < '3.11'",
+]
+
+[[package]]
+name = "aimeat-crewai"
+version = "0.3.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "crewai" },
+    { name = "crewai-tools", extra = ["mcp"] },
+    { name = "mcp" },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/59/76/9fec425c183eaae336180c4f61ee97192163e8ce982a998176cc785cc860/aimeat_crewai-0.3.5.tar.gz", hash = "sha256:6234dd3fa4d5f3d01f06c4ce337276741caed259e9d947347c83b239becb4e47", size = 32184, upload-time = "2026-05-30T09:51:19.542Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d4/65/53b0313150a69615359054f96f80639e2b4b4dfe432a7e730f80327a21d5/aimeat_crewai-0.3.5-py3-none-any.whl", hash = "sha256:65b2c32cb071adfc7444a934475034c6e8229f3de970c5d0e8d49a6cb7d45858", size = 28090, upload-time = "2026-05-30T09:51:18.273Z" },
 ]
 
 [[package]]
@@ -612,21 +628,32 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/de/75/da5801576a5bbb81d0b59e4acb0fe5c509dcd0535249f77fda0d4758dd54/crewai_tools-1.14.6-py3-none-any.whl", hash = "sha256:411a09eab6b8fa713a49f2820314e74f6d693a6600aef785a498e8f42ec9eb71", size = 809650, upload-time = "2026-05-28T17:05:44.721Z" },
 ]
 
+[package.optional-dependencies]
+mcp = [
+    { name = "mcp" },
+    { name = "mcpadapt", version = "0.1.19", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "mcpadapt", version = "0.1.20", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
+
 [[package]]
 name = "crewfive"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "aimeat-crewai" },
     { name = "crewai", extra = ["tools"] },
     { name = "python-dotenv" },
     { name = "tavily-python" },
+    { name = "tzdata" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "aimeat-crewai", specifier = ">=0.3.4" },
     { name = "crewai", extras = ["tools"], specifier = ">=1.14.6" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
     { name = "tavily-python", specifier = ">=0.5.0" },
+    { name = "tzdata" },
 ]
 
 [[package]]
@@ -1510,6 +1537,49 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/fd/d9/eaa1f80170d2b7c5ba23f3b59f766f3a0bb41155fbc32a69adfa1adaaef9/mcp-1.26.0-py3-none-any.whl", hash = "sha256:904a21c33c25aa98ddbeb47273033c435e595bbacfdb177f4bd87f6dceebe1ca", size = 233615, upload-time = "2026-01-24T19:40:30.652Z" },
 ]
 
+[package.optional-dependencies]
+ws = [
+    { name = "websockets" },
+]
+
+[[package]]
+name = "mcpadapt"
+version = "0.1.19"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version == '3.11.*'",
+    "python_full_version < '3.11'",
+]
+dependencies = [
+    { name = "jsonref", marker = "python_full_version < '3.12'" },
+    { name = "mcp", extra = ["ws"], marker = "python_full_version < '3.12'" },
+    { name = "pydantic", marker = "python_full_version < '3.12'" },
+    { name = "python-dotenv", marker = "python_full_version < '3.12'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d0/28/64fc666fa5d86bb1b048c167975d4ea19210f9f8571b64b26563739774ac/mcpadapt-0.1.19.tar.gz", hash = "sha256:dfab84fc75cc84a49a40bd61079773b1faf840227b74b82c71a7755b9c1957c5", size = 4227721, upload-time = "2025-10-16T07:11:56.736Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0f/21/703a79103273b5dd268457ffb94dc8b7d6efcc7fe54413e9723cf2caa8c9/mcpadapt-0.1.19-py3-none-any.whl", hash = "sha256:052e91dea8b6f530770d6fd45a1640a8c34816d18d060918dc752c5221083525", size = 19454, upload-time = "2025-10-16T07:11:55.487Z" },
+]
+
+[[package]]
+name = "mcpadapt"
+version = "0.1.20"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.13'",
+    "python_full_version == '3.12.*'",
+]
+dependencies = [
+    { name = "jsonref", marker = "python_full_version >= '3.12'" },
+    { name = "mcp", extra = ["ws"], marker = "python_full_version >= '3.12'" },
+    { name = "pydantic", marker = "python_full_version >= '3.12'" },
+    { name = "python-dotenv", marker = "python_full_version >= '3.12'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e3/71/1bbbe157e55d30ab4a74fa878f6942cc0586e9820f03e03451a3d2297e9b/mcpadapt-0.1.20.tar.gz", hash = "sha256:4047c0da61e481dd0673a48936a427da9e6547c6cf0d580ff4e4761dcf058ed1", size = 4203656, upload-time = "2025-10-24T15:35:02.135Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ba/d8/5b6c8cf2070d765904fcb9066f8d7956cb9d399807d86c7fb7f7503b80bf/mcpadapt-0.1.20-py3-none-any.whl", hash = "sha256:117a661eb536dfb0b2a73e5730c2f5ad4e611263e014fb1cebaaff9e78a18f78", size = 19481, upload-time = "2025-10-24T15:35:00.159Z" },
+]
+
 [[package]]
 name = "mdit-py-plugins"
 version = "0.6.1"
@@ -1790,7 +1860,8 @@ version = "2.4.6"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.13'",
-    "python_full_version >= '3.11' and python_full_version < '3.13'",
+    "python_full_version == '3.12.*'",
+    "python_full_version == '3.11.*'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d0/ad/fed0499ce6a338d2a03ebae59cd15093910c8875328855781952abf6c2fe/numpy-2.4.6.tar.gz", hash = "sha256:f3a3570c4a2a16746ac2c31a7c7c7b0c186b95ce902e33db6f28094ed7387dda", size = 20735807, upload-time = "2026-05-18T23:37:14.07Z" }
 wheels = [
@@ -1895,7 +1966,8 @@ version = "1.26.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.13'",
-    "python_full_version >= '3.11' and python_full_version < '3.13'",
+    "python_full_version == '3.12.*'",
+    "python_full_version == '3.11.*'",
 ]
 dependencies = [
     { name = "flatbuffers", marker = "python_full_version >= '3.11'" },
@@ -3139,7 +3211,8 @@ version = "2026.5.1"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.13'",
-    "python_full_version >= '3.11' and python_full_version < '3.13'",
+    "python_full_version == '3.12.*'",
+    "python_full_version == '3.11.*'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/2e/43/25a8dcd3feedd735039a8f0b5b7e3b118232b5eae288c4fd9ab200d41094/rpds_py-2026.5.1.tar.gz", hash = "sha256:07b24fea40541e28570e5b795a4a38fbdcd12550c06bd0748005ecc8116ca256", size = 64459, upload-time = "2026-05-28T12:02:13.232Z" }
 wheels = [
@@ -3468,6 +3541,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/55/e3/70399cb7dd41c10ac53367ae42139cf4b1ca5f36bb3dc6c9d33acdb43655/typing_inspection-0.4.2.tar.gz", hash = "sha256:ba561c48a67c5958007083d386c3295464928b01faa735ab8547c5692e87f464", size = 75949, upload-time = "2025-10-01T02:14:41.687Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/dc/9b/47798a6c91d8bdb567fe2698fe81e0c6b7cb7ef4d13da4114b41d239f65d/typing_inspection-0.4.2-py3-none-any.whl", hash = "sha256:4ed1cacbdc298c220f1bd249ed5287caa16f34d44ef4e9c3d0cbad5b521545e7", size = 14611, upload-time = "2025-10-01T02:14:40.154Z" },
+]
+
+[[package]]
+name = "tzdata"
+version = "2026.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ba/19/1b9b0e29f30c6d35cb345486df41110984ea67ae69dddbc0e8a100999493/tzdata-2026.2.tar.gz", hash = "sha256:9173fde7d80d9018e02a662e168e5a2d04f87c41ea174b139fbef642eda62d10", size = 198254, upload-time = "2026-04-24T15:22:08.651Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ce/e4/dccd7f47c4b64213ac01ef921a1337ee6e30e8c6466046018326977efd95/tzdata-2026.2-py2.py3-none-any.whl", hash = "sha256:bbe9af844f658da81a5f95019480da3a89415801f6cc966806612cc7169bffe7", size = 349321, upload-time = "2026-04-24T15:22:05.876Z" },
 ]
 
 [[package]]
