@@ -1,11 +1,11 @@
-"""CLI-entrypoint.
+"""CLI entrypoint.
 
-Käyttö:
-    uv run crew "Tehtävän kuvaus tähän"
-    uv run crew                # käyttää oletusdemoa
+Usage:
+    uv run crew "Task description here"
+    uv run crew                # uses the default demo
 
-Ajaa hierarkisen kruun ja tallentaa tulokset output/-kansioon
-(sekä luettava .md että koneluettava .json aikaleimalla).
+Runs the hierarchical crew and saves the results to the output/ folder
+(both a readable .md and a machine-readable .json with a timestamp).
 """
 
 from __future__ import annotations
@@ -18,18 +18,17 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 DEFAULT_REQUEST = (
-    "Laadi liiketoimintasuunnitelma uudelle B2B SaaS -tuotteelle, joka auttaa "
-    "pk-yrityksiä automatisoimaan laskutuksensa tekoälyn avulla. Kata teknologia, "
-    "markkinointi, talous ja operaatiot."
+    "Draft a business plan for a new B2B SaaS product that helps SMEs automate "
+    "their invoicing with AI. Cover technology, marketing, finance and operations."
 )
 
-# Tulokset tallennetaan projektin juuren output/-kansioon.
+# Results are saved to the output/ folder in the project root.
 OUTPUT_DIR = Path(__file__).resolve().parents[2] / "output"
 
 
 def run() -> None:
-    # Pakota UTF-8 stdoutiin: Windowsin konsoli (cp1252) ei muuten osaa
-    # tulostaa ääkkösiä/emojeja, ja CrewAI:n tapahtumakäsittelijä kaatuilee niihin.
+    # Force UTF-8 on stdout: the Windows console (cp1252) otherwise cannot print
+    # accented characters/emojis, and CrewAI's event handler crashes on them.
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is not None:
@@ -39,10 +38,10 @@ def run() -> None:
 
     request = " ".join(sys.argv[1:]).strip() or DEFAULT_REQUEST
 
-    # Tuodaan vasta load_dotenv():n jälkeen, jotta LLM saa avaimet ympäristöstä.
+    # Import only after load_dotenv() so the LLM picks up keys from the env.
     from crewfive.crew import CrewFive
 
-    print(f"\n=== crewfive ===\nDirektiivi: {request}\n")
+    print(f"\n=== crewfive ===\nDirective: {request}\n")
 
     crew = CrewFive().crew()
     result = crew.kickoff(inputs={"request": request})
@@ -50,29 +49,29 @@ def run() -> None:
     md_path, json_path = _save_outputs(request, result)
 
     print("\n" + "=" * 70)
-    print("LOPULLINEN RAPORTTI:\n")
+    print("FINAL REPORT:\n")
     print(result.raw)
     print("=" * 70)
-    print(f"\nTallennettu:\n  {md_path}\n  {json_path}")
+    print(f"\nSaved:\n  {md_path}\n  {json_path}")
 
 
 def _save_outputs(request: str, result) -> tuple[Path, Path]:
-    """Tallentaa lopputuloksen ja jokaisen taskin tuotoksen levylle."""
+    """Save the final result and each task's output to disk."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # --- Luettava Markdown-raportti ---
-    md_path = OUTPUT_DIR / f"raportti_{stamp}.md"
+    # --- Readable Markdown report ---
+    md_path = OUTPUT_DIR / f"report_{stamp}.md"
     md = [
-        f"# Johtoryhmän raportti\n",
-        f"**Aikaleima:** {datetime.now().isoformat(timespec='seconds')}  ",
-        f"\n**Direktiivi:** {request}\n",
+        f"# Executive report\n",
+        f"**Timestamp:** {datetime.now().isoformat(timespec='seconds')}  ",
+        f"\n**Directive:** {request}\n",
         "\n---\n",
-        result.raw or "(ei tulosta)",
+        result.raw or "(no output)",
     ]
     md_path.write_text("\n".join(md), encoding="utf-8")
 
-    # --- Koneluettava JSON (lopputulos + per-task tuotokset + tokenit) ---
+    # --- Machine-readable JSON (final result + per-task outputs + tokens) ---
     tasks_output = []
     for t in getattr(result, "tasks_output", []) or []:
         tasks_output.append(
@@ -97,7 +96,7 @@ def _save_outputs(request: str, result) -> tuple[Path, Path]:
         "tasks_output": tasks_output,
         "token_usage": token_usage,
     }
-    json_path = OUTPUT_DIR / f"raportti_{stamp}.json"
+    json_path = OUTPUT_DIR / f"report_{stamp}.json"
     json_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )

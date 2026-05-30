@@ -1,37 +1,35 @@
 # =====================================================================
-# Taskit. Hierarkisessa prosessissa taskeja EI sidota agenttiin –
-# CEO-manageri delegoi osat sopiville osastopäälliköille.
-# {request} korvautuu CLI:stä annetulla tehtävällä (kickoff inputs).
+# Tasks. In the hierarchical process tasks are NOT bound to an agent –
+# the CEO manager delegates the parts to the right department heads.
+# {request} is replaced by the task given from the CLI (kickoff inputs).
 # =====================================================================
 
 company_directive:
   description: >
-    Yrityksen hallitus on antanut johtoryhmälle seuraavan direktiivin:
+    The company's board has given the executive team the following directive:
 
     "{request}"
 
-    Toimi johtoryhmän vetäjänä. Analysoi direktiivi, pilko se relevantteihin
-    osa-alueisiin (teknologia, markkinointi, talous, operaatiot) ja delegoi
-    kunkin osan oikealle osastopäällikölle:
-      - Teknologia ja toteutettavuus  -> CTO
-      - Markkinointi ja go-to-market  -> CMO
-      - Talous, budjetti, kannattavuus -> CFO
-      - Operaatiot ja toteutus         -> COO
-    Pyydä jokaiselta konkreettinen tuotos. Jos tarvitaan ajantasaista
-    markkina-, kilpailija- tai faktatietoa, käytä web-hakutyökalua.
-    Haasta osastojen vastaukset ja yhdistä ne yhdeksi yhtenäiseksi
-    johtoryhmän raportiksi. Vältä epämääräisyyttä: jokaisella toimella
-    on oltava omistaja, aikataulu ja arvioitu kustannus tai vaikutus.
+    Act as the head of the executive team. Analyze the directive, break it
+    into the relevant sub-areas (technology, marketing, finance, operations)
+    and delegate each part to the right department head:
+      - Technology and feasibility    -> CTO
+      - Marketing and go-to-market     -> CMO
+      - Finance, budget, profitability -> CFO
+      - Operations and execution       -> COO
+    Ask each one for a concrete output. If up-to-date market, competitor or
+    factual information is needed, use the web search tool. Challenge the
+    departments' answers and combine them into one coherent executive report.
+    Avoid vagueness: every action must have an owner, a timeline and an
+    estimated cost or impact.
   expected_output: >
-    Viimeistelty johtoryhmän raportti Markdown-muodossa, jossa on osiot:
+    A polished executive report in Markdown, with the sections:
 
-    1. **Tiivistelmä** (Executive Summary) – 3–5 lauseen ydin.
-    2. **Strateginen analyysi** – mitä direktiivi tarkoittaa, mahdollisuudet
-       ja keskeiset oletukset.
-    3. **Osastosuunnitelmat** – erikseen Teknologia (CTO), Markkinointi (CMO),
-       Talous (CFO) ja Operaatiot (COO), kukin konkreettisine toimineen.
-    4. **Riskit ja niiden lieventäminen** – taulukkona (riski | vaikutus | toimenpide).
-    5. **90 päivän toimintasuunnitelma** – taulukkona (toimenpide | omistaja | aikataulu).
-    6. **Mittarit (KPI:t)** – mitä seurataan onnistumisen arvioimiseksi.
-
-    Kirjoita raportti samalla kielellä kuin direktiivi oli annettu.
+    1. **Executive Summary** – the core in 3–5 sentences.
+    2. **Strategic analysis** – what the directive means, the opportunities
+       and the key assumptions.
+    3. **Department plans** – separately Technology (CTO), Marketing (CMO),
+       Finance (CFO) and Operations (COO), each with concrete actions.
+    4. **Risks and mitigation** – as a table (risk | impact | mitigation).
+    5. **90-day action plan** – as a table (action | owner | timeline).
+    6. **Metrics (KPIs)** – what is tracked to evaluate success.

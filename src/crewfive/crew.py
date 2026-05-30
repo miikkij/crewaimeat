@@ -1,8 +1,8 @@
-"""Hierarkinen C-suite kruu.
+"""Hierarchical C-suite crew.
 
-CEO toimii managerina (manager_agent) ja delegoi taskit neljälle
-osastopäällikölle (CTO, CMO, CFO, COO). Roolit ja taskit luetaan
-config/-kansion YAML-tiedostoista.
+The CEO acts as the manager (manager_agent) and delegates tasks to the four
+department heads (CTO, CMO, CFO, COO). The roles and tasks are read from the
+YAML files in the config/ folder.
 """
 
 from __future__ import annotations
@@ -16,13 +16,13 @@ from crewfive.llm import get_llm
 
 
 def _web_tools() -> list:
-    """Palauttaa Tavily-web-hakutyökalun listassa, jos TAVILY_API_KEY on asetettu.
+    """Return the Tavily web search tool in a list, if TAVILY_API_KEY is set.
 
-    Jos avainta ei ole, agentit toimivat ilman web-hakua (lista on tyhjä).
+    If the key is missing, the agents work without web search (empty list).
     """
     if not os.getenv("TAVILY_API_KEY"):
         return []
-    # Tuodaan vasta täällä, jotta puuttuva tavily-python ei kaada importtia.
+    # Import only here so a missing tavily-python does not crash the import.
     from crewai_tools import TavilySearchTool
 
     return [TavilySearchTool()]
@@ -30,7 +30,7 @@ def _web_tools() -> list:
 
 @CrewBase
 class CrewFive:
-    """5 agentin johtoryhmä hierarkisessa prosessissa."""
+    """A 5-agent executive team in a hierarchical process."""
 
     agents_config = "config/agents.yaml"
     tasks_config = "config/tasks.yaml"
@@ -38,15 +38,15 @@ class CrewFive:
     def __init__(self, verbose: bool | None = None) -> None:
         self.llm = get_llm()
         self.tools = _web_tools()
-        # Verbose: paikallinen CLI haluaa näkyvyyttä (oletus True), mutta
-        # AIMEAT-runner ajaa hiljaisena (CREW_VERBOSE=0) jotta stdout pysyy puhtaana.
+        # Verbose: the local CLI wants visibility (default True), but the
+        # AIMEAT runner runs quiet (CREW_VERBOSE=0) so stdout stays clean.
         if verbose is None:
             verbose = os.getenv("CREW_VERBOSE", "1").lower() not in ("0", "false", "")
         self.verbose = verbose
 
-    # ---- Manageri (EI @agent-koristetta -> ei mukana agents-listassa) ----
+    # ---- Manager (NO @agent decorator -> not in the agents list) ----
     def manager(self) -> Agent:
-        """CEO – delegoi ja koostaa lopputuloksen."""
+        """CEO – delegates and assembles the final result."""
         return Agent(
             config=self.agents_config["ceo"],
             llm=self.llm,
@@ -54,7 +54,7 @@ class CrewFive:
             verbose=self.verbose,
         )
 
-    # ---- Työntekijät (osastopäälliköt) -----------------------------------
+    # ---- Workers (department heads) --------------------------------------
     @agent
     def cto(self) -> Agent:
         return Agent(
@@ -91,17 +91,17 @@ class CrewFive:
             verbose=self.verbose,
         )
 
-    # ---- Taski (ei sidota agenttiin -> manageri delegoi) -----------------
+    # ---- Task (not bound to an agent -> the manager delegates) -----------
     @task
     def company_directive(self) -> Task:
         return Task(config=self.tasks_config["company_directive"])
 
-    # ---- Kruu ------------------------------------------------------------
+    # ---- Crew ------------------------------------------------------------
     @crew
     def crew(self) -> Crew:
         return Crew(
-            agents=self.agents,  # @agent-koristellut kerätään automaattisesti
-            tasks=self.tasks,  # @task-koristellut kerätään automaattisesti
+            agents=self.agents,  # @agent-decorated are collected automatically
+            tasks=self.tasks,  # @task-decorated are collected automatically
             process=Process.hierarchical,
             manager_agent=self.manager(),
             verbose=self.verbose,

@@ -1,14 +1,14 @@
-"""AIMEAT-task-runner: ajaa 5-agentin hierarkisen company-kruun (CrewFive).
+"""AIMEAT task-runner: runs the 5-agent hierarchical company crew (CrewFive).
 
-Käynnistetään aliprosessina, esim. `aimeat connect serve`:n toimesta:
+Launched as a subprocess, e.g. by `aimeat connect serve`:
 
-    AIMEAT_TASK_PROMPT="Tee Q3 markkinointisuunnitelma ..." \
+    AIMEAT_TASK_PROMPT="Make a Q3 marketing plan ..." \
     AIMEAT_TASK_ID="abc123" AIMEAT_AGENT_NAME="marketing-crew" AIMEAT_TOKEN="..." \
     uv run python -m crewfive.runner
 
-Lukee tehtävän envistä, ajaa kruun, tulostaa Deliverable-JSON:n (stdout ja/tai
-CREW_OUTPUT_FILE). Suuren/verbosen kruun kanssa suositellaan file-capturea
-(output_capture: file:<path>) jotta stdout pysyy puhtaana.
+Reads the task from env, runs the crew, prints a Deliverable JSON (stdout and/or
+CREW_OUTPUT_FILE). For a large/verbose crew, prefer file capture
+(output_capture: file:<path>) so stdout stays clean.
 """
 
 from __future__ import annotations
@@ -32,12 +32,12 @@ def run() -> None:
 
     env = read_runner_env()
     print(
-        f"[crewfive.runner] Aloitetaan task={env.task_id} agent={env.agent_name}\n"
-        f"[crewfive.runner] Direktiivi: {env.prompt}",
+        f"[crewfive.runner] Starting task={env.task_id} agent={env.agent_name}\n"
+        f"[crewfive.runner] Directive: {env.prompt}",
         file=sys.stderr,
     )
 
-    # Best-effort: merkitse aloitus AIMEATin muistiin (jos aimeat-CLI saatavilla).
+    # Best-effort: mark the start in AIMEAT memory (if the aimeat CLI is available).
     if env.task_id:
         write_memory_note(
             key=f"crews/company/tasks/{env.task_id}/started",
@@ -46,7 +46,7 @@ def run() -> None:
         )
 
     try:
-        # Tuodaan vasta load_dotenv():n jälkeen, jotta LLM saa avaimet ympäristöstä.
+        # Import only after load_dotenv() so the LLM picks up keys from the env.
         from crewfive.crew import CrewFive
         from crewfive.main import _save_outputs
 
@@ -55,13 +55,13 @@ def run() -> None:
 
         deliverable = coerce_deliverable(result, env.prompt)
 
-        # Paikallinen arkisto (md + json) – uudelleenkäytetään olemassa olevaa apuria.
+        # Local archive (md + json) – reuse the existing helper.
         try:
             _save_outputs(env.prompt, result)
-        except Exception as exc:  # noqa: BLE001 – arkistointi ei saa kaataa ajoa
-            print(f"[crewfive.runner] Arkistointi epäonnistui: {exc}", file=sys.stderr)
+        except Exception as exc:  # noqa: BLE001 – archiving must not crash the run
+            print(f"[crewfive.runner] Archiving failed: {exc}", file=sys.stderr)
 
-        # Best-effort: tallenna lopputuloksen tiivistelmä AIMEATin muistiin.
+        # Best-effort: save the result summary to AIMEAT memory.
         if env.task_id:
             write_memory_note(
                 key=f"crews/company/tasks/{env.task_id}/result",
@@ -71,8 +71,8 @@ def run() -> None:
 
         emit_deliverable(deliverable)
 
-    except Exception as exc:  # noqa: BLE001 – ilmoita epäonnistuminen non-zero exitillä
-        print(f"[crewfive.runner] VIRHE: {exc}", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 – report failure with a non-zero exit
+        print(f"[crewfive.runner] ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
 
 

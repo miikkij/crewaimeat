@@ -1,15 +1,15 @@
-"""Jaetut AIMEAT-task-runner -apurit.
+"""Shared AIMEAT task-runner helpers.
 
-crewfive-kruut voidaan käynnistää aliprosessina `aimeat connect serve`:n toimesta.
-Tämä moduuli hoitaa sopimuksen AIMEATin kanssa:
+crewfive crews can be launched as a subprocess by `aimeat connect serve`. This
+module handles the contract with AIMEAT:
 
-- lukee tehtävän env-muuttujista (AIMEAT_TASK_PROMPT jne.)
-- muotoilee lopputuloksen yhtenäiseksi Deliverable-JSON:ksi
-- tulostaa sen stdoutiin ja/tai tiedostoon (serve nappaa tämän)
-- voi kesken ajon kirjoittaa muistiinpanon takaisin AIMEATiin CLI:n kautta
+- reads the task from env vars (AIMEAT_TASK_PROMPT etc.)
+- formats the result into a uniform Deliverable JSON
+- prints it to stdout and/or a file (serve captures this)
+- can write a note back to AIMEAT mid-run via the CLI
   (`aimeat connect call aimeat_memory_write ...`), best-effort.
 
-Mitään AIMEAT-Python-pakettia ei tarvita – pelkkä subprocess + CLI riittää.
+No AIMEAT Python package is needed – a plain subprocess + CLI is enough.
 """
 
 from __future__ import annotations
@@ -24,36 +24,35 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
 
-# Käytetään samaa oletustehtävää kuin paikallisessa CLI:ssä, jotta skriptit
-# ovat ajettavissa myös ilman AIMEATia (standalone-testaus).
+# Use the same default task as the local CLI so the scripts can be run without
+# AIMEAT too (standalone testing).
 DEFAULT_REQUEST = (
-    "Laadi liiketoimintasuunnitelma uudelle B2B SaaS -tuotteelle, joka auttaa "
-    "pk-yrityksiä automatisoimaan laskutuksensa tekoälyn avulla. Kata teknologia, "
-    "markkinointi, talous ja operaatiot."
+    "Draft a business plan for a new B2B SaaS product that helps SMEs automate "
+    "their invoicing with AI. Cover technology, marketing, finance and operations."
 )
 
 
 # --------------------------------------------------------------------------- #
-# Deliverable-malli (doc Task 4: { title, summary, sections, recommendations })
+# Deliverable model (doc Task 4: { title, summary, sections, recommendations })
 # --------------------------------------------------------------------------- #
 class Section(BaseModel):
-    heading: str = Field(description="Osion otsikko")
-    content: str = Field(description="Osion sisältö")
+    heading: str = Field(description="Section heading")
+    content: str = Field(description="Section content")
 
 
 class Deliverable(BaseModel):
-    title: str = Field(description="Lyhyt otsikko lopputulokselle")
-    summary: str = Field(description="Tiivistelmä lopputuloksesta")
+    title: str = Field(description="Short title for the result")
+    summary: str = Field(description="Summary of the result")
     sections: list[Section] = Field(
-        default_factory=list, description="Raportin osiot"
+        default_factory=list, description="Report sections"
     )
     recommendations: list[str] = Field(
-        default_factory=list, description="Konkreettiset suositukset"
+        default_factory=list, description="Concrete recommendations"
     )
 
 
 # --------------------------------------------------------------------------- #
-# Env-sopimus
+# Env contract
 # --------------------------------------------------------------------------- #
 @dataclass
 class RunnerEnv:
@@ -64,10 +63,10 @@ class RunnerEnv:
 
 
 def read_runner_env() -> RunnerEnv:
-    """Lukee AIMEAT-task-runnerin env-muuttujat.
+    """Read the AIMEAT task-runner env vars.
 
-    Jos AIMEAT_TASK_PROMPT puuttuu, käytetään CLI-argumentteja tai oletustehtävää,
-    jotta skripti on ajettavissa myös standalone-testinä.
+    If AIMEAT_TASK_PROMPT is missing, fall back to CLI args or the default task
+    so the script can also be run as a standalone test.
     """
     prompt = os.getenv("AIMEAT_TASK_PROMPT", "").strip()
     if not prompt:
@@ -81,13 +80,13 @@ def read_runner_env() -> RunnerEnv:
 
 
 # --------------------------------------------------------------------------- #
-# Lopputuloksen muotoilu ja tulostus
+# Result formatting and output
 # --------------------------------------------------------------------------- #
 def emit_deliverable(deliverable: Deliverable) -> None:
-    """Tulostaa Deliverablen JSON:na.
+    """Print the Deliverable as JSON.
 
-    - Jos CREW_OUTPUT_FILE on asetettu, kirjoittaa JSON:n sinne (output_capture: file:<path>).
-    - Tulostaa JSON:n aina myös stdoutin viimeiseksi (output_capture: stdout).
+    - If CREW_OUTPUT_FILE is set, write the JSON there (output_capture: file:<path>).
+    - Always print the JSON last to stdout too (output_capture: stdout).
     """
     payload = deliverable.model_dump()
     text = json.dumps(payload, ensure_ascii=False, indent=2)
@@ -99,16 +98,16 @@ def emit_deliverable(deliverable: Deliverable) -> None:
         path = Path(out_file)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
-        print(f"[crewfive] Deliverable kirjoitettu: {path}", file=sys.stderr)
+        print(f"[crewfive] Deliverable written: {path}", file=sys.stderr)
 
-    # Lopullinen JSON stdoutiin (serve nappaa tämän stdout-capture-moodissa).
+    # Final JSON to stdout (serve captures this in stdout-capture mode).
     print(text)
 
 
 def _parse_markdown_sections(raw: str) -> list[Section]:
-    """Pilkkoo markdown-tekstin osioihin '##'/'###'-otsikoiden perusteella.
+    """Split markdown text into sections based on '##'/'###' headings.
 
-    Robusti: jos otsikoita ei löydy, palauttaa yhden osion koko tekstillä.
+    Robust: if no headings are found, return a single section with the whole text.
     """
     if not raw:
         return []
@@ -120,7 +119,7 @@ def _parse_markdown_sections(raw: str) -> list[Section]:
     def flush() -> None:
         if heading is not None or buf:
             content = "\n".join(buf).strip()
-            sections.append(Section(heading=heading or "Yhteenveto", content=content))
+            sections.append(Section(heading=heading or "Summary", content=content))
 
     for line in lines:
         m = re.match(r"^#{2,4}\s+(.*)$", line.strip())
@@ -132,23 +131,23 @@ def _parse_markdown_sections(raw: str) -> list[Section]:
             buf.append(line)
     flush()
 
-    # Jos koko teksti oli otsikoton, palautetaan yksi osio.
+    # If the whole text was heading-less, return a single section.
     if not sections:
-        return [Section(heading="Yhteenveto", content=raw.strip())]
+        return [Section(heading="Summary", content=raw.strip())]
     return sections
 
 
 def coerce_deliverable(result, prompt: str) -> Deliverable:
-    """Muuntaa CrewAI:n kickoff-tuloksen Deliverableksi.
+    """Convert CrewAI's kickoff result into a Deliverable.
 
-    Yritysjärjestys: valmis pydantic-malli -> JSON-dict -> raaka markdown käärittynä.
+    Try order: ready pydantic model -> JSON dict -> raw markdown wrapped.
     """
-    # 1) Task määritteli output_pydantic=Deliverable.
+    # 1) The task declared output_pydantic=Deliverable.
     pyd = getattr(result, "pydantic", None)
     if isinstance(pyd, Deliverable):
         return pyd
 
-    # 2) Strukturoitu JSON-dict tuloksessa.
+    # 2) Structured JSON dict in the result.
     data = getattr(result, "json_dict", None)
     if isinstance(data, dict) and data.get("title"):
         try:
@@ -156,15 +155,16 @@ def coerce_deliverable(result, prompt: str) -> Deliverable:
         except Exception:
             pass
 
-    # 3) Fallback: käärit raaka teksti.
+    # 3) Fallback: wrap raw text.
     raw = getattr(result, "raw", None) or str(result)
-    title = prompt.strip().splitlines()[0][:80] if prompt.strip() else "Lopputulos"
+    title = prompt.strip().splitlines()[0][:80] if prompt.strip() else "Result"
     sections = _parse_markdown_sections(raw)
 
-    # Poimi suositukset osiosta, jonka otsikko viittaa suosituksiin.
+    # Pick recommendations from a section whose heading hints at recommendations.
+    # Keep both English and Finnish keywords so either output language is handled.
     recommendations: list[str] = []
     for sec in sections:
-        if re.search(r"suosit|recommend|toimenpit", sec.heading, re.IGNORECASE):
+        if re.search(r"recommend|suosit|toimenpit|action", sec.heading, re.IGNORECASE):
             for line in sec.content.splitlines():
                 item = re.sub(r"^\s*(?:[-*+]|\d+[.)])\s+", "", line).strip()
                 if item:
@@ -179,21 +179,21 @@ def coerce_deliverable(result, prompt: str) -> Deliverable:
 
 
 # --------------------------------------------------------------------------- #
-# Takaisinkutsu AIMEATiin (best-effort, CLI-fallback)
+# Callback to AIMEAT (best-effort, CLI fallback)
 # --------------------------------------------------------------------------- #
 def write_memory_note(
     key: str, value, tags: list[str] | None = None, visibility: str = "private"
 ) -> bool:
-    """Kirjoittaa muistiinpanon AIMEATiin: `aimeat connect call aimeat_memory_write`.
+    """Write a note to AIMEAT: `aimeat connect call aimeat_memory_write`.
 
-    Best-effort: jos `aimeat`-CLI:tä ei löydy tai kutsu epäonnistuu, palautetaan
-    False eikä kruun ajoa kaadeta. Autentikointi tapahtuu AIMEAT-CLI:n omasta
-    konfiguraatiosta (~/.aimeat/), ei tästä prosessista.
+    Best-effort: if the `aimeat` CLI is not found or the call fails, return
+    False and do not crash the crew. Authentication comes from the AIMEAT CLI's
+    own configuration (~/.aimeat/), not from this process.
     """
     exe = shutil.which("aimeat")
     if exe is None:
         print(
-            "[crewfive] 'aimeat'-CLI ei löydy PATHista – ohitetaan muistiinpano.",
+            "[crewfive] 'aimeat' CLI not found in PATH – skipping memory note.",
             file=sys.stderr,
         )
         return False
@@ -203,7 +203,7 @@ def write_memory_note(
         payload["tags"] = tags
 
     args = [exe, "connect", "call", "aimeat_memory_write", "--json", json.dumps(payload)]
-    # Windowsissa npm-asennettu `aimeat` on .cmd/.bat – se vaatii shellin.
+    # On Windows the npm-installed `aimeat` is a .cmd/.bat – it needs a shell.
     use_shell = os.name == "nt" and exe.lower().endswith((".cmd", ".bat"))
     cmd = subprocess.list2cmdline(args) if use_shell else args
 
@@ -215,24 +215,24 @@ def write_memory_note(
             text=True,
             timeout=30,
         )
-    except Exception as exc:  # noqa: BLE001 – best-effort, ei saa kaataa kruuta
-        print(f"[crewfive] aimeat_memory_write epäonnistui: {exc}", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 – best-effort, must not crash the crew
+        print(f"[crewfive] aimeat_memory_write failed: {exc}", file=sys.stderr)
         return False
 
     if proc.returncode != 0:
         print(
-            f"[crewfive] aimeat_memory_write palautti {proc.returncode}: "
+            f"[crewfive] aimeat_memory_write returned {proc.returncode}: "
             f"{(proc.stderr or proc.stdout or '').strip()[:300]}",
             file=sys.stderr,
         )
         return False
 
-    print(f"[crewfive] Muistiinpano kirjoitettu AIMEATiin: {key}", file=sys.stderr)
+    print(f"[crewfive] Memory note written to AIMEAT: {key}", file=sys.stderr)
     return True
 
 
 def force_utf8_stdout() -> None:
-    """Pakottaa stdout/stderr UTF-8:ksi (Windows-konsolin cp1252-ongelma)."""
+    """Force stdout/stderr to UTF-8 (Windows console cp1252 issue)."""
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is not None:
