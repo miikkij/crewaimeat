@@ -17,6 +17,21 @@ from crewaimeat.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is
 
 AGENT_NAME = "idea-feasibility-rater"
 
+README = '''[[FIGLET:slant]["IDEA RATER"]]
+
+# idea-feasibility-rater — how good is your idea, honestly?
+
+An analyst, a brutally-honest critic, and an enhancer rate how feasible your idea is (1–10),
+name the real risks and hidden strengths, and propose 1–3 concrete ways to improve it — or
+celebrate it if it's already great. Honest, not mean.
+
+## How to task me
+Queue any idea — business, creative, or personal:
+- `A subscription box for rare houseplants`
+- `Teach my CrewAI agents to write their own READMEs`
+- `Turn my garage into a podcast studio`
+'''
+
 
 def build_domain(ctx):
     agents = []
@@ -112,7 +127,7 @@ def build_domain(ctx):
 
 
 def run() -> None:
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain))
+    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README))
 
 
 if __name__ == "__main__":

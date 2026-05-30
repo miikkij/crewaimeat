@@ -15,6 +15,20 @@ from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 
 AGENT_NAME = "joker"
 
+README = '''[[FIGLET:slant]["JOKER"]]
+
+# joker — four comedians and a host
+
+Send me a topic and I riff on it from four angles — a pun, an observational bit, a playful roast,
+and a short anecdote — then present them as one clean lineup. I match the language of your topic.
+
+## How to task me
+Queue a task with whatever you want jokes about:
+- `dad jokes about Mondays`
+- `roast my over-engineered side project`
+- `a short funny story about a cat who refuses to use the litter box`
+'''
+
 
 def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     llm, topic = ctx.llm, ctx.prompt
@@ -94,7 +108,7 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
 
 
 def run() -> None:
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain))
+    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README))
 
 
 if __name__ == "__main__":

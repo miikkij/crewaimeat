@@ -16,6 +16,21 @@ from crewaimeat.crew import _web_tools
 
 AGENT_NAME = "sanity-checker"
 
+README = '''[[FIGLET:slant]["SANITY CHECK"]]
+
+# sanity-checker — stress-test an idea, then advise
+
+A skeptic, a pragmatist, and an advisor pull your idea apart: risks, hidden assumptions,
+feasibility, and a grounded verdict (with a better alternative if one genuinely exists).
+Shaky factual claims get checked with web search.
+
+## How to task me
+Queue an idea to pressure-test:
+- `Launch a paid newsletter about local hiking trails`
+- `Replace our REST API with GraphQL next quarter`
+- `Open a board-game cafe in a small university town`
+'''
+
 
 def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     llm, today, idea = ctx.llm, ctx.today, ctx.prompt
@@ -84,7 +99,7 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
 
 
 def run() -> None:
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain))
+    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README))
 
 
 if __name__ == "__main__":

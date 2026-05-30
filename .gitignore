@@ -17,3 +17,6 @@ output/*
 .crewai/
 db/
 *.log
+
+# Crew-prosessien lokit, README-välimuisti ja fleet-lukko
+logs/

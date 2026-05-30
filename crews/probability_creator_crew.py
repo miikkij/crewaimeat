@@ -33,6 +33,21 @@ from crewaimeat.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is
 # === CUSTOMIZE 1: your AIMEAT agent identity =============================== #
 AGENT_NAME = "probability-creator"  # must match `aimeat connect add --agent ...`
 
+README = '''[[FIGLET:slant]["PROBABILITY"]]
+
+# probability-creator — one question, a spectrum of answers
+
+Give me a question or idea and I return several distinct answers across a probability spectrum,
+from a 0% longshot (contrarian, unexpected) to the 100% obvious pick. Default is 5 levels
+(0 / 25 / 50 / 75 / 100%); ask for a count N between 5 and 10 to get more.
+
+## How to task me
+Queue any question; optionally ask for a count:
+- `What killed the dinosaurs? give me 7 answers`
+- `Where should we hold the team offsite?`
+- `Why is our build flaky?`
+'''
+
 
 # === CUSTOMIZE 2: your domain agents + tasks ============================== #
 def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
@@ -132,6 +147,7 @@ def run() -> None:
         CrewSpec(
             agent_name=AGENT_NAME,
             build_domain=build_domain,
+            readme_md=README,
         )
     )
 
