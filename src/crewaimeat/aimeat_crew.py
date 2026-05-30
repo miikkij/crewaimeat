@@ -35,6 +35,7 @@ Minimal usage:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -109,6 +110,10 @@ class CrewSpec:
     #   onboarding via aimeat_onboarding_declare_services
     commands: list[dict] | None = None    # slash-command palette [{name, description, category}, ...]
     #   published to memory key agents.<agent>.commands (owner) so the Messages UI surfaces it
+    readme_md: str | None = None          # markdown for the agent's README tab; may contain
+    #   [[FIGLET[:font]]["text"]] (deterministic ASCII-art) and [[LLM]["prompt"]] (LLM output)
+    #   directives expanded at publish time. Written to agents.<agent>.readme (owner).
+    #   Expanded only when the text changes (cached).
 
 
 # --------------------------------------------------------------------------- #
@@ -230,7 +235,8 @@ def _aimeat_call(agent_name: str, tool: str, payload: dict) -> dict | None:
     cmd = ["cmd", "/c", *base] if os.name == "nt" else base
     try:
         proc = subprocess.run(
-            cmd, input=json.dumps(payload), capture_output=True, text=True, timeout=90
+            cmd, input=json.dumps(payload), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=90,
         )
         return json.loads(proc.stdout)
     except Exception as exc:  # noqa: BLE001
@@ -355,6 +361,94 @@ def _finalize_message_task(agent_name: str, mem_key: str, sender: str | None, li
     )
 
 
+# README directives, expanded at publish time:
+#   [[FIGLET]["text"]] / [[FIGLET:font]["text"]] -> deterministic ASCII-art (pyfiglet)
+#   [[LLM]["prompt"]]                            -> the LLM's response to that prompt
+_FIGLET_DIRECTIVE = re.compile(r"\[\[FIGLET(?::([\w-]+))?\]\[(.*?)\]\]", re.DOTALL)
+_LLM_DIRECTIVE = re.compile(r"\[\[LLM\]\[(.*?)\]\]", re.DOTALL)
+
+
+def _unquote(s: str) -> str:
+    return s.strip().strip('"').strip("'").strip()
+
+
+def _figlet_repl(m: "re.Match[str]") -> str:
+    """Render [[FIGLET[:font]]["text"]] to ASCII-art wrapped in a code fence (monospace)."""
+    font = m.group(1) or "standard"
+    text = _unquote(m.group(2))
+    if not text:
+        return ""
+    try:
+        from pyfiglet import figlet_format
+
+        art = figlet_format(text, font=font).rstrip("\n")
+        return f"```\n{art}\n```"
+    except Exception as exc:  # noqa: BLE001 — unknown font / pyfiglet missing
+        return f"[[FIGLET directive failed: {exc}]]"
+
+
+def _expand_readme(text: str, llm: Any) -> str:
+    """Expand README directives. FIGLET (deterministic) first, then LLM (one call each).
+
+    Lets a README stay dynamic (a generated logo, an LLM-written tagline) while the rest is
+    plain markdown. A directive whose expansion fails is left as a visible marker, never crashes.
+    """
+    text = _FIGLET_DIRECTIVE.sub(_figlet_repl, text)
+
+    def _repl(m: "re.Match[str]") -> str:
+        prompt = _unquote(m.group(1))
+        if not prompt:
+            return ""
+        try:
+            out = llm.call([
+                {
+                    "role": "system",
+                    "content": (
+                        "Output ONLY the requested content (e.g. the raw ASCII art or text). "
+                        "No explanation, no preamble, no surrounding code fences unless asked."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ])
+            return (out or "").strip("\n")
+        except Exception as exc:  # noqa: BLE001
+            return f"[[LLM directive failed: {exc}]]"
+
+    return _LLM_DIRECTIVE.sub(_repl, text)
+
+
+def _publish_readme(agent_name: str, readme_md: str) -> None:
+    """Expand README directives (once per content change) and publish to memory.
+
+    Writes the expanded markdown to agents.<agent>.readme (owner-visible) for the README
+    tab. A local cache keyed by a hash of the source means the LLM only runs when the
+    README text actually changes — so watchdog restarts don't re-bill or reshuffle it.
+    """
+    src_hash = hashlib.sha256(readme_md.encode("utf-8")).hexdigest()
+    cache_dir = Path.cwd() / "logs" / ".readme_cache"
+    body_file = cache_dir / f"{agent_name}.md"
+    hash_file = cache_dir / f"{agent_name}.hash"
+
+    expanded: str | None = None
+    if hash_file.is_file() and body_file.is_file() and hash_file.read_text(encoding="utf-8").strip() == src_hash:
+        expanded = body_file.read_text(encoding="utf-8")  # unchanged -> reuse, no LLM call
+    if expanded is None:
+        expanded = _expand_readme(readme_md, get_llm(for_tool_use=False))
+        try:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            body_file.write_text(expanded, encoding="utf-8")
+            hash_file.write_text(src_hash, encoding="utf-8")
+        except OSError:
+            pass  # cache is best-effort
+
+    res = _aimeat_call(
+        agent_name,
+        "aimeat_memory_write",
+        {"key": f"agents.{agent_name}.readme", "value": expanded, "visibility": "owner"},
+    )
+    print(f"[{agent_name}] published README to agents.{agent_name}.readme: {bool(res)}", file=sys.stderr)
+
+
 def run_crew(spec: CrewSpec) -> None:
     """Entry point: ensure onboarding once, then run the daemon forever.
 
@@ -387,6 +481,10 @@ def run_crew(spec: CrewSpec) -> None:
             f"agents.{spec.agent_name}.commands: {bool(res)}",
             file=sys.stderr,
         )
+
+    # 1c) Publish the README (with any [[LLM]] directives expanded) to the README tab.
+    if spec.readme_md:
+        _publish_readme(spec.agent_name, spec.readme_md)
 
     # 2) Per-task crew builder handed to the daemon.
     def _build(task: dict, liaison: Agent) -> Crew:

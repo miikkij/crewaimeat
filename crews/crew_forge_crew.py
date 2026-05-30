@@ -54,6 +54,27 @@ COMMANDS = [
     {"name": "/help", "description": "List crew-forge's slash commands", "category": "meta"},
 ]
 
+# Published to the README tab (agents.crew-forge.readme). The [[LLM][...]] directive is
+# expanded once by an LLM at publish time (re-run only when this text changes).
+README = '''[[FIGLET:slant]["CREW FORGE"]]
+
+# crew-forge — the agent that makes agents
+
+Tell me the agent you want and I design it, write + validate its crew on the AIMEAT
+scaffold, register it, and launch it under a watchdog. You approve each new agent once.
+
+## How to use me
+Send me a **task**:
+
+- `/build <description>` — e.g. `/build an agent that drafts release notes from a changelog`
+- `/restart <agent>` — bring a stopped crew back online
+- `/reauth <agent>` — re-run authorization so you can approve it again
+- `/list` (or `/status`) — show your crews and which are running
+- `/help` — list these commands
+
+Plain text with no leading `/` is treated as a `/build` request.
+'''
+
 _BUILD_CMDS = {"build", "new", "make", "create"}
 _RESTART_CMDS = {"restart", "relaunch", "reboot", "start"}
 _LIST_CMDS = {"list", "ls", "status"}
@@ -222,6 +243,8 @@ def run() -> None:
             # palette to agents.crew-forge.commands (owner) so the Messages UI surfaces it.
             services=COMMAND_SERVICES,
             commands=COMMANDS,
+            # README tab — the [[LLM]] logo is generated at publish time.
+            readme_md=README,
         )
     )
 

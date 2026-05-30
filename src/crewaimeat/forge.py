@@ -138,9 +138,12 @@ def _is_running_file(fname: str) -> bool:
     """True if some process command line references this crew filename (daemon or watchdog)."""
     try:
         if os.name == "nt":
+            # Exclude THIS query's own process ($PID): its command line contains `fname`
+            # (the -like pattern), so without the guard the check always matches itself
+            # and reports "running" for every crew.
             ps = (
                 "Get-CimInstance Win32_Process | "
-                f"Where-Object {{ $_.CommandLine -like '*{fname}*' }} | "
+                f"Where-Object {{ $_.ProcessId -ne $PID -and $_.CommandLine -like '*{fname}*' }} | "
                 "Select-Object -First 1 -ExpandProperty ProcessId"
             )
             proc = subprocess.run(
@@ -169,6 +172,10 @@ def launch_crew(rel_path: str) -> tuple[int | None, str]:
     logs.mkdir(exist_ok=True)
     log_path = logs / (Path(rel_path).stem + ".watchdog.log")
     logf = open(log_path, "ab")
+    # Put the venv's Scripts/bin dir (where uv.exe lives next to this python.exe) first on
+    # PATH so the watchdog's `uv run` resolves even if the parent's PATH lacks it.
+    env = os.environ.copy()
+    env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
     try:
         if os.name == "nt":
             script = root / "scripts" / "watchdog.ps1"
@@ -176,16 +183,18 @@ def launch_crew(rel_path: str) -> tuple[int | None, str]:
                 "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
                 "-File", str(script), rel_path,
             ]
-            # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP: survive the parent daemon.
-            flags = 0x00000008 | 0x00000200
+            # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP: runs hidden and outlives the parent.
+            # NOT DETACHED_PROCESS — with that flag PowerShell never executes the script and the
+            # log stays empty (verified); CREATE_NO_WINDOW runs it and captures its output.
+            flags = 0x08000000 | 0x00000200
             proc = subprocess.Popen(
-                cmd, cwd=str(root), stdout=logf, stderr=logf,
+                cmd, cwd=str(root), env=env, stdout=logf, stderr=logf,
                 stdin=subprocess.DEVNULL, creationflags=flags, close_fds=True,
             )
         else:
             script = root / "scripts" / "watchdog.sh"
             proc = subprocess.Popen(
-                ["bash", str(script), rel_path], cwd=str(root), stdout=logf,
+                ["bash", str(script), rel_path], cwd=str(root), env=env, stdout=logf,
                 stderr=logf, stdin=subprocess.DEVNULL, start_new_session=True, close_fds=True,
             )
         return proc.pid, _rel(log_path)
