@@ -1,6 +1,6 @@
 # AIMEAT × CrewAI scaffold: canon & pitfalls
 
-**The authoritative "why it's built this way" reference.** The scaffold (`crewfive/aimeat_crew.py`, plus `progress.py` and `llm.py`) provides everything below. Reuse it as-is and keep your work in `build_domain`. The **Why** column explains each piece; every one is a real failure we diagnosed and fixed end-to-end against https://aimeat.io, so reusing the scaffold keeps it fixed.
+**The authoritative "why it's built this way" reference.** The scaffold (`crewaimeat/aimeat_crew.py`, plus `progress.py` and `llm.py`) provides everything below. Reuse it as-is and keep your work in `build_domain`. The **Why** column explains each piece; every one is a real failure we diagnosed and fixed end-to-end against https://aimeat.io, so reusing the scaffold keeps it fixed.
 
 Validated 2026-05-30 against: aimeat-crewai **0.3.4**, aimeat CLI **1.14.3**, crewai **1.14.6** (native providers, no litellm), model `openrouter/owl-alpha`, Windows 11. Result: onboarding 7/7 `completed`; daemon picks up an active task; the domain crew researches; the liaison publishes to memory and completes the task; live progress feed updates every 5s.
 
@@ -38,7 +38,7 @@ A task-runner agent's tasks are **auto-activated** on the node (C3, landed 2026-
 | 5 | **`parallel_tool_calls=False` + sequential-verify todos** | The liaison fired 4 `aimeat_task_todo` in one turn → server read-modify-writes the whole task → lost updates (only 1 stuck) | `get_llm()` + `_finalize_task` |
 | 6 | **Empty-`choices` guard** | OpenRouter returns transient upstream errors as HTTP 200 + `choices=None` → `'NoneType' object is not subscriptable` | crewai `openai/completion.py` (upstream) |
 | 7 | **Current-date injection** (`ctx.today`) | The model hallucinated dates (produced "18.6.2025" on a 2026 run) with no grounding | `_now_context()` |
-| 8 | **Deterministic progress bridge** (no LLM): milestones → `aimeat_task_event`, 5s live status → memory key | UI needs "what's happening now"; todos are the wrong tool, and auto-activated tasks have none | `crewfive/progress.py` |
+| 8 | **Deterministic progress bridge** (no LLM): milestones → `aimeat_task_event`, 5s live status → memory key | UI needs "what's happening now"; todos are the wrong tool, and auto-activated tasks have none | `crewaimeat/progress.py` |
 | 9 | **Windows: `cmd /c` + UTF-8 reconfigure** | `aimeat` is an extensionless npm shim (WinError 193); console cp1252 breaks accents/emojis | `_aimeat_call`, module top |
 | 10 | **Idle auth-guard** (probe on idle; exit `78` after N rejections) | `_poll_tasks` swallows a 401, so a stale token looks like an empty queue and the daemon would idle silently forever. The guard notices and exits so you re-approve the agent | `run_crew` `on_idle` + `_auth_alive`; watchdog stops on exit 78 |
 
@@ -59,5 +59,5 @@ Items marked *(upstream)* are now shipped in the packages, listed so you know th
 ## 6. See also
 
 - `CREW_AUTHORING_PROMPT.md`: the paste-into-assistant prompt that drives Steps 0 to 3.
-- `src/crewfive/research_crew.py`: the canonical worked example.
-- `crewfive new-crew <name>`: scaffolds `crews/<name>_crew.py` from the template.
+- `src/crewaimeat/research_crew.py`: the canonical worked example.
+- `crewaimeat new-crew <name>`: scaffolds `crews/<name>_crew.py` from the template.

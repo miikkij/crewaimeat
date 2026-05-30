@@ -4,15 +4,15 @@ Generated example crew on the AIMEAT scaffold. Edit build_domain to taste;
 the scaffold provides the AIMEAT wiring (see SCAFFOLD_CANON.md). Register first:
   aimeat connect add --agent marketing-crew --mode task-runner --url https://aimeat.io --owner <owner>
 
-Run: python -m crewfive.examples.marketing_crew
+Run: python -m crewaimeat.examples.marketing_crew
 """
 
 from __future__ import annotations
 
 from crewai import Agent, Task
 
-from crewfive.aimeat_crew import BuildContext, CrewSpec, run_crew
-from crewfive.crew import _web_tools
+from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
+from crewaimeat.crew import _web_tools
 
 AGENT_NAME = "marketing-crew"
 

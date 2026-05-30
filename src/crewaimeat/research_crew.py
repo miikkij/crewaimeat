@@ -4,10 +4,10 @@ This is the reference TEMPLATE. To make your own crew: copy this file, change
 AGENT_NAME (it must match the name you used in `aimeat connect add`), and edit
 ONLY `build_domain` — your agents and their tasks. Everything AIMEAT-related
 (onboarding, daemon, liaison publish/complete, live progress, date injection) is
-handled by crewfive.aimeat_crew.run_crew — reuse it as-is.
+handled by crewaimeat.aimeat_crew.run_crew — reuse it as-is.
 
 Run:
-    uv run python -m crewfive.research_crew
+    uv run python -m crewaimeat.research_crew
     # or, after `pip install`:  research-crew
 """
 
@@ -17,8 +17,8 @@ import os
 
 from crewai import Agent, Task
 
-from crewfive.aimeat_crew import BuildContext, CrewSpec, run_crew
-from crewfive.crew import _web_tools
+from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
+from crewaimeat.crew import _web_tools
 
 AGENT_NAME = "research-crew"
 

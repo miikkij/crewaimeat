@@ -10,7 +10,7 @@ https://aimeat.io:
   execute on active)
 - the liaison `finalize` task: publish to AIMEAT memory + mark todos done ONE AT
   A TIME with read-after-write verify + complete the task
-- the live progress bridge (crewfive.progress): milestones -> aimeat_task_event,
+- the live progress bridge (crewaimeat.progress): milestones -> aimeat_task_event,
   5s live status -> memory key agents.<agent>.tasks.<id>.live
 - current-date injection so the crew never hallucinates "today"
 
@@ -21,7 +21,7 @@ onboarding cache loops). Reusing the scaffold keeps them fixed.
 Minimal usage:
 
     from crewai import Agent, Task
-    from crewfive.aimeat_crew import BuildContext, CrewSpec, run_crew
+    from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 
     def build_domain(ctx: BuildContext) -> tuple[list, list]:
         worker = Agent(role="Worker", goal="...", backstory="...", llm=ctx.llm)
@@ -62,8 +62,8 @@ try:  # private helper; degrade gracefully if a future version moves it
 except Exception:  # pragma: no cover
     _aimeat_read_token = None
 
-from crewfive.llm import get_llm  # noqa: E402
-from crewfive.progress import install_progress  # noqa: E402
+from crewaimeat.llm import get_llm  # noqa: E402
+from crewaimeat.progress import install_progress  # noqa: E402
 
 # run_crew() exits with this code when the agent's token is no longer accepted by the
 # node (needs re-approval). The watchdog scripts treat it as "stop, don't restart".
@@ -79,7 +79,7 @@ class BuildContext:
 
     task: dict          # the raw AIMEAT task (id, title, description, ...)
     prompt: str         # task.description or task.title — the user's actual request
-    llm: Any            # the shared LLM (crewfive.llm.get_llm); pass to your Agents
+    llm: Any            # the shared LLM (crewaimeat.llm.get_llm); pass to your Agents
     today: str          # current-time context string — prepend to time-sensitive tasks
 
 

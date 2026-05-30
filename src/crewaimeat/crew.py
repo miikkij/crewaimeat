@@ -2,7 +2,7 @@
 
 `_web_tools()` returns the Tavily web-search tool when `TAVILY_API_KEY` is set, and an
 empty list otherwise, so an agent can pass `tools=_web_tools()` and work with or without
-web search. Crews import it as `from crewfive.crew import _web_tools`.
+web search. Crews import it as `from crewaimeat.crew import _web_tools`.
 """
 
 from __future__ import annotations

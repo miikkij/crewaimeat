@@ -12,7 +12,7 @@ Signals come from CrewAI's framework events (crewai.events), not from LLM
 decisions -> fully deterministic. Writes go through ``aimeat connect call`` (its
 own short-lived REST client, independent of the serve process).
 
-Prototype lives in crewfive. Portable to aimeat-crewai: there the daemon has
+Prototype lives in crewaimeat. Portable to aimeat-crewai: there the daemon has
 ``_read_token`` -> token + node_url ready, so these writes can be done directly
 with ``requests.post`` without a subprocess.
 """

@@ -1,17 +1,17 @@
 # Crew authoring prompt: paste this into Claude Code / Copilot
 
-**What this is:** hand this whole document to an AI coding assistant (Claude Code, a VS Code Copilot/agent, etc.) when you want to create a new CrewAI crew that connects to **AIMEAT.io**. The assistant will interview you and generate a working crew on the validated `crewfive` scaffold, reusing it for the parts that are hard to get right.
+**What this is:** hand this whole document to an AI coding assistant (Claude Code, a VS Code Copilot/agent, etc.) when you want to create a new CrewAI crew that connects to **AIMEAT.io**. The assistant will interview you and generate a working crew on the validated `crewaimeat` scaffold, reusing it for the parts that are hard to get right.
 
 > Everything from the line below is the prompt. Copy from there down.
 
 ---
 
-You are helping me create a new **CrewAI crew connected to AIMEAT.io**, built on the **`crewfive` scaffold** (the `aimeat_crew` module). Your job: confirm the prerequisites, **interview me** about what the crew is for, then **generate the crew with `crewfive new-crew` and fill in the domain part**.
+You are helping me create a new **CrewAI crew connected to AIMEAT.io**, built on the **`crewaimeat` scaffold** (the `aimeat_crew` module). Your job: confirm the prerequisites, **interview me** about what the crew is for, then **generate the crew with `crewaimeat new-crew` and fill in the domain part**.
 
 ## Core rules (always follow these)
 
-1. **Reuse the AIMEAT wiring; it is already built and verified.** The scaffold `crewfive.aimeat_crew.run_crew` provides, end-to-end: the onboarding handshake (Hello Integration), the task daemon (poll then execute), the **liaison** that publishes results to AIMEAT memory and completes tasks, the live progress bridge, current-date injection, and an auth-expiry guard. Let it own all of that; your code lives entirely in `build_domain`. (Each of those areas was a real bug we already fixed, so reusing the scaffold keeps them fixed.)
-2. **You write exactly one thing: `build_domain(ctx)`**, the crew's own agents and their tasks, plus the `CrewSpec` that names the crew. Generate the file with `crewfive new-crew <name>` and edit that file; leave `crewfive/aimeat_crew.py` as-is.
+1. **Reuse the AIMEAT wiring; it is already built and verified.** The scaffold `crewaimeat.aimeat_crew.run_crew` provides, end-to-end: the onboarding handshake (Hello Integration), the task daemon (poll then execute), the **liaison** that publishes results to AIMEAT memory and completes tasks, the live progress bridge, current-date injection, and an auth-expiry guard. Let it own all of that; your code lives entirely in `build_domain`. (Each of those areas was a real bug we already fixed, so reusing the scaffold keeps them fixed.)
+2. **You write exactly one thing: `build_domain(ctx)`**, the crew's own agents and their tasks, plus the `CrewSpec` that names the crew. Generate the file with `crewaimeat new-crew <name>` and edit that file; leave `crewaimeat/aimeat_crew.py` as-is.
 3. **Interview me first, then build.** Ask the questions in Step 1, wait for my answers, confirm your understanding, and generate from there. A few questions at a time is fine.
 4. If something breaks at runtime, **report the exact step, the error, and which AIMEAT tool returned it**, and pause for guidance. The scaffold is the source of truth, so surfacing a regression there beats working around it.
 
@@ -45,7 +45,7 @@ Reflect my answers back as a short spec (roster, order, I/O) and get my OK befor
 
 ## Step 2: generate the crew
 
-- Scaffold the file: `uv run crewfive new-crew <name>` creates `crews/<name>_crew.py` and sets `AGENT_NAME`. (Worked reference to mirror: `crewfive/research_crew.py`.)
+- Scaffold the file: `uv run crewaimeat new-crew <name>` creates `crews/<name>_crew.py` and sets `AGENT_NAME`. (Worked reference to mirror: `crewaimeat/research_crew.py`.)
 - In `crews/<name>_crew.py`, fill in `build_domain(ctx)`:
   - Create the agreed `Agent`s; pass `llm=ctx.llm` to each. Add `tools=_web_tools()` to agents that need web search.
   - Create the `Task`s in order. Prepend `ctx.today` to any time-sensitive task. Give the agent that needs my request `ctx.prompt`. The **last task's output is what gets published** to AIMEAT.

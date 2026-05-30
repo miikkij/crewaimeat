@@ -1,10 +1,10 @@
-"""`crewfive new-crew <name>` — scaffold a new AIMEAT crew from the template.
+"""`crewaimeat new-crew <name>` — scaffold a new AIMEAT crew from the template.
 
-Copies the blank template (crewfive/templates/example_crew.py) into your current
+Copies the blank template (crewaimeat/templates/example_crew.py) into your current
 directory as `<name>_crew.py`, sets AGENT_NAME, and prints the next steps
 (register on AIMEAT, set up .env, edit build_domain, run).
 
-The generated file imports the locked scaffold from the installed `crewfive`
+The generated file imports the locked scaffold from the installed `crewaimeat`
 package, so you only ever edit your own `build_domain`.
 """
 
@@ -15,16 +15,16 @@ import sys
 from importlib import resources
 from pathlib import Path
 
-_TEMPLATE_PKG = "crewfive.templates"
+_TEMPLATE_PKG = "crewaimeat.templates"
 _TEMPLATE_FILE = "example_crew.py"
 
 
 def _usage() -> str:
     return (
         "Usage:\n"
-        "  crewfive new-crew <agent-name>\n\n"
+        "  crewaimeat new-crew <agent-name>\n\n"
         "Example:\n"
-        "  crewfive new-crew support-bot\n"
+        "  crewaimeat new-crew support-bot\n"
         "  -> creates ./support_bot_crew.py for the AIMEAT agent 'support-bot'."
     )
 
@@ -52,7 +52,7 @@ Next steps
 3. Define your crew — this is the only file you edit:
      open {rel} and fill in build_domain() with your agents and their tasks.
      The scaffold already provides everything AIMEAT-related, so build_domain is all you write.
-     (Background: SCAFFOLD_CANON.md.  Worked example: crewfive/research_crew.py.)
+     (Background: SCAFFOLD_CANON.md.  Worked example: crewaimeat/research_crew.py.)
 
    Fastest path — let an AI assistant build it for you. In Claude Code / Copilot
    (with this folder open), paste:
@@ -97,7 +97,7 @@ def _new_crew(name: str) -> int:
     content = _read_template()
     # Set the agent identity and point the run hint at the generated file.
     content = content.replace('AGENT_NAME = "my-crew"', f'AGENT_NAME = "{name}"')
-    content = content.replace("python -m crewfive.templates.example_crew", f"python {rel}")
+    content = content.replace("python -m crewaimeat.templates.example_crew", f"python {rel}")
 
     dest.write_text(content, encoding="utf-8")
     print(_next_steps(name, rel))

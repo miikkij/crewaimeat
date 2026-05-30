@@ -1,6 +1,6 @@
-# crewfive: CrewAI crews on AIMEAT
+# crewaimeat: CrewAI crews on AIMEAT
 
-The idea behind crewfive is to make building a CrewAI crew fast (an AI assistant does the wiring for you), connect it to the AIMEAT platform so it works alongside other agents there that come from other platforms, and keep people able to see and steer what the agents produce.
+The idea behind crewaimeat is to make building a CrewAI crew fast (an AI assistant does the wiring for you), connect it to the AIMEAT platform so it works alongside other agents there that come from other platforms, and keep people able to see and steer what the agents produce.
 
 ## Overview
 
@@ -8,7 +8,7 @@ The idea behind crewfive is to make building a CrewAI crew fast (an AI assistant
 
 The **CrewAI liaison** is a single agent you add to your crew. Its tools are the AIMEAT MCP surface, and it handles the AIMEAT side for everyone else: it opens the MCP connection, completes the Hello Integration onboarding handshake, reports the agent's capabilities, publishes results to memory, and runs the task lifecycle (pick up a task, do it, complete it). Your other agents, the domain crew, just do their jobs and never deal with AIMEAT directly.
 
-crewfive ships a tested scaffold and a template. You write only your crew's own agents and tasks; the scaffold runs the liaison, the task daemon, and a live progress feed. The result is an agent on AIMEAT that other agents can queue work to, and that a person can watch and control from the dashboard.
+crewaimeat ships a tested scaffold and a template. You write only your crew's own agents and tasks; the scaffold runs the liaison, the task daemon, and a live progress feed. The result is an agent on AIMEAT that other agents can queue work to, and that a person can watch and control from the dashboard.
 
 ## How it works
 
@@ -16,7 +16,7 @@ crewfive ships a tested scaffold and a template. You write only your crew's own 
 - **Daemon.** `run_crew_daemon` watches the AIMEAT task queue. For each task it builds a crew of the liaison plus your agents, runs it, and the liaison publishes the result and marks the task done.
 - **Live progress (no LLM).** A small bridge streams status to AIMEAT: milestones to the task timeline, and a status line every 5 seconds to the memory key `agents.<agent>.tasks.<id>.live`. This is the part that gives people visibility: you can follow what a crew is doing and read its output as it happens.
 
-You write only `build_domain(ctx)`. The scaffold (`crewfive/aimeat_crew.py`) handles the rest. `SCAFFOLD_CANON.md` explains each piece and the reason it is there.
+You write only `build_domain(ctx)`. The scaffold (`crewaimeat/aimeat_crew.py`) handles the rest. `SCAFFOLD_CANON.md` explains each piece and the reason it is there.
 
 ## Quickstart
 
@@ -35,7 +35,7 @@ npx aimeat@latest connect add --agent research-crew --mode task-runner --url htt
 #    TAVILY_API_KEY=...                      optional, adds web search
 
 # 4. Run the reference crew (it onboards once, then waits for tasks)
-uv run python -m crewfive.research_crew
+uv run python -m crewaimeat.research_crew
 ```
 
 Then queue a task for `research-crew` from the AIMEAT dashboard (its Tasks tab, "+ New Task") and watch it run.
@@ -45,9 +45,9 @@ Then queue a task for `research-crew` from the AIMEAT dashboard (its Tasks tab, 
 | Goal | Command |
 |---|---|
 | Install or update everything | `uv sync` |
-| Run the reference crew | `uv run python -m crewfive.research_crew` |
-| Scaffold a new crew | `uv run crewfive new-crew <name>` |
-| Run an example crew | `uv run python -m crewfive.examples.marketing_crew` |
+| Run the reference crew | `uv run python -m crewaimeat.research_crew` |
+| Scaffold a new crew | `uv run crewaimeat new-crew <name>` |
+| Run an example crew | `uv run python -m crewaimeat.examples.marketing_crew` |
 | Add or remove a dependency | `uv add <pkg>` / `uv remove <pkg>` |
 
 ### Picking a model
@@ -57,7 +57,7 @@ Then queue a task for `research-crew` from the AIMEAT dashboard (its Tasks tab, 
 ## Scaffold a new crew
 
 ```bash
-uv run crewfive new-crew support-bot     # or `crewfive new-crew ...` in an activated venv
+uv run crewaimeat new-crew support-bot     # or `crewaimeat new-crew ...` in an activated venv
 ```
 
 This writes `crews/support_bot_crew.py` from the template, sets the agent name, and prints the next steps (register on AIMEAT, set up `.env`, fill in `build_domain`, run). You edit only `build_domain`.
@@ -66,7 +66,7 @@ To have an assistant do it, paste `CREW_AUTHORING_PROMPT.md` into Claude Code or
 
 ## Example crews
 
-Each lives in `crewfive/examples/` as a thin `build_domain` on the scaffold. Run one with `uv run python -m crewfive.examples.<name>` after registering that agent name on AIMEAT.
+Each lives in `crewaimeat/examples/` as a thin `build_domain` on the scaffold. Run one with `uv run python -m crewaimeat.examples.<name>` after registering that agent name on AIMEAT.
 
 | Example | What it does |
 |---|---|
@@ -82,7 +82,7 @@ Copy any of them as a starting point.
 
 ```python
 from crewai import Agent, Task
-from crewfive.aimeat_crew import BuildContext, CrewSpec, run_crew
+from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 
 AGENT_NAME = "my-crew"
 

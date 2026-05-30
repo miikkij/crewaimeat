@@ -4,14 +4,14 @@ Generated example crew on the AIMEAT scaffold. Edit build_domain to taste;
 the scaffold provides the AIMEAT wiring (see SCAFFOLD_CANON.md). Register first:
   aimeat connect add --agent data-insights-crew --mode task-runner --url https://aimeat.io --owner <owner>
 
-Run: python -m crewfive.examples.data_insights_crew
+Run: python -m crewaimeat.examples.data_insights_crew
 """
 
 from __future__ import annotations
 
 from crewai import Agent, Task
 
-from crewfive.aimeat_crew import BuildContext, CrewSpec, run_crew
+from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 
 AGENT_NAME = "data-insights-crew"
 

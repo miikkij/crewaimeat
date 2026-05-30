@@ -1,20 +1,20 @@
-# crewfive ↔ AIMEAT -integraatio
+# crewaimeat ↔ AIMEAT -integraatio
 
-Miten crewfive-kruut kytketään **AIMEAT**-noodiin. Kaksi tapaa; **Liaison Agent**
+Miten crewaimeat-kruut kytketään **AIMEAT**-noodiin. Kaksi tapaa; **Liaison Agent**
 on suositeltu.
 
 > Syvempi teoria ja framework-agnostinen vastaavuuskartta: AIMEATin oma
 > [`docs/integrations/crewai.md`](https://github.com/miikkij/aimeat-protocol/blob/main/docs/integrations/crewai.md).
 
-## crewfiven rakenne
+## crewaimeatn rakenne
 
 | Kruu | Entrypoint | Prosessi | Agentit |
 |------|-----------|----------|---------|
-| **Company** | `crewfive.runner` | hierarkinen | CEO (manageri) + CTO, CMO, CFO, COO |
-| **Kevyt** | `crewfive.demo` | sekventiaalinen | researcher → analyst → writer |
+| **Company** | `crewaimeat.runner` | hierarkinen | CEO (manageri) + CTO, CMO, CFO, COO |
+| **Kevyt** | `crewaimeat.demo` | sekventiaalinen | researcher → analyst → writer |
 
-Roolit: [src/crewfive/config/agents.yaml](../src/crewfive/config/agents.yaml). LLM:
-OpenRouter/xAI ([src/crewfive/llm.py](../src/crewfive/llm.py)). Web-haku: Tavily.
+Roolit: [src/crewaimeat/config/agents.yaml](../src/crewaimeat/config/agents.yaml). LLM:
+OpenRouter/xAI ([src/crewaimeat/llm.py](../src/crewaimeat/llm.py)). Web-haku: Tavily.
 
 ## Tapa A — AIMEAT Liaison Agent (suositus)
 
@@ -25,7 +25,7 @@ memory, telemetria) MCP-pinnan kautta — muut agentit tekevät vain domain-työ
 ```python
 from crewai import Crew, Task
 from aimeat_crewai import create_liaison_agent, stdio_params
-from crewfive.llm import get_llm
+from crewaimeat.llm import get_llm
 
 params = stdio_params(agent_name="company-crew")   # spawnaa `aimeat connect serve`
 with create_liaison_agent(mcp_server_params=params, agent_name="company-crew",
@@ -39,7 +39,7 @@ Toimiva esimerkki: [try_liaison.py](../try_liaison.py).
 ### Ajo tyhjästä asennuksesta
 
 ```powershell
-# 1) crewfive-riippuvuudet + liaison-paketti
+# 1) crewaimeat-riippuvuudet + liaison-paketti
 python -m uv sync
 python -m uv pip install aimeat-crewai
 
@@ -68,9 +68,9 @@ Verifioi serveriltä: `aimeat connect call aimeat_onboarding_status --agent comp
 | Onboarding test task | merkitään `done` (accept + complete) |
 | (capabilities, telemetria) | raportoidaan onboardingin yhteydessä |
 
-> `crewfive.runner` (task-runner-subprocess, ks. Tapa B) kirjoittaa lisäksi
+> `crewaimeat.runner` (task-runner-subprocess, ks. Tapa B) kirjoittaa lisäksi
 > best-effort -muistiinpanot avaimiin `crews/company/tasks/<task_id>/started`
-> ja `.../result` ([src/crewfive/aimeat.py](../src/crewfive/aimeat.py)).
+> ja `.../result` ([src/crewaimeat/aimeat.py](../src/crewaimeat/aimeat.py)).
 
 ### Suositukset (tuotanto)
 - **`tool_filter`**: liaison saa oletuksena ~95 MCP-työkalua (mm. wallet/admin/consent).
@@ -80,7 +80,7 @@ Verifioi serveriltä: `aimeat connect call aimeat_onboarding_status --agent comp
 
 ## Tapa B — task-runner-subprocess
 
-`aimeat connect serve` käynnistää crewfive-kruun aliprosessina kun tehtävä saapuu;
+`aimeat connect serve` käynnistää crewaimeat-kruun aliprosessina kun tehtävä saapuu;
 kruu lukee env-muuttujat, ajaa, tulostaa JSON-deliverablen stdoutiin. Per-agent
 config + env-sopimus: ks. [examples/aimeat/](../examples/aimeat/). Tämä sopii
 yksinkertaisiin fire-and-forget -keisseihin; LLM-pohjaisille kruuille Liaison

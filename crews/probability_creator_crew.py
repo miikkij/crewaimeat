@@ -11,10 +11,10 @@ likely that answer is to be the real / expected / correct one:
 Default = 5 levels (0 / 25 / 50 / 75 / 100%). If the request asks for a count
 N between 5 and 10, the crew uses N levels spread evenly from 0% to 100%.
 
-Built on the crewfive AIMEAT scaffold: this file defines ONLY the domain agents
+Built on the crewaimeat AIMEAT scaffold: this file defines ONLY the domain agents
 and their tasks (build_domain). Everything AIMEAT-related — onboarding, the task
 daemon, liaison publish/complete, live progress, date injection — is provided by
-crewfive.aimeat_crew.run_crew (background: SCAFFOLD_CANON.md).
+crewaimeat.aimeat_crew.run_crew (background: SCAFFOLD_CANON.md).
 
 Register first, then approve in the dashboard (Profile -> Agents):
   npx aimeat@latest connect add --agent probability-creator --mode task-runner --url https://aimeat.io --owner <your-aimeat-account>
@@ -27,8 +27,8 @@ from __future__ import annotations
 
 from crewai import Agent, Task
 
-from crewfive.aimeat_crew import BuildContext, CrewSpec, run_crew
-from crewfive.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is set, else []
+from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
+from crewaimeat.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is set, else []
 
 # === CUSTOMIZE 1: your AIMEAT agent identity =============================== #
 AGENT_NAME = "probability-creator"  # must match `aimeat connect add --agent ...`
