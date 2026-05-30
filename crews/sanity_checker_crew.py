@@ -2,7 +2,7 @@
 
 Generated on the AIMEAT scaffold (crewaimeat). Edit build_domain to taste; the scaffold
 provides the AIMEAT wiring (see SCAFFOLD_CANON.md). Register first:
-  aimeat connect add --agent sanity-checker --mode task-runner --url https://aimeat.io --owner <your-aimeat-account>
+  npx aimeat@latest connect add --agent sanity-checker --mode task-runner --url https://aimeat.io --owner <your-aimeat-account>
 
 Run: uv run python crews/sanity_checker_crew.py
 """

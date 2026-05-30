@@ -44,6 +44,7 @@ import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Iterable
 from zoneinfo import ZoneInfo
 
@@ -102,8 +103,8 @@ class CrewSpec:
     owner: str | None = None              # AIMEAT owner; set only if the agent name is ambiguous
     max_idle_auth_failures: int = 10      # idle cycles with a rejected token before exiting for re-auth
     listen_for: Iterable[str] = ("tasks",)  # add "messages" to also act on inbox messages
-    wait_for_approval_seconds: int | None = None  # wait this long for the token to be approved
-    #   before onboarding (None = wait indefinitely; right for an unattended service)
+    wait_for_approval_seconds: int | None = 900  # wait this long for the token to be approved
+    #   before onboarding, then exit for re-auth (None = wait indefinitely)
 
 
 # --------------------------------------------------------------------------- #
@@ -156,39 +157,63 @@ def _auth_alive(agent_name: str, owner: str | None) -> bool | None:
         return None
 
 
+def _token_exists(agent_name: str, owner: str | None) -> bool:
+    """True if the connector has written a token file for this agent yet.
+
+    Mirrors aimeat_crewai's keychain layout (~/.aimeat/tokens/{agent}@{owner}.token). Before
+    the owner approves a freshly-registered agent there is no token, so the daemon's
+    _read_token would raise at startup — we use this to wait for registration/approval first.
+    """
+    import glob
+
+    home = Path(os.environ.get("AIMEAT_HOME") or (Path.home() / ".aimeat"))
+    tokens = home / "tokens"
+    if owner:
+        return (tokens / f"{agent_name}@{owner}.token").is_file()
+    return bool(glob.glob(str(tokens / f"{agent_name}@*.token")))
+
+
 def _wait_for_auth(agent_name: str, owner: str | None, max_wait_seconds: int | None, interval: int = 30) -> None:
-    """Block until the agent's token is accepted by the node (the owner has approved it).
+    """Wait for the agent's token to exist AND be accepted (the owner has approved it).
 
-    A crew launched BEFORE approval would otherwise crash-loop in onboarding (every call
-    401s) until the watchdog gives up. Instead we wait patiently here and continue the
-    moment the token is accepted — so an unattended crew comes online by itself when the
-    owner approves it, with no console needed.
+    A crew launched BEFORE approval would otherwise crash-loop (no token, or every call 401s)
+    until the watchdog gives up. Instead we wait patiently here and continue the moment the
+    token is accepted — so an unattended crew comes online by itself once approved, no console.
 
-    Proceeds immediately if the token is already accepted, or if auth cannot be probed
-    (no probe helper / transient). With max_wait_seconds=None it waits indefinitely.
+    Waits while the token is missing OR rejected. Proceeds when accepted (or when the token
+    exists but auth cannot be probed — transient / no probe helper). After max_wait_seconds it
+    gives up and exits with AUTH_EXIT_CODE so the watchdog stops cleanly and the owner can
+    re-approve / re-auth (e.g. message crew-forge "/restart <agent>"). None = wait forever.
     """
     waited = 0
     announced = False
     while True:
-        alive = _auth_alive(agent_name, owner)
-        if alive is not False:  # True (approved) or None (cannot probe) -> proceed
+        has_token = _token_exists(agent_name, owner)
+        # Only probe auth when there's a token to probe; no token -> definitely not ready.
+        ready = has_token and _auth_alive(agent_name, owner) is not False
+        if ready:
             if announced:
                 print(f"[{agent_name}] token accepted — continuing.", file=sys.stderr)
             return
         if not announced:
+            reason = (
+                "no token yet — register the agent and approve it"
+                if not has_token
+                else "the token is not accepted (approve it, or it may have been denied)"
+            )
             print(
-                f"[{agent_name}] waiting for approval: the token is not accepted yet. Approve "
-                "the agent on AIMEAT (Profile -> Agents) and the crew continues on its own.",
+                f"[{agent_name}] waiting for approval: {reason} on AIMEAT (Profile -> Agents). "
+                "The crew continues on its own once approved.",
                 file=sys.stderr,
             )
             announced = True
         if max_wait_seconds is not None and waited >= max_wait_seconds:
             print(
-                f"[{agent_name}] still not approved after {waited}s — continuing anyway; "
-                "onboarding will surface any remaining issue.",
+                f"[{agent_name}] not approved after {waited}s — exiting for re-auth. Re-approve it "
+                f"on AIMEAT, then re-run the crew (or message crew-forge '/restart {agent_name}').",
                 file=sys.stderr,
             )
-            return
+            raise SystemExit(AUTH_EXIT_CODE)
         time.sleep(interval)
         waited += interval
 

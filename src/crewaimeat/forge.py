@@ -32,7 +32,7 @@ _FILE_TEMPLATE = '''\
 Only build_domain below is crew-specific; crewaimeat.aimeat_crew.run_crew provides the
 AIMEAT wiring (onboarding, daemon, liaison publish/complete, live progress, date
 injection). See SCAFFOLD_CANON.md. Register + approve before running:
-  aimeat connect add --agent {agent_name} --mode task-runner --url https://aimeat.io --owner <your-aimeat-account>
+  npx aimeat@latest connect add --agent {agent_name} --mode task-runner --url https://aimeat.io --owner <your-aimeat-account>
 
 Run: uv run python crews/{fname}
 """
@@ -112,9 +112,13 @@ def validate_crew_file(path: Path) -> tuple[bool, str]:
 
 
 def register_agent(agent_name: str, owner: str, url: str = "https://aimeat.io") -> tuple[bool, str]:
-    """`aimeat connect add` for a new task-runner agent. Approval stays a human step."""
+    """Register a task-runner agent via the latest connector. Approval stays a human step.
+
+    Uses `npx aimeat@latest connect add` (the local `aimeat` may be an older connector that
+    predates `connect add` / `--mode`). The owner then approves the agent on AIMEAT.
+    """
     base = [
-        "aimeat", "connect", "add",
+        "npx", "aimeat@latest", "connect", "add",
         "--agent", agent_name,
         "--mode", "task-runner",
         "--url", url,
@@ -122,7 +126,8 @@ def register_agent(agent_name: str, owner: str, url: str = "https://aimeat.io") 
     ]
     cmd = ["cmd", "/c", *base] if os.name == "nt" else base
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        # npx may fetch the package on first use, so allow generous time.
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     except Exception as exc:  # noqa: BLE001
         return False, f"connect add could not run: {exc}"
     out = ((proc.stdout or "") + (proc.stderr or "")).strip()
@@ -241,7 +246,7 @@ def register_and_launch_crew(agent_name: str) -> str:
     else:
         reg_line = (
             "Registration SKIPPED: AIMEAT_OWNER is not set. Set it in .env, then run:\n"
-            f"  aimeat connect add --agent {agent_name} --mode task-runner "
+            f"  npx aimeat@latest connect add --agent {agent_name} --mode task-runner "
             "--url https://aimeat.io --owner <your-aimeat-account>"
         )
 
@@ -299,11 +304,32 @@ def list_crews() -> str:
     return "Crews in crews/:\n" + "\n".join(lines)
 
 
+@tool("reauth_crew")
+def reauth_crew(agent_name: str) -> str:
+    """Re-run AIMEAT authorization for an existing agent so the owner can approve it again.
+    Use after an accidental deny, or when a token expired/was revoked. Re-registers via
+    `npx aimeat@latest connect add`; the owner then re-approves it in the dashboard.
+    Owner is read from the AIMEAT_OWNER environment variable.
+    """
+    owner = os.getenv("AIMEAT_OWNER", "").strip()
+    if not owner:
+        return (
+            "AIMEAT_OWNER is not set, so I cannot re-auth. Set it in .env, then run:\n"
+            f"  npx aimeat@latest connect add --agent {agent_name} --mode task-runner "
+            "--url https://aimeat.io --owner <your-aimeat-account>"
+        )
+    ok, out = register_agent(agent_name, owner)
+    return (
+        f"Re-auth started for '{agent_name}'. Approve it on AIMEAT (Profile -> Agents) and it "
+        f"comes back online by itself. Connector output:\n{out or '(none)'}"
+    )
+
+
 def make_forge_tools() -> list:
     """The tools the crew-forge builder agent uses to materialize a new crew."""
     return [write_and_validate_crew, register_and_launch_crew]
 
 
 def make_manage_tools() -> list:
-    """The tools crew-forge uses to operate the fleet (restart a downed crew, report status)."""
-    return [restart_crew, list_crews]
+    """The tools crew-forge uses to operate the fleet (restart a downed crew, report status, re-auth)."""
+    return [restart_crew, list_crews, reauth_crew]

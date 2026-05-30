@@ -6,24 +6,24 @@ scaffold, registers the new agent (aimeat connect add), and launches it under th
 watchdog. You approve the new agent once in the dashboard; then it is live — the new crew
 waits patiently for that approval, so nothing crash-loops while you get to it.
 
-crew-forge also operates the fleet. Send it a TASK or a MESSAGE that starts with a
-management verb and it acts instead of building:
-  - "restart release-notes-writer"  -> relaunches that crew if it is down
-  - "list"  /  "status"             -> reports which crews are running
-This is the unattended-service path: when a crew goes offline, message crew-forge to
-bring it back — no console needed.
+crew-forge also operates the fleet via slash commands (send as a task OR an inbox message):
+  /build <description>   design, register, and launch a new agent
+  /restart <agent>       bring a stopped crew back online
+  /reauth <agent>        re-run authorization so you can approve it again
+  /list  (or /status)    show your crews and which are running
+  /help                  show the command list
+Plain text with no leading "/" is treated as a /build request. This is the unattended path:
+when a crew goes offline, message crew-forge "/restart <agent>" to bring it back — no console.
 
 Generated work lands in crews/<new-agent>_crew.py. crew-forge edits nothing in the
 scaffold — every crew it makes reuses crewaimeat.aimeat_crew.run_crew. Register first:
-  aimeat connect add --agent crew-forge --mode task-runner --url https://aimeat.io --owner <your-aimeat-account>
+  npx aimeat@latest connect add --agent crew-forge --mode task-runner --url https://aimeat.io --owner <your-aimeat-account>
 
 Run: uv run python crews/crew_forge_crew.py
 Needs AIMEAT_OWNER in .env so it can register the agents it builds under your account.
 """
 
 from __future__ import annotations
-
-import re
 
 from crewai import Agent, Task
 
@@ -32,52 +32,81 @@ from crewaimeat.forge import make_forge_tools, make_manage_tools
 
 AGENT_NAME = "crew-forge"
 
-# A request that starts with one of these verbs is a fleet-management request (restart /
-# report), not a build request. Build requests say "build / make / create an agent that ...".
-_MANAGE_RE = re.compile(r"^\s*(restart|relaunch|reboot|status|list|ls|stop)\b", re.IGNORECASE)
-
-
-def _is_management_request(text: str) -> bool:
-    return bool(_MANAGE_RE.match(text or ""))
+# crew-forge is driven by explicit slash commands (sent as a task or an inbox message).
+# Plain text with no leading "/" is treated as a /build request, so casual asks still work.
+HELP = (
+    "crew-forge commands (send as a task or a message):\n"
+    "  /build <description>   design, register, and launch a new agent\n"
+    "  /restart <agent>       bring a stopped crew back online\n"
+    "  /reauth <agent>        re-run authorization so you can approve it again\n"
+    "  /list   (or /status)   show your crews and which are running\n"
+    "  /help                  show this list\n"
+    "Plain text with no leading '/' is treated as a /build request."
+)
+_BUILD_CMDS = {"build", "new", "make", "create"}
+_RESTART_CMDS = {"restart", "relaunch", "reboot", "start"}
+_LIST_CMDS = {"list", "ls", "status"}
+_HELP_CMDS = {"help", "commands", "?"}
 
 
 def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
-    if _is_management_request(ctx.prompt):
-        return _manage_domain(ctx)
-    return _build_domain(ctx)
+    text = (ctx.prompt or "").strip()
+    if not text.startswith("/"):
+        return _build_domain(ctx, request=text)  # plain text = a build request
+    parts = text[1:].split(None, 1)
+    cmd = parts[0].lower() if parts else "help"
+    arg = parts[1].strip() if len(parts) > 1 else ""
+    if cmd in _BUILD_CMDS:
+        return _build_domain(ctx, request=arg or text)
+    return _command_domain(ctx, cmd, arg)
 
 
-def _manage_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
-    """Operate the fleet: relaunch a downed crew, or report status."""
+def _command_domain(ctx: BuildContext, cmd: str, arg: str) -> tuple[list[Agent], list[Task]]:
+    """Run one fleet command (restart / reauth / list / help) via the Fleet Operator."""
     operator = Agent(
         role="Fleet Operator",
-        goal="Keep the user's crews running: relaunch one that is down, or report what is running",
+        goal="Carry out fleet commands precisely: restart or re-auth a crew, or report status",
         backstory=(
-            "You operate a fleet of AIMEAT crews on this machine. You do not build crews; you bring "
-            "them back online and report status, using your tools and nothing else."
+            "You operate a fleet of AIMEAT crews on this machine. You do not design crews; you run "
+            "the requested command with your tools and report the result, nothing more."
         ),
         tools=make_manage_tools(),
         llm=ctx.llm,
         verbose=True,
     )
+
+    if cmd in _LIST_CMDS:
+        instr = "Call list_crews and report its result verbatim."
+    elif cmd in _RESTART_CMDS:
+        instr = (
+            f"Call restart_crew with agent_name='{arg}' and report the result."
+            if arg
+            else "No agent name was given. Reply asking the user to send '/restart <agent>'."
+        )
+    elif cmd == "reauth":
+        instr = (
+            f"Call reauth_crew with agent_name='{arg}' and report the result."
+            if arg
+            else "No agent name was given. Reply asking the user to send '/reauth <agent>'."
+        )
+    elif cmd in _HELP_CMDS:
+        instr = f"Report exactly this text as the final answer, with no changes:\n{HELP}"
+    else:
+        instr = f"There is no '/{cmd}' command. Report exactly this text as the final answer:\n{HELP}"
+
     task = Task(
         description=(
-            "Handle this fleet-management request, then report what you did. Request:\n"
-            f"{ctx.prompt}\n\n"
-            "- To restart / relaunch / bring back a crew, call restart_crew with its agent name "
-            "(the kebab name, e.g. 'release-notes-writer').\n"
-            "- To list crews or report status, call list_crews.\n"
-            "If the request actually asks to BUILD a new agent, say so and ask the user to resend it "
-            "as a plain build request (e.g. 'build an agent that ...'). Use one tool call at a time."
+            "You operate a fleet of AIMEAT crews. Do exactly this, one tool call at a time:\n" + instr
         ),
-        expected_output="A short report of the action taken (what was relaunched, or the status list).",
+        expected_output="A short report of the action taken, or the requested information.",
         agent=operator,
     )
     return [operator], [task]
 
 
-def _build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
-    llm, today, request = ctx.llm, ctx.today, ctx.prompt
+def _build_domain(ctx: BuildContext, request: str | None = None) -> tuple[list[Agent], list[Task]]:
+    llm, today = ctx.llm, ctx.today
+    request = request if request is not None else ctx.prompt
 
     architect = Agent(
         role="Crew Architect",
