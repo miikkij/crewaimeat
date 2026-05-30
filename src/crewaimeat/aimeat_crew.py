@@ -105,8 +105,10 @@ class CrewSpec:
     listen_for: Iterable[str] = ("tasks",)  # add "messages" to also act on inbox messages
     wait_for_approval_seconds: int | None = 900  # wait this long for the token to be approved
     #   before onboarding, then exit for re-auth (None = wait indefinitely)
-    services: list[dict] | None = None    # {name, description} services to declare at onboarding
-    #   (e.g. the commands the agent answers to), published via aimeat_onboarding_declare_services
+    services: list[dict] | None = None    # {name, description} capabilities to declare at
+    #   onboarding via aimeat_onboarding_declare_services
+    commands: list[dict] | None = None    # slash-command palette [{name, description, category}, ...]
+    #   published to memory key agents.<agent>.commands (owner) so the Messages UI surfaces it
 
 
 # --------------------------------------------------------------------------- #
@@ -370,6 +372,21 @@ def run_crew(spec: CrewSpec) -> None:
     # 1) Ensure Hello Integration once (one-shot) before the daemon.
     if not _onboarding_completed(spec.agent_name):
         _run_onboarding_only(spec.agent_name, services=spec.services)
+
+    # 1b) Publish the slash-command palette so the dashboard (Data Access) and the Messages UI
+    #     can surface it. Key agents.<agent>.commands, owner-visible. Rewritten on every start
+    #     (idempotent), so the commands appear even for an already-onboarded agent after a restart.
+    if spec.commands:
+        res = _aimeat_call(
+            spec.agent_name,
+            "aimeat_memory_write",
+            {"key": f"agents.{spec.agent_name}.commands", "value": spec.commands, "visibility": "owner"},
+        )
+        print(
+            f"[{spec.agent_name}] published {len(spec.commands)} commands to "
+            f"agents.{spec.agent_name}.commands: {bool(res)}",
+            file=sys.stderr,
+        )
 
     # 2) Per-task crew builder handed to the daemon.
     def _build(task: dict, liaison: Agent) -> Crew:

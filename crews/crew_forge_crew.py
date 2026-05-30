@@ -43,6 +43,17 @@ HELP = (
     "  /help                  show this list\n"
     "Plain text with no leading '/' is treated as a /build request."
 )
+# Published to memory key agents.crew-forge.commands (owner) at startup so the Messages UI shows
+# this command palette. Uses the {name, description, category} shape AIMEAT expects.
+COMMANDS = [
+    {"name": "/build", "description": "Design, register, and launch a new AIMEAT agent from a description", "category": "fleet"},
+    {"name": "/restart", "description": "Bring a stopped crew back online: /restart <agent>", "category": "fleet"},
+    {"name": "/reauth", "description": "Re-run authorization so you can approve an agent again: /reauth <agent>", "category": "fleet"},
+    {"name": "/list", "description": "Show your crews and which are running", "category": "fleet"},
+    {"name": "/status", "description": "Alias of /list: crews and their running state", "category": "fleet"},
+    {"name": "/help", "description": "List crew-forge's slash commands", "category": "meta"},
+]
+
 _BUILD_CMDS = {"build", "new", "make", "create"}
 _RESTART_CMDS = {"restart", "relaunch", "reboot", "start"}
 _LIST_CMDS = {"list", "ls", "status"}
@@ -207,8 +218,10 @@ def run() -> None:
             build_domain=build_domain,
             # Act on inbox messages too, so the fleet can be operated by messaging crew-forge.
             listen_for=("tasks", "messages"),
-            # Publish the command list at onboarding so the commands are discoverable.
+            # Declare capabilities at onboarding (Services), and publish the slash-command
+            # palette to agents.crew-forge.commands (owner) so the Messages UI surfaces it.
             services=COMMAND_SERVICES,
+            commands=COMMANDS,
         )
     )
 
