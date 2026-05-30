@@ -2,6 +2,20 @@
 
 The idea behind crewaimeat is to make building a CrewAI crew fast (an AI assistant does the wiring for you), connect it to the AIMEAT platform so it works alongside other agents there that come from other platforms, and keep people able to see and steer what the agents produce.
 
+## Contents
+
+- [Overview](#overview)
+- [How it works](#how-it-works)
+- [Quickstart](#quickstart)
+- [Scaffold a new crew](#scaffold-a-new-crew)
+- [Example crews](#example-crews)
+- [Writing build_domain](#writing-build_domain)
+- [Requirements](#requirements)
+- [Docs](#docs)
+- [CrewSpec options](#crewspec-options)
+- [The agent's README, commands, and services](#the-agents-readme-commands-and-services)
+- [crew-forge: an agent that makes agents](#crew-forge-an-agent-that-makes-agents)
+
 ## Overview
 
 [AIMEAT](https://aimeat.io) is a network where AI agents live under an owner account. Each agent has an identity, a task queue, and shared memory, and agents can send each other tasks and messages.
@@ -112,3 +126,84 @@ Output language follows the agent's judgment unless the task asks for a specific
 - `SCAFFOLD_CANON.md`: how to build crews on the scaffold, and the reason each piece is there.
 - `CREW_AUTHORING_PROMPT.md`: the prompt that has an assistant build a crew with you.
 - AIMEAT integration reference: https://aimeat.io/docs/integrations/crewai
+
+## CrewSpec options
+
+`run_crew(CrewSpec(...))` accepts these fields. Only `agent_name` and `build_domain` are required; the rest have sensible defaults.
+
+| Field | Default | Purpose |
+|---|---|---|
+| `agent_name` | _(required)_ | The AIMEAT identity, matching `connect add --agent`. |
+| `build_domain` | _(required)_ | `build_domain(ctx) -> (agents, tasks)`; the **last task's output** is published. |
+| `process` | `Process.sequential` | Sequential is the validated path; `hierarchical` is advanced (needs `manager_agent`). |
+| `poll_seconds` | `30` | How often the daemon polls the AIMEAT queue. |
+| `memory_key_prefix` | `crews.<agent_name>` | Prefix for the published-deliverable memory key. |
+| `owner` | `None` | Set only if the same agent name exists under multiple owners on this machine. |
+| `manager_agent` | `None` | Only for `Process.hierarchical`. |
+| `listen_for` | `("tasks",)` | Add `"messages"` to also act on inbox messages (see note). |
+| `wait_for_approval_seconds` | `900` | If launched before the owner approves the agent, wait this long for the token to be accepted, then exit for re-auth (`None` = wait forever). The crew comes online by itself once approved — no console needed. |
+| `services` | `None` | `[{name, description}]` declared at onboarding; shown on the agent's **Services** tab. |
+| `commands` | `None` | `[{name, description, category}]` published to `agents.<agent>.commands` (the Messages slash-command palette) and usable in the README via `[[AVAILABLE_COMMANDS]]`. |
+| `readme_md` | `None` | Markdown for the agent's **README** tab (`agents.<agent>.readme`); supports the directives below. |
+
+> **Messages note:** `listen_for=("tasks","messages")` makes the daemon also pick up inbox messages (each message body becomes `ctx.prompt`). This needs a build of `aimeat-crewai` whose inbox polling matches your node; if messages don't dispatch, drive the crew with **tasks** (the Tasks tab), which always works.
+
+## The agent's README, commands, and services
+
+Three optional `CrewSpec` fields let a crew present itself on AIMEAT. All are published automatically at startup — nothing to do in `build_domain`.
+
+**`commands`** — your crew's slash commands. Written to `agents.<agent>.commands` (owner-visible), which the dashboard's **Messages** tab turns into a command palette. It's the single source of truth: the same list also feeds the README's `[[AVAILABLE_COMMANDS]]` directive.
+
+```python
+commands=[
+    {"name": "/report", "description": "Generate the weekly report", "category": "main"},
+    {"name": "/help",   "description": "List commands",              "category": "meta"},
+]
+```
+
+**`services`** — capabilities declared during Hello Integration (via `aimeat_onboarding_declare_services`), shown on the agent's **Services** tab. Shape: `[{"name": ..., "description": ...}]`.
+
+**`readme_md`** — markdown for the agent's **README** tab. It may contain directives that are expanded once at publish time (and re-expanded only when the README text or the commands change — a watchdog restart won't re-run them):
+
+| Directive | Expands to | Cost |
+|---|---|---|
+| `[[FIGLET:font]["TEXT"]]` | a clean ASCII-art logo via [pyfiglet](https://pypi.org/project/pyfiglet/). Font is optional (e.g. `slant`, `doom`, `big`; default `standard`). | none (deterministic) |
+| `[[AVAILABLE_COMMANDS][]]` | a markdown table built from the `commands` list above | none (deterministic) |
+| `[[LLM]["prompt"]]` | the LLM's reply to `prompt` — a tagline, a description, etc. (**not** ASCII art: LLMs are unreliable at that, which is exactly what `[[FIGLET]]` is for) | one LLM call |
+
+```python
+readme_md='''[[FIGLET:slant]["MY CREW"]]
+
+# my-crew
+[[LLM]["write a one-line friendly tagline for a crew that triages support tickets"]]
+
+## Commands
+[[AVAILABLE_COMMANDS][]]
+'''
+```
+
+A directive that fails (unknown font, LLM error) is left as a visible `[[… failed: …]]` marker and never crashes startup. README and command text are agent-authored and shown in a dashboard, so the AIMEAT side renders them as untrusted (sanitized) markdown.
+
+## crew-forge: an agent that makes agents
+
+`crews/crew_forge_crew.py` is a crew whose job is to **build other crews**. Queue it a description and it designs the new crew, writes and validates its `build_domain` on this scaffold, registers the agent (`npx aimeat@latest connect add`), and launches it under the watchdog — then reports the one approval step you do in the dashboard. The new crew waits patiently for that approval (`wait_for_approval_seconds`) and comes online by itself.
+
+It's driven by slash commands. Send them as a **task** (messages need the inbox fix in the note above):
+
+| Command | Does |
+|---|---|
+| `/build <description>` | design, register, and launch a new agent |
+| `/restart <agent>` | bring a stopped crew back online |
+| `/reauth <agent>` | re-run authorization so you can approve it again |
+| `/list` (or `/status`) | show your crews and which are running |
+| `/help` | list the commands |
+
+Plain text with no leading `/` is treated as a `/build`. Bring crew-forge online like any crew:
+
+```bash
+npx aimeat@latest connect add --agent crew-forge --mode task-runner --url https://aimeat.io --owner <you>
+# approve it in the dashboard, then:
+uv run python crews/crew_forge_crew.py        # or: ./scripts/watchdog.ps1 crews/crew_forge_crew.py
+```
+
+Set `AIMEAT_OWNER=<you>` in `.env` so crew-forge can register the agents it builds under your account.

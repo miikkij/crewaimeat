@@ -64,15 +64,12 @@ Tell me the agent you want and I design it, write + validate its crew on the AIM
 scaffold, register it, and launch it under a watchdog. You approve each new agent once.
 
 ## How to use me
-Send me a **task**:
+Send me a **task** with one of these commands:
 
-- `/build <description>` — e.g. `/build an agent that drafts release notes from a changelog`
-- `/restart <agent>` — bring a stopped crew back online
-- `/reauth <agent>` — re-run authorization so you can approve it again
-- `/list` (or `/status`) — show your crews and which are running
-- `/help` — list these commands
+[[AVAILABLE_COMMANDS][]]
 
 Plain text with no leading `/` is treated as a `/build` request.
+Example: `/build an agent that drafts release notes from a changelog`
 '''
 
 _BUILD_CMDS = {"build", "new", "make", "create"}
