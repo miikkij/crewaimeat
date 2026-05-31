@@ -106,7 +106,11 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "Using the collected materials above, produce the FINAL polished deliverable that fulfils "
             f"the original goal:\n{ctx.prompt}\n\n"
             "Integrate the crews' contributions into one clean, well-structured result. If a crew "
-            "returned no result, work with what arrived and briefly note the gap."
+            "returned no result, work with what arrived and briefly note the gap.\n\n"
+            "FIDELITY: preserve every factual claim, name, number, date and source from the contributions "
+            "EXACTLY as given. Do NOT add, infer, 'improve' or invent any fact, and never attach a source to "
+            "anything not in the contributions. If only ONE crew contributed, return its output essentially "
+            "verbatim (do not re-write it). Write creative connective prose only if the goal is itself creative."
         ),
         expected_output="The final deliverable for the goal, assembled from the crews' contributions.",
         agent=editor,
@@ -117,9 +121,12 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
 
 
 def run() -> None:
-    # verify="on": append a Reviewer pass that checks the synthesis against the goal and fixes gaps
-    # before publish (one pass, no loop). Per task, an owner can flip it with <<NOVERIFY>>.
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README, verify="on"))
+    # adapt_to_task: classify each goal (fact/creative/mixed) -> cool+grounded+faithfulness-verified for
+    # fact work, warm+free for creative. verify="on" is the fallback when the gate is inactive.
+    run_crew(CrewSpec(
+        agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README,
+        adapt_to_task=True, verify="on",
+    ))
 
 
 if __name__ == "__main__":

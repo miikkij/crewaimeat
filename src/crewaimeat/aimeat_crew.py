@@ -153,6 +153,9 @@ class CrewSpec:
     #   onboarding via aimeat_onboarding_declare_services
     commands: list[dict] | None = None    # slash-command palette [{name, description, category}, ...]
     #   published to memory key agents.<agent>.commands (owner) so the Messages UI surfaces it
+    adapt_to_task: bool = False           # when True, classify each task (fact/creative/mixed) and
+    #   adapt: temperature (cool for fact ~0.15, warm for creative ~0.7), inject a grounding rule for
+    #   factual work, and pick the verify mode (factcheck for fact, off for creative). Spreads like verify.
     contribute_to_library: bool = False   # when True, after each task the deliverable is classified
     #   (topic + shelf-life, junk dropped) and a compact pointer-entry is appended to
     #   agents.<agent>.library for the librarian to index. Spreads like `verify` — opt-in per crew.
@@ -625,6 +628,46 @@ def _expand_readme(text: str, llm: Any, commands: list[dict] | None = None) -> s
     return _LLM_DIRECTIVE.sub(_repl, text)
 
 
+# Task-nature gate: classify fact vs creative -> cooler/hotter temperature + grounding + verify mode.
+_NATURE_TEMP = {"fact": 0.15, "creative": 0.7, "mixed": 0.4}
+_NATURE_CREATIVE_HINTS = (
+    "joke", "jingle", "poem", "story", "funny", "slogan", "tagline", "brainstorm", "song",
+    "vitsi", "runo", "laulu", "hauska", "tarina",
+)
+_GROUNDING_RULE = (
+    "GROUNDING (this is factual work): state only what your sources/inputs actually support. If you "
+    "cannot confirm a specific (name, number, date, organisation) from a source, write 'ei julkista "
+    "tietoa löytynyt' / 'not found' — do NOT invent estimate-ranges, and NEVER attach a citation to "
+    "anything you did not actually find. Never present an invented specific as a verified fact."
+)
+
+
+def _classify_task_nature(prompt: str, llm: Any) -> dict:
+    """Classify a task as fact | creative | mixed and derive its temperature, grounding and verify
+    mode. One cheap LLM call with a deterministic keyword fallback. fact -> cool (~0.15, not 0) +
+    grounded + faithfulness verify; creative -> warm (~0.7) + free; mixed -> in between."""
+    text = (prompt or "").lower()
+    nature = "creative" if any(k in text for k in _NATURE_CREATIVE_HINTS) else "fact"
+    try:
+        reply = (llm.call([{"role": "user", "content": (
+            "Classify this task as exactly ONE word — 'fact' (needs verifiable facts, real entities, "
+            "data, sources), 'creative' (invent/entertain, nothing to fact-check), or 'mixed'. Reply "
+            "with ONLY the one word.\n\nTask:\n" + (prompt or "")[:1500]
+        )}]) or "").strip().lower()
+        for n in ("mixed", "creative", "fact"):
+            if n in reply:
+                nature = n
+                break
+    except Exception:  # noqa: BLE001
+        pass
+    return {
+        "nature": nature,
+        "temperature": _NATURE_TEMP[nature],
+        "ground": nature in ("fact", "mixed"),
+        "verify": "factcheck" if nature in ("fact", "mixed") else "off",
+    }
+
+
 def _publish_readme(agent_name: str, readme_md: str, commands: list[dict] | None = None) -> None:
     """Expand README directives (once per content change) and publish to memory.
 
@@ -713,13 +756,17 @@ def run_crew(spec: CrewSpec) -> None:
 
     # 2) Per-task crew builder handed to the daemon.
     def _build(task: dict, liaison: Agent) -> Crew:
-        llm = get_llm()
         tid = task.get("id")
         raw_prompt = task.get("description") or task.get("title") or ""
         # A coordinator may ask us to also publish into a shared tag area it can read.
         shared_key, shared_tag, prompt = _parse_publish_directive(raw_prompt)
         verify_override, prompt = _parse_verify_directive(prompt)
-        verify_mode = verify_override or spec.verify
+        # Task-nature gate: fact work runs cool + grounded + faithfulness-verified; creative runs warm.
+        gate = _classify_task_nature(prompt, get_llm(for_tool_use=False)) if spec.adapt_to_task else None
+        if gate:
+            print(f"[{spec.agent_name}] task nature={gate['nature']} temp={gate['temperature']} verify={gate['verify']}", file=sys.stderr)
+        llm = get_llm(temperature=gate["temperature"]) if gate else get_llm()
+        verify_mode = verify_override or (gate["verify"] if gate else None) or spec.verify
         mem_key = _memory_key(spec.agent_name, spec.memory_key_prefix, {"id": tid, "description": prompt})
         print(
             f"[{spec.agent_name}] build crew for task {tid} -> key {mem_key}"
@@ -735,6 +782,9 @@ def run_crew(spec: CrewSpec) -> None:
         directives = _format_directives(_fetch_directives(spec.agent_name, spec.owner))
         if directives:
             print(f"[{spec.agent_name}] applying owner directives ({directives.count(chr(10))} line(s))", file=sys.stderr)
+        # Factual work also gets the grounding rule (no invented specifics, honest gaps) prepended.
+        if gate and gate["ground"]:
+            directives = _GROUNDING_RULE + ("\n\n" + directives if directives else "")
 
         ctx = BuildContext(task=task, prompt=prompt, llm=llm, today=_now_context(), directives=directives)
         agents, tasks = spec.build_domain(ctx)
@@ -743,27 +793,41 @@ def run_crew(spec: CrewSpec) -> None:
         # and FIXES any gap, producing the final deliverable. ONE pass, no loop — so it cannot
         # reintroduce step-repetition (FM-1.3). Enabled by CrewSpec.verify="on" or a <<VERIFY>> task
         # directive; becomes the new last domain task, so publish/directives attach to it below.
-        if verify_mode == "on" and tasks:
+        if verify_mode in ("on", "factcheck") and tasks:
             reviewer = Agent(
                 role="Deliverable Reviewer",
-                goal="Verify the deliverable fully satisfies the goal and correct any gap, returning the final deliverable",
+                goal="Verify the deliverable and return a corrected, trustworthy final version",
                 backstory=(
-                    "You are a sharp, skeptical reviewer. You check the work against the original goal and the "
-                    "expected output, hunt for anything missing, incorrect, unsupported, or off-target, and you "
-                    "FIX it. You never rubber-stamp — but if it is already complete and correct you return it "
-                    "unchanged."
+                    "You are a sharp, skeptical reviewer. You never rubber-stamp; you check the work hard and "
+                    "FIX what is wrong, but you never add anything that is not supported."
                 ),
                 llm=llm,
                 verbose=True,
             )
-            verify_task = Task(
-                description=(
+            if verify_mode == "factcheck":
+                # Faithfulness check (RAGAS/QAFactEval + CoVe style): every claim must be supported by
+                # the source materials in context — invented specifics get removed, never dressed as fact.
+                verify_desc = (
+                    f"Original goal:\n{prompt}\n\n"
+                    "FACT-CHECK the deliverable produced above against the SOURCE MATERIALS in your context "
+                    "(the crews' contributions / retrieved sources). Work claim by claim: break it into atomic "
+                    "factual claims — names, numbers, dates, organisations, citations. For EACH, check whether "
+                    "the source materials actually support it. If a claim is NOT supported, REMOVE it or mark it "
+                    "'[unverified]'; NEVER keep an invented specific dressed as a sourced fact, and never attach "
+                    "a citation to something not in the sources. Do not add anything new. If the materials came "
+                    "from a single source, return it faithfully rather than re-writing. Output the corrected, "
+                    "faithful deliverable, ending with: 'Verify: faithfulness — <N claims, M unsupported removed/flagged>'."
+                )
+            else:
+                verify_desc = (
                     f"Original goal:\n{prompt}\n\n"
                     "Review the deliverable produced above against this goal. Does it fully answer the goal? "
                     "Is anything missing, incorrect, unsupported, or off-target versus the expected output? "
                     "If it is complete and correct, return it verbatim. If not, CORRECT it and return the "
                     "final, complete deliverable. End with one line: 'Verify: pass' or 'Verify: fixed - <what>'."
-                ),
+                )
+            verify_task = Task(
+                description=verify_desc,
                 expected_output="The final, verified deliverable (corrected if needed), ending with a one-line Verify note.",
                 agent=reviewer,
                 context=list(tasks),

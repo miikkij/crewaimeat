@@ -12,14 +12,17 @@ import os
 from crewai import LLM
 
 
-def get_llm(for_tool_use: bool = True) -> LLM:
+def get_llm(for_tool_use: bool = True, temperature: float | None = None) -> LLM:
     """Build an LLM instance based on environment variables.
 
     for_tool_use=True (default) adds parallel_tool_calls=False for the tool-calling
     crews. Pass False for a plain completion (e.g. README expansion): OpenAI-compatible
     endpoints reject parallel_tool_calls when no tools are supplied.
+
+    `temperature` overrides the LLM_TEMPERATURE env default — the task-nature gate uses this to run
+    factual work cool (~0.15, not 0) and creative work warm (~0.7).
     """
-    temperature = float(os.getenv("LLM_TEMPERATURE", "0.5"))
+    temperature = temperature if temperature is not None else float(os.getenv("LLM_TEMPERATURE", "0.5"))
 
     # --- Option: xAI directly ------------------------------------------
     if os.getenv("USE_XAI") not in (None, "", "0", "false", "False"):
