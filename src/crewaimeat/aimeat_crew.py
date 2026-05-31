@@ -153,6 +153,9 @@ class CrewSpec:
     #   onboarding via aimeat_onboarding_declare_services
     commands: list[dict] | None = None    # slash-command palette [{name, description, category}, ...]
     #   published to memory key agents.<agent>.commands (owner) so the Messages UI surfaces it
+    contribute_to_library: bool = False   # when True, after each task the deliverable is classified
+    #   (topic + shelf-life, junk dropped) and a compact pointer-entry is appended to
+    #   agents.<agent>.library for the librarian to index. Spreads like `verify` — opt-in per crew.
     verify: str = "off"                   # "on" appends a Reviewer pass that checks the deliverable
     #   against the goal and FIXES gaps before publish (one pass, no loop). Per-task <<VERIFY>> /
     #   <<NOVERIFY>> in the task description overrides this. "feeling lucky" (off) vs "serious" (on).
@@ -791,6 +794,27 @@ def run_crew(spec: CrewSpec) -> None:
                         pass
 
             tasks[-1].callback = _last_cb
+
+            # Optional: contribute this deliverable to the agent's library so the librarian can index
+            # it (classified by topic + shelf-life, junk dropped). Chained after publish; best-effort.
+            if spec.contribute_to_library:
+                _pub_cb = tasks[-1].callback
+
+                def _lib_cb(out, _prev=_pub_cb, _key=mem_key):
+                    if _prev:
+                        try:
+                            _prev(out)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    try:
+                        from crewaimeat.librarian import contribute_deliverable  # local: avoid import cycle
+
+                        text = getattr(out, "raw", None) or str(out)
+                        contribute_deliverable(spec.agent_name, _key, text)
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"[{spec.agent_name}] library contribute skipped: {exc}", file=sys.stderr)
+
+                tasks[-1].callback = _lib_cb
 
         if task.get("_source") == "message":
             original = task.get("_original") or {}
