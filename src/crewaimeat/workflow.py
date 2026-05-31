@@ -257,6 +257,25 @@ def make_workflow_tools(
             waited += POLL_SECONDS
         return False
 
+    def _do_cancel_pending() -> list:
+        """Write the cancel marker agents.cancel.run.<run> (owner-visible) with every not-yet-collected
+        subtask id, so idle workers stop instead of grinding on results no one awaits. Workers
+        (aimeat-crewai >= 0.3.7) check agents.cancel.* before each kickoff and skip+fail a cancelled
+        task; work already mid-flight finishes (cooperative). Returns the cancelled ids."""
+        pending_ids = [j["tid"] for j in state["jobs"] if "result" not in j and j.get("tid")]
+        if not pending_ids:
+            return []
+        _aimeat_call(
+            coordinator_name,
+            "aimeat_memory_write",
+            {"key": f"agents.cancel.run.{run_id}", "value": pending_ids, "visibility": "owner"},
+        )
+        for j in state["jobs"]:
+            if "result" not in j:
+                j["cancelled"] = True
+        _event(f"Cancelled {len(pending_ids)} pending subtask(s)")
+        return pending_ids
+
     @tool("delegate_subtask")
     def delegate_subtask(target_agent: str, title: str, instruction: str) -> str:
         """Fan-out: create a subtask for another same-owner crew. Call once per subtask. The crew runs
@@ -317,11 +336,26 @@ def make_workflow_tools(
                 break
             time.sleep(POLL_SECONDS)
             waited += POLL_SECONDS
+        # Timed out with stragglers? Cancel them so abandoned workers stop grinding (circuit breaker).
+        if any("result" not in j for j in state["jobs"]):
+            _do_cancel_pending()
         parts = []
         for j in state["jobs"]:
-            body = j.get("result", "[no result within timeout]")
+            body = j.get("result", "[no result within timeout — subtask cancelled]")
             parts.append(f"### From {j['agent']} — {j['title']}\n{body}")
         return "\n\n".join(parts)
+
+    @tool("cancel_pending")
+    def cancel_pending() -> str:
+        """Cancel every delegated subtask that has NOT finished yet, so idle/abandoned workers stop
+        instead of grinding on results no one is waiting for. Use it to prune speculative branches you
+        no longer need, or to stay within budget. (collect_results calls this automatically when it
+        times out.) Workers honour the cancel marker before their next run; work already mid-flight
+        finishes."""
+        ids = _do_cancel_pending()
+        if not ids:
+            return "No pending subtasks to cancel."
+        return f"Cancelled {len(ids)} pending subtask(s): {', '.join(ids)}."
 
     @tool("commission_crew")
     def commission_crew(agent_name: str, capability: str) -> str:
@@ -404,4 +438,4 @@ def make_workflow_tools(
             f"'{question[:60]}' and note the assumption in your result."
         )
 
-    return [discover_crews, delegate_subtask, delegate_and_wait, collect_results, commission_crew, wait_for_crew, ask_owner]
+    return [discover_crews, delegate_subtask, delegate_and_wait, collect_results, cancel_pending, commission_crew, wait_for_crew, ask_owner]
