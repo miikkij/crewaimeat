@@ -273,6 +273,29 @@ def _format_directives(data: dict | None) -> str:
     return "\n".join(lines)
 
 
+def _rate_task(rater_agent: str, ratee_agent: str, task_id: str, body: dict, owner: str | None = None) -> "tuple[bool, int | None, str]":
+    """POST a reputation rating for ratee_agent's task using rater_agent's token (REST).
+
+    The AIMEAT Quality-tab rate endpoint: a coordinator rates a worker it consumed
+    (POST /v1/agents/:ratee/tasks/:id/rate). Source-grounded + inter-agent — self-rating is
+    rejected 403, missing grounding 422 GROUNDING_REQUIRED (distinct, the caller separates them).
+    Returns (ok, status_code, detail). Best-effort: any transport failure returns (False, None, msg)."""
+    if _aimeat_read_token is None:
+        return False, None, "no token reader available"
+    try:
+        token, node_url = _aimeat_read_token(rater_agent, owner=owner)
+        r = requests.post(
+            f"{node_url.rstrip('/')}/v1/agents/{ratee_agent}/tasks/{task_id}/rate",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json=body,
+            timeout=30,
+        )
+        ok = r.status_code in (200, 201)
+        return ok, r.status_code, ("" if ok else f"{r.status_code} {r.text[:200]}")
+    except Exception as exc:  # noqa: BLE001 — transient; caller logs and skips
+        return False, None, str(exc)
+
+
 def _token_exists(agent_name: str, owner: str | None) -> bool:
     """True if the connector has written a token file for this agent yet.
 
@@ -473,10 +496,13 @@ _VERIFY_UNSUP_RE = re.compile(r"unsupported\s*=\s*(\d+)", re.I)
 
 
 def _write_verify_stat(agent_name: str, tid: str | None, output_text: str, dimension: str) -> None:
-    """Parse the factcheck Reviewer's score line and write it to the reputation convention
-    agents.stats.<agent>.review.<short>.verify (owner-visible). Source-grounded faithfulness score
-    (Reviewer checked the deliverable against its context inputs) — validated by POC v2. Best-effort;
-    no-op if no score line is found. Per docs/reliability-stack.md + e:/crewaimeat reputation docs."""
+    """Parse the factcheck Reviewer's score line and write it as the agent's OWN introspection under
+    agents.<agent>.statistics.custom.<short>.verify (owner-visible). This is a SELF assessment of the
+    crew's own deliverable — under AIMEAT's Quality-tab contract an agent cannot rate itself via the
+    rate endpoint (self-rating → 403), so the self-verify is kept as internal data, not a reputation
+    rating. Source-grounded faithfulness (Reviewer checked the deliverable vs its context inputs) —
+    validated by POC v2. Best-effort; no-op if no score line. Inter-agent reputation ratings come from
+    the coordinator rating its workers (workflow.py _judge_and_rate -> POST /tasks/:id/rate)."""
     m = _VERIFY_SCORE_RE.search(output_text or "")
     if not m:
         return
@@ -488,24 +514,63 @@ def _write_verify_stat(agent_name: str, tid: str | None, output_text: str, dimen
         agent_name,
         "aimeat_memory_write",
         {
-            "key": f"agents.stats.{agent_name}.review.{short}.verify",
+            "key": f"agents.{agent_name}.statistics.custom.{short}.verify",
             "value": {
-                "score": score, "by": agent_name, "role": "verify", "dimension": dimension,
+                "score": score, "by": agent_name, "role": "self-verify", "dimension": dimension,
                 "unsupported": unsupported, "ts": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             },
             "visibility": "owner",
         },
     )
-    print(f"[{agent_name}] verify score {score}/5 (unsupported={unsupported}, dim={dimension}) -> agents.stats: {bool(res)}", file=sys.stderr)
+    print(f"[{agent_name}] self-verify score {score}/5 (unsupported={unsupported}, dim={dimension}) -> statistics.custom: {bool(res)}", file=sys.stderr)
 
 
-def _make_publish_cb(agent_name: str, primary_key: str, shared_key: str | None = None, tag: str | None = None):
+def _eval_ctx(eval_info: dict | None) -> dict:
+    """Build the evaluation-context record {model, temperature, nature, tokens_*} for a run.
+
+    Captures the actual LLM the deliverable was produced with (model + temperature from the run's
+    LLM) and the token usage (crew.usage_metrics, read via a mutable holder so it is populated by
+    kickoff). This is the eval-params payload AIMEAT's rate endpoint stores in rating.metadata, and
+    a coordinator reads the worker's copy to attribute a rating to the right model/cost — crew-run
+    level (not per-claim). Returns {} when nothing is known."""
+    if not eval_info:
+        return {}
+    ctx: dict = {}
+    if eval_info.get("model"):
+        ctx["model"] = eval_info["model"]
+    if eval_info.get("temperature") is not None:
+        ctx["temperature"] = eval_info["temperature"]
+    if eval_info.get("nature"):
+        ctx["nature"] = eval_info["nature"]
+    crew = (eval_info.get("crew_holder") or {}).get("crew")
+    um = None
+    if crew is not None:
+        # crew.usage_metrics (the field) is None until kickoff FINISHES, but this callback runs
+        # mid-kickoff — so aggregate live from the agents' LLMs instead (token usage accrues there
+        # as the run proceeds). Falls back to the field if the live call is unavailable.
+        try:
+            um = crew.calculate_usage_metrics()
+        except Exception:  # noqa: BLE001
+            um = getattr(crew, "usage_metrics", None)
+    if um is not None:
+        for src, dst in (("prompt_tokens", "tokens_in"), ("completion_tokens", "tokens_out"), ("total_tokens", "tokens_total")):
+            v = getattr(um, src, None)
+            if v:  # skip None/0 — a real run has nonzero tokens by publish time
+                ctx[dst] = v
+    return ctx
+
+
+def _make_publish_cb(agent_name: str, primary_key: str, shared_key: str | None = None, tag: str | None = None,
+                     eval_info: dict | None = None):
     """Task callback: write the task output to AIMEAT memory deterministically (no LLM).
 
     Attached to the last DOMAIN task so the deliverable always lands, even if the liaison's
     LLM-driven memory_write loops or errors (observed on weaker models). Always writes the agent's
     own key; if a shared_key/tag are supplied (a delegated workflow subtask), ALSO writes into the
-    shared tag area so the coordinator can collect it with its own scope."""
+    shared tag area so the coordinator can collect it with its own scope. When eval_info is given,
+    also records the run's eval-context (model/temperature/tokens): the shared `<shared_key>.evalctx`
+    is written BEFORE the shared deliverable (so a coordinator that detects the deliverable always
+    finds the evalctx beside it), plus an own-introspection copy under statistics.custom.*."""
     def _cb(task_output) -> None:
         text = getattr(task_output, "raw", None)
         if text is None:
@@ -514,7 +579,18 @@ def _make_publish_cb(agent_name: str, primary_key: str, shared_key: str | None =
             agent_name, "aimeat_memory_write", {"key": primary_key, "value": text, "visibility": "owner"}
         )
         print(f"[{agent_name}] deliverable published -> {primary_key}: {bool(r1)}", file=sys.stderr)
+        ectx = _eval_ctx(eval_info)
+        if ectx and eval_info and eval_info.get("custom_key"):
+            _aimeat_call(  # own performance introspection (store now, analyze later)
+                agent_name, "aimeat_memory_write",
+                {"key": eval_info["custom_key"], "value": ectx, "visibility": "owner"},
+            )
         if shared_key:
+            if ectx:  # write evalctx FIRST so it is present when the coordinator sees the deliverable
+                _aimeat_call(
+                    agent_name, "aimeat_memory_write",
+                    {"key": f"{shared_key}.evalctx", "value": ectx, "visibility": "owner", "tags": [tag] if tag else []},
+                )
             r2 = _aimeat_call(
                 agent_name,
                 "aimeat_memory_write",
@@ -669,7 +745,7 @@ _NATURE_CREATIVE_HINTS = (
     "vitsi", "runo", "laulu", "hauska", "tarina",
 )
 _GROUNDING_RULE = (
-    "GROUNDING (this is factual work): state only what your sources/inputs actually support. If you "
+    "GROUNDING (this work involves factual claims): state only what your sources/inputs actually support. If you "
     "cannot confirm a specific (name, number, date, organisation) from a source, write 'ei julkista "
     "tietoa löytynyt' / 'not found' — do NOT invent estimate-ranges, and NEVER attach a citation to "
     "anything you did not actually find. Never present an invented specific as a verified fact."
@@ -878,12 +954,25 @@ def run_crew(spec: CrewSpec) -> None:
             for _t in tasks:
                 _t.description = f"{directives}\n\n---\n\n{_t.description}"
 
+        # Capture the run's eval-context (model + temperature from the actual LLM; tokens from the
+        # crew's usage_metrics via a holder populated by kickoff). Published beside the deliverable so
+        # a coordinator can attribute its rating to the right model/cost (AIMEAT rate metadata).
+        _short = (tid or "manual").split("-", 1)[0] if tid else "manual"
+        _crew_holder: dict = {}
+        eval_info = {
+            "model": getattr(llm, "model", None),
+            "temperature": getattr(llm, "temperature", None),
+            "nature": gate["nature"] if gate else None,
+            "crew_holder": _crew_holder,
+            "custom_key": f"agents.{spec.agent_name}.statistics.custom.{_short}.evalctx",
+        }
+
         # Guarantee the deliverable lands even if the liaison's LLM memory_write loops/errors:
         # publish the LAST domain task's output deterministically via its callback (chained so an
         # author-set callback still runs).
         if tasks:
             _author_cb = getattr(tasks[-1], "callback", None)
-            _publish = _make_publish_cb(spec.agent_name, mem_key, shared_key, shared_tag)
+            _publish = _make_publish_cb(spec.agent_name, mem_key, shared_key, shared_tag, eval_info)
 
             def _last_cb(out, _pub=_publish, _prev=_author_cb):
                 _pub(out)
@@ -955,7 +1044,9 @@ def run_crew(spec: CrewSpec) -> None:
         }
         if spec.manager_agent is not None:
             crew_kwargs["manager_agent"] = spec.manager_agent
-        return Crew(**crew_kwargs)
+        crew = Crew(**crew_kwargs)
+        _crew_holder["crew"] = crew  # so the publish callback can read usage_metrics after kickoff
+        return crew
 
     # 3) Idle auth-guard: run_crew_daemon's _poll_tasks swallows a 401 and returns []
     #    (a dead token looks exactly like an empty queue), so the daemon would idle

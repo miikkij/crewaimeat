@@ -47,6 +47,9 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
         AGENT_NAME, run_id=run_id, task_id=ctx.task.get("id"), tag="workflow", exclude=_NOT_DELEGABLE,
         timeout=3600,  # 60 min: the coordinator waits for slow workers (commissioned crews, deep
         #              multi-search research) — its budget must exceed any single worker's runtime.
+        directives=ctx.directives,  # so leaked owner-directive markers get stripped from delegated work
+        llm=ctx.llm,         # the grounded judge that rates each worker's deliverable
+        rate_workers=True,   # coordinator -> worker reputation rating (AIMEAT POST /tasks/:id/rate)
     )
 
     dispatcher = Agent(

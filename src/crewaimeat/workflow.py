@@ -14,13 +14,16 @@ queues (target_agent), so the coordinator never double-runs its own work.
 from __future__ import annotations
 
 import json
+import os
 import re
+import sys
 import time
 from pathlib import Path
+from typing import Any
 
 from crewai.tools import tool
 
-from crewaimeat.aimeat_crew import _aimeat_call
+from crewaimeat.aimeat_crew import _GROUNDING_RULE, _aimeat_call, _rate_task
 
 POLL_SECONDS = 15
 DEFAULT_TIMEOUT = 1800  # default per collect_results / delegate_and_wait / wait_for_crew (30 min).
@@ -34,6 +37,28 @@ MAX_CLARIFICATIONS = 2  # cap clarification questions per run so it can't ping-p
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
 _AGENT_NAME_RE = re.compile(r'^\s*AGENT_NAME\s*=\s*["\']([^"\']+)["\']', re.M)
+
+# Coordinator-rates-worker (AIMEAT Quality-tab): a source-grounded faithfulness judge of each
+# delegated worker's deliverable -> POST /tasks/:id/rate. v1 auto-rates only the grounded contexts
+# (the rate gate requires source_grounded there); creative/planning/communication are left to the owner.
+_JUDGE_CONTEXT_RE = re.compile(r"context\s*=\s*([a-z]+)", re.I)
+_JUDGE_SCORE_RE = re.compile(r"score\s*=\s*([1-5])", re.I)
+_JUDGE_UNSUP_RE = re.compile(r"unsupported\s*=\s*(\d+)", re.I)
+_GROUNDED_CONTEXTS = {"factual", "research", "code", "summarization"}
+
+
+def _parse_evalctx(value):
+    """A worker publishes its eval-context (model/temperature/tokens) as JSON beside its deliverable;
+    the memory API may hand it back as a dict or a JSON string. Return a dict (or {})."""
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            v = json.loads(value)
+            return v if isinstance(v, dict) else {}
+        except Exception:  # noqa: BLE001
+            return {}
+    return {}
 
 
 def _find_id(obj) -> str | None:
@@ -176,6 +201,33 @@ def _crew_roster() -> list[dict]:
     return roster
 
 
+# A weak coordinator model sometimes copies its OWN standing directives into a delegated worker's
+# instruction, despite the prompt telling it not to (observed: the owner's "append ⚠️ directive-active"
+# directive leaked into a worker prompt). Each worker applies its own directives, so we strip leaked
+# directive content deterministically — stronger than trusting the model to obey "do not copy".
+_QUOTED_RE = re.compile(r'["“‘\']([^"”’\'\n]{5,})["”’\']')
+_SENTINEL_RE = re.compile(r"\b([A-Z][A-Z0-9]*_[A-Z0-9_]{2,})\b")  # ALLCAPS_WITH_UNDERSCORE tokens
+
+
+def _directive_signatures(directives: str) -> list[str]:
+    """Distinctive substrings of the coordinator's OWN directives — quoted markers (e.g.
+    "⚠️ directive-active") and SENTINEL_TOKENs. We drop the scaffold's generic grounding rule so
+    only owner-policy markers count; generic phrases (no quotes / no sentinel) are not signatures
+    and stay unstripped (harmless if copied)."""
+    body = (directives or "").replace(_GROUNDING_RULE, "")
+    sigs = {m.group(1).strip() for m in _QUOTED_RE.finditer(body)}
+    sigs |= {m.group(1) for m in _SENTINEL_RE.finditer(body)}
+    return [s for s in sigs if len(s) >= 5]
+
+
+def _strip_leaked_directives(instruction: str, sigs: list[str]) -> str:
+    """Drop any line of `instruction` carrying one of the coordinator's directive signatures."""
+    if not sigs or not instruction:
+        return instruction
+    kept = [ln for ln in instruction.splitlines() if not any(sig in ln for sig in sigs)]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
+
+
 def make_workflow_tools(
     coordinator_name: str,
     run_id: str,
@@ -183,6 +235,9 @@ def make_workflow_tools(
     tag: str = "workflow",
     exclude: list[str] | None = None,
     timeout: int = DEFAULT_TIMEOUT,
+    directives: str = "",
+    llm: Any = None,
+    rate_workers: bool = False,
 ) -> list:
     """Tools for the coordinator. Delegated workers publish into the SHARED TAG area
     agents.tag.<tag>.<run_id>.<worker>, which the coordinator reads with its OWN scope — so the
@@ -191,6 +246,7 @@ def make_workflow_tools(
     own task) is used to append "Delegated to X" / "Received from X" events to its timeline."""
     blocked = set(exclude or []) | {coordinator_name}
     state: dict = {"jobs": [], "seq": 0, "clarifications": 0}
+    directive_sigs = _directive_signatures(directives)  # strip these if the model leaks them into a worker
 
     def _event(message: str) -> None:
         """Append a progress event to the coordinator's task so the delegation is visible on its timeline."""
@@ -221,6 +277,7 @@ def make_workflow_tools(
             return None, f"Refused: subtask cap ({MAX_SUBTASKS}) reached. Gather what you have instead."
         if target_agent in blocked:
             return None, f"Refused: '{target_agent}' is not a delegable crew. Call discover_crews to see valid targets."
+        instruction = _strip_leaked_directives(instruction, directive_sigs)  # the worker applies its own
         state["seq"] += 1
         pub_key = f"agents.tag.{tag}.{run_id}.{target_agent}.{state['seq']}"
         full_instruction = f'{instruction}\n\n<<AIMEAT_PUBLISH key="{pub_key}" tag="{tag}">>'
@@ -232,7 +289,7 @@ def make_workflow_tools(
         tid = _find_id(resp)
         if not tid:
             return None, f"Failed to create subtask for {target_agent}: {json.dumps(resp)[:200]}"
-        job = {"agent": target_agent, "tid": tid, "title": title, "pub_key": pub_key}
+        job = {"agent": target_agent, "tid": tid, "title": title, "pub_key": pub_key, "instruction": instruction}
         state["jobs"].append(job)
         _event(f"Delegated to {target_agent}: {title}")
         return job, None
@@ -251,6 +308,7 @@ def make_workflow_tools(
             found = {it.get("key"): it.get("value") for it in _items_of(listing)}
             if found.get(job["pub_key"]) is not None:
                 job["result"] = str(found[job["pub_key"]])
+                job["evalctx"] = _parse_evalctx(found.get(f"{job['pub_key']}.evalctx"))
                 _event(f"Received result from {job['agent']}")
                 return True
             time.sleep(POLL_SECONDS)
@@ -276,6 +334,71 @@ def make_workflow_tools(
         _event(f"Cancelled {len(pending_ids)} pending subtask(s)")
         return pending_ids
 
+    def _judge_and_rate(job: dict) -> None:
+        """Coordinator rates a worker it consumed (AIMEAT rate endpoint). Runs a source-grounded
+        faithfulness judge of the worker's deliverable vs the sources IT cites, then POSTs a rating
+        to the worker's task with the worker's eval-context as metadata. v1 auto-rates only the
+        grounded contexts (factual/research/code/summarization); others are left for the owner.
+        Inter-agent (coordinator != worker), so it passes the rate gate. Best-effort; never raises."""
+        if not (rate_workers and llm) or job.get("rated") or "result" not in job:
+            return
+        job["rated"] = True
+        try:
+            reply = str(llm.call([{"role": "user", "content": (
+                "You delegated this subtask to a worker agent:\n" + (job.get("instruction") or job["title"]) +
+                "\n\nThe worker returned this deliverable:\n" + job["result"][:6000] +
+                "\n\nFACT-CHECK the deliverable against the sources IT cites. Count atomic claims presented "
+                "as sourced facts that are NOT supported by a cited source ('unsupported'). Classify the "
+                "work's context as ONE of: factual, research, code, summarization, planning, communication, "
+                "creative. Reply with EXACTLY one line: 'context=<ctx> | score=<1-5> | unsupported=<N>'."
+            )}]) or "")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[{coordinator_name}] rating skipped for {job['agent']} (judge error: {exc})", file=sys.stderr)
+            _event(f"Rating skipped for {job['agent']} (judge error)")
+            return
+        sm = _JUDGE_SCORE_RE.search(reply)
+        if not sm:
+            print(f"[{coordinator_name}] rating skipped for {job['agent']}: no score parsed from judge reply: {reply[:120]!r}", file=sys.stderr)
+            return
+        cm = _JUDGE_CONTEXT_RE.search(reply)
+        context = cm.group(1).lower() if cm else "factual"
+        if context not in _GROUNDED_CONTEXTS:
+            print(f"[{coordinator_name}] rating skipped for {job['agent']}: context '{context}' not grounded-rateable in v1", file=sys.stderr)
+            _event(f"Rating skipped for {job['agent']}: context '{context}' not source-grounded in v1")
+            return
+        um = _JUDGE_UNSUP_RE.search(reply)
+        ectx = job.get("evalctx") or {}
+        meta = {k: ectx[k] for k in ("temperature", "tokens_in", "tokens_out", "tokens_total") if k in ectx}
+        body = {
+            "stars": int(sm.group(1)),
+            "context": context,
+            "source_grounded": True,
+            "unsupported": int(um.group(1)) if um else 0,
+            "evaluated_model": ectx.get("model") or os.getenv("OPENROUTER_MODEL"),
+            "metadata": meta,
+            "comment": "source-grounded faithfulness judge by coordinator",
+        }
+        # The deliverable lands in the tag area (worker's publish callback) BEFORE the worker's task is
+        # marked 'done' (its finalize callback runs after); the rate endpoint accepts only 'done' tasks,
+        # so an early POST is rejected. Retry while the worker finalizes (403 self / 422 grounding are
+        # definitive — never retry those).
+        ok, status, detail = _rate_task(coordinator_name, job["agent"], job["tid"], body)
+        attempts = 1
+        while not ok and status not in (403, 422) and attempts < 5:
+            time.sleep(POLL_SECONDS)
+            ok, status, detail = _rate_task(coordinator_name, job["agent"], job["tid"], body)
+            attempts += 1
+        if ok:
+            msg = f"Rated {job['agent']} {body['stars']}/5 ({context}, unsupported={body['unsupported']})"
+        elif status == 403:
+            msg = f"Rating rejected 403 self-rating for {job['agent']} (unexpected: coordinator≠worker)"
+        elif status == 422:
+            msg = f"Rating rejected 422 GROUNDING_REQUIRED for {job['agent']}"
+        else:
+            msg = f"Rating failed for {job['agent']} after {attempts} tries (status={status}): {detail[:80]}"
+        print(f"[{coordinator_name}] {msg}", file=sys.stderr)
+        _event(msg)
+
     @tool("delegate_subtask")
     def delegate_subtask(target_agent: str, title: str, instruction: str) -> str:
         """Fan-out: create a subtask for another same-owner crew. Call once per subtask. The crew runs
@@ -300,6 +423,7 @@ def make_workflow_tools(
         if err:
             return err
         if _await_job(job):
+            _judge_and_rate(job)
             return f"Result from {target_agent} — {title}:\n{job['result']}"
         return (
             f"[no result from {target_agent} within the timeout] — it may still be building or awaiting "
@@ -331,6 +455,7 @@ def make_workflow_tools(
             for job in pending:
                 if found.get(job["pub_key"]) is not None:
                     job["result"] = str(found[job["pub_key"]])
+                    job["evalctx"] = _parse_evalctx(found.get(f"{job['pub_key']}.evalctx"))
                     _event(f"Received result from {job['agent']}")
             if all("result" in j for j in state["jobs"]):
                 break
@@ -339,6 +464,9 @@ def make_workflow_tools(
         # Timed out with stragglers? Cancel them so abandoned workers stop grinding (circuit breaker).
         if any("result" not in j for j in state["jobs"]):
             _do_cancel_pending()
+        # Rate each worker that delivered (coordinator -> worker, source-grounded). Best-effort.
+        for job in state["jobs"]:
+            _judge_and_rate(job)
         parts = []
         for j in state["jobs"]:
             body = j.get("result", "[no result within timeout — subtask cancelled]")
@@ -438,4 +566,15 @@ def make_workflow_tools(
             f"'{question[:60]}' and note the assumption in your result."
         )
 
-    return [discover_crews, delegate_subtask, delegate_and_wait, collect_results, cancel_pending, commission_crew, wait_for_crew, ask_owner]
+    tools = [discover_crews, delegate_subtask, delegate_and_wait, collect_results, cancel_pending, commission_crew, wait_for_crew, ask_owner]
+    # Disable CrewAI's tool-result cache on ALL of these. They are stateful / side-effecting and
+    # several are argument-identical across calls (collect_results / cancel_pending take no args), so
+    # the cache would serve a stale first-call result for a later call — e.g. collect_results returning
+    # the first poll's partial set instead of re-waiting for a worker delegated AFTER that call. That
+    # exact bug let a freshly-commissioned crew's result be missed and the task complete prematurely.
+    for _t in tools:
+        try:
+            _t.cache_function = lambda *_a, **_k: False
+        except Exception:  # noqa: BLE001 — tool object may not expose it on some versions
+            pass
+    return tools
