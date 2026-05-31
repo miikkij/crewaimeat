@@ -510,19 +510,22 @@ def _write_verify_stat(agent_name: str, tid: str | None, output_text: str, dimen
     um = _VERIFY_UNSUP_RE.search(output_text or "")
     unsupported = int(um.group(1)) if um else None
     short = (tid or "manual").split("-", 1)[0]
+    # Single-segment custom key (agents.<agent>.statistics.custom.<name>) so the Quality tab's Custom
+    # Metrics renders it; it holds the LATEST self-verify (the per-task reputation history lives on the
+    # rate endpoint). `task` keeps it traceable to the run.
     res = _aimeat_call(
         agent_name,
         "aimeat_memory_write",
         {
-            "key": f"agents.{agent_name}.statistics.custom.{short}.verify",
+            "key": f"agents.{agent_name}.statistics.custom.self_verify",
             "value": {
                 "score": score, "by": agent_name, "role": "self-verify", "dimension": dimension,
-                "unsupported": unsupported, "ts": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                "unsupported": unsupported, "task": short, "ts": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             },
-            "visibility": "owner",
+            "visibility": "public",  # like other statistics.* keys, so the Quality "Custom Metrics" tab renders it
         },
     )
-    print(f"[{agent_name}] self-verify score {score}/5 (unsupported={unsupported}, dim={dimension}) -> statistics.custom: {bool(res)}", file=sys.stderr)
+    print(f"[{agent_name}] self-verify score {score}/5 (unsupported={unsupported}, dim={dimension}) -> statistics.custom.self_verify: {bool(res)}", file=sys.stderr)
 
 
 def _eval_ctx(eval_info: dict | None) -> dict:
@@ -542,6 +545,8 @@ def _eval_ctx(eval_info: dict | None) -> dict:
         ctx["temperature"] = eval_info["temperature"]
     if eval_info.get("nature"):
         ctx["nature"] = eval_info["nature"]
+    if eval_info.get("task"):
+        ctx["task"] = eval_info["task"]
     crew = (eval_info.get("crew_holder") or {}).get("crew")
     um = None
     if crew is not None:
@@ -581,9 +586,9 @@ def _make_publish_cb(agent_name: str, primary_key: str, shared_key: str | None =
         print(f"[{agent_name}] deliverable published -> {primary_key}: {bool(r1)}", file=sys.stderr)
         ectx = _eval_ctx(eval_info)
         if ectx and eval_info and eval_info.get("custom_key"):
-            _aimeat_call(  # own performance introspection (store now, analyze later)
+            _aimeat_call(  # own performance introspection; public so the Quality Custom Metrics tab renders it
                 agent_name, "aimeat_memory_write",
-                {"key": eval_info["custom_key"], "value": ectx, "visibility": "owner"},
+                {"key": eval_info["custom_key"], "value": ectx, "visibility": "public"},
             )
         if shared_key:
             if ectx:  # write evalctx FIRST so it is present when the coordinator sees the deliverable
@@ -963,8 +968,9 @@ def run_crew(spec: CrewSpec) -> None:
             "model": getattr(llm, "model", None),
             "temperature": getattr(llm, "temperature", None),
             "nature": gate["nature"] if gate else None,
+            "task": _short,
             "crew_holder": _crew_holder,
-            "custom_key": f"agents.{spec.agent_name}.statistics.custom.{_short}.evalctx",
+            "custom_key": f"agents.{spec.agent_name}.statistics.custom.eval_context",
         }
 
         # Guarantee the deliverable lands even if the liaison's LLM memory_write loops/errors:
