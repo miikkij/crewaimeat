@@ -196,18 +196,23 @@ def _build_domain(ctx: BuildContext, request: str | None = None) -> tuple[list[A
             "    * returns (agents, tasks) as a 2-tuple of lists.\n"
             "- Do NOT write imports, AGENT_NAME, run(), or any AIMEAT/onboarding/daemon/memory code — "
             "the scaffold provides all of it. Agent, Task, BuildContext and _web_tools are already "
-            "imported in the target file.\n\n"
-            "Output EXACTLY these three labeled sections, nothing else, so the builder can use them "
+            "imported in the target file.\n"
+            "- Also write a short README for the new crew's README tab: start with a FIGLET logo "
+            'directive like [[FIGLET:slant]["New Crew"]] (use the agent name, words spaced), then a '
+            "one-line description of what it does and a short 'How to task me' line. Plain markdown.\n\n"
+            "Output EXACTLY these four labeled sections, nothing else, so the builder can use them "
             "verbatim:\n"
             "AGENT_NAME: <kebab-name>\n"
             "EXTRA_IMPORTS:\n"
             "<extra import lines, or leave this empty>\n"
+            "README:\n"
+            "<the README markdown for the new crew>\n"
             "BUILD_DOMAIN:\n"
             "<the full def build_domain(ctx): ... function text>"
         ),
         expected_output=(
-            "The three labeled sections AGENT_NAME, EXTRA_IMPORTS, BUILD_DOMAIN, with a complete, "
-            "ready-to-write build_domain function."
+            "The four labeled sections AGENT_NAME, EXTRA_IMPORTS, README, BUILD_DOMAIN, with a "
+            "complete, ready-to-write build_domain function."
         ),
         agent=architect,
     )
@@ -216,7 +221,8 @@ def _build_domain(ctx: BuildContext, request: str | None = None) -> tuple[list[A
             "Bring the Crew Architect's design above to life. Work ONE tool call at a time — never "
             "fire several in the same turn.\n"
             "1. Call write_and_validate_crew with the architect's AGENT_NAME (as agent_name), the "
-            "BUILD_DOMAIN code (as build_domain_code), and EXTRA_IMPORTS (as extra_imports).\n"
+            "BUILD_DOMAIN code (as build_domain_code), EXTRA_IMPORTS (as extra_imports), and the "
+            "README markdown (as readme_md).\n"
             "2. If it returns INVALID, fix the build_domain code from the error and call "
             "write_and_validate_crew again. Repeat until it returns VALID.\n"
             "3. Once VALID, call register_and_launch_crew ONCE with the same agent_name.\n"

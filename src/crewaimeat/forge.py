@@ -49,18 +49,31 @@ from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 from crewaimeat.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is set, else []
 
 AGENT_NAME = "{agent_name}"
-
+{readme_block}
 
 {build_domain_code}
 
 
 def run() -> None:
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain))
+    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain{readme_arg}))
 
 
 if __name__ == "__main__":
     run()
 '''
+
+
+def _embed_readme(readme_md: str) -> str:
+    """Embed README markdown as a safe triple-single-quoted Python literal for the generated file.
+
+    Escapes backslashes and any ''' run, and guarantees a trailing newline so the closing quotes
+    can never collide with a final quote char. README directives ([[FIGLET..]], [[AVAILABLE_COMMANDS][]])
+    are plain text here; the scaffold expands them at publish time.
+    """
+    body = readme_md.replace("\\", "\\\\").replace("'''", "\\'\\'\\'")
+    if not body.endswith("\n"):
+        body += "\n"
+    return f"README = '''{body}'''"
 
 
 def _project_root() -> Path:
@@ -79,20 +92,33 @@ def _rel(path: Path) -> str:
         return str(path)
 
 
-def write_crew_file(agent_name: str, build_domain_code: str, extra_imports: str = "") -> Path:
+def write_crew_file(
+    agent_name: str, build_domain_code: str, extra_imports: str = "", readme_md: str = ""
+) -> Path:
     """Assemble crews/<name>_crew.py from the scaffold template + generated build_domain.
 
-    Overwrites freely so the validate-fix-retry loop can rewrite the same file.
+    A non-empty `readme_md` is embedded as a README constant and passed to CrewSpec(readme_md=...),
+    so the new crew shows a proper README tab. When empty, the scaffold publishes a generated
+    default README instead, so the tab is never blank either way. Overwrites freely so the
+    validate-fix-retry loop can rewrite the same file.
     """
     crews_dir = _project_root() / "crews"
     crews_dir.mkdir(exist_ok=True)
     fname = _fname(agent_name)
     extra = ("\n" + extra_imports.strip() + "\n") if extra_imports.strip() else ""
+    if readme_md.strip():
+        readme_block = "\n" + _embed_readme(readme_md) + "\n"
+        readme_arg = ", readme_md=README"
+    else:
+        readme_block = ""
+        readme_arg = ""
     content = _FILE_TEMPLATE.format(
         agent_name=agent_name,
         fname=fname,
         extra_imports=extra,
         build_domain_code=build_domain_code.strip("\n"),
+        readme_block=readme_block,
+        readme_arg=readme_arg,
     )
     dest = crews_dir / fname
     dest.write_text(content, encoding="utf-8")
@@ -115,27 +141,63 @@ def validate_crew_file(path: Path) -> tuple[bool, str]:
     return proc.returncode == 0, out
 
 
-def register_agent(agent_name: str, owner: str, url: str = "https://aimeat.io") -> tuple[bool, str]:
-    """Register a task-runner agent via the latest connector. Approval stays a human step.
+_VERIFY_CODE_RE = re.compile(r"Verification code:\s*([A-Za-z0-9][A-Za-z0-9-]*)")
+_VERIFY_URL_RE = re.compile(r"(https?://\S*verif\S*)")
 
-    Uses `npx aimeat@latest connect add` (the local `aimeat` may be an older connector that
-    predates `connect add` / `--mode`). The owner then approves the agent on AIMEAT.
+
+def register_agent(agent_name: str, owner: str, url: str = "https://aimeat.io") -> tuple[bool, str]:
+    """Start `connect add` for a new task-runner agent and SURFACE its device verification code + URL.
+
+    `connect add` is an OAuth device flow: it prints a verification code + URL and then polls until
+    the owner approves. Capturing that output silently (the old behaviour) hid the code and made the
+    call hang. Instead we launch it in the BACKGROUND (it keeps polling and registers once approved),
+    read the code + URL it prints within a few seconds, and return them so the owner can approve.
+    Non-blocking: returns in ~seconds, not after the full poll.
     """
     base = [
         "npx", "aimeat@latest", "connect", "add",
-        "--agent", agent_name,
-        "--mode", "task-runner",
-        "--url", url,
-        "--owner", owner,
+        "--agent", agent_name, "--mode", "task-runner", "--url", url, "--owner", owner,
     ]
     cmd = ["cmd", "/c", *base] if os.name == "nt" else base
+    logs = _project_root() / "logs"
+    logs.mkdir(exist_ok=True)
+    out_path = logs / f".register_{_fname(agent_name)}.log"
     try:
-        # npx may fetch the package on first use, so allow generous time.
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        outf = open(out_path, "w+b")
+        if os.name == "nt":
+            proc = subprocess.Popen(
+                cmd, stdout=outf, stderr=outf, stdin=subprocess.DEVNULL,
+                creationflags=0x08000000, close_fds=True,  # CREATE_NO_WINDOW
+            )
+        else:
+            proc = subprocess.Popen(
+                cmd, stdout=outf, stderr=outf, stdin=subprocess.DEVNULL,
+                start_new_session=True, close_fds=True,
+            )
     except Exception as exc:  # noqa: BLE001
-        return False, f"connect add could not run: {exc}"
-    out = ((proc.stdout or "") + (proc.stderr or "")).strip()
-    return proc.returncode == 0, out
+        return False, f"could not start connect add: {exc}"
+
+    code = verify_url = None
+    for _ in range(40):  # ~40s: npx fetch + device-auth request, then the code is printed
+        time.sleep(1)
+        try:
+            txt = out_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            txt = ""
+        if not code:
+            m = _VERIFY_CODE_RE.search(txt)
+            code = m.group(1) if m else None
+        if not verify_url:
+            m = _VERIFY_URL_RE.search(txt)
+            verify_url = m.group(1) if m else None
+        if (code and verify_url) or proc.poll() is not None:
+            break
+
+    if code and verify_url:
+        return True, f"APPROVE to activate: open {verify_url} and enter code {code} (it registers automatically once approved)."
+    if proc.poll() is not None:
+        return True, "connect add finished (the agent may already be registered)."
+    return True, f"Registration started for '{agent_name}'; approve it in the dashboard (Profile -> Agents)."
 
 
 def _is_running_file(fname: str) -> bool:
@@ -285,7 +347,9 @@ def reconcile_fleet() -> str:
 # CrewAI tools handed to the builder agent
 # --------------------------------------------------------------------------- #
 @tool("write_and_validate_crew")
-def write_and_validate_crew(agent_name: str, build_domain_code: str, extra_imports: str = "") -> str:
+def write_and_validate_crew(
+    agent_name: str, build_domain_code: str, extra_imports: str = "", readme_md: str = ""
+) -> str:
     """Write crews/<agent_name>_crew.py on the locked AIMEAT scaffold and validate it.
 
     Pass ONLY the build_domain function in build_domain_code:
@@ -294,11 +358,16 @@ def write_and_validate_crew(agent_name: str, build_domain_code: str, extra_impor
     __main__ guard are added for you; Agent, Task, BuildContext and _web_tools are
     already imported in the file. Put any additional import lines in extra_imports.
 
+    Pass `readme_md` with the crew's README tab markdown (start it with a FIGLET logo, e.g.
+    [[FIGLET:slant]["New Crew"]], then a short description and a "How to task me" line). It is
+    embedded and published to the agent's README tab. If you omit it, the scaffold publishes a
+    generated default README, so the tab is never blank.
+
     Returns 'VALID: ...' when it compiles and build_domain returns a non-empty
     (agents, tasks). Otherwise returns 'INVALID: <error>' — fix the build_domain code
     and call this tool again until it is VALID. Overwrites the file each call.
     """
-    path = write_crew_file(agent_name, build_domain_code, extra_imports)
+    path = write_crew_file(agent_name, build_domain_code, extra_imports, readme_md)
     ok, detail = validate_crew_file(path)
     rel = _rel(path)
     if ok:
@@ -324,17 +393,11 @@ def register_and_launch_crew(agent_name: str) -> str:
 
     owner = os.getenv("AIMEAT_OWNER", "").strip()
     if owner:
-        reg_ok, reg_out = register_agent(agent_name, owner)
-        reg_line = (
-            f"Registered '{agent_name}' (owner {owner})."
-            if reg_ok
-            else f"connect add did not report success — output:\n{reg_out or '(none)'}"
-        )
+        _ok, reg_line = register_agent(agent_name, owner)
     else:
         reg_line = (
-            "Registration SKIPPED: AIMEAT_OWNER is not set. Set it in .env, then run:\n"
-            f"  npx aimeat@latest connect add --agent {agent_name} --mode task-runner "
-            "--url https://aimeat.io --owner <your-aimeat-account>"
+            "AIMEAT_OWNER is not set — register manually: npx aimeat@latest connect add --agent "
+            f"{agent_name} --mode task-runner --url https://aimeat.io --owner <your-aimeat-account>"
         )
 
     if is_crew_running(agent_name):
@@ -342,20 +405,15 @@ def register_and_launch_crew(agent_name: str) -> str:
     else:
         pid, log = launch_crew(rel)
         launch_line = (
-            f"Launched under the watchdog (pid {pid}). Log: {log}"
+            f"Launched under the watchdog (pid {pid}); it comes online the moment you approve. Log: {log}"
             if pid is not None
             else f"Launch problem: {log}"
         )
     return (
-        f"NEW AGENT: {agent_name}\n"
-        f"File: {rel}\n"
-        f"{reg_line}\n"
+        f"NEW AGENT: {agent_name}  (file: {rel})\n"
+        f"ACTION REQUIRED -> {reg_line}\n"
         f"{launch_line}\n"
-        "ACTION REQUIRED — approve the agent so its token activates: open the AIMEAT "
-        f"dashboard (Profile -> Agents), find '{agent_name}', and approve it. The crew comes "
-        "online within ~30s of approval. If the watchdog stopped before you approved, re-run:\n"
-        f"  ./scripts/watchdog.ps1 {rel}\n"
-        f"Then queue a task for '{agent_name}' from its Tasks tab to put it to work."
+        f"Once approved, queue a task for '{agent_name}' from its Tasks tab."
     )
 
 
