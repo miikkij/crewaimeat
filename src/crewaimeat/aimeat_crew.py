@@ -124,6 +124,9 @@ class BuildContext:
     prompt: str         # task.description or task.title — the user's actual request
     llm: Any            # the shared LLM (crewaimeat.llm.get_llm); pass to your Agents
     today: str          # current-time context string — prepend to time-sensitive tasks
+    directives: str = ""  # owner-set behavioral directives (GET /v1/agents/me/directives),
+    #   already formatted. The scaffold also prepends these to every domain task, so they bind
+    #   behavior automatically; reference ctx.directives only if you want finer placement.
 
 
 # build_domain returns (agents, tasks). Tasks run in `process` order; the LAST
@@ -204,6 +207,54 @@ def _auth_alive(agent_name: str, owner: str | None) -> bool | None:
         return None
     except Exception:  # noqa: BLE001 — transient; treat as unknown
         return None
+
+
+def _fetch_directives(agent_name: str, owner: str | None) -> dict | None:
+    """Read the agent's owner-set directives via GET /v1/agents/me/directives (its own token).
+
+    `me` resolves to the calling agent from its JWT. Returns the inner data payload
+    {purpose, rules[], memory_areas, shared_tags, shared_memory_prefixes, resources} or None.
+    rules are merged system -> owner -> agent, each tagged with its source. This is the canonical
+    directives contract (also onboarding STEP 1). Best-effort: any failure returns None so a crew
+    still runs without directives."""
+    if _aimeat_read_token is None:
+        return None
+    try:
+        token, node_url = _aimeat_read_token(agent_name, owner=owner)
+        r = requests.get(
+            f"{node_url.rstrip('/')}/v1/agents/me/directives",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=15,
+        )
+        if r.status_code != 200:
+            return None
+        body = r.json()
+        return body.get("data") if isinstance(body, dict) else None
+    except Exception:  # noqa: BLE001 — transient / offline; run without directives
+        return None
+
+
+def _format_directives(data: dict | None) -> str:
+    """Render purpose + rules into a behavioral-constraints block for the crew's prompt.
+
+    system/owner rules are binding policy; agent rules are the agent's own standing notes. All are
+    framed as directives to follow. Returns "" when there is nothing to apply."""
+    if not isinstance(data, dict):
+        return ""
+    purpose = (data.get("purpose") or "").strip()
+    rules = [
+        r for r in (data.get("rules") or [])
+        if isinstance(r, dict) and (r.get("description") or "").strip()
+    ]
+    if not purpose and not rules:
+        return ""
+    lines = ["STANDING DIRECTIVES (owner-set policy — follow these in everything you produce):"]
+    if purpose:
+        lines.append(f"- Purpose: {purpose}")
+    label = {"system": "policy", "owner": "policy", "agent": "standing"}
+    for r in rules:
+        lines.append(f"- [{label.get(r.get('source'), 'rule')}] {r.get('description', '').strip()}")
+    return "\n".join(lines)
 
 
 def _token_exists(agent_name: str, owner: str | None) -> bool:
@@ -653,8 +704,21 @@ def run_crew(spec: CrewSpec) -> None:
         # Bind the progress bridge: kickoff starts a 5s heartbeat writing live status.
         progress.bind(tid, prompt[:80])
 
-        ctx = BuildContext(task=task, prompt=prompt, llm=llm, today=_now_context())
+        # Owner-set directives (GET /v1/agents/me/directives) bind this run's behavior. Fetched per
+        # task so an owner edit takes effect on the next task with no restart.
+        directives = _format_directives(_fetch_directives(spec.agent_name, spec.owner))
+        if directives:
+            print(f"[{spec.agent_name}] applying owner directives ({directives.count(chr(10))} line(s))", file=sys.stderr)
+
+        ctx = BuildContext(task=task, prompt=prompt, llm=llm, today=_now_context(), directives=directives)
         agents, tasks = spec.build_domain(ctx)
+
+        # Prepend the directives to every domain task so the agent that produces the deliverable
+        # also sees them (not just the first task). The finalize task is added after this and stays
+        # deterministic.
+        if directives:
+            for _t in tasks:
+                _t.description = f"{directives}\n\n---\n\n{_t.description}"
 
         # Guarantee the deliverable lands even if the liaison's LLM memory_write loops/errors:
         # publish the LAST domain task's output deterministically via its callback (chained so an
