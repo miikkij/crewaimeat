@@ -75,10 +75,12 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             f"{ctx.today}\n\nGoal:\n{ctx.prompt}\n\n"
             "Work ONE tool call at a time:\n"
             "1. Call discover_crews to see which crews are available and what they do.\n"
-            "2. Decide which crews can contribute to this goal. For each, call delegate_subtask("
-            "target_agent, title, instruction). The crew does NOT see this goal, so `instruction` must "
-            "be a complete, self-contained prompt with everything that crew needs.\n"
-            "3. After delegating every subtask, call collect_results ONCE to gather all outputs.\n"
+            "2. Decide which crews can contribute. For each, call delegate_subtask(target_agent, "
+            "title, instruction) with a complete, self-contained prompt (the crew does NOT see this goal).\n"
+            "3. If a needed capability has NO matching crew, call commission_crew(agent_name, capability) "
+            "to have crew-forge build one, then wait_for_crew(agent_name), then delegate_subtask to it. "
+            "Only do this for a genuine gap — prefer existing crews.\n"
+            "4. After delegating every subtask, call collect_results ONCE to gather all outputs.\n"
             "Then report the collected materials verbatim as your result."
         ),
         expected_output="The collected materials from every delegated crew.",

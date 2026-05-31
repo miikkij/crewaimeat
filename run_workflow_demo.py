@@ -11,8 +11,10 @@ from crewaimeat.aimeat_crew import _aimeat_call
 from crewaimeat.workflow import _find_id, _read_deliverable, _deliverable_by_key
 
 GOAL = (
-    "Write a short, upbeat bulletin about opening a board-game cafe in Tapiola, Espoo: "
-    "a few realistic scenarios for how it could go, plus one playful joke to open with."
+    "Make a tiny bilingual promo for a board-game cafe in Tapiola, Espoo: "
+    "(1) a few realistic scenarios for how it could go, and "
+    "(2) translate the tagline 'Where strategy meets espresso' into French and German. "
+    "Note: there may be no existing crew for translation."
 )
 
 resp = _aimeat_call(
@@ -27,7 +29,7 @@ if not short:
     print(f"[demo] FAILED to create task: {resp}", flush=True)
     raise SystemExit(1)
 
-deadline, waited = 900, 0
+deadline, waited = 1500, 0  # longer: crew-forge builds a new crew + you approve it + it onboards + runs
 while waited < deadline:
     val = _deliverable_by_key("workflow-manager", GOAL, short) or _read_deliverable("workflow-manager", short)
     if val:

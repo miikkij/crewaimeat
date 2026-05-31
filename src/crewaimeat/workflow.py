@@ -23,7 +23,9 @@ from crewai.tools import tool
 from crewaimeat.aimeat_crew import _aimeat_call
 
 POLL_SECONDS = 15
-DEFAULT_TIMEOUT = 600  # per collect_results call
+DEFAULT_TIMEOUT = 1800  # per collect_results / wait_for_crew call (30 min): a commissioned crew must
+                        # be built + onboarded + owner-approved + run before its deliverable lands, so
+                        # heavy multi-crew goals need a generous window.
 MAX_SUBTASKS = 6       # hard cap so a coordinator can't fan out a token storm
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
@@ -71,6 +73,18 @@ def _items_of(resp) -> list:
         if isinstance(c, dict) and isinstance(c.get("items"), list):
             return [it for it in c["items"] if isinstance(it, dict)]
     return []
+
+
+def _agent_names(resp) -> set:
+    """Extract the set of agent names from an aimeat_agents_list response."""
+    if not isinstance(resp, dict):
+        return set()
+    for c in (resp, resp.get("data") or {}):
+        for field in ("agents", "items"):
+            arr = c.get(field) if isinstance(c, dict) else None
+            if isinstance(arr, list):
+                return {a.get("name") for a in arr if isinstance(a, dict) and a.get("name")}
+    return set()
 
 
 def _read_deliverable(agent: str, short: str):
@@ -220,4 +234,44 @@ def make_workflow_tools(
             parts.append(f"### From {j['agent']} — {j['title']}\n{body}")
         return "\n\n".join(parts)
 
-    return [discover_crews, delegate_subtask, collect_results]
+    @tool("commission_crew")
+    def commission_crew(agent_name: str, capability: str) -> str:
+        """When NO existing crew can do part of the goal, ask crew-forge to BUILD a new one. Give it a
+        short kebab `agent_name` and a clear `capability` description. crew-forge designs, registers,
+        and launches it; the owner approves it once. AFTER commissioning, call wait_for_crew(agent_name)
+        before delegating to it. Use this only for a genuine capability gap — prefer existing crews."""
+        instruction = (
+            f"/build Create a task-runner crew named exactly '{agent_name}'. It should: {capability}"
+        )
+        resp = _aimeat_call(
+            coordinator_name,
+            "aimeat_task_create",
+            {"target_agent": "crew-forge", "title": f"Build {agent_name}", "description": instruction, "status": "queued"},
+        )
+        tid = _find_id(resp)
+        if not tid:
+            return f"Failed to commission '{agent_name}' from crew-forge: {json.dumps(resp)[:200]}"
+        _event(f"Commissioned crew-forge to build '{agent_name}'")
+        return (
+            f"Asked crew-forge to build '{agent_name}' (task {tid}). It will be registered and launched, "
+            f"then the owner approves it. Call wait_for_crew('{agent_name}') next, then delegate to it."
+        )
+
+    @tool("wait_for_crew")
+    def wait_for_crew(agent_name: str) -> str:
+        """Wait until a commissioned crew is registered on the node and can receive a subtask. Call
+        this after commission_crew and before delegate_subtask. (The crew may still need owner approval
+        before it actually runs — collect_results waits for that part.)"""
+        waited = 0
+        while waited < DEFAULT_TIMEOUT:
+            if agent_name in _agent_names(_aimeat_call(coordinator_name, "aimeat_agents_list", {})):
+                _event(f"Crew '{agent_name}' is registered")
+                return (
+                    f"'{agent_name}' is registered — you can delegate a subtask to it now. It runs once "
+                    "the owner approves it; collect_results will wait for the result."
+                )
+            time.sleep(POLL_SECONDS)
+            waited += POLL_SECONDS
+        return f"'{agent_name}' has not appeared yet — crew-forge may still be building it, or it awaits approval."
+
+    return [discover_crews, delegate_subtask, collect_results, commission_crew, wait_for_crew]
