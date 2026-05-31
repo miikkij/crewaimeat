@@ -73,6 +73,46 @@ from crewaimeat.progress import install_progress  # noqa: E402
 AUTH_EXIT_CODE = 78
 
 
+# Lock-file handles for the single-instance guard, kept alive for the whole process lifetime
+# (the OS advisory lock is held only while the handle is open).
+_SINGLE_INSTANCE_HANDLES: list = []
+
+
+def _acquire_single_instance(agent_name: str) -> bool:
+    """Best-effort name-based single-instance lock so only ONE daemon runs per agent.
+
+    Returns True if this process is the sole daemon for `agent_name`, False if another live
+    daemon already holds the lock. The lock is an OS advisory lock on logs/.locks/<agent>.lock
+    held for the whole process lifetime; it releases automatically when the process dies, so a
+    crash never leaves a stale lock. If locking is unavailable it returns True (never blocks a
+    legitimate start). This catches duplicates launched any way (uv run, .\\crews\\, a stray
+    watchdog, an orphaned daemon) — unlike a command-line scan, which a differing path string
+    defeats.
+    """
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", agent_name)
+    lock_dir = Path.cwd() / "logs" / ".locks"
+    try:
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        fh = open(lock_dir / f"{safe}.lock", "a+")
+    except OSError:
+        return True  # cannot create the lock file -> do not block startup
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fh.close()
+        return False  # another daemon holds the lock
+    _SINGLE_INSTANCE_HANDLES.append(fh)  # keep it open (and locked) for the process lifetime
+    return True
+
+
 # --------------------------------------------------------------------------- #
 # Public API: what a crew author fills in
 # --------------------------------------------------------------------------- #
@@ -437,6 +477,32 @@ def _render_commands(commands: list[dict] | None) -> str:
     return "| Command | Description |\n| --- | --- |\n" + rows
 
 
+def _humanize_name(agent_name: str) -> str:
+    """'jingle-writer' -> 'Jingle Writer' for a friendly README title."""
+    return re.sub(r"[-_]+", " ", agent_name).strip().title() or agent_name
+
+
+def _default_readme(agent_name: str) -> str:
+    """A sensible README for a crew whose author did not supply one (e.g. crew-forge builds).
+
+    Deterministic: a FIGLET logo of the name, a one-line description, how to task it, and the
+    command table (empty-safe). Keeps every generated crew's README tab from being blank — the
+    same shape the hand-written crews use, just generic where they are specific.
+    """
+    title = _humanize_name(agent_name)
+    return (
+        f'[[FIGLET:slant]["{title}"]]\n\n'
+        f"# {agent_name}\n\n"
+        "A task-runner crew on the AIMEAT scaffold (crewaimeat). Queue it a goal and it runs the "
+        "work, then publishes the finished result to its memory.\n\n"
+        "## How to task me\n"
+        "Open the **Tasks** tab, choose **+ New Task**, and describe what you want in plain "
+        "language. I take it from there and post the deliverable when it is done.\n\n"
+        "## Commands\n"
+        "[[AVAILABLE_COMMANDS][]]\n"
+    )
+
+
 def _figlet_repl(m: "re.Match[str]") -> str:
     """Render [[FIGLET[:font]]["text"]] to ASCII-art wrapped in a code fence (monospace)."""
     font = m.group(1) or "standard"
@@ -526,6 +592,17 @@ def run_crew(spec: CrewSpec) -> None:
     """
     progress = install_progress(spec.agent_name)
 
+    # 0a) Single-instance guard: if another daemon for THIS agent is already running, exit
+    #     cleanly instead of double-dispatching its tasks (two daemons each poll the same active
+    #     task and run it). Name-based, so it catches duplicates however they were launched.
+    if not _acquire_single_instance(spec.agent_name):
+        print(
+            f"[{spec.agent_name}] another daemon for this agent already holds the single-instance "
+            "lock — exiting to avoid duplicate task dispatch.",
+            file=sys.stderr,
+        )
+        raise SystemExit(0)
+
     # 0) If launched before the owner approved the agent, wait patiently for the token
     #    to be accepted rather than crash-looping in onboarding. Lets an unattended crew
     #    come online by itself once approved (no console needed).
@@ -550,9 +627,14 @@ def run_crew(spec: CrewSpec) -> None:
             file=sys.stderr,
         )
 
-    # 1c) Publish the README (FIGLET / AVAILABLE_COMMANDS / LLM directives expanded).
-    if spec.readme_md:
-        _publish_readme(spec.agent_name, spec.readme_md, spec.commands)
+    # 1c) Publish the README (FIGLET / AVAILABLE_COMMANDS / LLM directives expanded). Every crew
+    #     gets a README tab: the author's text if provided, otherwise a generated default so a
+    #     forge-built crew (which passes no readme_md) is never blank.
+    _publish_readme(
+        spec.agent_name,
+        spec.readme_md or _default_readme(spec.agent_name),
+        spec.commands,
+    )
 
     # 2) Per-task crew builder handed to the daemon.
     def _build(task: dict, liaison: Agent) -> Crew:
