@@ -38,9 +38,10 @@ MAX_CLARIFICATIONS = 2  # cap clarification questions per run so it can't ping-p
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
 _AGENT_NAME_RE = re.compile(r'^\s*AGENT_NAME\s*=\s*["\']([^"\']+)["\']', re.M)
 
-# Coordinator-rates-worker (AIMEAT Quality-tab): a source-grounded faithfulness judge of each
-# delegated worker's deliverable -> POST /tasks/:id/rate. v1 auto-rates only the grounded contexts
-# (the rate gate requires source_grounded there); creative/planning/communication are left to the owner.
+# Coordinator-rates-worker (AIMEAT Quality-tab): one judge classifies the worker's deliverable and
+# scores the right dimension -> POST /tasks/:id/rate. Grounded contexts (factual/research/code/
+# summarization) get a source-grounded faithfulness score; creative gets an output-alone craft score
+# (source_grounded=false, which the rate gate allows). planning/communication/other are not auto-rated.
 _JUDGE_CONTEXT_RE = re.compile(r"context\s*=\s*([a-z]+)", re.I)
 _JUDGE_SCORE_RE = re.compile(r"score\s*=\s*([1-5])", re.I)
 _JUDGE_UNSUP_RE = re.compile(r"unsupported\s*=\s*(\d+)", re.I)
@@ -335,11 +336,12 @@ def make_workflow_tools(
         return pending_ids
 
     def _judge_and_rate(job: dict) -> None:
-        """Coordinator rates a worker it consumed (AIMEAT rate endpoint). Runs a source-grounded
-        faithfulness judge of the worker's deliverable vs the sources IT cites, then POSTs a rating
-        to the worker's task with the worker's eval-context as metadata. v1 auto-rates only the
-        grounded contexts (factual/research/code/summarization); others are left for the owner.
-        Inter-agent (coordinator != worker), so it passes the rate gate. Best-effort; never raises."""
+        """Coordinator rates a worker it consumed (AIMEAT rate endpoint). One judge classifies the
+        deliverable and scores the right dimension: faithfulness vs cited sources for factual-type
+        contexts (source_grounded=true), or output-alone craft for creative (source_grounded=false).
+        POSTs to the worker's task with the worker's eval-context as metadata. planning/communication/
+        other are not auto-rated. Inter-agent (coordinator != worker), so it passes the rate gate.
+        Best-effort; never raises."""
         if not (rate_workers and llm) or job.get("rated") or "result" not in job:
             return
         job["rated"] = True
@@ -347,10 +349,14 @@ def make_workflow_tools(
             reply = str(llm.call([{"role": "user", "content": (
                 "You delegated this subtask to a worker agent:\n" + (job.get("instruction") or job["title"]) +
                 "\n\nThe worker returned this deliverable:\n" + job["result"][:6000] +
-                "\n\nFACT-CHECK the deliverable against the sources IT cites. Count atomic claims presented "
-                "as sourced facts that are NOT supported by a cited source ('unsupported'). Classify the "
-                "work's context as ONE of: factual, research, code, summarization, planning, communication, "
-                "creative. Reply with EXACTLY one line: 'context=<ctx> | score=<1-5> | unsupported=<N>'."
+                "\n\nFirst classify the work's context as ONE of: factual, research, code, summarization, "
+                "planning, communication, creative.\n"
+                "- If factual/research/code/summarization: FACT-CHECK it against the sources IT cites; count "
+                "atomic claims presented as sourced facts but NOT supported by a cited source as 'unsupported', "
+                "and score faithfulness 1-5 (5 = fully supported, no invented specifics).\n"
+                "- If creative: judge CRAFT against the brief (fulfils the request, originality, polish, "
+                "language) and score 1-5; set unsupported=0 (creative work has no sources to check).\n"
+                "Reply with EXACTLY one line: 'context=<ctx> | score=<1-5> | unsupported=<N>'."
             )}]) or "")
         except Exception as exc:  # noqa: BLE001
             print(f"[{coordinator_name}] rating skipped for {job['agent']} (judge error: {exc})", file=sys.stderr)
@@ -362,9 +368,16 @@ def make_workflow_tools(
             return
         cm = _JUDGE_CONTEXT_RE.search(reply)
         context = cm.group(1).lower() if cm else "factual"
-        if context not in _GROUNDED_CONTEXTS:
-            print(f"[{coordinator_name}] rating skipped for {job['agent']}: context '{context}' not grounded-rateable in v1", file=sys.stderr)
-            _event(f"Rating skipped for {job['agent']}: context '{context}' not source-grounded in v1")
+        # factual-type contexts are rated source-grounded (faithfulness vs cited sources); creative is
+        # rated output-alone (craft) with source_grounded=false (the rate gate allows ungrounded creative).
+        # planning/communication/other aren't auto-rated in v1.
+        if context in _GROUNDED_CONTEXTS:
+            source_grounded = True
+        elif context == "creative":
+            source_grounded = False
+        else:
+            print(f"[{coordinator_name}] rating skipped for {job['agent']}: context '{context}' not auto-rated in v1", file=sys.stderr)
+            _event(f"Rating skipped for {job['agent']}: context '{context}' not auto-rated in v1")
             return
         um = _JUDGE_UNSUP_RE.search(reply)
         ectx = job.get("evalctx") or {}
@@ -372,11 +385,11 @@ def make_workflow_tools(
         body = {
             "stars": int(sm.group(1)),
             "context": context,
-            "source_grounded": True,
+            "source_grounded": source_grounded,
             "unsupported": int(um.group(1)) if um else 0,
             "evaluated_model": ectx.get("model") or os.getenv("OPENROUTER_MODEL"),
             "metadata": meta,
-            "comment": "source-grounded faithfulness judge by coordinator",
+            "comment": ("source-grounded faithfulness judge" if source_grounded else "output-alone craft judge") + " by coordinator",
         }
         # The deliverable lands in the tag area (worker's publish callback) BEFORE the worker's task is
         # marked 'done' (its finalize callback runs after); the rate endpoint accepts only 'done' tasks,
