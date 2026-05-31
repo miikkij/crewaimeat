@@ -251,7 +251,11 @@ def _format_directives(data: dict | None) -> str:
     ]
     if not purpose and not rules:
         return ""
-    lines = ["STANDING DIRECTIVES (owner-set policy — follow these in everything you produce):"]
+    lines = [
+        "STANDING DIRECTIVES (owner-set policy — follow these in everything you produce. They apply "
+        "to YOU; if you delegate work to other crews, do NOT copy these into their instructions — "
+        "each crew already applies its own directives):"
+    ]
     if purpose:
         lines.append(f"- Purpose: {purpose}")
     label = {"system": "policy", "owner": "policy", "agent": "standing"}
