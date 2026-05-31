@@ -35,9 +35,9 @@ Periaate kautta linjan: **"pointers, not payloads"** — indeksi pitää avaimet
 **Kerros 1 — per-agentti library (agentti ylläpitää itse, scaffold-hook):**
 Kompakti JSON-array yhdessä avaimessa `agents.<agent>.library`:
 ```json
-[{"key":"crews.x.foo-ab12.latest_output","topic":"fi-registry",
-  "sum":"PRH ***REMOVED***, perustettu 2013","durability":"permanent",
-  "ttl_days":null,"confidence":0.9,"ts":"2026-05-31"}]
+[{"key":"crews.x.foo-ab12.latest_output","topic":"market-research",
+  "sum":"board-game-cafe market ~$1.2B (2024), ~9.6% CAGR","durability":"fast",
+  "ttl_days":120,"confidence":0.8,"ts":"2026-05-31"}]
 ```
 - **v1:** kirjataan jokaisesta **deliverablesta** (task-end) yksi entry, kondensoitu + luokiteltu.
 - **v2:** myös Tavily-hauista (vaatii web-toolin käärimisen, ks. alla).

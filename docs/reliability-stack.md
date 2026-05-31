@@ -2,17 +2,17 @@
 
 **Status:** suunnitelma (meidän idea) + ulkoinen vertailu kesken · **Päivä:** 2026-05-31
 
-## Mistä tämä lähti (***REMOVED***-keissi)
+## Mistä tämä lähti (yritystausta-keissi)
 
-workflow-manager commissionoi `finnish-corporate-researcher`n tekemään yritystaustaselvityksen. Lopputulos näytti hyvältä mutta sisälsi vaarallisia hallusinaatioita (ulkoinen Claude-review: 6/11 faktaa keksitty). Watchdog-logien + muistin vertailu paljasti **mistä konfabulaatio tuli:**
+Koordinaattori commissionoi tutkija-crewn tekemään erään yrityksen taustaselvityksen. Lopputulos näytti hyvältä mutta sisälsi vaarallisia hallusinaatioita (ulkoinen review: 6/11 faktaa keksitty). Watchdog-logien + muistin vertailu paljasti **mistä konfabulaatio tuli:**
 
 | Termi | Tutkijan oma raportti | Watchdog-logi | Lopullinen deliverable (Editor) |
 |---|---|---|---|
-| ***REMOVED*** (oikea sijoittaja) | **6×** ✅ | – | korvattu |
-| ***REMOVED*** (oikea sijoittaja) | **5×** ✅ | – | korvattu |
-| ***REMOVED*** (keksitty) | **0** | **0** | **läsnä** ❌ |
-| ***REMOVED***/***REMOVED*** (keksitty) | 0 | (haku­kohina) | **läsnä** ❌ |
-| 3 rahoituskierrosta (keksitty) | 0 | – | **läsnä** ❌ |
+| Oikea sijoittaja A | **6×** ✅ | – | korvattu |
+| Oikea sijoittaja B | **5×** ✅ | – | korvattu |
+| Keksitty sijoittaja | **0** | **0** | **läsnä** ❌ |
+| Keksitty tausta puheenjohtajalle | 0 | (haku­kohina) | **läsnä** ❌ |
+| Keksityt rahoituskierrokset | 0 | – | **läsnä** ❌ |
 
 **Johtopäätös:** tutkija oli rehellinen ja lähteistetty (löysi oikeat sijoittajat, merkitsi aukot "ei julkista tietoa löytynyt"). **workflow-managerin Editor/synteesi-askel (owl-alpha) keksi hallusinaatiot kun se "kokosi raportin uudelleen"** — ja verify (vain täydellisyystarkistus) leimasi sen "pass".
 
@@ -20,7 +20,7 @@ workflow-manager commissionoi `finnish-corporate-researcher`n tekemään yrityst
 
 ## Vihollinen ei ole luovuus
 
-Editor ei tehnyt syntiä olemalla luova. Synti oli **keksityn spesifin (nimi/luku/päivä/organisaatio/lähde) esittäminen vahvistettuna faktana** — usein **väärennetyllä lähdeviitteellä** ("***REMOVED*** | Crunchbase / Kauppalehti").
+Editor ei tehnyt syntiä olemalla luova. Synti oli **keksityn spesifin (nimi/luku/päivä/organisaatio/lähde) esittäminen vahvistettuna faktana** — usein **väärennetyllä lähdeviitteellä** (keksitty sijoittaja + olematon lähde).
 
 > **Periaate:** Luovissa tehtävissä keksi vapaasti. Mutta älä KOSKAAN esitä keksittyä spesifiä vahvistettuna faktana, äläkä liitä keksittyä lähdeviitettä. Fakta-tehtävissä: lähteistä tai "ei löytynyt".
 
@@ -45,10 +45,10 @@ Sama muoto kuin librarianin durability-luokitus ja verify — johdonmukaista.
 5. **verify-moodit:** `completeness` (nykyinen) | `faithfulness` (vertaa synteesiä worker-syötteisiin: "onko väitettä jota ei ole syötteissä?" — tämän heikkokin malli osaa).
 6. **Malli:** owl-alpha ok *groundattuna*; eskaloi (esim. grok-4-fast) vain jos faithfulness-verify yhä nappaa konfabulaatiota.
 
-## Miksi tämä korjaa ***REMOVED***n
+## Miksi tämä korjaa keissin
 
-- Single-worker pass-through olisi palauttanut tutkijan **oikean** raportin (***REMOVED***/***REMOVED***) ilman Editorin keksintöjä.
-- Faithfulness-verify olisi napannut ***REMOVED***in heti ("tätä ei ole tutkijan syötteessä").
+- Single-worker pass-through olisi palauttanut tutkijan **oikean** raportin (oikeat sijoittajat) ilman Editorin keksintöjä.
+- Faithfulness-verify olisi napannut keksityn sijoittajan heti ("tätä ei ole tutkijan syötteessä").
 - Grounding-sääntö olisi estänyt arvio-haarukat + väärennetyt lähdeviitteet.
 - Creative-tehtävät (esim. jingle) eivät kärsi — gate päästää ne luoviksi.
 
@@ -69,5 +69,5 @@ Sama muoto kuin librarianin durability-luokitus ja verify — johdonmukaista.
 | grounding-sääntö (honest gaps) | RAG groundedness | ✅ vakiokäytäntö |
 
 **Meidän lisä jota kirjallisuus ei korosta:**
-1. **Synteesi/aggregointi PRIMÄÄRINÄ konfabulaatiolähteenä** — useimmat työt keskittyvät generaattoriin; meidän ***REMOVED***-keissi osoitti että *rehellisen tutkijan* päälle ajettu synteesi keksi faktat. Aggregaattorin oma hallusinaatio on aliarvioitu reikä.
+1. **Synteesi/aggregointi PRIMÄÄRINÄ konfabulaatiolähteenä** — useimmat työt keskittyvät generaattoriin; meidän keissi osoitti että *rehellisen tutkijan* päälle ajettu synteesi keksi faktat. Aggregaattorin oma hallusinaatio on aliarvioitu reikä.
 2. **Single-worker pass-through** — kirjallisuus synretisoi aina; me skippaamme synteesin kun on yksi worker → ei synteesihallusinaatiota lainkaan. Halvin ja varmin korjaus tähän keissiin.

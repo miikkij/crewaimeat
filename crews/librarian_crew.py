@@ -32,7 +32,7 @@ and tell you what is worth reusing — so the fleet doesn't redo expensive work.
 ## How to task me
 Queue a topic or need, e.g.:
 - `What do we already have on board-game cafe feasibility?`
-- `Do we have background research on ***REMOVED*** Oy?`
+- `Do we have market research on the subscription-box idea?`
 '''
 
 
