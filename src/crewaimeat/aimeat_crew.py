@@ -147,7 +147,7 @@ class CrewSpec:
     owner: str | None = None              # AIMEAT owner; set only if the agent name is ambiguous
     max_idle_auth_failures: int = 10      # idle cycles with a rejected token before exiting for re-auth
     listen_for: Iterable[str] = ("tasks",)  # add "messages" to also act on inbox messages
-    wait_for_approval_seconds: int | None = 900  # wait this long for the token to be approved
+    wait_for_approval_seconds: int | None = 1800  # wait this long (30 min) for the token to be approved
     #   before onboarding, then exit for re-auth (None = wait indefinitely)
     services: list[dict] | None = None    # {name, description} capabilities to declare at
     #   onboarding via aimeat_onboarding_declare_services

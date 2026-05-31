@@ -23,11 +23,13 @@ from crewai.tools import tool
 from crewaimeat.aimeat_crew import _aimeat_call
 
 POLL_SECONDS = 15
-DEFAULT_TIMEOUT = 1800  # per collect_results / wait_for_crew call (30 min): a commissioned crew must
-                        # be built + onboarded + owner-approved + run before its deliverable lands, so
-                        # heavy multi-crew goals need a generous window.
+DEFAULT_TIMEOUT = 1800  # default per collect_results / delegate_and_wait / wait_for_crew (30 min).
+                        # Overridable per coordinator via make_workflow_tools(timeout=...). A commissioned
+                        # crew must be built + onboarded + owner-approved + run before its deliverable
+                        # lands, and deep workers (e.g. multi-search research) can run long, so the
+                        # coordinator's wait must be generous (workflow-manager uses 60 min).
 MAX_SUBTASKS = 6       # hard cap so a coordinator can't fan out a token storm
-CLARIFY_TIMEOUT = 600  # ask_owner: max seconds to wait for the human to answer a single-select prompt
+CLARIFY_TIMEOUT = 1800  # ask_owner: max seconds to wait for the human to answer (30 min)
 MAX_CLARIFICATIONS = 2  # cap clarification questions per run so it can't ping-pong with the owner
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
@@ -180,6 +182,7 @@ def make_workflow_tools(
     task_id: str | None = None,
     tag: str = "workflow",
     exclude: list[str] | None = None,
+    timeout: int = DEFAULT_TIMEOUT,
 ) -> list:
     """Tools for the coordinator. Delegated workers publish into the SHARED TAG area
     agents.tag.<tag>.<run_id>.<worker>, which the coordinator reads with its OWN scope — so the
@@ -239,7 +242,7 @@ def make_workflow_tools(
         (job['result'] set), False on timeout."""
         prefix = f"agents.tag.{tag}.{run_id}."
         waited = 0
-        while waited < DEFAULT_TIMEOUT:
+        while waited < timeout:
             listing = _aimeat_call(
                 coordinator_name,
                 "aimeat_memory_list",
@@ -293,7 +296,7 @@ def make_workflow_tools(
             return "No subtasks were delegated; nothing to collect."
         prefix = f"agents.tag.{tag}.{run_id}."
         waited = 0
-        while waited < DEFAULT_TIMEOUT:
+        while waited < timeout:
             pending = [j for j in state["jobs"] if "result" not in j]
             if not pending:
                 break
@@ -349,7 +352,7 @@ def make_workflow_tools(
         this after commission_crew and before delegate_subtask. (The crew may still need owner approval
         before it actually runs — collect_results waits for that part.)"""
         waited = 0
-        while waited < DEFAULT_TIMEOUT:
+        while waited < timeout:
             if agent_name in _agent_names(_aimeat_call(coordinator_name, "aimeat_agents_list", {})):
                 _event(f"Crew '{agent_name}' is registered")
                 return (

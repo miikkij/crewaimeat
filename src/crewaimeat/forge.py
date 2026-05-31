@@ -132,7 +132,7 @@ def validate_crew_file(path: Path) -> tuple[bool, str]:
             [sys.executable, "-m", "crewaimeat._validate_crew", str(path)],
             capture_output=True,
             text=True,
-            timeout=180,
+            timeout=600,
             cwd=str(_project_root()),
         )
     except Exception as exc:  # noqa: BLE001

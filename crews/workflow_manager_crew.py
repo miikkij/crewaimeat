@@ -44,7 +44,9 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     # tag (Data Access -> Shared tags) to this agent AND every worker it delegates to.
     run_id = (ctx.task.get("id") or "manual").split("-", 1)[0]
     tools = make_workflow_tools(
-        AGENT_NAME, run_id=run_id, task_id=ctx.task.get("id"), tag="workflow", exclude=_NOT_DELEGABLE
+        AGENT_NAME, run_id=run_id, task_id=ctx.task.get("id"), tag="workflow", exclude=_NOT_DELEGABLE,
+        timeout=3600,  # 60 min: the coordinator waits for slow workers (commissioned crews, deep
+        #              multi-search research) — its budget must exceed any single worker's runtime.
     )
 
     dispatcher = Agent(
