@@ -238,9 +238,16 @@ def _aimeat_call(agent_name: str, tool: str, payload: dict) -> dict | None:
             cmd, input=json.dumps(payload), capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=90,
         )
-        return json.loads(proc.stdout)
     except Exception as exc:  # noqa: BLE001
         print(f"[{agent_name}] {tool} failed: {exc}", file=sys.stderr)
+        return None
+    out = (proc.stdout or "").strip()
+    if not out:
+        return None  # empty result (e.g. memory_read of a key that doesn't exist yet) — not an error
+    try:
+        return json.loads(out)
+    except Exception:  # noqa: BLE001
+        print(f"[{agent_name}] {tool} returned non-JSON: {out[:120]}", file=sys.stderr)
         return None
 
 
@@ -304,34 +311,80 @@ def _run_onboarding_only(agent_name: str, services: list[dict] | None = None) ->
 
 
 def _finalize_task(agent_name: str, tid: str, mem_key: str, liaison: Agent) -> Task:
-    """The locked liaison task that publishes the deliverable and closes the task.
+    """Liaison closing task. The deliverable is published and the task is completed
+    DETERMINISTICALLY by scaffold callbacks (see _make_publish_cb / _make_complete_cb) — not by
+    the LLM, which proved unreliable at memory_write on weaker models. This task therefore only
+    handles todos (when a task has them); it keeps the liaison in the crew per the daemon contract.
 
-    Sequential + read-after-write verify on todos (concurrent aimeat_task_todo
-    calls race on the server and silently lose writes). Combined with
-    parallel_tool_calls=False in get_llm(), this keeps todo updates safe.
+    Sequential todo marking + parallel_tool_calls=False keeps concurrent task-state writes safe.
     """
     return Task(
         description=(
-            "The crew has finished the work for an ACTIVE AIMEAT task (the owner has "
-            "already approved its plan). Publish the deliverable and close the task. "
-            "Work carefully and in order — do NOT fire several tool calls in the same turn.\n"
-            f"1. Write the previous agent's final result to AIMEAT memory under the EXACT "
-            f"key '{mem_key}' with visibility owner (aimeat_memory_write).\n"
-            f"2. Fetch the todo list with aimeat_task_get for task '{tid}'. Then mark each "
-            "todo done with aimeat_task_todo (status='done') ONE AT A TIME: fire ONE call, "
-            "WAIT for its result, then the next. NEVER several aimeat_task_todo calls in the "
-            "same turn — the node updates a todo by rewriting the whole task, so concurrent "
-            "updates race and silently lose writes.\n"
-            f"3. Call aimeat_task_get for '{tid}' again and CONFIRM every todo status == "
-            "'done'. Re-mark (still one at a time) any that are still pending, then re-check. "
-            "Only proceed once all todos are verified done.\n"
-            f"4. Finally call aimeat_task_complete for task '{tid}', using the result as the "
-            "completion summary.\n"
-            "Once a call succeeds and you have verified it, move on to the next step."
+            f"The crew has finished the work for AIMEAT task '{tid}'. Its deliverable has already "
+            "been saved to memory, and the task will be marked complete for you automatically — you "
+            "do NOT need to write memory and you do NOT need to call aimeat_task_complete.\n"
+            f"Your only job: call aimeat_task_get for '{tid}'. If it has any todos, mark each one "
+            "done with aimeat_task_todo (status='done') ONE AT A TIME — fire one call, wait for its "
+            "result, then the next (never several in one turn). If there are no todos, just reply 'done'."
         ),
-        expected_output=f"Memory written to '{mem_key}'; ALL todos verified done; task '{tid}' completed.",
+        expected_output="Any todos marked done one at a time; otherwise 'done'.",
         agent=liaison,
     )
+
+
+# A coordinator can ask a delegated worker to ALSO publish into a SHARED TAG memory area it can
+# read with its own scope. The marker is embedded in the task description and stripped before the
+# domain agents see it.
+_PUBLISH_DIRECTIVE = re.compile(r'<<AIMEAT_PUBLISH\s+key="([^"]+)"(?:\s+tag="([^"]*)")?\s*>>')
+
+
+def _parse_publish_directive(text: str) -> "tuple[str | None, str | None, str]":
+    """Return (shared_key, tag, cleaned_text) from a task description carrying a publish marker."""
+    m = _PUBLISH_DIRECTIVE.search(text or "")
+    if not m:
+        return None, None, text
+    cleaned = (text[: m.start()] + text[m.end():]).strip()
+    return m.group(1), (m.group(2) or None), cleaned
+
+
+def _make_publish_cb(agent_name: str, primary_key: str, shared_key: str | None = None, tag: str | None = None):
+    """Task callback: write the task output to AIMEAT memory deterministically (no LLM).
+
+    Attached to the last DOMAIN task so the deliverable always lands, even if the liaison's
+    LLM-driven memory_write loops or errors (observed on weaker models). Always writes the agent's
+    own key; if a shared_key/tag are supplied (a delegated workflow subtask), ALSO writes into the
+    shared tag area so the coordinator can collect it with its own scope."""
+    def _cb(task_output) -> None:
+        text = getattr(task_output, "raw", None)
+        if text is None:
+            text = str(task_output)
+        r1 = _aimeat_call(
+            agent_name, "aimeat_memory_write", {"key": primary_key, "value": text, "visibility": "owner"}
+        )
+        print(f"[{agent_name}] deliverable published -> {primary_key}: {bool(r1)}", file=sys.stderr)
+        if shared_key:
+            r2 = _aimeat_call(
+                agent_name,
+                "aimeat_memory_write",
+                {"key": shared_key, "value": text, "visibility": "owner", "tags": [tag] if tag else []},
+            )
+            print(f"[{agent_name}] deliverable shared -> {shared_key} (tag {tag}): {bool(r2)}", file=sys.stderr)
+
+    return _cb
+
+
+def _make_complete_cb(agent_name: str, tid: str):
+    """Task callback: close the AIMEAT task deterministically (no LLM). Attached to the finalize
+    task so the task is completed even if the liaison never calls aimeat_task_complete."""
+    def _cb(_task_output) -> None:
+        res = _aimeat_call(
+            agent_name,
+            "aimeat_task_complete",
+            {"task_id": tid, "message": "Crew finished; deliverable published to memory."},
+        )
+        print(f"[{agent_name}] task completed deterministically {tid}: {bool(res)}", file=sys.stderr)
+
+    return _cb
 
 
 def _finalize_message_task(agent_name: str, mem_key: str, sender: str | None, liaison: Agent) -> Task:
@@ -505,21 +558,47 @@ def run_crew(spec: CrewSpec) -> None:
     def _build(task: dict, liaison: Agent) -> Crew:
         llm = get_llm()
         tid = task.get("id")
-        prompt = task.get("description") or task.get("title") or ""
-        mem_key = _memory_key(spec.agent_name, spec.memory_key_prefix, task)
-        print(f"[{spec.agent_name}] build crew for task {tid} -> key {mem_key}", file=sys.stderr)
+        raw_prompt = task.get("description") or task.get("title") or ""
+        # A coordinator may ask us to also publish into a shared tag area it can read.
+        shared_key, shared_tag, prompt = _parse_publish_directive(raw_prompt)
+        mem_key = _memory_key(spec.agent_name, spec.memory_key_prefix, {"id": tid, "description": prompt})
+        print(
+            f"[{spec.agent_name}] build crew for task {tid} -> key {mem_key}"
+            + (f" (+ shared {shared_key})" if shared_key else ""),
+            file=sys.stderr,
+        )
 
         # Bind the progress bridge: kickoff starts a 5s heartbeat writing live status.
         progress.bind(tid, prompt[:80])
 
         ctx = BuildContext(task=task, prompt=prompt, llm=llm, today=_now_context())
         agents, tasks = spec.build_domain(ctx)
+
+        # Guarantee the deliverable lands even if the liaison's LLM memory_write loops/errors:
+        # publish the LAST domain task's output deterministically via its callback (chained so an
+        # author-set callback still runs).
+        if tasks:
+            _author_cb = getattr(tasks[-1], "callback", None)
+            _publish = _make_publish_cb(spec.agent_name, mem_key, shared_key, shared_tag)
+
+            def _last_cb(out, _pub=_publish, _prev=_author_cb):
+                _pub(out)
+                if _prev:
+                    try:
+                        _prev(out)
+                    except Exception:  # noqa: BLE001
+                        pass
+
+            tasks[-1].callback = _last_cb
+
         if task.get("_source") == "message":
             original = task.get("_original") or {}
             sender = original.get("from") or original.get("sender") or original.get("from_agent")
             finalize = _finalize_message_task(spec.agent_name, mem_key, sender, liaison)
         else:
             finalize = _finalize_task(spec.agent_name, tid, mem_key, liaison)
+            # Guarantee the task is closed even if the liaison never calls aimeat_task_complete.
+            finalize.callback = _make_complete_cb(spec.agent_name, tid)
 
         crew_kwargs: dict[str, Any] = {
             "agents": [liaison, *agents],

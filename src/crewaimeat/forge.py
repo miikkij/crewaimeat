@@ -337,12 +337,15 @@ def register_and_launch_crew(agent_name: str) -> str:
             "--url https://aimeat.io --owner <your-aimeat-account>"
         )
 
-    pid, log = launch_crew(rel)
-    launch_line = (
-        f"Launched under the watchdog (pid {pid}). Log: {log}"
-        if pid is not None
-        else f"Launch problem: {log}"
-    )
+    if is_crew_running(agent_name):
+        launch_line = f"'{agent_name}' is already running; did not launch a duplicate."
+    else:
+        pid, log = launch_crew(rel)
+        launch_line = (
+            f"Launched under the watchdog (pid {pid}). Log: {log}"
+            if pid is not None
+            else f"Launch problem: {log}"
+        )
     return (
         f"NEW AGENT: {agent_name}\n"
         f"File: {rel}\n"

@@ -17,117 +17,82 @@ from crewaimeat.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is
 
 AGENT_NAME = "idea-feasibility-rater"
 
-README = '''[[FIGLET:slant]["IDEA RATER"]]
-
-# idea-feasibility-rater — how good is your idea, honestly?
-
-An analyst, a brutally-honest critic, and an enhancer rate how feasible your idea is (1–10),
-name the real risks and hidden strengths, and propose 1–3 concrete ways to improve it — or
-celebrate it if it's already great. Honest, not mean.
-
-## How to task me
-Queue any idea — business, creative, or personal:
-- `A subscription box for rare houseplants`
-- `Teach my CrewAI agents to write their own READMEs`
-- `Turn my garage into a podcast studio`
-'''
-
 
 def build_domain(ctx):
-    agents = []
-    tasks = []
-
-    # --- Agents ---
-
-    analyst = Agent(
-        role="Idea Analyst",
-        goal="Deconstruct the user's idea into its core components, assumptions, and context to prepare a structured brief for evaluation.",
-        backstory="You are a sharp, methodical analyst who strips away fluff and identifies the true mechanics of any idea—business, creative, or otherwise. You never judge; you only map.",
-        llm=ctx.llm,
-        tools=_web_tools(),
-    )
-    agents.append(analyst)
-
-    critic = Agent(
-        role="Brutal Honesty Critic",
-        goal="Evaluate the idea with ruthless honesty. Identify risks, feasibility gaps, and opportunities. Rate feasibility on a 1-10 scale and explain why.",
-        backstory="You are a no-nonsense evaluator who has seen a thousand ideas fail. You don't sugarcoat. You find the cracks, the blind spots, and the hidden strengths. Your honesty is a gift, not an insult.",
-        llm=ctx.llm,
-        tools=_web_tools(),
-    )
-    agents.append(critic)
-
-    enhancer = Agent(
-        role="Idea Enhancer",
-        goal="Propose 1-3 concrete options to improve the idea if it's not perfect. If the idea is already excellent, celebrate it genuinely and explain why it works.",
-        backstory="You are a creative problem-solver who loves making good ideas great and great ideas legendary. You offer practical, actionable paths forward—not vague encouragement. When something is truly brilliant, you say so with enthusiasm.",
-        llm=ctx.llm,
-        tools=_web_tools(),
-    )
-    agents.append(enhancer)
-
-    # --- Tasks ---
-
-    task_analyze = Task(
-        description=(
-            f"{ctx.today}\n\n"
-            "Analyze the following idea presented by the user. Break it down into:\n"
-            "1. Core concept (what is the idea in one sentence)\n"
-            "2. Context (business, creative, personal, etc.)\n"
-            "3. Key assumptions the idea relies on\n"
-            "4. What success would look like\n"
-            "5. Any obvious surface-level strengths or weaknesses\n\n"
-            "User's idea:\n"
-            f"{ctx.prompt}\n\n"
-            "Provide a structured analysis brief."
+    agents = [
+        Agent(
+            role="Idea Analyst",
+            goal="Thoroughly dissect the user's idea to understand its core concept, context, and intended outcomes. Identify key assumptions and surface-level strengths and weaknesses.",
+            backstory="A seasoned strategist with a background in both startup incubation and corporate innovation. Known for asking the 'dumb' questions that reveal the critical flaws everyone else missed.",
+            llm=ctx.llm,
         ),
-        agent=analyst,
-        expected_output="A structured analysis brief covering the 5 points above.",
-    )
-    tasks.append(task_analyze)
-
-    task_evaluate = Task(
-        description=(
-            f"{ctx.today}\n\n"
-            "Using the analysis brief, evaluate this idea with brutal honesty. Cover:\n"
-            "1. Feasibility rating (1-10) with clear justification\n"
-            "2. Top 3-5 risks (be specific and realistic)\n"
-            "3. Top 3-5 opportunities or hidden strengths\n"
-            "4. Key assumptions that could break the idea\n"
-            "5. A blunt verdict: is this idea worth pursuing as-is?\n\n"
-            "Be honest, not mean. The user wants truth, not comfort."
+        Agent(
+            role="Market & Reality Checker",
+            goal="Investigate the current landscape relevant to the idea. Identify real-world competitors, market trends, technological feasibility, and regulatory hurdles using web search.",
+            backstory="A data-driven researcher who lives on industry reports and competitor analysis. Believes that no idea exists in a vacuum and that 'it's been tried before' is the most important phrase in business.",
+            llm=ctx.llm,
+            tools=_web_tools(),
         ),
-        agent=critic,
-        context=[task_analyze],
-        expected_output="A brutally honest evaluation with feasibility rating, risks, opportunities, and a clear verdict.",
-    )
-    tasks.append(task_evaluate)
-
-    task_enhance = Task(
-        description=(
-            f"{ctx.today}\n\n"
-            "Based on the analysis and evaluation, produce the final deliverable for the user:\n\n"
-            "If the idea has significant gaps or risks:\n"
-            "- Propose 1-3 concrete, actionable options to improve the idea\n"
-            "- For each option, explain what problem it solves and what it adds\n"
-            "- Rank the options by impact vs. effort\n\n"
-            "If the idea is already strong and feasible:\n"
-            "- Celebrate it! Explain specifically why it works\n"
-            "- Suggest 1-2 ways to make it even better or scale it\n\n"
-            "Format the output clearly so the user can immediately understand their idea's standing and next steps.\n\n"
-            "This is the final published output—make it polished, direct, and useful."
+        Agent(
+            role="Brutally Honest Evaluator",
+            goal="Synthesize the analysis and research into a final feasibility verdict. Provide a clear rating, list the top risks and opportunities, and deliver a final recommendation with actionable next steps.",
+            backstory="A no-nonsense consultant who has seen a thousand pitches. Has a reputation for being the bearer of bad news, but always provides a clear path forward. Celebrates genuinely great ideas with enthusiasm.",
+            llm=ctx.llm,
         ),
-        agent=enhancer,
-        context=[task_analyze, task_evaluate],
-        expected_output="The final deliverable: a clear verdict on the idea with improvement options (1-3) or a celebration of a great idea, formatted for immediate user value.",
-    )
-    tasks.append(task_enhance)
+    ]
 
-    return (agents, tasks)
+    task_0 = Task(
+        description=(
+            f"Analyze the following idea and its context: {ctx.prompt}\n\n"
+            "Break it down into its core components: the problem it solves, the proposed solution, the target audience, and the key assumptions being made. "
+            "Do not judge feasibility yet; just provide a clear, structured summary of the idea's anatomy."
+        ),
+        agent=agents[0],
+        expected_output="A structured breakdown of the idea's core components.",
+    )
+
+    task_1 = Task(
+        description=(
+            f"Given the idea analysis from the previous task, conduct a thorough reality check. "
+            "Use web search to find: "
+            "1. Existing competitors or similar solutions. "
+            "2. Current market trends that support or contradict the idea. "
+            "3. Any obvious technological, legal, or logistical hurdles. "
+            "4. The general sentiment or demand for such a solution."
+        ),
+        agent=agents[1],
+        context=[task_0],
+        expected_output="A report on the external factors affecting the idea's viability.",
+    )
+
+    task_2 = Task(
+        description=(
+            f"Synthesize the idea analysis and the reality check into a final, brutally honest feasibility assessment. "
+            "Your output MUST follow this exact structure:\n\n"
+            "### Feasibility Score: [Score]/10\n"
+            "(A single number representing the overall feasibility)\n\n"
+            "### Top 3 Risks:\n"
+            "(The three most critical threats to the idea's success)\n\n"
+            "### Top 3 Opportunities:\n"
+            "(The three most compelling reasons this could work)\n\n"
+            "### Final Verdict & Next Steps:\n"
+            "- If the idea is highly feasible (8+), celebrate! Explain why it's brilliant and suggest how to capitalize on the momentum.\n"
+            "- If the idea has potential but needs work (4-7), provide 1-3 concrete, actionable options to improve it and increase its feasibility.\n"
+            "- If the idea is not feasible (1-3), be kind but clear. Explain the fundamental flaws and suggest a pivot or a completely different approach.\n\n"
+            "Be direct, honest, and constructive."
+        ),
+        agent=agents[2],
+        context=[task_0, task_1],
+        expected_output="The final feasibility report with a score, risks, opportunities, and a clear path forward.",
+    )
+
+    tasks = [task_0, task_1, task_2]
+
+    return agents, tasks
 
 
 def run() -> None:
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README))
+    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain))
 
 
 if __name__ == "__main__":
