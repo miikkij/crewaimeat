@@ -125,7 +125,7 @@ def run() -> None:
     # fact work, warm+free for creative. verify="on" is the fallback when the gate is inactive.
     run_crew(CrewSpec(
         agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README,
-        adapt_to_task=True, verify="on",
+        adapt_to_task=True, verify="on", score_to_stats=True,
     ))
 
 

@@ -156,6 +156,9 @@ class CrewSpec:
     adapt_to_task: bool = False           # when True, classify each task (fact/creative/mixed) and
     #   adapt: temperature (cool for fact ~0.15, warm for creative ~0.7), inject a grounding rule for
     #   factual work, and pick the verify mode (factcheck for fact, off for creative). Spreads like verify.
+    score_to_stats: bool = False          # when True (with verify="factcheck"), the Reviewer's
+    #   faithfulness score is parsed and written to agents.stats.<agent>.review.<task>.verify (the
+    #   reputation convention). Source-grounded judging — validated by POC v2. Spreads like verify.
     contribute_to_library: bool = False   # when True, after each task the deliverable is classified
     #   (topic + shelf-life, junk dropped) and a compact pointer-entry is appended to
     #   agents.<agent>.library for the librarian to index. Spreads like `verify` — opt-in per crew.
@@ -463,6 +466,37 @@ def _parse_verify_directive(text: str) -> "tuple[str | None, str]":
         return None, text
     override = "off" if m.group(1) else "on"
     return override, _VERIFY_DIRECTIVE.sub("", text).strip()
+
+
+_VERIFY_SCORE_RE = re.compile(r"score\s*=\s*([1-5])", re.I)
+_VERIFY_UNSUP_RE = re.compile(r"unsupported\s*=\s*(\d+)", re.I)
+
+
+def _write_verify_stat(agent_name: str, tid: str | None, output_text: str, dimension: str) -> None:
+    """Parse the factcheck Reviewer's score line and write it to the reputation convention
+    agents.stats.<agent>.review.<short>.verify (owner-visible). Source-grounded faithfulness score
+    (Reviewer checked the deliverable against its context inputs) — validated by POC v2. Best-effort;
+    no-op if no score line is found. Per docs/reliability-stack.md + e:/crewaimeat reputation docs."""
+    m = _VERIFY_SCORE_RE.search(output_text or "")
+    if not m:
+        return
+    score = int(m.group(1))
+    um = _VERIFY_UNSUP_RE.search(output_text or "")
+    unsupported = int(um.group(1)) if um else None
+    short = (tid or "manual").split("-", 1)[0]
+    res = _aimeat_call(
+        agent_name,
+        "aimeat_memory_write",
+        {
+            "key": f"agents.stats.{agent_name}.review.{short}.verify",
+            "value": {
+                "score": score, "by": agent_name, "role": "verify", "dimension": dimension,
+                "unsupported": unsupported, "ts": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            },
+            "visibility": "owner",
+        },
+    )
+    print(f"[{agent_name}] verify score {score}/5 (unsupported={unsupported}, dim={dimension}) -> agents.stats: {bool(res)}", file=sys.stderr)
 
 
 def _make_publish_cb(agent_name: str, primary_key: str, shared_key: str | None = None, tag: str | None = None):
@@ -816,7 +850,9 @@ def run_crew(spec: CrewSpec) -> None:
                     "'[unverified]'; NEVER keep an invented specific dressed as a sourced fact, and never attach "
                     "a citation to something not in the sources. Do not add anything new. If the materials came "
                     "from a single source, return it faithfully rather than re-writing. Output the corrected, "
-                    "faithful deliverable, ending with: 'Verify: faithfulness — <N claims, M unsupported removed/flagged>'."
+                    "faithful deliverable, ending with EXACTLY this line: "
+                    "'Verify: faithfulness | score=<1-5> | unsupported=<N> | <short note>' "
+                    "(score 5 = fully faithful / no unsupported specifics, 1 = several fabricated specifics)."
                 )
             else:
                 verify_desc = (
@@ -879,6 +915,27 @@ def run_crew(spec: CrewSpec) -> None:
                         print(f"[{spec.agent_name}] library contribute skipped: {exc}", file=sys.stderr)
 
                 tasks[-1].callback = _lib_cb
+
+            # Optional: persist the factcheck Reviewer's faithfulness score to agents.stats.* (the
+            # reputation convention). Validated by POC v2 — source-grounded judging discriminates
+            # faithful from confabulated. tasks[-1] is the verify task, so its output carries the score.
+            if spec.score_to_stats and verify_mode == "factcheck":
+                _prev_cb2 = tasks[-1].callback
+                _dim = gate["nature"] if gate else "general"
+
+                def _score_cb(out, _prev=_prev_cb2, _dim=_dim):
+                    if _prev:
+                        try:
+                            _prev(out)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    try:
+                        text = getattr(out, "raw", None) or str(out)
+                        _write_verify_stat(spec.agent_name, tid, text, _dim)
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"[{spec.agent_name}] verify-score skipped: {exc}", file=sys.stderr)
+
+                tasks[-1].callback = _score_cb
 
         if task.get("_source") == "message":
             original = task.get("_original") or {}
