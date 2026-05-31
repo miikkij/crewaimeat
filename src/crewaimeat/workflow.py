@@ -27,6 +27,8 @@ DEFAULT_TIMEOUT = 1800  # per collect_results / wait_for_crew call (30 min): a c
                         # be built + onboarded + owner-approved + run before its deliverable lands, so
                         # heavy multi-crew goals need a generous window.
 MAX_SUBTASKS = 6       # hard cap so a coordinator can't fan out a token storm
+CLARIFY_TIMEOUT = 600  # ask_owner: max seconds to wait for the human to answer a single-select prompt
+MAX_CLARIFICATIONS = 2  # cap clarification questions per run so it can't ping-pong with the owner
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
 _AGENT_NAME_RE = re.compile(r'^\s*AGENT_NAME\s*=\s*["\']([^"\']+)["\']', re.M)
@@ -85,6 +87,39 @@ def _agent_names(resp) -> set:
             if isinstance(arr, list):
                 return {a.get("name") for a in arr if isinstance(a, dict) and a.get("name")}
     return set()
+
+
+def _walk(obj):
+    """Yield every dict in a nested dict/list structure (robust to API response wrapping)."""
+    if isinstance(obj, dict):
+        yield obj
+        for v in obj.values():
+            yield from _walk(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _walk(v)
+
+
+def _find_thread_id(resp) -> str | None:
+    """Pull a thread id out of an aimeat_message_send response (any nesting / casing)."""
+    for d in _walk(resp):
+        for k in ("thread_id", "threadId"):
+            v = d.get(k)
+            if isinstance(v, str) and v:
+                return v
+    return None
+
+
+def _find_prompt_answer(resp, prompt_id: str):
+    """Find the owner's single-select answer matching prompt_id in a message-history response.
+    Returns the chosen value (or free-text 'other'), or None if not answered yet."""
+    for d in _walk(resp):
+        meta = d.get("metadata")
+        if isinstance(meta, dict):
+            pa = meta.get("prompt_answer") or meta.get("promptAnswer")
+            if isinstance(pa, dict) and pa.get("prompt_id") == prompt_id:
+                return pa.get("choice") or pa.get("other") or pa.get("value")
+    return None
 
 
 def _read_deliverable(agent: str, short: str):
@@ -152,7 +187,7 @@ def make_workflow_tools(
     `exclude` agents are hidden from discovery and refused as targets. `task_id` (the coordinator's
     own task) is used to append "Delegated to X" / "Received from X" events to its timeline."""
     blocked = set(exclude or []) | {coordinator_name}
-    state: dict = {"jobs": [], "seq": 0}
+    state: dict = {"jobs": [], "seq": 0, "clarifications": 0}
 
     def _event(message: str) -> None:
         """Append a progress event to the coordinator's task so the delegation is visible on its timeline."""
@@ -325,4 +360,45 @@ def make_workflow_tools(
             waited += POLL_SECONDS
         return f"'{agent_name}' has not appeared yet — crew-forge may still be building it, or it awaits approval."
 
-    return [discover_crews, delegate_subtask, delegate_and_wait, collect_results, commission_crew, wait_for_crew]
+    @tool("ask_owner")
+    def ask_owner(question: str, options: str) -> str:
+        """Ask the HUMAN owner a single-select question when an instruction is genuinely ambiguous —
+        do NOT guess. `options` is a comma-separated list of 2-6 likely interpretations (an 'Other'
+        free-text choice is offered automatically; do not add it yourself). Blocks until the owner
+        picks one (or a timeout), then returns their choice so you can proceed. Use sparingly: only
+        for real ambiguity that changes the work."""
+        if state["clarifications"] >= MAX_CLARIFICATIONS:
+            return "Clarification limit reached — proceed with your best assumption and state it in your result."
+        opts = [o.strip() for o in (options or "").split(",") if o.strip()]
+        if len(opts) < 2:
+            return "Refused: give at least 2 comma-separated options covering the likely interpretations."
+        state["clarifications"] += 1
+        pid = f"{run_id}-clarify-{state['clarifications']}"
+        payload = {
+            "content": f"**Clarification needed**\n\n{question}",
+            "metadata": {"prompt": {"prompt_id": pid, "question": question, "options": opts, "allow_other": True}},
+        }
+        if task_id:
+            payload["linked_task_id"] = task_id
+        send = _aimeat_call(coordinator_name, "aimeat_message_send", payload)
+        _event(f"Asked owner for clarification: {question[:80]}")
+        thread_id = _find_thread_id(send)
+        waited = 0
+        while waited < CLARIFY_TIMEOUT:
+            hist = _aimeat_call(
+                coordinator_name,
+                "aimeat_message_history",
+                {"thread_id": thread_id} if thread_id else {"per_page": 50},
+            )
+            ans = _find_prompt_answer(hist, pid)
+            if ans is not None:
+                _event(f"Owner answered: {str(ans)[:80]}")
+                return f"Owner chose: {ans}"
+            time.sleep(POLL_SECONDS)
+            waited += POLL_SECONDS
+        return (
+            f"No answer within {CLARIFY_TIMEOUT}s — proceed with your best assumption for "
+            f"'{question[:60]}' and note the assumption in your result."
+        )
+
+    return [discover_crews, delegate_subtask, delegate_and_wait, collect_results, commission_crew, wait_for_crew, ask_owner]

@@ -153,6 +153,9 @@ class CrewSpec:
     #   onboarding via aimeat_onboarding_declare_services
     commands: list[dict] | None = None    # slash-command palette [{name, description, category}, ...]
     #   published to memory key agents.<agent>.commands (owner) so the Messages UI surfaces it
+    verify: str = "off"                   # "on" appends a Reviewer pass that checks the deliverable
+    #   against the goal and FIXES gaps before publish (one pass, no loop). Per-task <<VERIFY>> /
+    #   <<NOVERIFY>> in the task description overrides this. "feeling lucky" (off) vs "serious" (on).
     readme_md: str | None = None          # markdown for the agent's README tab; may contain
     #   [[FIGLET[:font]]["text"]] (deterministic ASCII-art) and [[LLM]["prompt"]] (LLM output)
     #   directives expanded at publish time. Written to agents.<agent>.readme (owner).
@@ -438,6 +441,20 @@ def _parse_publish_directive(text: str) -> "tuple[str | None, str | None, str]":
     return m.group(1), (m.group(2) or None), cleaned
 
 
+_VERIFY_DIRECTIVE = re.compile(r"<<\s*(NO)?VERIFY\s*>>", re.I)
+
+
+def _parse_verify_directive(text: str) -> "tuple[str | None, str]":
+    """Return (override, cleaned_text) from a task description: <<VERIFY>> -> 'on', <<NOVERIFY>> ->
+    'off', neither -> None (use the CrewSpec default). Lets the owner flip the verification pass per
+    task from the dashboard without touching code."""
+    m = _VERIFY_DIRECTIVE.search(text or "")
+    if not m:
+        return None, text
+    override = "off" if m.group(1) else "on"
+    return override, _VERIFY_DIRECTIVE.sub("", text).strip()
+
+
 def _make_publish_cb(agent_name: str, primary_key: str, shared_key: str | None = None, tag: str | None = None):
     """Task callback: write the task output to AIMEAT memory deterministically (no LLM).
 
@@ -694,6 +711,8 @@ def run_crew(spec: CrewSpec) -> None:
         raw_prompt = task.get("description") or task.get("title") or ""
         # A coordinator may ask us to also publish into a shared tag area it can read.
         shared_key, shared_tag, prompt = _parse_publish_directive(raw_prompt)
+        verify_override, prompt = _parse_verify_directive(prompt)
+        verify_mode = verify_override or spec.verify
         mem_key = _memory_key(spec.agent_name, spec.memory_key_prefix, {"id": tid, "description": prompt})
         print(
             f"[{spec.agent_name}] build crew for task {tid} -> key {mem_key}"
@@ -712,6 +731,38 @@ def run_crew(spec: CrewSpec) -> None:
 
         ctx = BuildContext(task=task, prompt=prompt, llm=llm, today=_now_context(), directives=directives)
         agents, tasks = spec.build_domain(ctx)
+
+        # Optional verification pass (MAST FM-3.2): a Reviewer checks the deliverable against the goal
+        # and FIXES any gap, producing the final deliverable. ONE pass, no loop — so it cannot
+        # reintroduce step-repetition (FM-1.3). Enabled by CrewSpec.verify="on" or a <<VERIFY>> task
+        # directive; becomes the new last domain task, so publish/directives attach to it below.
+        if verify_mode == "on" and tasks:
+            reviewer = Agent(
+                role="Deliverable Reviewer",
+                goal="Verify the deliverable fully satisfies the goal and correct any gap, returning the final deliverable",
+                backstory=(
+                    "You are a sharp, skeptical reviewer. You check the work against the original goal and the "
+                    "expected output, hunt for anything missing, incorrect, unsupported, or off-target, and you "
+                    "FIX it. You never rubber-stamp — but if it is already complete and correct you return it "
+                    "unchanged."
+                ),
+                llm=llm,
+                verbose=True,
+            )
+            verify_task = Task(
+                description=(
+                    f"Original goal:\n{prompt}\n\n"
+                    "Review the deliverable produced above against this goal. Does it fully answer the goal? "
+                    "Is anything missing, incorrect, unsupported, or off-target versus the expected output? "
+                    "If it is complete and correct, return it verbatim. If not, CORRECT it and return the "
+                    "final, complete deliverable. End with one line: 'Verify: pass' or 'Verify: fixed - <what>'."
+                ),
+                expected_output="The final, verified deliverable (corrected if needed), ending with a one-line Verify note.",
+                agent=reviewer,
+                context=list(tasks),
+            )
+            agents = [*agents, reviewer]
+            tasks = [*tasks, verify_task]
 
         # Prepend the directives to every domain task so the agent that produces the deliverable
         # also sees them (not just the first task). The finalize task is added after this and stays

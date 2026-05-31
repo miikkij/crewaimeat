@@ -73,7 +73,8 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     dispatch = Task(
         description=(
             f"{ctx.today}\n\nGoal:\n{ctx.prompt}\n\n"
-            "Work ONE tool call at a time:\n"
+            "Work ONE tool call at a time. If the goal is genuinely ambiguous in a way that changes "
+            "the work, call ask_owner(question, options) FIRST (do not guess); otherwise proceed:\n"
             "1. Call discover_crews to see which crews are available and what they do.\n"
             "2. Decide which crews can contribute. For each INDEPENDENT piece, call delegate_subtask("
             "target_agent, title, instruction) with a complete, self-contained prompt (the crew does NOT "
@@ -113,7 +114,9 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
 
 
 def run() -> None:
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README))
+    # verify="on": append a Reviewer pass that checks the synthesis against the goal and fixes gaps
+    # before publish (one pass, no loop). Per task, an owner can flip it with <<NOVERIFY>>.
+    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README, verify="on"))
 
 
 if __name__ == "__main__":
