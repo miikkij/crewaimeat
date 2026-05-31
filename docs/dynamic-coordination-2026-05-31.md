@@ -15,11 +15,13 @@ Tämä raportti dokumentoi mitä **kokeiltiin**, mitä **todettiin todeksi**, **
 
 | Tiedosto | Vastuu |
 |---|---|
-| `src/crewaimeat/aimeat_crew.py` | Lukittu scaffold: `run_crew`, `CrewSpec`, `BuildContext`, deterministinen publish/complete, single-instance-lukko, direktiivien luku, README-julkaisu, daemon-kytkentä |
-| `src/crewaimeat/workflow.py` | Koordinaattorin työkalut: `discover_crews`, `delegate_subtask`, `delegate_and_wait`, `collect_results`, `commission_crew`, `wait_for_crew` + shared-tag-luku |
+| `src/crewaimeat/aimeat_crew.py` | Lukittu scaffold: `run_crew`, `CrewSpec`, `BuildContext`, deterministinen publish/complete, single-instance-lukko, direktiivien luku, **task-nature-gate** (`adapt_to_task` → temppi/grounding/verify), **verify** (completeness/factcheck), **contribute_to_library**, README-julkaisu, daemon-kytkentä |
+| `src/crewaimeat/workflow.py` | Koordinaattorin työkalut: `discover_crews`, `delegate_subtask`, `delegate_and_wait`, `collect_results`, `commission_crew`, `wait_for_crew`, **`ask_owner`** + shared-tag-luku |
 | `src/crewaimeat/forge.py` | crew-forgen koneisto: `write_and_validate_crew`, `register_agent` (device-koodi), `register_and_launch_crew`, `reconcile_fleet`, restart/reauth/list/start_all |
-| `crews/workflow_manager_crew.py` | Koordinaattori-crew (dispatcher + Editor) |
+| `src/crewaimeat/librarian.py` | Tietokartta: `gather_deliverables`, `classify_entry` (kestävyys/junk), `search_index`, `consult_librarian`, `contribute_deliverable` |
+| `crews/workflow_manager_crew.py` | Koordinaattori-crew (dispatcher + Editor); `adapt_to_task=True` |
 | `crews/crew_forge_crew.py` | "Agentti joka tekee agentteja" |
+| `crews/librarian_crew.py` | Tietokartta-crew (reuse-before-redo, tuoreusvahti) |
 | `crews/*_crew.py` | Domain-crewit: joker, probability-creator, sanity-checker, idea-feasibility-rater, tagline-translator, jingle-writer |
 
 **Shared-tag-mekanismi (fan-in):** worker julkaisee deliverablensa avaimeen `agents.tag.workflow.<run_id>.<crew>.<seq>`, jonka koordinaattori lukee OMALLA tokenillaan (`memory_list owner_scope=true`). `run_id` = koordinaattorin task-id:n ensimmäinen segmentti → tulokset ovat task-id:llä tunnistettavissa. `<seq>` = per-run-laskuri (sama crew voi esiintyä putkessa törmäämättä).
@@ -166,16 +168,16 @@ Webhaku (toukokuu 2026) monitoimija-orkestroinnista:
 | 1.4 Loss of history | 🟡 | Workerit self-contained, deliverable persistoituu; mutta koordinaattori pitää kaikki tulokset kontekstissa Editorille (iso ajo voi pullistua) |
 | 1.5 Unaware of termination | 🟢 | Deterministinen `_make_complete_cb` + finalize + timeout — ei LLM:n varassa |
 | 2.1 Conversation reset | 🟢 | Yksi task = yksi ajo; ei monikierros-dialogia (tupladaemon korjattu) |
-| 2.2 Fail to ask clarification | 🔴 | **Aukko:** workerit arvaavat epäselvästä; ei tarkennus-takaisinkytkentää |
+| 2.2 Fail to ask clarification | 🟢 | **SULJETTU (§12):** `ask_owner(question, options)` — single-select prompt omistajalle + inbox-poll (cap 2, 30 min timeout); direktiivi "ask, don't guess" |
 | 2.3 Task derailment | 🟡 | Fokusoidut ohjeet + "fulfil original goal", mutta ei tarkistusta vastaavuudesta |
 | 2.4 Information withholding | 🟢 | Shared-tag + delegate_and_wait jakavat koko tuotoksen; collect kerää kaiken |
 | 2.5 Ignored other agent input | 🟡 | delegate_and_wait liittää edellisen; Editor saa kaiken — mutta voi silti sivuuttaa |
 | 2.6 Reasoning-action mismatch | 🟡 | Finalize on koodia; tool-kutsut eksplisiittisiä; jäännös LLM:lle ominainen |
 | 3.1 Premature termination | 🟡 | Odottaa timeoutilla; gap raportoidaan (graceful), Editor huomauttaa |
-| 3.2 No/incomplete verification | 🔴 | **Suurin aukko:** ei kriitikkoa/hyväksyntätarkistusta (21 % failureista) |
-| 3.3 Incorrect verification | 🟢* | *Ei altista koska verifiointia ei juuri ole; jos lisätään, tee adversariaalisesti |
+| 3.2 No/incomplete verification | 🟢 | **SULJETTU (§12):** `verify=factcheck` (atomic-claim faithfulness vs syötteet) + faithful synteesi + single-worker pass-through; gate valitsee moodin |
+| 3.3 Incorrect verification | 🟡 | factcheck-Reviewer vertaa syötteisiin (ei absoluuttista totuutta); heikko malli rajoittaa — eskaloi malli jos jää konfabulaatiota |
 
-**Aukot (prioriteetti):** (1) 🔴 3.2 verifiointitaski (kriitikko ennen completea), (2) 🔴 2.2 tarkennus-portti ("CLARIFY: …"), (3) 🟡 1.4 tulosten trimmaus ennen synteesiä.
+**Aukot:** 🔴 3.2 ja 🔴 2.2 **SULJETTU** tämän session aikana (ks. §12). Jäljellä 🟡 1.4 (tulosten trimmaus ennen synteesiä) + muut 🟡-kohdat, joita gate/grounding/factcheck osin lieventävät.
 
 ---
 
@@ -192,8 +194,15 @@ Webhaku (toukokuu 2026) monitoimija-orkestroinnista:
 | `4046ceb` | scripts: `view_fleet.ps1/.sh` |
 | `030beb5` | workflow: adaptiivinen ehdollinen haarautuminen (prompt) |
 | `ef503a9` | scaffold: lue owner-direktiivit ja sido ne jokaiseen ajoon |
+| `275f1ad` | MAST-aukot 3.2 (verify) + 2.2 (`ask_owner`) suljettu |
+| `605647a` | reilut timeoutit: 30 min default, 60 min workflow-manager |
+| `98afe06` | fix: koordinaattori ei vuoda omia direktiivejään worker-ohjeisiin |
+| `dfb3eb5` | librarian v1: indeksi + `consult_librarian` + kestävyys/junk-luokitus |
+| `718131b` | reliability-pino: task-nature-gate (temppi + grounding + faithfulness-verify) |
+| `bace7f6` | chore: oikean yrityksen testidata pois dokumenteista (geneeriset placeholderit) |
+| `6fd604c` | fix(librarian): sisällytä memory key raporttiin |
 
-*Ei pushattu (työ on mainissa paikallisesti).*
+*Ei pushattu (mainissa paikallisesti). **Huom:** `dfb3eb5`:stä eteenpäin hashit on kirjoitettu uusiksi `git filter-repo`lla (poistettiin oikean yrityksen testidata sisällöstä + commit-viesteistä koko historiasta, ks. §12.6). Varmuuskopio: `../crewfive-backup-pre-filterrepo.bundle`.*
 
 ---
 
@@ -220,7 +229,48 @@ Neljä dynaamisen koordinaation arkkitehtuuria todistettu livenä peräkkäin sa
 | 3 | Ehdollinen/adaptiivinen | koordinaattori haarautuu välituloksen perusteella | ✅ |
 | 4 | Direktiivi-ohjattu | scaffold lukee `GET /v1/agents/me/directives` ja sitoo käytöksen | ✅ |
 
-Infra koventui: single-instance-lukko (ei tupladispatchia), deterministinen publish/complete, default-README, fleet-työkalut. Arkkitehtuuripäätös tutkimuksen tukemana: litteä orkestraattori–worker. Tunnetut aukot (MAST 3.2 verifiointi, 2.2 tarkennus) dokumentoitu jatkoa varten.
+Infra koventui: single-instance-lukko (ei tupladispatchia), deterministinen publish/complete, default-README, fleet-työkalut. Arkkitehtuuripäätös tutkimuksen tukemana: litteä orkestraattori–worker.
+
+Session jatkui **luotettavuuden kovennuksella** (ks. §12): MAST-aukot 3.2 + 2.2 suljettu, ja konfabulaatio­löydös (synteesi keksi faktat rehellisen tutkijan päälle) johti **task-nature-gateen** (dynaaminen temppi + grounding + faithfulness-verify + single-worker pass-through) sekä **librarianiin** (tietokartta + reuse + tuoreusvahti). Yksityisyys: oikean yrityksen testidata poistettu dokumenteista + git-historiasta.
+
+---
+
+## 12. Jatko-osa — luotettavuuden kovennus + librarian (sama sessio, myöhemmät lisäykset)
+
+Neljän arkkitehtuurin todistuksen jälkeen sessio jatkui kovettamalla luotettavuutta ja lisäämällä tietokartan. Täydet yksityiskohdat: `docs/reliability-stack.md` ja `docs/librarian-design.md`.
+
+### 12.1 MAST-aukkojen sulkeminen
+- **3.2 (verifiointi):** `CrewSpec.verify` — `"on"` = täydellisyys-Reviewer (yksi review-and-fix-pass, ei looppia → ei FM-1.3-paluuta), `"factcheck"` = atomic-claim faithfulness syötteitä vasten. Per-task `<<VERIFY>>`/`<<NOVERIFY>>`-override.
+- **2.2 (tarkennus):** `ask_owner(question, options)` — single-select prompt omistajalle (`aimeat_message_send` metadata.prompt) + `aimeat_message_history`-poll (`prompt_id`-match), cap 2, 30 min timeout. Self-contained (ei `listen_for`-muutosta).
+
+### 12.2 Konfabulaation juurisyy: synteesi (anonymisoitu keissi)
+Eräässä yritystaustaselvitys-ajossa lopputulos näytti hyvältä mutta sisälsi keksittyjä faktoja (ulkoinen review: 6/11). Watchdog-logien + muistin vertailu osoitti: **tutkija-crew oli rehellinen ja lähteistetty** (oikeat tiedot, "ei löytynyt" aukoille), mutta **koordinaattorin Editor/synteesi-askel keksi faktat kun se "kokosi raportin uudelleen"** — ja täydellisyys-verify leimasi sen "pass". → **Rajoittamaton synteesi on reikä, ei malli sinänsä** (sama malli teki hyvää työtä groundattuna tutkijana).
+
+**Vihollinen ei ole luovuus** vaan keksityn spesifin (nimi/luku/päivä/organisaatio/lähde) esittäminen vahvistettuna faktana — usein väärennetyllä lähdeviitteellä.
+
+### 12.3 Korjaus: task-nature-gate (yksi luokitus säätää kaiken)
+`CrewSpec.adapt_to_task` → scaffold luokittelee taskin ja säätää:
+
+| nature | temppi | grounding | synteesi | verify |
+|---|---|---|---|---|
+| **fact** | ~0.15 (ei 0) | honest-gaps päälle | faithful / single-worker **pass-through** | factcheck |
+| **creative** | ~0.7 | pois | vapaa | off |
+| **mixed** | ~0.4 | faktaosiin | luova kehys + faktat säilytetään | factcheck |
+
+Lisäksi: `get_llm(temperature=...)`-override, grounding-sääntö (ei keksittyjä spesifejä / ei väärennettyä lähdettä), Editorin **fidelity-ohje** (single-worker → verbatim, ei re-writeä). Erillinen **direktiivivuoto-fix:** koordinaattori ei enää kopioi omia direktiivejään delegoituihin worker-ohjeisiin.
+
+### 12.4 Ulkoinen vertailu (websearch)
+Pino on linjassa kirjallisuuden kanssa: **CoVe** (itsenäinen verifiointi), **RAGAS/FActScore/QAFactEval** (atomic-claim faithfulness), **Council Mode** (strukturoitu/attribuoiva synteesi, −35,9 % hallusinaatio), **temperature-tutkimus** (matala muttei 0). Meidän lisä jota kirjallisuus ei korosta: **synteesi/aggregointi primäärinä konfabulaatiolähteenä** + **single-worker pass-through**.
+
+### 12.5 Librarian v1 (tietokartta + reuse + tuoreusvahti)
+`librarian.py` + `crews/librarian_crew.py`: deterministinen indeksi kaikkien crewien deliverableista (`owner_scope`), **kestävyys/junk-luokitus** (permanent/slow/fast/ephemeral), `consult_librarian(need)` = reuse-before-redo. Scaffold-lippu `contribute_to_library` (leviää kuten verify). Rekisteröity device-flow'lla + online; todennettu live (löysi olemassa olevat deliverablet järkevin shelf-life-leimoin).
+
+### 12.6 Quota + yksityisyys
+- **Quotat nostettu:** muisti 10→100 MB, avaimet 1000→10000, arvo max 1 MB. Siivousperiaate: **"pointers, not payloads"** + TTL ephemeralille + librarian-janitor (v3).
+- **Yksityisyys:** oikean yrityksen testidata (nimi/Y-tunnus/henkilöt/sijoittajat) poistettu dokumenteista JA **git-historiasta** (`git filter-repo --replace-text` + `--replace-message`, koko historia). Raaka data elää vain gitignored-tiedostoissa (`debug.log`, `logs/`) + AIMEAT-muistissa — ei koskaan gitiin.
+
+### 12.7 Avoin (ajossa raporttia kirjoitettaessa)
+Multi-worker faithful-synteesin + factcheckin live-testi käynnissä: koordinaattori hajotti raskaan briefin useaan subtaskiin **yhdelle** crewille → sekventiaalinen pullonkaula (single-instance = yksi kerrallaan). Opetus: raskasta dekompositiota yhdelle crewille kannattaa välttää (joko yksi raportti = pass-through, tai eri crewit rinnakkain).
 
 ---
 
