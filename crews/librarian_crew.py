@@ -53,7 +53,8 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
         description=(
             f"{ctx.today}\n\nThe owner wants to know what the fleet already has for this need:\n{ctx.prompt}\n\n"
             "Call consult_librarian(need=...) with a concise description of the need. Then report the "
-            "matches it returns verbatim-ish: for each, the owning crew, topic, shelf-life and one-line "
+            "matches it returns verbatim-ish: for each, the owning crew, topic, shelf-life, the EXACT "
+            "memory key (always include it — the owner needs it to fetch the deliverable), a one-line "
             "summary, and whether it looks directly reusable or should be re-verified (old 'fast' items). "
             "If nothing relevant exists, say so plainly so the owner knows to commission the work."
         ),
