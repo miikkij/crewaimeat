@@ -48,6 +48,35 @@ _JUDGE_UNSUP_RE = re.compile(r"unsupported\s*=\s*(\d+)", re.I)
 _GROUNDED_CONTEXTS = {"factual", "research", "code", "summarization"}
 
 
+def _judge_deliverable(llm: Any, instruction: str, deliverable: str) -> "tuple[str, int, int] | None":
+    """The coordinator's grader, factored out so the calibration-runner measures the EXACT same judge.
+
+    One LLM call classifies the deliverable's context and scores the matching dimension: faithfulness
+    vs the sources it cites for factual/research/code/summarization, or output-alone craft for creative.
+    Returns (context, score 1-5, unsupported) or None if the reply can't be parsed."""
+    try:
+        reply = str(llm.call([{"role": "user", "content": (
+            "You delegated this subtask to a worker agent:\n" + (instruction or "") +
+            "\n\nThe worker returned this deliverable:\n" + (deliverable or "")[:6000] +
+            "\n\nFirst classify the work's context as ONE of: factual, research, code, summarization, "
+            "planning, communication, creative.\n"
+            "- If factual/research/code/summarization: FACT-CHECK it against the sources IT cites; count "
+            "atomic claims presented as sourced facts but NOT supported by a cited source as 'unsupported', "
+            "and score faithfulness 1-5 (5 = fully supported, no invented specifics).\n"
+            "- If creative: judge CRAFT against the brief (fulfils the request, originality, polish, "
+            "language) and score 1-5; set unsupported=0 (creative work has no sources to check).\n"
+            "Reply with EXACTLY one line: 'context=<ctx> | score=<1-5> | unsupported=<N>'."
+        )}]) or "")
+    except Exception:  # noqa: BLE001
+        return None
+    sm = _JUDGE_SCORE_RE.search(reply)
+    if not sm:
+        return None
+    cm = _JUDGE_CONTEXT_RE.search(reply)
+    um = _JUDGE_UNSUP_RE.search(reply)
+    return (cm.group(1).lower() if cm else "factual", int(sm.group(1)), int(um.group(1)) if um else 0)
+
+
 def _parse_evalctx(value):
     """A worker publishes its eval-context (model/temperature/tokens) as JSON beside its deliverable;
     the memory API may hand it back as a dict or a JSON string. Return a dict (or {})."""
@@ -345,29 +374,11 @@ def make_workflow_tools(
         if not (rate_workers and llm) or job.get("rated") or "result" not in job:
             return
         job["rated"] = True
-        try:
-            reply = str(llm.call([{"role": "user", "content": (
-                "You delegated this subtask to a worker agent:\n" + (job.get("instruction") or job["title"]) +
-                "\n\nThe worker returned this deliverable:\n" + job["result"][:6000] +
-                "\n\nFirst classify the work's context as ONE of: factual, research, code, summarization, "
-                "planning, communication, creative.\n"
-                "- If factual/research/code/summarization: FACT-CHECK it against the sources IT cites; count "
-                "atomic claims presented as sourced facts but NOT supported by a cited source as 'unsupported', "
-                "and score faithfulness 1-5 (5 = fully supported, no invented specifics).\n"
-                "- If creative: judge CRAFT against the brief (fulfils the request, originality, polish, "
-                "language) and score 1-5; set unsupported=0 (creative work has no sources to check).\n"
-                "Reply with EXACTLY one line: 'context=<ctx> | score=<1-5> | unsupported=<N>'."
-            )}]) or "")
-        except Exception as exc:  # noqa: BLE001
-            print(f"[{coordinator_name}] rating skipped for {job['agent']} (judge error: {exc})", file=sys.stderr)
-            _event(f"Rating skipped for {job['agent']} (judge error)")
+        verdict = _judge_deliverable(llm, job.get("instruction") or job["title"], job["result"])
+        if not verdict:
+            print(f"[{coordinator_name}] rating skipped for {job['agent']}: judge gave no parseable verdict", file=sys.stderr)
             return
-        sm = _JUDGE_SCORE_RE.search(reply)
-        if not sm:
-            print(f"[{coordinator_name}] rating skipped for {job['agent']}: no score parsed from judge reply: {reply[:120]!r}", file=sys.stderr)
-            return
-        cm = _JUDGE_CONTEXT_RE.search(reply)
-        context = cm.group(1).lower() if cm else "factual"
+        context, stars, unsupported = verdict
         # factual-type contexts are rated source-grounded (faithfulness vs cited sources); creative is
         # rated output-alone (craft) with source_grounded=false (the rate gate allows ungrounded creative).
         # planning/communication/other aren't auto-rated in v1.
@@ -379,14 +390,13 @@ def make_workflow_tools(
             print(f"[{coordinator_name}] rating skipped for {job['agent']}: context '{context}' not auto-rated in v1", file=sys.stderr)
             _event(f"Rating skipped for {job['agent']}: context '{context}' not auto-rated in v1")
             return
-        um = _JUDGE_UNSUP_RE.search(reply)
         ectx = job.get("evalctx") or {}
         meta = {k: ectx[k] for k in ("temperature", "tokens_in", "tokens_out", "tokens_total") if k in ectx}
         body = {
-            "stars": int(sm.group(1)),
+            "stars": stars,
             "context": context,
             "source_grounded": source_grounded,
-            "unsupported": int(um.group(1)) if um else 0,
+            "unsupported": unsupported,
             "evaluated_model": ectx.get("model") or os.getenv("OPENROUTER_MODEL"),
             "metadata": meta,
             "comment": ("source-grounded faithfulness judge" if source_grounded else "output-alone craft judge") + " by coordinator",
