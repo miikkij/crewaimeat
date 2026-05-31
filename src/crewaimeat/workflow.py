@@ -152,7 +152,7 @@ def make_workflow_tools(
     `exclude` agents are hidden from discovery and refused as targets. `task_id` (the coordinator's
     own task) is used to append "Delegated to X" / "Received from X" events to its timeline."""
     blocked = set(exclude or []) | {coordinator_name}
-    state: dict = {"jobs": []}
+    state: dict = {"jobs": [], "seq": 0}
 
     def _event(message: str) -> None:
         """Append a progress event to the coordinator's task so the delegation is visible on its timeline."""
@@ -172,19 +172,19 @@ def make_workflow_tools(
             return "No delegable crews found."
         return "Available crews:\n" + "\n".join(f"- {c['agent']}: {c['summary']}" for c in roster)
 
-    @tool("delegate_subtask")
-    def delegate_subtask(target_agent: str, title: str, instruction: str) -> str:
-        """Fan-out: create a subtask for another same-owner crew. Call once per subtask. The crew runs
-        it in parallel with the others; you gather everything later with collect_results. IMPORTANT:
-        the target crew does NOT see the overall goal — `instruction` must be a complete, self-contained
-        prompt with everything that crew needs."""
+    def _dispatch_one(target_agent: str, title: str, instruction: str):
+        """Create one subtask for another crew. Returns (job, None) on success or (None, error).
+
+        The worker is told to publish its deliverable into a UNIQUE shared-tag key (the scaffold
+        writes it there deterministically); we read it back with our own scope. The key carries a
+        per-run sequence number so delegating to the SAME crew twice (e.g. a pipeline that revisits
+        a crew) never collides on one key."""
         if len(state["jobs"]) >= MAX_SUBTASKS:
-            return f"Refused: subtask cap ({MAX_SUBTASKS}) reached. Call collect_results now."
+            return None, f"Refused: subtask cap ({MAX_SUBTASKS}) reached. Gather what you have instead."
         if target_agent in blocked:
-            return f"Refused: '{target_agent}' is not a delegable crew. Call discover_crews to see valid targets."
-        # Tell the worker to publish its deliverable into the shared tag area (the scaffold writes
-        # it there deterministically); we read it back with our own scope in collect_results.
-        pub_key = f"agents.tag.{tag}.{run_id}.{target_agent}"
+            return None, f"Refused: '{target_agent}' is not a delegable crew. Call discover_crews to see valid targets."
+        state["seq"] += 1
+        pub_key = f"agents.tag.{tag}.{run_id}.{target_agent}.{state['seq']}"
         full_instruction = f'{instruction}\n\n<<AIMEAT_PUBLISH key="{pub_key}" tag="{tag}">>'
         resp = _aimeat_call(
             coordinator_name,
@@ -193,10 +193,61 @@ def make_workflow_tools(
         )
         tid = _find_id(resp)
         if not tid:
-            return f"Failed to create subtask for {target_agent}: {json.dumps(resp)[:200]}"
-        state["jobs"].append({"agent": target_agent, "tid": tid, "title": title, "pub_key": pub_key})
+            return None, f"Failed to create subtask for {target_agent}: {json.dumps(resp)[:200]}"
+        job = {"agent": target_agent, "tid": tid, "title": title, "pub_key": pub_key}
+        state["jobs"].append(job)
         _event(f"Delegated to {target_agent}: {title}")
-        return f"Delegated '{title}' to {target_agent} (task {tid}). Subtasks so far: {len(state['jobs'])}."
+        return job, None
+
+    def _await_job(job: dict) -> bool:
+        """Poll the shared-tag area until this job's deliverable lands. Returns True if it arrived
+        (job['result'] set), False on timeout."""
+        prefix = f"agents.tag.{tag}.{run_id}."
+        waited = 0
+        while waited < DEFAULT_TIMEOUT:
+            listing = _aimeat_call(
+                coordinator_name,
+                "aimeat_memory_list",
+                {"owner_scope": True, "prefix": prefix, "tags": [tag]},
+            )
+            found = {it.get("key"): it.get("value") for it in _items_of(listing)}
+            if found.get(job["pub_key"]) is not None:
+                job["result"] = str(found[job["pub_key"]])
+                _event(f"Received result from {job['agent']}")
+                return True
+            time.sleep(POLL_SECONDS)
+            waited += POLL_SECONDS
+        return False
+
+    @tool("delegate_subtask")
+    def delegate_subtask(target_agent: str, title: str, instruction: str) -> str:
+        """Fan-out: create a subtask for another same-owner crew. Call once per subtask. The crew runs
+        it in parallel with the others; you gather everything later with collect_results. IMPORTANT:
+        the target crew does NOT see the overall goal — `instruction` must be a complete, self-contained
+        prompt with everything that crew needs."""
+        job, err = _dispatch_one(target_agent, title, instruction)
+        if err:
+            return err
+        return f"Delegated '{title}' to {target_agent} (task {job['tid']}). Subtasks so far: {len(state['jobs'])}."
+
+    @tool("delegate_and_wait")
+    def delegate_and_wait(target_agent: str, title: str, instruction: str) -> str:
+        """Delegate ONE subtask and BLOCK until its result is ready, then return that result inline.
+
+        Use this for a DEPENDENT step: when one crew needs another crew's output, delegate_and_wait the
+        prerequisite, then paste its returned text into the next crew's instruction (the next crew is
+        self-contained and does not see the goal). Chain these for an A -> B -> C pipeline. For
+        independent pieces that can run at the same time, prefer delegate_subtask (many) +
+        collect_results (once) — do not serialize work that has no dependency."""
+        job, err = _dispatch_one(target_agent, title, instruction)
+        if err:
+            return err
+        if _await_job(job):
+            return f"Result from {target_agent} — {title}:\n{job['result']}"
+        return (
+            f"[no result from {target_agent} within the timeout] — it may still be building or awaiting "
+            "approval. Proceed with what you have, or try again."
+        )
 
     @tool("collect_results")
     def collect_results() -> str:
@@ -274,4 +325,4 @@ def make_workflow_tools(
             waited += POLL_SECONDS
         return f"'{agent_name}' has not appeared yet — crew-forge may still be building it, or it awaits approval."
 
-    return [discover_crews, delegate_subtask, collect_results, commission_crew, wait_for_crew]
+    return [discover_crews, delegate_subtask, delegate_and_wait, collect_results, commission_crew, wait_for_crew]
