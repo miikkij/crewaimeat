@@ -24,3 +24,22 @@ def _web_tools() -> list:
     from crewaimeat.searxng_search import SearxngSearchTool
 
     return [SearxngSearchTool()]
+
+
+def _browser_tools(profile: str | None = None, allowed_domains: list[str] | None = None) -> list:
+    """Return the Playwright browser tool in a list (or [] if playwright isn't installed).
+
+    Pass `profile` to persist login across runs (logs/.browser/<profile>.json); pass `allowed_domains`
+    (or set env BROWSER_ALLOWED_DOMAINS) to restrict navigation. The screenshot action can describe the
+    page with a vision model (qwen-vl via OpenRouter). Only give this to crews that test/operate web apps.
+    Imports are local so a missing optional dependency (playwright) never breaks this module's import.
+    """
+    try:
+        from crewaimeat.browser_tool import PlaywrightBrowserTool
+    except Exception:  # noqa: BLE001 — playwright not installed
+        return []
+    domains = allowed_domains or [d.strip() for d in os.getenv("BROWSER_ALLOWED_DOMAINS", "").split(",") if d.strip()]
+    tool = PlaywrightBrowserTool()
+    if domains:
+        tool.allowed_domains = tuple(domains)
+    return [tool]

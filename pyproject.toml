@@ -9,7 +9,8 @@ dependencies = [
     "aimeat-crewai>=0.3.8",  # 0.3.8: run_crew_daemon(max_concurrent_tasks) — per-task-liaison worker pool
     #                          (reads owner-set watchdog_spec value when None); 0.3.7 added cancel.* markers
     "tavily-python>=0.5.0",  # optional Tavily fallback (USE_TAVILY=1); default web search is SearXNG
-    "requests>=2.31",        # SearXNG web-search tool + REST helpers
+    "requests>=2.31",        # SearXNG web-search tool + REST helpers + qwen-vl vision (browser screenshots)
+    "playwright>=1.44",      # web-tester browser tool (plan-then-execute); needs `uv run playwright install chromium`
     "python-dotenv>=1.0.1",
     "tzdata",  # zoneinfo tz database (needed on Windows for current-time injection)
     "pyfiglet>=1.0.0",  # deterministic ASCII-art for [[FIGLET]] README directives
