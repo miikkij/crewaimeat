@@ -284,6 +284,21 @@ def evolve_ab(incumbent_fn, candidate_fn, eval_tasks: list[dict], temperature: f
     return out
 
 
+def latest_signal(agent: str, owner: str | None = None) -> tuple[str | None, str | None, str | None]:
+    """First (context, signal, detail) past the n-gate with a WEAK/SPLIT signal, else (None, None, None).
+
+    Used by crew-forge's /evolve to know WHICH (context, signal) to evolve — re-detected live, so it
+    works whether triggered by a click relay or typed manually."""
+    by_ctx = (_read_reviews(agent, owner).get("byContext")) or {}
+    for ctx, stats in by_ctx.items():
+        if (stats.get("n") or 0) < MIN_N:
+            continue
+        sig, detail = _signal(stats)
+        if sig:
+            return ctx, sig, detail
+    return None, None, None
+
+
 def self_monitor_check(agent_name: str, owner: str | None = None) -> None:
     """Read own reputation; for each context past the n-gate, fire a gated, deduped proposal."""
     by_ctx = (_read_reviews(agent_name, owner).get("byContext")) or {}

@@ -498,6 +498,38 @@ def make_forge_tools() -> list:
     return [write_and_validate_crew, register_and_launch_crew]
 
 
+@tool("diagnose_evolution")
+def diagnose_evolution(agent_name: str) -> str:
+    """Diagnose why a crew scores unevenly and propose an evolution direction (doc 20, /evolve step 1).
+
+    Reads the agent's OWN reputation, finds the signaled context (WEAK avg<2.5 or bimodal SPLIT, gated
+    n>=10), classifies its score clusters, and reports a targeted brief: what it's weak/strong at, the
+    proposed mode (specialist|replace), and what the evolved crew should change. Designing + A/B-testing
+    the candidate is the next step."""
+    try:
+        from crewaimeat.evolve import diagnose, latest_signal
+    except Exception as exc:  # noqa: BLE001
+        return f"Cannot diagnose: {exc}"
+    ctx, sig, detail = latest_signal(agent_name)
+    if not sig:
+        return (f"No evolution signal for '{agent_name}': no context past n>=10 shows a WEAK or SPLIT "
+                f"pattern. Nothing to evolve right now.")
+    d = diagnose(agent_name, ctx, sig)
+    if not d.get("ok"):
+        return f"'{agent_name}' / {ctx}: {sig.upper()} signal ({detail}), but cannot diagnose yet — {d.get('reason')}."
+    return (
+        f"Evolution diagnosis — {agent_name} / {ctx} ({sig.upper()}: {detail}):\n"
+        f"  • Distinction: {d.get('distinction')}\n"
+        f"  • Weak at: {d.get('weak_at')}\n"
+        f"  • Strong at: {d.get('strong_at')}\n"
+        f"  • Proposed mode: {d.get('mode')}\n"
+        f"  • Brief: {d.get('brief')}\n"
+        f"  • Clusters scored: {d.get('counts')}\n"
+        f"Next: design this candidate + A/B-test it against {agent_name} on its own tasks, then propose "
+        f"only if it's proven better."
+    )
+
+
 def make_manage_tools() -> list:
-    """The tools crew-forge uses to operate the fleet: restart, re-auth, list, and start-all."""
-    return [restart_crew, list_crews, reauth_crew, start_all_crews]
+    """The tools crew-forge uses to operate the fleet: restart, re-auth, list, start-all, diagnose-evolution."""
+    return [restart_crew, list_crews, reauth_crew, start_all_crews, diagnose_evolution]

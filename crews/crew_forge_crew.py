@@ -41,6 +41,7 @@ HELP = (
     "  /reauth <agent>        re-run authorization so you can approve it again\n"
     "  /list   (or /status)   show your crews and which are running\n"
     "  /startall              launch any stopped crews (skip running ones; good after a reboot)\n"
+    "  /evolve <agent>        diagnose an agent's weak/split reputation and propose an evolution\n"
     "  /help                  show this list\n"
     "Plain text with no leading '/' is treated as a /build request."
 )
@@ -53,6 +54,7 @@ COMMANDS = [
     {"name": "/list", "description": "Show your crews and which are running", "category": "fleet"},
     {"name": "/status", "description": "Alias of /list: crews and their running state", "category": "fleet"},
     {"name": "/startall", "description": "Launch any stopped crews; skip running ones (also after a reboot)", "category": "fleet"},
+    {"name": "/evolve", "description": "Diagnose an agent's weak/split reputation and propose an evolution: /evolve <agent>", "category": "fleet"},
     {"name": "/help", "description": "List crew-forge's slash commands", "category": "meta"},
 ]
 
@@ -78,6 +80,7 @@ _BUILD_CMDS = {"build", "new", "make", "create"}
 _RESTART_CMDS = {"restart", "relaunch", "reboot", "start"}
 _LIST_CMDS = {"list", "ls", "status"}
 _RECONCILE_CMDS = {"startall", "start-all", "reconcile", "up"}
+_EVOLVE_CMDS = {"evolve"}
 _HELP_CMDS = {"help", "commands", "?"}
 
 # Declared at onboarding (aimeat_onboarding_declare_services) so other agents and the owner
@@ -127,6 +130,12 @@ def _command_domain(ctx: BuildContext, cmd: str, arg: str) -> tuple[list[Agent],
             f"Call restart_crew with agent_name='{arg}' and report the result."
             if arg
             else "No agent name was given. Reply asking the user to send '/restart <agent>'."
+        )
+    elif cmd in _EVOLVE_CMDS:
+        instr = (
+            f"Call diagnose_evolution with agent_name='{arg}' and report its result verbatim."
+            if arg
+            else "No agent name was given. Reply asking the user to send '/evolve <agent>'."
         )
     elif cmd == "reauth":
         instr = (
