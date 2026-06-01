@@ -1,0 +1,31 @@
+# settings.yml
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: "AIMEAT SearxNG"
+
+server:
+  secret_key: "8a5d80ce063cc4c17a53f9ac3265a515407992b123ef5df4939e6fefb129d06d"
+  base_url: http://localhost:21333/
+  limiter: false                    # Voit laittaa true jos haluat rate limitingin
+
+search:
+  formats:
+    - html
+    - json
+    - csv
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "all"
+
+engines:
+  - name: duckduckgo
+    disabled: false
+  - name: brave
+    disabled: false
+  - name: wikipedia
+    disabled: false
+  - name: bing
+    disabled: false
+  # Voit kommentoida pois huonompia tai turhia hakukoneita
