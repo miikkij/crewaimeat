@@ -111,28 +111,20 @@ def _mark_proposed(agent: str, ctx: str, signal: str) -> None:
 
 
 def _propose(agent: str, ctx: str, signal: str, detail: str) -> bool:
-    """Send the owner a clickable 'explore an evolution?' prompt (metadata.prompt)."""
-    pid = f"evolve-{agent}-{ctx}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
-    if signal == "weak":
-        question = f"{agent} is scoring low on '{ctx}' ({detail}). Explore an evolution?"
-    else:
-        question = (f"{agent} is inconsistent on '{ctx}' ({detail}) — strong on some inputs, weak on "
-                    f"others. Explore a specialist / evolution?")
-    body = {
-        "content": (
-            f"**Self-monitor — {agent} / {ctx}: {signal.upper()} signal**\n\n{detail}\n\n"
-            f"Run `/evolve {agent}` and I'll design candidate evolution(s), A/B-test them against this "
-            f"crew on its own rated tasks, and bring back only the proven-better ones to pick from."
-        ),
-        "metadata": {"prompt": {
-            "prompt_id": pid,
-            "question": question,
-            "options": [f"Explore evolution (/evolve {agent})", "Not now"],
-            "allow_other": False,
-        }},
-    }
-    res = _aimeat_call(agent, "aimeat_message_send", body)
-    print(f"[{agent}] self-monitor proposed evolution: {ctx}/{signal} -> {bool(res)}", file=sys.stderr)
+    """Hand the signal to crew-forge, which sends the owner the clickable proposal.
+
+    Why via crew-forge and not a direct owner message: AIMEAT routes a clicked answer back to the agent
+    that SENT the prompt — and the agent can't run /evolve, crew-forge can. So crew-forge sends the
+    proposal (its clickable option IS the `/evolve <agent>` command); clicking it lands a `/evolve`
+    message in crew-forge's thread, handled by crew-forge's existing command parser. The agent just
+    self-detects and relays the signal here (one crew-forge task)."""
+    res = _aimeat_call(agent, "aimeat_task_create", {
+        "target_agent": "crew-forge",
+        "title": f"Evolution signal: {agent} / {ctx} ({signal})",
+        "description": f"/propose-evolution {agent}",
+    })
+    print(f"[{agent}] self-monitor -> crew-forge /propose-evolution {agent} ({ctx}/{signal}): {bool(res)}",
+          file=sys.stderr)
     return bool(res)
 
 

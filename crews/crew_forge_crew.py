@@ -81,6 +81,8 @@ _RESTART_CMDS = {"restart", "relaunch", "reboot", "start"}
 _LIST_CMDS = {"list", "ls", "status"}
 _RECONCILE_CMDS = {"startall", "start-all", "reconcile", "up"}
 _EVOLVE_CMDS = {"evolve"}
+_PROPOSE_CMDS = {"propose-evolution", "propose_evolution"}  # internal: an agent's monitor asks us to propose
+_DISMISS_CMDS = {"dismiss", "notnow", "not-now"}            # the "not now" option on an evolution proposal
 _HELP_CMDS = {"help", "commands", "?"}
 
 # Declared at onboarding (aimeat_onboarding_declare_services) so other agents and the owner
@@ -137,6 +139,15 @@ def _command_domain(ctx: BuildContext, cmd: str, arg: str) -> tuple[list[Agent],
             if arg
             else "No agent name was given. Reply asking the user to send '/evolve <agent>'."
         )
+    elif cmd in _PROPOSE_CMDS:
+        instr = (
+            f"Call send_evolution_proposal with agent_name='{arg}' and report its result verbatim."
+            if arg
+            else "No agent name was given for the evolution proposal."
+        )
+    elif cmd in _DISMISS_CMDS:
+        instr = ("Report exactly this as the final answer: 'Okay — no evolution for now. The monitor "
+                 "will flag it again if the pattern persists.'")
     elif cmd == "reauth":
         instr = (
             f"Call reauth_crew with agent_name='{arg}' and report the result."
