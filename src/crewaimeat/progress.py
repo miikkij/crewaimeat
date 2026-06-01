@@ -131,7 +131,7 @@ class ProgressReporter:
         _aimeat_fire(
             "aimeat_memory_write",
             {"key": self._live_key(task_id), "value": snap, "visibility": "owner",
-             "tags": ["live-status"]},
+             "tags": ["live-status", f"task:{task_id}"]},  # per-task tag so AIMEAT lists it under the task
             self.agent_name,
         )
 
