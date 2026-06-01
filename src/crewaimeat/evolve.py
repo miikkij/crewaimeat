@@ -19,8 +19,13 @@ from datetime import datetime, timezone
 
 import requests
 
+import importlib.util
 import math
+import os
 import re
+import subprocess
+import time
+from pathlib import Path
 from statistics import mean, pstdev
 from types import SimpleNamespace
 
@@ -143,7 +148,8 @@ def _propose(agent: str, ctx: str, signal: str, detail: str) -> bool:
 # The exact option texts we offer — used as a fallback when AIMEAT doesn't propagate prompt_answer
 # metadata into the delivered message (then the message CONTENT is just the chosen option text).
 # Friendly, non-technical labels (the A/B build happens under the hood).
-_EVOLVE_CHOICES = {"explore evolution", "evolve to the next level", "not now"}
+_EVOLVE_CHOICES = {"explore evolution", "evolve to the next level", "not now",
+                   "make it live", "add the specialist", "postpone", "cancel"}
 
 
 def is_evolve_answer(task: dict, content: str = "") -> dict | None:
@@ -207,20 +213,40 @@ def handle_evolve_answer(agent: str, pa: dict, owner: str | None = None) -> None
         return
 
     if "next level" in cl or cl.startswith("evolve to"):
-        # The actual build + A/B (crew-forge designs the candidate, evolve_ab compares it to me on my own
-        # tasks, only-if-better proposal) is the next capability being wired. Acknowledge honestly, and
-        # set the expectations for when it runs for real: it's slow, results come as a message, and a new
-        # agent needs the owner's one-time approval.
-        _send(agent,
-              "On it. Here's how the level-up will go (the build step is the very next thing being "
-              "wired):\n\n"
-              "1. I design my evolved version and **A/B-test it against my current self on my own past "
-              "tasks** — this takes a few minutes, so I'll go quiet and **message you here the moment the "
-              "results are in** (you don't need to wait around).\n"
-              "2. If it's genuinely better, I'll show you the score and ask whether to make it live.\n"
-              "3. If you say yes, a new agent is created — you'll get a **one-time connect-approval "
-              "request in AIMEAT (Profile → Agents)** to approve it, then it runs alongside me.\n\n"
-              "I'll never swap myself out silently — you approve every step.")
+        if _launch_evolve_run(agent, ctx):
+            _send(agent,
+                  "On it — I'm designing my evolved version and A/B-testing it against my current self on "
+                  "my own past tasks. This runs in the background and is slow on the current model "
+                  "(~10–20 min), so go do something else — **I'll message you here the moment the results "
+                  "are in.** If it wins and you approve, you'll then get a one-time connect-approval for "
+                  "the new agent. Nothing changes without your yes. 🛠️")
+        else:
+            _send(agent, "I tried to start the level-up but couldn't launch the background run — I've "
+                         "logged it; try again shortly.")
+        return
+
+    if cl.startswith("make it live") or cl.startswith("add the specialist"):
+        mode = "replace" if cl.startswith("make it live") else "specialist"
+        vname = (pid.split("-live-")[-1] if "-live-" in pid
+                 else pid.split("-spec-")[-1] if "-spec-" in pid else f"{agent}-evolved")
+        _promote_candidate(agent, vname, ctx, mode, owner)
+        return
+
+    if cl.startswith("postpone"):
+        _send(agent, "Okay — I'll keep my evolved version on the shelf, ready. I'll re-offer it (or you can "
+                     "ask) when you want to revisit.")
+        return
+
+    if cl.startswith("cancel"):
+        try:
+            from crewaimeat.forge import _fname
+            cand = Path.cwd() / "crews" / ".candidates" / _fname(f"{agent}-evolved")
+            if cand.exists():
+                cand.unlink()
+        except Exception:  # noqa: BLE001
+            pass
+        _send(agent, "Scrapped it — the evolved version is discarded. I'll keep watching and propose a "
+                     "fresh angle if the pattern persists.")
         return
 
     _send(agent, "Okay — no evolution for now. I'll flag it again if the pattern persists.")
@@ -387,6 +413,188 @@ def latest_signal(agent: str, owner: str | None = None) -> tuple[str | None, str
         if sig:
             return ctx, sig, detail
     return None, None, None
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3 orchestration — the level-up: design candidate -> staging -> A/B -> result -> promote.
+# Runs in a detached background process (crewaimeat.evolve_run) so it never blocks the daemon.
+# --------------------------------------------------------------------------- #
+def _crew_path(agent: str) -> Path:
+    from crewaimeat.forge import _fname
+    return Path.cwd() / "crews" / _fname(agent)
+
+
+def _load_build_domain(path: Path):
+    """Import build_domain from a crew file by path (incumbent from crews/, candidate from staging)."""
+    spec = importlib.util.spec_from_file_location(f"evo_{abs(hash(str(path))) % 10**7}", str(path))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    return mod.build_domain
+
+
+_DESIGN_PROMPT = (
+    "You are evolving an existing CrewAI crew into a better version, guided by a diagnosis of where it "
+    "is weak vs strong.\n\nCURRENT CREW FILE:\n```python\n{src}\n```\n\nDIAGNOSIS:\n"
+    "- weak at: {weak}\n- strong at: {strong}\n- mode: {mode}\n- brief: {brief}\n\n"
+    "Design an EVOLVED `build_domain(ctx)` that implements the brief. If mode is 'specialist', focus the "
+    "crew tightly on what it's STRONG at (drop/!merge the parts that drag it down). If 'replace', rebuild "
+    "the whole approach to fix the weakness. Keep the same scaffold contract: build Agents with "
+    "llm=ctx.llm, give the user's request via ctx.prompt, the LAST task's output is the deliverable, "
+    "return (agents, tasks). Do NOT write imports beyond EXTRA_IMPORTS, AGENT_NAME, run(), or AIMEAT code.\n\n"
+    "Output EXACTLY these three labeled sections, nothing else:\n"
+    "EXTRA_IMPORTS:\n<extra import lines, or empty>\n"
+    "TEMPERATURE:\n<a single number suited to the role, e.g. 0.7 for creative>\n"
+    "BUILD_DOMAIN:\n<the full def build_domain(ctx): ... function text>"
+)
+
+
+def design_candidate(agent: str, d: dict, llm) -> dict:
+    """LLM-design an evolved build_domain from the agent's current crew + the diagnosis brief."""
+    src = _crew_path(agent).read_text(encoding="utf-8")[:6000]
+    reply = str(llm.call(_DESIGN_PROMPT.format(src=src, weak=d.get("weak_at"), strong=d.get("strong_at"),
+                                               mode=d.get("mode"), brief=d.get("brief"))))
+    ei = re.search(r"(?is)EXTRA_IMPORTS:\s*(.*?)\n\s*TEMPERATURE:", reply)
+    tp = re.search(r"(?i)TEMPERATURE:\s*([0-9.]+)", reply)
+    bd = re.search(r"(?is)BUILD_DOMAIN:\s*(.*)\Z", reply)
+    code = (bd.group(1).strip() if bd else "")
+    code = re.sub(r"^```[a-z]*\s*|\s*```$", "", code).strip()  # strip a code fence if the model added one
+    extra = (ei.group(1).strip() if ei else "")
+    extra = re.sub(r"^```[a-z]*\s*|\s*```$", "", extra).strip()
+    if extra.lower() in ("", "none", "(empty)"):
+        extra = ""
+    return {"extra_imports": extra, "build_domain_code": code,
+            "temperature": float(tp.group(1)) if tp else 0.7}
+
+
+def _eval_subset(tasks: list[dict], k: int = 6) -> list[dict]:
+    """A small, balanced eval set from the agent's rated tasks (some weak, some strong cases)."""
+    low = [t for t in tasks if t["stars"] <= 2][: max(1, k // 2)]
+    high = [t for t in tasks if t["stars"] >= 4][: max(1, k // 2)]
+    chosen = low + high
+    return chosen if len(chosen) >= 2 else tasks[:k]
+
+
+def _post_ab_result(agent: str, ctx: str, d: dict, result: dict, vname: str) -> None:
+    """Message the owner the A/B verdict + the make-it-live / add-specialist / nothing decision."""
+    o = result.get("overall") or {}
+    low = (result.get("by_cluster") or {}).get("low") or {}
+    weak = d.get("weak_at") or "my weak cases"
+    if o.get("promote"):
+        _send(agent, f"**Done testing my next version.** On my own past tasks it scored **{o.get('cand_avg')}★** "
+                     f"vs my current **{o.get('inc_avg')}★** — a real, solid win (t={o.get('welch_t')}, "
+                     f"d={o.get('cohen_d')}). Make it my new self?",
+              prompt={"prompt_id": f"evolve-{agent}-{ctx}-live-{vname}",
+                      "question": "Make my evolved version live?",
+                      "options": ["Make it live", "Postpone", "Cancel"], "allow_other": False})
+    elif low.get("promote"):
+        _send(agent, f"**Done testing.** My evolved version doesn't beat me overall, but it clearly wins on "
+                     f"**{weak}** ({low.get('cand_avg')}★ vs {low.get('inc_avg')}★). I'd keep it as a "
+                     f"**specialist alongside me** and route {weak} to it. Add it?",
+              prompt={"prompt_id": f"evolve-{agent}-{ctx}-spec-{vname}",
+                      "question": "Add the specialist alongside me?",
+                      "options": ["Add the specialist", "Postpone", "Cancel"], "allow_other": False})
+    else:
+        _send(agent, f"**Done testing — and I'll be straight with you:** my evolved version didn't actually "
+                     f"beat my current self ({o.get('cand_avg')}★ vs {o.get('inc_avg')}★ on my own tasks). "
+                     f"Not worth the churn, so I'm staying as I am. I'll keep watching and try a different "
+                     f"angle later.")
+
+
+def run_evolution(agent: str, ctx: str, owner: str | None = None) -> None:
+    """The full level-up (background): diagnose -> design candidate -> stage+validate -> A/B -> result.
+    Single-instance locked so only one runs at a time. Always messages the owner with the outcome."""
+    lock = Path.cwd() / "logs" / ".evolve.lock"
+    try:
+        if lock.exists() and (time.time() - lock.stat().st_mtime) < 7200:
+            _send(agent, "An evolution run is already going — I'll finish that one first.")
+            return
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_text(str(time.time()), encoding="utf-8")
+    except OSError:
+        pass
+    try:
+        sig_ctx, sig, _ = latest_signal(agent, owner)
+        ctx = sig_ctx or ctx
+        d = diagnose(agent, ctx, sig or "split", owner)
+        if not d.get("ok"):
+            _send(agent, f"I started the level-up but couldn't diagnose myself well enough yet ({d.get('reason')}).")
+            return
+        design = design_candidate(agent, d, get_llm(temperature=0.3))
+        if not design["build_domain_code"]:
+            _send(agent, "I couldn't design a clean evolved version this time — I'll try a different angle later.")
+            return
+        from crewaimeat.forge import validate_crew_file, write_crew_file
+        vname = f"{agent}-evolved"
+        path = write_crew_file(vname, design["build_domain_code"], design["extra_imports"], readme_md="",
+                               temperature=design["temperature"], subdir=".candidates")
+        ok, vdetail = validate_crew_file(path)
+        if not ok:
+            _send(agent, f"I designed an evolved version but it didn't pass validation, so I'm skipping it. "
+                         f"(Reason: {vdetail[:160]})")
+            return
+        evalset = _eval_subset(_rated_tasks(agent, ctx, owner))
+        if len(evalset) < 2:
+            _send(agent, "Not enough of my own rated tasks to A/B-test fairly yet — I'll revisit when I have more.")
+            return
+        result = evolve_ab(_load_build_domain(_crew_path(agent)), _load_build_domain(path),
+                           evalset, temperature=design["temperature"], repeats=1)
+        _post_ab_result(agent, ctx, d, result, vname)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[{agent}] run_evolution failed: {exc}", file=sys.stderr)
+        _send(agent, "Something went wrong while building my evolution — I've logged it and I'll try again later.")
+    finally:
+        try:
+            lock.unlink()
+        except OSError:
+            pass
+
+
+def _launch_evolve_run(agent: str, ctx: str) -> bool:
+    """Launch the level-up as a detached background process (so it never blocks the agent's daemon)."""
+    root = Path.cwd()
+    (root / "logs").mkdir(exist_ok=True)
+    try:
+        logf = open(root / "logs" / f".evolve-{agent}.log", "ab")
+        env = os.environ.copy()
+        env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
+        cmd = [sys.executable, "-m", "crewaimeat.evolve_run", agent, ctx]
+        kwargs: dict = dict(cwd=str(root), env=env, stdout=logf, stderr=logf,
+                            stdin=subprocess.DEVNULL, close_fds=True)
+        if os.name == "nt":
+            kwargs["creationflags"] = 0x08000000 | 0x00000200  # CREATE_NO_WINDOW | NEW_PROCESS_GROUP
+        else:
+            kwargs["start_new_session"] = True
+        subprocess.Popen(cmd, **kwargs)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        print(f"[{agent}] launch evolve_run failed: {exc}", file=sys.stderr)
+        return False
+
+
+def _promote_candidate(agent: str, vname: str, ctx: str, mode: str, owner: str | None) -> None:
+    """Promote a staged candidate to a live agent: move into crews/, register (connect add) + launch.
+    The new agent waits for the owner's one-time approval, then comes online. Records the lineage."""
+    from crewaimeat.forge import _fname, launch_crew, register_agent
+    staging = Path.cwd() / "crews" / ".candidates" / _fname(vname)
+    if not staging.exists():
+        _send(agent, "I couldn't find the prepared version to promote — re-run the level-up and I'll rebuild it.")
+        return
+    dest = Path.cwd() / "crews" / _fname(vname)
+    dest.write_text(staging.read_text(encoding="utf-8"), encoding="utf-8")
+    owner = owner or (os.getenv("AIMEAT_OWNER", "").strip() or None)
+    reg_note = ""
+    if owner:
+        try:
+            register_agent(vname, owner)  # connect add (background; prints a verification code/url)
+        except Exception as exc:  # noqa: BLE001
+            reg_note = f" (registration hiccup: {exc})"
+    pid, _log = launch_crew(f"crews/{_fname(vname)}")
+    sig_ctx = latest_signal(agent, owner)[0] or ctx or "creative"
+    record_evolution(agent, sig_ctx, "split", vname, mode)
+    _send(agent, f"**Created `{vname}`**{reg_note} — and it's waiting on you. **Approve its connection in "
+                 f"AIMEAT → Profile → Agents** (a one-time approval). The moment you do, it comes online "
+                 + ("as my stronger self." if mode == "replace" else "as a specialist alongside me.")
+                 + " Until then it sits patiently, nothing else changes.")
 
 
 def self_monitor_check(agent_name: str, owner: str | None = None) -> None:

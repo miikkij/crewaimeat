@@ -94,7 +94,7 @@ def _rel(path: Path) -> str:
 
 def write_crew_file(
     agent_name: str, build_domain_code: str, extra_imports: str = "", readme_md: str = "",
-    temperature: float | None = None,
+    temperature: float | None = None, subdir: str | None = None,
 ) -> Path:
     """Assemble crews/<name>_crew.py from the scaffold template + generated build_domain.
 
@@ -105,8 +105,10 @@ def write_crew_file(
     (creative ~0.7, factual ~0.25) instead of the cool .env default. Overwrites freely so the
     validate-fix-retry loop can rewrite the same file.
     """
-    crews_dir = _project_root() / "crews"
-    crews_dir.mkdir(exist_ok=True)
+    # subdir (e.g. ".candidates") writes to a staging area NOT scanned by reconcile_fleet, so an
+    # unapproved evolution candidate is never auto-launched until it's promoted into crews/.
+    crews_dir = (_project_root() / "crews" / subdir) if subdir else (_project_root() / "crews")
+    crews_dir.mkdir(parents=True, exist_ok=True)
     fname = _fname(agent_name)
     extra = ("\n" + extra_imports.strip() + "\n") if extra_imports.strip() else ""
     if readme_md.strip():
