@@ -142,7 +142,8 @@ def _propose(agent: str, ctx: str, signal: str, detail: str) -> bool:
 
 # The exact option texts we offer — used as a fallback when AIMEAT doesn't propagate prompt_answer
 # metadata into the delivered message (then the message CONTENT is just the chosen option text).
-_EVOLVE_CHOICES = {"explore evolution", "build & a/b test", "not now"}
+# Friendly, non-technical labels (the A/B build happens under the hood).
+_EVOLVE_CHOICES = {"explore evolution", "evolve to the next level", "not now"}
 
 
 def is_evolve_answer(task: dict, content: str = "") -> dict | None:
@@ -191,17 +192,17 @@ def handle_evolve_answer(agent: str, pa: dict, owner: str | None = None) -> None
             f"- I'm weak at: **{d.get('weak_at')}**\n"
             f"- I'm strong at: **{d.get('strong_at')}**\n"
             f"- Proposed: a **{d.get('mode')}** — {d.get('brief')}\n\n"
-            f"Shall I build that evolved version and A/B-test it against my current self on my own past "
-            f"tasks? I'll only bring it back if it's proven better."
+            f"Want me to grow into that next version? I'll build it, prove it against my current self on "
+            f"my own past tasks, and only keep it if it's genuinely better."
         )
         _send(agent, report, prompt={
             "prompt_id": f"evolve-{agent}-{ctx}-build",
-            "question": f"Build + A/B-test the {d.get('mode')} evolution of {agent}?",
-            "options": ["Build & A/B test", "Not now"], "allow_other": False,
+            "question": "Ready for me to evolve to my next level?",
+            "options": ["Evolve to the next level", "Not now"], "allow_other": False,
         })
         return
 
-    if cl.startswith("build"):
+    if "next level" in cl or cl.startswith("evolve to"):
         # The actual build + A/B (crew-forge designs the candidate, evolve_ab compares it to me on my own
         # tasks, only-if-better proposal) is the next capability being wired. Acknowledge honestly rather
         # than fire a hand-off crew-forge can't act on yet.
