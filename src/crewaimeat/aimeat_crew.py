@@ -174,6 +174,11 @@ class CrewSpec:
     #   [[FIGLET[:font]]["text"]] (deterministic ASCII-art) and [[LLM]["prompt"]] (LLM output)
     #   directives expanded at publish time. Written to agents.<agent>.readme (owner).
     #   Expanded only when the text changes (cached).
+    clean_deliverable: "Callable[[str], str] | None" = None  # optional deterministic post-processor run
+    #   on the final deliverable TEXT just before it is published (primary + shared writes). Use it to
+    #   strip model scaffolding the prompt couldn't fully suppress (e.g. an editor leaking its KEPT/CUT
+    #   notes). Deterministic = enforced in code, not left to the model. Must never raise; on any error
+    #   the original text is published unchanged.
 
 
 # --------------------------------------------------------------------------- #
@@ -571,7 +576,8 @@ def _eval_ctx(eval_info: dict | None) -> dict:
 
 
 def _make_publish_cb(agent_name: str, primary_key: str, shared_key: str | None = None, tag: str | None = None,
-                     eval_info: dict | None = None, task_id: str | None = None):
+                     eval_info: dict | None = None, task_id: str | None = None,
+                     clean: "Callable[[str], str] | None" = None):
     """Task callback: write the task output to AIMEAT memory deterministically (no LLM).
 
     Attached to the last DOMAIN task so the deliverable always lands, even if the liaison's
@@ -592,6 +598,13 @@ def _make_publish_cb(agent_name: str, primary_key: str, shared_key: str | None =
         text = getattr(task_output, "raw", None)
         if text is None:
             text = str(task_output)
+        if clean:  # deterministic post-processor (e.g. strip an editor's leaked KEPT/CUT notes)
+            try:
+                cleaned = clean(text)
+                if cleaned:  # never publish an empty deliverable; fall back to the original
+                    text = cleaned
+            except Exception as exc:  # noqa: BLE001 — cleaning is best-effort, must not block publish
+                print(f"[{agent_name}] clean_deliverable skipped: {exc}", file=sys.stderr)
         r1 = _aimeat_call(
             agent_name, "aimeat_memory_write",
             {"key": primary_key, "value": text, "visibility": "owner",
@@ -998,7 +1011,8 @@ def run_crew(spec: CrewSpec) -> None:
         # author-set callback still runs).
         if tasks:
             _author_cb = getattr(tasks[-1], "callback", None)
-            _publish = _make_publish_cb(spec.agent_name, mem_key, shared_key, shared_tag, eval_info, task_id=tid)
+            _publish = _make_publish_cb(spec.agent_name, mem_key, shared_key, shared_tag, eval_info,
+                                        task_id=tid, clean=spec.clean_deliverable)
 
             def _last_cb(out, _pub=_publish, _prev=_author_cb):
                 _pub(out)

@@ -11,11 +11,47 @@ Run: uv run python crews/joker_v2_crew.py
 
 from __future__ import annotations
 
+import re
+
 from crewai import Agent, Task
 
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 
 AGENT_NAME = "joker-v2"
+
+# --- deterministic meta-leak strip -------------------------------------------------------------
+# The editor is told to keep its KEPT/CUT reasoning private; owl-alpha obeys ~9/10 but occasionally
+# leaks it into the deliverable ("Let me work through these… Final lineup:"). The prompt can't fully
+# guarantee it, so we ENFORCE it in code (deterministic, model-whim-proof) — same idea as the
+# coordinator's _strip_leaked_directives. Passed to CrewSpec.clean_deliverable; runs just before publish.
+_LINEUP_RE = re.compile(r"(?im)^\s*\**\s*final\s+lineup\b.*$")          # "**Final lineup: 2 jokes.**"
+# Decision labels use a DASH ("**Punslinger — CUT.**" / "Observational — KEPT & SHARPENED"); joke labels
+# use a COLON ("**Roast:**"), so keying on the dash + CUT/KEPT never eats a real joke (e.g. a "director's cut").
+_DECISION_RE = re.compile(
+    r"(?im)^\s*\**\s*(?:punslinger|observational|roast|storyteller)\b\s*\**\s*[—–-]\s*\**\s*(?:cut|kept)\b.*$"
+)
+_META_HEADER_RE = re.compile(r"(?im)^\s*\**\s*(?:what i cut and why|cut note|let me work through)\b.*$")
+
+
+def _strip_editor_meta(text: str) -> str:
+    """Remove the editor's leaked editing scaffolding, leaving only the intro + jokes.
+
+    1. If the editor announced a "Final lineup", keep only what follows the last such marker
+       (drops the whole analysis preamble before it). 2. Drop stray decision/meta lines.
+    3. Collapse blank runs. Falls back to the original if stripping would empty it."""
+    if not text:
+        return text
+    original = text
+    markers = list(_LINEUP_RE.finditer(text))
+    if markers:
+        m = markers[-1]
+        after, before = text[m.end():].strip(), text[:m.start()].strip()
+        # "Final lineup:" can be a HEADER (jokes follow — keep `after`) or a TRAILING summary (jokes are
+        # above — keep `before`). Substantial content after the marker means it's a header.
+        text = after if len(after) > 80 else (before or after)
+    kept = [ln for ln in text.splitlines() if not _DECISION_RE.match(ln) and not _META_HEADER_RE.match(ln)]
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
+    return text or original
 
 README = '''[[FIGLET:slant]["JOKER v2"]]
 
@@ -148,6 +184,7 @@ def run() -> None:
     run_crew(CrewSpec(
         agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README,
         adapt_to_task=True, score_to_stats=True,
+        clean_deliverable=_strip_editor_meta,  # enforce: no leaked KEPT/CUT scaffolding in the deliverable
     ))
 
 
