@@ -475,29 +475,43 @@ def _eval_subset(tasks: list[dict], k: int = 6) -> list[dict]:
 
 
 def _post_ab_result(agent: str, ctx: str, d: dict, result: dict, vname: str) -> None:
-    """Message the owner the A/B verdict + the make-it-live / add-specialist / nothing decision."""
+    """Message the owner the A/B verdict + the make-it-live / add-specialist / nothing decision, with a
+    per-cluster breakdown so it's clear WHY it did or didn't help."""
     o = result.get("overall") or {}
-    low = (result.get("by_cluster") or {}).get("low") or {}
-    weak = d.get("weak_at") or "my weak cases"
+    by = result.get("by_cluster") or {}
+    low, high = (by.get("low") or {}), (by.get("high") or {})
+    weak, strong = (d.get("weak_at") or "my weak cases"), (d.get("strong_at") or "my strong cases")
+
+    def _cl(c: dict, label: str) -> str:
+        return (f"  • on {label}: evolved **{c.get('cand_avg')}★** vs me **{c.get('inc_avg')}★** "
+                f"(n={c.get('n')})") if c.get("n") else ""
+    breakdown = "\n".join(x for x in (_cl(low, weak), _cl(high, strong)) if x)
+    head = f"overall **{o.get('cand_avg')}★ vs my {o.get('inc_avg')}★** on my own past tasks (n={o.get('n')})"
+
     if o.get("promote"):
-        _send(agent, f"**Done testing my next version.** On my own past tasks it scored **{o.get('cand_avg')}★** "
-                     f"vs my current **{o.get('inc_avg')}★** — a real, solid win (t={o.get('welch_t')}, "
-                     f"d={o.get('cohen_d')}). Make it my new self?",
+        _send(agent, f"**I built and tested an evolved version of myself — and it's genuinely better.** "
+                     f"{head}, t={o.get('welch_t')}, d={o.get('cohen_d')}.\n{breakdown}\n\nMake it my new self?",
               prompt={"prompt_id": f"evolve-{agent}-{ctx}-live-{vname}",
                       "question": "Make my evolved version live?",
                       "options": ["Make it live", "Postpone", "Cancel"], "allow_other": False})
     elif low.get("promote"):
-        _send(agent, f"**Done testing.** My evolved version doesn't beat me overall, but it clearly wins on "
-                     f"**{weak}** ({low.get('cand_avg')}★ vs {low.get('inc_avg')}★). I'd keep it as a "
-                     f"**specialist alongside me** and route {weak} to it. Add it?",
+        _send(agent, f"**I tested an evolved version.** It doesn't beat me overall, but it clearly wins on "
+                     f"**{weak}** ({low.get('cand_avg')}★ vs {low.get('inc_avg')}★) — so I'd keep it as a "
+                     f"**specialist alongside me** and route {weak} to it.\n{breakdown}\n\nAdd it?",
               prompt={"prompt_id": f"evolve-{agent}-{ctx}-spec-{vname}",
                       "question": "Add the specialist alongside me?",
                       "options": ["Add the specialist", "Postpone", "Cancel"], "allow_other": False})
     else:
-        _send(agent, f"**Done testing — and I'll be straight with you:** my evolved version didn't actually "
-                     f"beat my current self ({o.get('cand_avg')}★ vs {o.get('inc_avg')}★ on my own tasks). "
-                     f"Not worth the churn, so I'm staying as I am. I'll keep watching and try a different "
-                     f"angle later.")
+        why = (f"the diagnosis was that I'm weak at **{weak}**, but the candidate narrowed into **{strong}** "
+               f"(something I was already good at) instead of fixing the weakness — so it lost ground on "
+               f"{weak} without gaining enough elsewhere"
+               if d.get("mode") == "specialist" else
+               f"the rebuild didn't actually move the needle on **{weak}**")
+        _send(agent, f"**FYI — no action needed.** I built and tested an evolution of myself, and it's **not "
+                     f"better**, so nothing changes. {head}.\n{breakdown}\n\n**Why it didn't help:** {why}. "
+                     f"Often my real issue is *variance* (I sometimes collapse) rather than a fixed gap, which "
+                     f"a narrower design can't fix. I'll keep watching and try a different angle next — likely "
+                     f"a **sibling specialist for {weak}** rather than narrowing myself.")
 
 
 def run_evolution(agent: str, ctx: str, owner: str | None = None) -> None:
@@ -598,7 +612,9 @@ def _promote_candidate(agent: str, vname: str, ctx: str, mode: str, owner: str |
 
 
 def self_monitor_check(agent_name: str, owner: str | None = None) -> None:
-    """Read own reputation; for each context past the n-gate, fire a gated, deduped proposal."""
+    """On a gated signal, test an evolution SILENTLY in the background and only surface a PROPOSAL if the
+    A/B proves it better (A/B-before-propose). Never make the owner wait-and-hope: the heavy work runs
+    with no involvement; the owner's first touch is either a proven win or a short no-action note."""
     by_ctx = (_read_reviews(agent_name, owner).get("byContext")) or {}
     for ctx, stats in by_ctx.items():
         if (stats.get("n") or 0) < MIN_N:
@@ -607,8 +623,15 @@ def self_monitor_check(agent_name: str, owner: str | None = None) -> None:
         if not signal:
             continue
         if _has_variant(agent_name, ctx, signal):
-            continue  # already evolved for this (ctx, signal) — permanent suppression, don't re-propose
+            continue  # already evolved for this (ctx, signal) — permanent suppression
         if _recently_proposed(agent_name, ctx):
-            continue  # proposed recently (any signal) — anti-spam cooldown
-        if _propose(agent_name, ctx, signal, detail):
+            continue  # tested recently — anti-spam cooldown
+        # Kick off the design + A/B in the BACKGROUND; come back only with a result the owner can act on.
+        if _launch_evolve_run(agent_name, ctx):
+            _send(agent_name,
+                  f"Heads-up (no action needed): I noticed I'm inconsistent on '{ctx}' ({detail}). I'm "
+                  f"quietly building and testing an evolution of myself in the background — you don't need "
+                  f"to wait. I'll only come back with a proposal **if it actually proves better**; otherwise "
+                  f"I'll just let you know it didn't pan out and stay as I am.")
             _mark_proposed(agent_name, ctx, signal)
+        return  # one signal at a time
