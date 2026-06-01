@@ -24,7 +24,35 @@ from crewaimeat.aimeat_crew import _aimeat_call, _aimeat_read_token
 MIN_N = 10            # never propose on thin data (the n=3 lesson — see doc 20)
 WEAK_FLOOR = 2.5      # avgStars below this (with enough n) = consistently weak
 COOLDOWN_DAYS = 3     # don't re-propose the same (context, signal) within this window
-_PROPOSED_KEY = "agents.{agent}.statistics.custom.evolve_proposed"
+_PROPOSED_KEY = "agents.{agent}.statistics.custom.evolve_proposed"   # time-based dedup (anti-spam)
+_LINEAGE_KEY = "agents.{agent}.statistics.custom.evolve_lineage"     # PERMANENT: a variant was built
+
+
+def _has_variant(agent: str, ctx: str, signal: str) -> bool:
+    """True if an evolution variant was ALREADY built for this (context, signal).
+
+    Permanent, not time-based: once /evolve produced a variant (recorded by record_evolution on
+    selection), the monitor must stop re-proposing the SAME evolution — even after the cooldown, and
+    even if the parent still shows the signal (e.g. a specialist took some traffic but the parent's
+    own dist is unchanged). A genuinely DIFFERENT signal for the same context is still allowed."""
+    rec = (_aimeat_call(agent, "aimeat_memory_read", {"key": _LINEAGE_KEY.format(agent=agent)}) or {}).get("value")
+    return bool(isinstance(rec, dict) and (rec.get(ctx) or {}).get(signal))
+
+
+def record_evolution(parent: str, ctx: str, signal: str, variant: str, mode: str) -> bool:
+    """Record that a variant was built for parent's (ctx, signal) so the monitor stops re-proposing it.
+
+    Called by the selection step (P4) when the owner picks a variant. mode = 'replace' | 'specialist'.
+    Idempotent; stores the latest variant per (ctx, signal)."""
+    key = _LINEAGE_KEY.format(agent=parent)
+    rec = (_aimeat_call(parent, "aimeat_memory_read", {"key": key}) or {}).get("value")
+    rec = rec if isinstance(rec, dict) else {}
+    rec.setdefault(ctx, {})[signal] = {
+        "variant": variant, "mode": mode, "ts": datetime.now(timezone.utc).isoformat(),
+    }
+    res = _aimeat_call(parent, "aimeat_memory_write", {"key": key, "value": rec, "visibility": "owner"})
+    print(f"[{parent}] evolution recorded: {ctx}/{signal} -> {variant} ({mode}): {bool(res)}", file=sys.stderr)
+    return bool(res)
 
 
 def _read_reviews(agent: str, owner: str | None) -> dict:
@@ -107,7 +135,11 @@ def self_monitor_check(agent_name: str, owner: str | None = None) -> None:
         if (stats.get("n") or 0) < MIN_N:
             continue  # the n=3 lesson — never act on thin data
         signal, detail = _signal(stats)
-        if not signal or _recently_proposed(agent_name, ctx):
+        if not signal:
             continue
+        if _has_variant(agent_name, ctx, signal):
+            continue  # already evolved for this (ctx, signal) — permanent suppression, don't re-propose
+        if _recently_proposed(agent_name, ctx):
+            continue  # proposed recently (any signal) — anti-spam cooldown
         if _propose(agent_name, ctx, signal, detail):
             _mark_proposed(agent_name, ctx, signal)
