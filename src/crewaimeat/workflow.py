@@ -231,6 +231,49 @@ def _crew_roster() -> list[dict]:
     return roster
 
 
+def _mem_value(d: dict | None):
+    """Pull the stored value out of an aimeat memory read (tolerates {value} or {data:{value}})."""
+    if not isinstance(d, dict):
+        return None
+    if "value" in d:
+        return d["value"]
+    return (d.get("data") or {}).get("value")
+
+
+def _gaii_map(coordinator_name: str) -> dict:
+    """{agent_name: gaii} for the owner's agents (one call), so we can read another agent's public stats."""
+    data = _aimeat_call(coordinator_name, "aimeat_agents_list", {})
+    agents = (data or {}).get("agents") or (data or {}).get("data", {}).get("agents") or []
+    return {a.get("name"): a.get("gaii") for a in agents if isinstance(a, dict) and a.get("name") and a.get("gaii")}
+
+
+def _reputation_suffix(coordinator_name: str, agent: str, gaii: str | None) -> str:
+    """A compact reputation tag for one candidate: live field score (selection) + lab benchmark (A/B).
+
+    Reads the candidate's OWN public keys via memory_read_public. Best-effort — any miss yields "".
+    Live = field reputation (coordinator ratings on real tasks); benchmark = cold-start lab prior."""
+    if not gaii:
+        return ""
+    try:
+        sel = _mem_value(_aimeat_call(coordinator_name, "aimeat_memory_read_public",
+                                      {"gaii": gaii, "key": f"agents.{agent}.statistics.custom.selection"}))
+        bench = _mem_value(_aimeat_call(coordinator_name, "aimeat_memory_read_public",
+                                        {"gaii": gaii, "key": f"agents.{agent}.statistics.custom.benchmark"}))
+    except Exception:  # noqa: BLE001 — reputation is advisory; never break discovery
+        return ""
+    parts: list[str] = []
+    if isinstance(sel, dict) and sel.get("normalized") is not None:
+        conf = "confident" if sel.get("confident") else f"unproven, n={sel.get('n')}"
+        parts.append(f"live {sel.get('context')} {sel.get('normalized')} ({conf})")
+    if isinstance(bench, dict) and bench.get("normalized") is not None:
+        vs = bench.get("vs_baseline") or {}
+        flag = f" vs {vs.get('base')}=PROMOTE" if vs.get("promote") else (f" vs {vs.get('base')}" if vs.get("base") else "")
+        dom = bench.get("by_domain") or {}
+        best = (f"; best@{max(dom, key=dom.get)}" if dom and any(v is not None for v in dom.values()) else "")
+        parts.append(f"benchmark {bench.get('dimension')} {bench.get('normalized')}{flag}{best}")
+    return ("   [" + " · ".join(parts) + "]") if parts else "   [no reputation yet]"
+
+
 # A weak coordinator model sometimes copies its OWN standing directives into a delegated worker's
 # instruction, despite the prompt telling it not to (observed: the owner's "append ⚠️ directive-active"
 # directive leaked into a worker prompt). Each worker applies its own directives, so we strip leaked
@@ -289,12 +332,29 @@ def make_workflow_tools(
 
     @tool("discover_crews")
     def discover_crews() -> str:
-        """List the crews available to delegate to (agent name + one-line summary). Call this first
-        to decide which crews can contribute to the goal."""
+        """List the crews available to delegate to, each with a one-line summary AND its reputation:
+        live field score (from real-task ratings) + lab benchmark (A/B test result). Call this first to
+        decide which crew should do each subtask. When two crews do the same thing (e.g. an agent and an
+        evolved variant), use the reputation to choose."""
         roster = [c for c in _crew_roster() if c["agent"] not in blocked]
         if not roster:
             return "No delegable crews found."
-        return "Available crews:\n" + "\n".join(f"- {c['agent']}: {c['summary']}" for c in roster)
+        gaii_map = state.get("gaii_map")
+        if gaii_map is None:
+            gaii_map = state["gaii_map"] = _gaii_map(coordinator_name)
+        lines = []
+        for c in roster:
+            rep = _reputation_suffix(coordinator_name, c["agent"], gaii_map.get(c["agent"]))
+            lines.append(f"- {c['agent']}: {c['summary']}{rep}")
+        return (
+            "Available crews (reputation in [brackets]: 'live' = field score from real ratings, "
+            "'benchmark' = lab A/B result; both normalized 0-1, higher is better):\n"
+            + "\n".join(lines)
+            + "\n\nHow to choose: prefer the highest CONFIDENT live score for the task's dimension. "
+            "If a strong candidate has no live data yet but a benchmark marked PROMOTE, give it the "
+            "subtask to gather field evidence (that is how a new/evolved crew earns its track record). "
+            "Honor explicit task intent over the score when they conflict (e.g. a deliberately simple ask)."
+        )
 
     def _dispatch_one(target_agent: str, title: str, instruction: str):
         """Create one subtask for another crew. Returns (job, None) on success or (None, error).
