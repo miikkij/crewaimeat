@@ -148,6 +148,7 @@ def run() -> None:
             agent_name=AGENT_NAME,
             build_domain=build_domain,
             readme_md=README,
+            temperature=0.7,  # creative service — enforce a warm temperature (no per-task classification)
         )
     )
 

@@ -158,6 +158,12 @@ class CrewSpec:
     #   onboarding via aimeat_onboarding_declare_services
     commands: list[dict] | None = None    # slash-command palette [{name, description, category}, ...]
     #   published to memory key agents.<agent>.commands (owner) so the Messages UI surfaces it
+    temperature: float | None = None      # ENFORCE a fixed LLM temperature for this crew, regardless of
+    #   the .env LLM_TEMPERATURE default and without per-task classification. Use it for single-purpose
+    #   crews whose nature is fixed: a creative service (jokes, jingles, taglines) should declare
+    #   temperature=0.7 once instead of relying on adapt_to_task to re-discover "this is creative" every
+    #   task. Takes precedence over adapt_to_task for the temperature knob (adapt_to_task still selects
+    #   verify mode if both are set). None = fall back to adapt_to_task, else the .env default.
     adapt_to_task: bool = False           # when True, classify each task (fact/creative/mixed) and
     #   adapt: temperature (cool for fact ~0.15, warm for creative ~0.7), inject a grounding rule for
     #   factual work, and pick the verify mode (factcheck for fact, off for creative). Spreads like verify.
@@ -908,7 +914,12 @@ def run_crew(spec: CrewSpec) -> None:
         gate = _classify_task_nature(prompt, get_llm(for_tool_use=False)) if spec.adapt_to_task else None
         if gate:
             print(f"[{spec.agent_name}] task nature={gate['nature']} temp={gate['temperature']} verify={gate['verify']}", file=sys.stderr)
-        llm = get_llm(temperature=gate["temperature"]) if gate else get_llm()
+        # A crew-level enforced temperature wins over the per-task gate (a creative service declares its
+        # warmth once); otherwise use the gate's temp, otherwise the .env default.
+        _temp = spec.temperature if spec.temperature is not None else (gate["temperature"] if gate else None)
+        if spec.temperature is not None:
+            print(f"[{spec.agent_name}] enforced temperature={spec.temperature} (creative-nature crew)", file=sys.stderr)
+        llm = get_llm(temperature=_temp) if _temp is not None else get_llm()
         verify_mode = verify_override or (gate["verify"] if gate else None) or spec.verify
         mem_key = _memory_key(spec.agent_name, spec.memory_key_prefix, {"id": tid, "description": prompt})
         print(

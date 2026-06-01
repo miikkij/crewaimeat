@@ -107,7 +107,8 @@ def build_domain(ctx):
 
 
 def run() -> None:
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README))
+    # Jingles are a creative service — enforce a warm temperature (no per-task classification needed).
+    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README, temperature=0.7))
 
 
 if __name__ == "__main__":

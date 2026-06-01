@@ -179,11 +179,12 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
 
 
 def run() -> None:
-    # adapt_to_task: comedy classifies as 'creative' -> warm temperature (more divergent, funnier
-    # candidates) and no factual-grounding constraint. score_to_stats keeps the self-verify introspection.
+    # Comedy is a creative service — enforce a warm temperature directly (same 0.7 as v1 now, so the two
+    # jokers differ in DESIGN only, not temperature). No per-task classification needed for a single-purpose
+    # creative crew.
     run_crew(CrewSpec(
         agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README,
-        adapt_to_task=True, score_to_stats=True,
+        temperature=0.7,
         clean_deliverable=_strip_editor_meta,  # enforce: no leaked KEPT/CUT scaffolding in the deliverable
     ))
 
