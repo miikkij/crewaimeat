@@ -912,6 +912,26 @@ def run_crew(spec: CrewSpec) -> None:
     def _build(task: dict, liaison: Agent) -> Crew:
         tid = task.get("id")
         raw_prompt = task.get("description") or task.get("title") or ""
+
+        # Self-evolution: if this message is the owner's CLICK on one of our own evolution prompts,
+        # handle it here (diagnose / build / dismiss) and reply in our thread — do NOT run the domain
+        # crew (joker must not "tell a joke" about the answer). Return a trivial crew so the daemon
+        # completes the message; handle_evolve_answer already sent the staged reply.
+        if spec.self_monitor:
+            from crewaimeat.evolve import handle_evolve_answer, is_evolve_answer
+            _pa = is_evolve_answer(task, raw_prompt)
+            if _pa is not None:
+                print(f"[{spec.agent_name}] handling own evolution answer: {_pa.get('choice')!r}", file=sys.stderr)
+                try:
+                    handle_evolve_answer(spec.agent_name, _pa, spec.owner)
+                except Exception as exc:  # noqa: BLE001 — never break the daemon
+                    print(f"[{spec.agent_name}] evolve-answer handling failed: {exc}", file=sys.stderr)
+                _ack = Agent(role="Self-monitor", goal="Acknowledge a handled control message tersely",
+                             backstory="You quietly acknowledge internal control messages.",
+                             llm=get_llm(for_tool_use=False), verbose=False)
+                _at = Task(description="Output exactly: ok", expected_output="ok", agent=_ack)
+                return Crew(agents=[_ack], tasks=[_at], process=Process.sequential, verbose=False, cache=False)
+
         # A coordinator may ask us to also publish into a shared tag area it can read.
         shared_key, shared_tag, prompt = _parse_publish_directive(raw_prompt)
         verify_override, prompt = _parse_verify_directive(prompt)
@@ -1154,11 +1174,17 @@ def run_crew(spec: CrewSpec) -> None:
 
     # 4) Daemon: poll the queue, execute the per-task crew. llm=get_llm() keeps the
     #    daemon's liaison on the configured model (not CrewAI's OpenAI default).
+    # self_monitor crews must also hear inbox messages — that's how the owner's click on an
+    # evolution prompt comes back (AIMEAT routes the answer to the agent that sent the prompt).
+    _listen = tuple(spec.listen_for)
+    if spec.self_monitor and "messages" not in _listen:
+        _listen = _listen + ("messages",)
+
     run_crew_daemon(
         agent_name=spec.agent_name,
         build_crew=_build,
         poll_interval_seconds=spec.poll_seconds,
-        listen_for=tuple(spec.listen_for),
+        listen_for=_listen,
         llm=get_llm(),
         owner=spec.owner,
         on_idle=_on_idle,

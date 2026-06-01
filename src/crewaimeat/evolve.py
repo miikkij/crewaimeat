@@ -110,22 +110,107 @@ def _mark_proposed(agent: str, ctx: str, signal: str) -> None:
     _aimeat_call(agent, "aimeat_memory_write", {"key": key, "value": rec, "visibility": "owner"})
 
 
-def _propose(agent: str, ctx: str, signal: str, detail: str) -> bool:
-    """Hand the signal to crew-forge, which sends the owner the clickable proposal.
+def _send(agent: str, content: str, prompt: dict | None = None) -> bool:
+    """Send the owner a message FROM this agent (its own thread). Optional clickable metadata.prompt."""
+    body: dict = {"content": content}
+    if prompt:
+        body["metadata"] = {"prompt": prompt}
+    return bool(_aimeat_call(agent, "aimeat_message_send", body))
 
-    Why via crew-forge and not a direct owner message: AIMEAT routes a clicked answer back to the agent
-    that SENT the prompt — and the agent can't run /evolve, crew-forge can. So crew-forge sends the
-    proposal (its clickable option IS the `/evolve <agent>` command); clicking it lands a `/evolve`
-    message in crew-forge's thread, handled by crew-forge's existing command parser. The agent just
-    self-detects and relays the signal here (one crew-forge task)."""
-    res = _aimeat_call(agent, "aimeat_task_create", {
-        "target_agent": "crew-forge",
-        "title": f"Evolution signal: {agent} / {ctx} ({signal})",
-        "description": f"/propose-evolution {agent}",
-    })
-    print(f"[{agent}] self-monitor -> crew-forge /propose-evolution {agent} ({ctx}/{signal}): {bool(res)}",
-          file=sys.stderr)
-    return bool(res)
+
+def _propose(agent: str, ctx: str, signal: str, detail: str) -> bool:
+    """Propose an evolution FROM the agent itself, in its own thread (self-evolution).
+
+    The agent sends the owner a clickable prompt; the answer comes back to THIS agent, which handles it
+    (handle_evolve_answer). The conversation stays with the agent — the only thing delegated to
+    crew-forge is the mechanical crew-file creation, and only after the owner approves."""
+    pid = f"evolve-{agent}-{ctx}-explore"
+    question = (f"I'm inconsistent on '{ctx}' ({detail}) — strong on some inputs, weak on others. "
+                f"Explore an evolution of me?" if signal == "split"
+                else f"I'm scoring low on '{ctx}' ({detail}). Explore an evolution of me?")
+    ok = _send(
+        agent,
+        f"**Self-monitor — {ctx}: {signal.upper()}**\n\n{detail}\n\nIf you say explore, I'll diagnose "
+        f"exactly what I'm good and bad at, then design an evolved version of myself and A/B-test it "
+        f"against my current self — and only bring it back if it's actually better.",
+        prompt={"prompt_id": pid, "question": question,
+                "options": ["Explore evolution", "Not now"], "allow_other": False},
+    )
+    print(f"[{agent}] self-monitor proposed evolution (own thread): {ctx}/{signal} -> {ok}", file=sys.stderr)
+    return ok
+
+
+# The exact option texts we offer — used as a fallback when AIMEAT doesn't propagate prompt_answer
+# metadata into the delivered message (then the message CONTENT is just the chosen option text).
+_EVOLVE_CHOICES = {"explore evolution", "build & a/b test", "not now"}
+
+
+def is_evolve_answer(task: dict, content: str = "") -> dict | None:
+    """If this message is an answer to one of THIS agent's evolution prompts, return a prompt_answer
+    dict ({prompt_id, choice}); else None. Primary signal: metadata.prompt_answer with a prompt_id we
+    minted (starts 'evolve-'). Fallback: the message content equals one of our option texts."""
+    if task.get("_source") != "message":
+        return None
+    pa = ((task.get("_original") or {}).get("metadata") or {}).get("prompt_answer")
+    if isinstance(pa, dict) and str(pa.get("prompt_id", "")).startswith("evolve-"):
+        return pa
+    text = (content or "").strip()
+    if text.lower() in _EVOLVE_CHOICES:
+        return {"choice": text, "prompt_id": ""}  # ctx re-detected via latest_signal in the handler
+    return None
+
+
+def handle_evolve_answer(agent: str, pa: dict, owner: str | None = None) -> None:
+    """Act on the owner's click on one of THIS agent's evolution prompts, replying in the agent's thread.
+
+    Stages (each replies with the next clickable step, so the whole conversation lives here):
+      explore -> diagnose + propose to build & A/B test
+      build   -> hand the crew-file creation to crew-forge (the one thing the agent can't do itself)
+      else    -> dismiss
+    """
+    choice = (pa.get("choice") or "").strip()
+    cl = choice.lower()
+    pid = str(pa.get("prompt_id", ""))
+    # ctx is the middle segment of the prompt_id: evolve-<agent>-<ctx>-<stage>
+    parts = pid.split("-")
+    ctx = parts[-2] if len(parts) >= 3 else "general"
+
+    if cl.startswith("explore"):
+        sig_ctx, sig, detail = latest_signal(agent, owner)
+        if not sig:
+            _send(agent, "The pattern has cleared since I flagged it — no evolution needed right now.")
+            return
+        ctx = sig_ctx or ctx
+        d = diagnose(agent, ctx, sig, owner)
+        if not d.get("ok"):
+            _send(agent, f"I wanted to diagnose my {sig} pattern on '{ctx}' but couldn't yet: {d.get('reason')}.")
+            return
+        report = (
+            f"**Diagnosis — {ctx} ({sig.upper()})**\n\n"
+            f"- What separates my good from bad: {d.get('distinction')}\n"
+            f"- I'm weak at: **{d.get('weak_at')}**\n"
+            f"- I'm strong at: **{d.get('strong_at')}**\n"
+            f"- Proposed: a **{d.get('mode')}** — {d.get('brief')}\n\n"
+            f"Shall I build that evolved version and A/B-test it against my current self on my own past "
+            f"tasks? I'll only bring it back if it's proven better."
+        )
+        _send(agent, report, prompt={
+            "prompt_id": f"evolve-{agent}-{ctx}-build",
+            "question": f"Build + A/B-test the {d.get('mode')} evolution of {agent}?",
+            "options": ["Build & A/B test", "Not now"], "allow_other": False,
+        })
+        return
+
+    if cl.startswith("build"):
+        # The actual build + A/B (crew-forge designs the candidate, evolve_ab compares it to me on my own
+        # tasks, only-if-better proposal) is the next capability being wired. Acknowledge honestly rather
+        # than fire a hand-off crew-forge can't act on yet.
+        _send(agent, "Noted — building the evolved version and A/B-testing it against my current self is "
+                     "the capability being wired right now. Once it's in, clicking this will design the "
+                     "candidate, test it on my own past tasks, and bring it back only if it's proven better.")
+        return
+
+    _send(agent, "Okay — no evolution for now. I'll flag it again if the pattern persists.")
 
 
 # --------------------------------------------------------------------------- #
