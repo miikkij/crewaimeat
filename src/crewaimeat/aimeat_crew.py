@@ -142,6 +142,11 @@ class CrewSpec:
     build_domain: BuildDomain             # returns (domain_agents, domain_tasks)
     process: Any = Process.sequential     # sequential is the validated path; hierarchical is advanced
     poll_seconds: int = 30                # daemon poll interval
+    max_concurrent_tasks: int | None = None  # how many EXECUTE tasks this ONE daemon runs at once.
+    #   None (default) = read the owner-set value from AIMEAT (Tasks tab -> "max concurrent", needs
+    #   AIMEAT >= 1.16.2 + aimeat-crewai >= 0.3.8); 1 = serial (unchanged); >1 = a bounded thread pool
+    #   with a SEPARATE liaison+MCP per task (a shared stdio MCP can't run parallel kickoffs). Best for
+    #   I/O-bound crews (mostly waiting on the LLM). PROPOSE + inbox stay serial on the shared liaison.
     memory_key_prefix: str | None = None  # default: crews.<agent_name>
     manager_agent: Any = None             # only for Process.hierarchical
     owner: str | None = None              # AIMEAT owner; set only if the agent name is ambiguous
@@ -1092,4 +1097,5 @@ def run_crew(spec: CrewSpec) -> None:
         llm=get_llm(),
         owner=spec.owner,
         on_idle=_on_idle,
+        max_concurrent_tasks=spec.max_concurrent_tasks,  # None = read owner-set value from AIMEAT
     )
