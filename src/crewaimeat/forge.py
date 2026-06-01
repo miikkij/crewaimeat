@@ -55,7 +55,7 @@ AGENT_NAME = "{agent_name}"
 
 
 def run() -> None:
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain{readme_arg}))
+    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain{readme_arg}{temp_arg}))
 
 
 if __name__ == "__main__":
@@ -93,13 +93,16 @@ def _rel(path: Path) -> str:
 
 
 def write_crew_file(
-    agent_name: str, build_domain_code: str, extra_imports: str = "", readme_md: str = ""
+    agent_name: str, build_domain_code: str, extra_imports: str = "", readme_md: str = "",
+    temperature: float | None = None,
 ) -> Path:
     """Assemble crews/<name>_crew.py from the scaffold template + generated build_domain.
 
     A non-empty `readme_md` is embedded as a README constant and passed to CrewSpec(readme_md=...),
     so the new crew shows a proper README tab. When empty, the scaffold publishes a generated
-    default README instead, so the tab is never blank either way. Overwrites freely so the
+    default README instead, so the tab is never blank either way. `temperature` (if given) is written
+    as CrewSpec(temperature=...) so the new crew runs at a fixed temperature suited to its role
+    (creative ~0.7, factual ~0.25) instead of the cool .env default. Overwrites freely so the
     validate-fix-retry loop can rewrite the same file.
     """
     crews_dir = _project_root() / "crews"
@@ -112,6 +115,7 @@ def write_crew_file(
     else:
         readme_block = ""
         readme_arg = ""
+    temp_arg = f", temperature={float(temperature)}" if temperature is not None else ""
     content = _FILE_TEMPLATE.format(
         agent_name=agent_name,
         fname=fname,
@@ -119,6 +123,7 @@ def write_crew_file(
         build_domain_code=build_domain_code.strip("\n"),
         readme_block=readme_block,
         readme_arg=readme_arg,
+        temp_arg=temp_arg,
     )
     dest = crews_dir / fname
     dest.write_text(content, encoding="utf-8")
@@ -348,7 +353,8 @@ def reconcile_fleet() -> str:
 # --------------------------------------------------------------------------- #
 @tool("write_and_validate_crew")
 def write_and_validate_crew(
-    agent_name: str, build_domain_code: str, extra_imports: str = "", readme_md: str = ""
+    agent_name: str, build_domain_code: str, extra_imports: str = "", readme_md: str = "",
+    temperature: float | None = None,
 ) -> str:
     """Write crews/<agent_name>_crew.py on the locked AIMEAT scaffold and validate it.
 
@@ -363,11 +369,16 @@ def write_and_validate_crew(
     embedded and published to the agent's README tab. If you omit it, the scaffold publishes a
     generated default README, so the tab is never blank.
 
+    Pass `temperature` to set the new crew's LLM temperature to match its ROLE: creative/generative
+    work (writing, naming, jokes, jingles, taglines, brainstorming, storytelling) → ~0.7; factual/
+    analytical/precise work (research, code, data, summarization, extraction, fact-checking) → ~0.25;
+    mixed → ~0.5. Without it the crew runs at the cool .env default, which under-serves creative work.
+
     Returns 'VALID: ...' when it compiles and build_domain returns a non-empty
     (agents, tasks). Otherwise returns 'INVALID: <error>' — fix the build_domain code
     and call this tool again until it is VALID. Overwrites the file each call.
     """
-    path = write_crew_file(agent_name, build_domain_code, extra_imports, readme_md)
+    path = write_crew_file(agent_name, build_domain_code, extra_imports, readme_md, temperature)
     ok, detail = validate_crew_file(path)
     rel = _rel(path)
     if ok:

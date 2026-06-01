@@ -187,6 +187,11 @@ def _build_domain(ctx: BuildContext, request: str | None = None) -> tuple[list[A
             "- Pick a short, descriptive kebab-case agent name (e.g. 'release-notes-writer'), "
             "distinct from obvious existing ones.\n"
             "- Choose 2-4 specialist agents (role / goal / backstory) that fit the purpose.\n"
+            "- Decide the crew's TEMPERATURE from its role (this sets how warm/divergent the model runs): "
+            "creative/generative work (writing, naming, jokes, jingles, taglines, brainstorming, "
+            "storytelling, design, marketing copy) -> 0.7; factual/analytical/precise work (research, "
+            "data, code, summarization, extraction, fact-checking, calculation, classification) -> 0.25; "
+            "a genuine mix of both -> 0.5. Pick the single number that best fits the crew's main job.\n"
             "- Write a complete `def build_domain(ctx):` that:\n"
             "    * builds those Agents, passing llm=ctx.llm to each; add tools=_web_tools() to any "
             "agent that needs web search;\n"
@@ -200,9 +205,10 @@ def _build_domain(ctx: BuildContext, request: str | None = None) -> tuple[list[A
             "- Also write a short README for the new crew's README tab: start with a FIGLET logo "
             'directive like [[FIGLET:slant]["New Crew"]] (use the agent name, words spaced), then a '
             "one-line description of what it does and a short 'How to task me' line. Plain markdown.\n\n"
-            "Output EXACTLY these four labeled sections, nothing else, so the builder can use them "
+            "Output EXACTLY these five labeled sections, nothing else, so the builder can use them "
             "verbatim:\n"
             "AGENT_NAME: <kebab-name>\n"
+            "TEMPERATURE: <single number, e.g. 0.7 / 0.5 / 0.25, chosen from the role per the rule above>\n"
             "EXTRA_IMPORTS:\n"
             "<extra import lines, or leave this empty>\n"
             "README:\n"
@@ -211,8 +217,8 @@ def _build_domain(ctx: BuildContext, request: str | None = None) -> tuple[list[A
             "<the full def build_domain(ctx): ... function text>"
         ),
         expected_output=(
-            "The four labeled sections AGENT_NAME, EXTRA_IMPORTS, README, BUILD_DOMAIN, with a "
-            "complete, ready-to-write build_domain function."
+            "The five labeled sections AGENT_NAME, TEMPERATURE, EXTRA_IMPORTS, README, BUILD_DOMAIN, "
+            "with a complete, ready-to-write build_domain function."
         ),
         agent=architect,
     )
@@ -221,8 +227,9 @@ def _build_domain(ctx: BuildContext, request: str | None = None) -> tuple[list[A
             "Bring the Crew Architect's design above to life. Work ONE tool call at a time — never "
             "fire several in the same turn.\n"
             "1. Call write_and_validate_crew with the architect's AGENT_NAME (as agent_name), the "
-            "BUILD_DOMAIN code (as build_domain_code), EXTRA_IMPORTS (as extra_imports), and the "
-            "README markdown (as readme_md).\n"
+            "BUILD_DOMAIN code (as build_domain_code), EXTRA_IMPORTS (as extra_imports), the "
+            "README markdown (as readme_md), and the architect's TEMPERATURE number (as temperature) "
+            "so the new crew runs at the temperature its role calls for.\n"
             "2. If it returns INVALID, fix the build_domain code from the error and call "
             "write_and_validate_crew again. Repeat until it returns VALID.\n"
             "3. Once VALID, call register_and_launch_crew ONCE with the same agent_name.\n"
