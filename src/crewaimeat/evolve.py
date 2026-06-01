@@ -19,7 +19,12 @@ from datetime import datetime, timezone
 
 import requests
 
+import math
 import re
+from statistics import mean, pstdev
+from types import SimpleNamespace
+
+from crewai import Crew, Process
 
 from crewaimeat.aimeat_crew import _aimeat_call, _aimeat_read_token
 from crewaimeat.llm import get_llm
@@ -210,6 +215,72 @@ def diagnose(agent: str, ctx: str, signal: str, owner: str | None = None) -> dic
     # default mode if the model didn't say: split -> specialist, weak -> replace
     if out.get("mode") not in ("specialist", "replace"):
         out["mode"] = "specialist" if signal == "split" else "replace"
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3 core — evolve A/B: re-run BOTH designs on the agent's OWN rated tasks, grade BOTH with the
+# SAME judge the coordinator uses live (_judge_deliverable), compare overall + per-cluster.
+# --------------------------------------------------------------------------- #
+def _run_design(build_fn, instruction: str, llm) -> str:
+    """Run one crew design on one task instruction in-process (no daemon); return the deliverable."""
+    ctx = SimpleNamespace(llm=llm, prompt=instruction, today="", directives="")
+    agents, tasks = build_fn(ctx)
+    for a in agents:
+        a.verbose = False
+    return str(Crew(agents=agents, tasks=tasks, process=Process.sequential, verbose=False).kickoff().raw)
+
+
+def _welch(a: list[float], b: list[float]) -> tuple[float, float]:
+    if len(a) < 2 or len(b) < 2:
+        return 0.0, 0.0
+    ma, mb, va, vb = mean(a), mean(b), pstdev(a) ** 2, pstdev(b) ** 2
+    se = math.sqrt(va / len(a) + vb / len(b))
+    t = (mb - ma) / se if se else 0.0
+    pooled = math.sqrt(((len(a) - 1) * va + (len(b) - 1) * vb) / max(1, len(a) + len(b) - 2))
+    d = (mb - ma) / pooled if pooled else 0.0
+    return round(t, 2), round(d, 2)
+
+
+def _verdict(inc: list[float], cand: list[float]) -> dict:
+    """Candidate vs incumbent. promote = real gain: gap>0 AND |t|>=2 AND d>=0.8 (NO 'gap>stdev' gate —
+    that one lets a high-variance incumbent hide a real loss, which is exactly what we're fixing)."""
+    if not inc or not cand:
+        return {"n": 0}
+    t, d = _welch(inc, cand)
+    gap = round(mean(cand) - mean(inc), 3)
+    return {"n": min(len(inc), len(cand)), "inc_avg": round(mean(inc), 3), "cand_avg": round(mean(cand), 3),
+            "gap": gap, "welch_t": t, "cohen_d": d, "promote": bool(gap > 0 and abs(t) >= 2.0 and d >= 0.8)}
+
+
+def evolve_ab(incumbent_fn, candidate_fn, eval_tasks: list[dict], temperature: float = 0.7,
+              repeats: int = 2) -> dict:
+    """A/B incumbent vs candidate on the agent's OWN rated tasks (option B — re-run both, same judge).
+
+    eval_tasks: [{instruction, stars}] from the agent's rated history (diagnose()/_rated_tasks).
+    Returns {overall, by_cluster:{low,high}} verdicts. Per-cluster lets a SPECIALIST that wins only its
+    target cluster be detected even if it doesn't win overall. Heavy (runs both crews x tasks x repeats)
+    — call it in the background (P3 launches it detached, under the single-instance lock)."""
+    from crewaimeat.workflow import _judge_deliverable  # local: same judge the coordinator rates with
+
+    judge = get_llm(temperature=0.15)
+    runner = get_llm(temperature=temperature)
+    rows: list[dict] = []
+    for t in eval_tasks:
+        instr = t["instruction"]
+        cluster = "low" if t["stars"] <= 2 else "high" if t["stars"] >= 4 else "mid"
+        for _ in range(repeats):
+            ji = _judge_deliverable(judge, instr, _run_design(incumbent_fn, instr, runner))
+            jc = _judge_deliverable(judge, instr, _run_design(candidate_fn, instr, runner))
+            rows.append({"cluster": cluster, "inc": ji[1] if ji else None, "cand": jc[1] if jc else None})
+    out = {"overall": _verdict([r["inc"] for r in rows if r["inc"] is not None],
+                               [r["cand"] for r in rows if r["cand"] is not None]),
+           "by_cluster": {}}
+    for cl in ("low", "high"):
+        out["by_cluster"][cl] = _verdict(
+            [r["inc"] for r in rows if r["cluster"] == cl and r["inc"] is not None],
+            [r["cand"] for r in rows if r["cluster"] == cl and r["cand"] is not None],
+        )
     return out
 
 
