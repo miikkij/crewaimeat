@@ -177,6 +177,10 @@ def handle_evolve_answer(agent: str, pa: dict, owner: str | None = None) -> None
     ctx = parts[-2] if len(parts) >= 3 else "general"
 
     if cl.startswith("explore"):
+        # Acknowledge immediately — the diagnosis below reads my rated tasks + an LLM call (~30-60s),
+        # so tell the owner what's happening and that a follow-up is coming.
+        _send(agent, "On it — reading back through my rated jokes to pin down exactly where I'm strong "
+                     "and weak. Give me ~30–60 seconds and I'll follow up here with the diagnosis. 🔎")
         sig_ctx, sig, detail = latest_signal(agent, owner)
         if not sig:
             _send(agent, "The pattern has cleared since I flagged it — no evolution needed right now.")
@@ -204,11 +208,19 @@ def handle_evolve_answer(agent: str, pa: dict, owner: str | None = None) -> None
 
     if "next level" in cl or cl.startswith("evolve to"):
         # The actual build + A/B (crew-forge designs the candidate, evolve_ab compares it to me on my own
-        # tasks, only-if-better proposal) is the next capability being wired. Acknowledge honestly rather
-        # than fire a hand-off crew-forge can't act on yet.
-        _send(agent, "Noted — building the evolved version and A/B-testing it against my current self is "
-                     "the capability being wired right now. Once it's in, clicking this will design the "
-                     "candidate, test it on my own past tasks, and bring it back only if it's proven better.")
+        # tasks, only-if-better proposal) is the next capability being wired. Acknowledge honestly, and
+        # set the expectations for when it runs for real: it's slow, results come as a message, and a new
+        # agent needs the owner's one-time approval.
+        _send(agent,
+              "On it. Here's how the level-up will go (the build step is the very next thing being "
+              "wired):\n\n"
+              "1. I design my evolved version and **A/B-test it against my current self on my own past "
+              "tasks** — this takes a few minutes, so I'll go quiet and **message you here the moment the "
+              "results are in** (you don't need to wait around).\n"
+              "2. If it's genuinely better, I'll show you the score and ask whether to make it live.\n"
+              "3. If you say yes, a new agent is created — you'll get a **one-time connect-approval "
+              "request in AIMEAT (Profile → Agents)** to approve it, then it runs alongside me.\n\n"
+              "I'll never swap myself out silently — you approve every step.")
         return
 
     _send(agent, "Okay — no evolution for now. I'll flag it again if the pattern persists.")
