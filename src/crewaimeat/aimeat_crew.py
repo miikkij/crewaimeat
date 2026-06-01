@@ -925,20 +925,25 @@ def run_crew(spec: CrewSpec) -> None:
                 verbose=True,
             )
             if verify_mode == "factcheck":
-                # Faithfulness check (RAGAS/QAFactEval + CoVe style): every claim must be supported by
-                # the source materials in context — invented specifics get removed, never dressed as fact.
+                # Faithfulness check (RAGAS/QAFactEval + CoVe style): every claim must appear in the CREW
+                # CONTRIBUTIONS in context — invented specifics get removed, never dressed as fact. The
+                # contributions are the source of truth; the Reviewer does NOT have (and must not ask for or
+                # refuse over) the original external web pages. It always returns the deliverable itself.
                 verify_desc = (
                     f"Original goal:\n{prompt}\n\n"
-                    "FACT-CHECK the deliverable produced above against the SOURCE MATERIALS in your context "
-                    "(the crews' contributions / retrieved sources). Work claim by claim: break it into atomic "
-                    "factual claims — names, numbers, dates, organisations, citations. For EACH, check whether "
-                    "the source materials actually support it. If a claim is NOT supported, REMOVE it or mark it "
-                    "'[unverified]'; NEVER keep an invented specific dressed as a sourced fact, and never attach "
-                    "a citation to something not in the sources. Do not add anything new. If the materials came "
-                    "from a single source, return it faithfully rather than re-writing. Output the corrected, "
-                    "faithful deliverable, ending with EXACTLY this line: "
+                    "Your context above contains the CREW CONTRIBUTIONS the deliverable was built from, then the "
+                    "deliverable itself. Fact-check the deliverable AGAINST THOSE CONTRIBUTIONS — they are your "
+                    "only source of truth. You do NOT have the original external web pages/articles, and you must "
+                    "NOT ask for them or refuse for lack of them. A claim is SUPPORTED if it appears in the "
+                    "contributions (a source named/cited WITHIN the contributions counts as support). A claim is "
+                    "UNSUPPORTED only if it is not in the contributions at all — an invented name, number, date, "
+                    "organisation, or citation. Work claim by claim: remove or mark '[unverified]' anything not in "
+                    "the contributions; never invent; never attach a citation that is not in the contributions; do "
+                    "not add anything new. If only one crew contributed, return its content faithfully. ALWAYS "
+                    "output the corrected deliverable ITSELF — never a commentary about your process or about "
+                    "missing materials — ending with EXACTLY this line: "
                     "'Verify: faithfulness | score=<1-5> | unsupported=<N> | <short note>' "
-                    "(score 5 = fully faithful / no unsupported specifics, 1 = several fabricated specifics)."
+                    "(score 5 = every specific is in the contributions; 1 = several invented specifics)."
                 )
             else:
                 verify_desc = (
