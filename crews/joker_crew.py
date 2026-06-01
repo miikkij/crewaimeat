@@ -1,4 +1,5 @@
-"""joker: four comedians each riff on the incoming task, then a host presents all four.
+"""joker: four comedians each draft many jokes and keep their best, then a ruthless editor
+cuts the weak ones and presents only what actually lands.
 
 Generated on the AIMEAT scaffold (crewaimeat). Edit build_domain to taste; the scaffold
 provides the AIMEAT wiring (see SCAFFOLD_CANON.md). Register first:
@@ -17,10 +18,11 @@ AGENT_NAME = "joker"
 
 README = '''[[FIGLET:slant]["JOKER"]]
 
-# joker — four comedians and a host
+# joker — four comedians and a ruthless editor
 
-Send me a topic and I riff on it from four angles — a pun, an observational bit, a playful roast,
-and a short anecdote — then present them as one clean lineup. I match the language of your topic.
+Send me a topic and four comics work it from four angles — a pun, an observational bit, a playful
+roast, and a short anecdote. Each one writes a batch and keeps only their funniest, then an editor
+cuts anything that doesn't land and presents the lineup. I match the language of your topic.
 
 ## How to task me
 Queue a task with whatever you want jokes about:
@@ -29,48 +31,64 @@ Queue a task with whatever you want jokes about:
 - `a short funny story about a cat who refuses to use the litter box`
 '''
 
+# The actual craft. Generic one-shot jokes are the groaners; these are the levers that make jokes land.
+CRAFT = (
+    "What makes a joke land:\n"
+    "- SPECIFIC beats generic — name the real detail, not the category.\n"
+    "- The punchline must SURPRISE: misdirection, an unexpected angle, or a sharp turn. If the listener "
+    "sees it coming, it's dead.\n"
+    "- Tight: every word earns its place; end on the funniest, hardest-hitting word.\n"
+    "- Rule of three, escalation, and callbacks are your tools.\n"
+    "AVOID: clichés ('why did the X cross the road', 'I'm not saying… but'), explaining the joke, "
+    "limp puns that only rhyme, and anything you've heard before. A groan is a fail, not a win."
+)
+
 
 def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     llm, topic = ctx.llm, ctx.prompt
 
     punslinger = Agent(
         role="Punslinger",
-        goal="Land one quick pun or wordplay joke about the topic",
+        goal="Land one genuinely clever pun or wordplay joke — the kind that earns a laugh, not a groan",
         backstory=(
-            "You live for puns and dad-joke energy. You find the word that bends two ways "
-            "and snap it shut with a grin."
+            "You live for wordplay, but you have taste: you find the word that bends two ways and the "
+            "twist nobody expects, and you throw away the lazy rhymes everyone else would settle for."
         ),
         llm=llm,
         verbose=True,
     )
     observer = Agent(
         role="Observational Comic",
-        goal="Find the wry everyday-life angle and make one observational joke",
+        goal="Make one sharp observational joke about the small absurd truth in the topic",
         backstory=(
-            "Seinfeld school. You notice the small absurd thing everyone lives with but "
-            "nobody says out loud, and you say it."
+            "Seinfeld school. You notice the specific small absurd thing everyone lives with but nobody "
+            "says out loud — and you name the exact detail that makes it click."
         ),
         llm=llm,
         verbose=True,
     )
     roaster = Agent(
         role="Roast Comic",
-        goal="Deliver one sharp, playful roast of the topic",
-        backstory="You roast with a wink: pointed and clever, never cruel. The target laughs hardest.",
+        goal="Deliver one sharp, playful roast of the topic that actually stings-then-laughs",
+        backstory="You roast with a wink: pointed, specific, clever — never cruel, never generic. The target laughs hardest.",
         llm=llm,
         verbose=True,
     )
     storyteller = Agent(
         role="Storyteller Comedian",
-        goal="Tell one short setup-and-punchline comic anecdote about the topic",
-        backstory="You build a tiny scene, draw the listener in, and land the punchline at the end.",
+        goal="Tell one short comic anecdote with a real setup and a punchline that turns",
+        backstory="You build a tiny vivid scene, draw the listener in, and land an ending they didn't see coming.",
         llm=llm,
         verbose=True,
     )
-    host = Agent(
-        role="Host",
-        goal="Present all four comedians' jokes as one clean lineup",
-        backstory="You are the compere who introduces the bit and hands the mic to each comic.",
+    editor = Agent(
+        role="Comedy Editor",
+        goal="Keep only the jokes that genuinely land, sharpen them, and cut the rest without mercy",
+        backstory=(
+            "You are a hard-nosed comedy editor and a tough audience. You have killed more jokes than you "
+            "have kept. A joke that only half-works gets cut, not padded. You would rather present two "
+            "jokes that genuinely land than four that limp."
+        ),
         llm=llm,
         verbose=True,
     )
@@ -78,10 +96,14 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     def joke_task(agent: Agent, style: str) -> Task:
         return Task(
             description=(
-                f"Tell exactly ONE joke about the following, in your {style} style. "
-                f"Keep it tight, and match the language of the topic. Topic:\n{topic}"
+                f"Topic:\n{topic}\n\n"
+                f"Write SIX different {style} jokes about this topic — fast, varied, push past the "
+                f"obvious first ideas (the first thing that comes to mind is usually the groaner everyone "
+                f"else writes). Then judge your own six honestly and output ONLY your single best one, "
+                f"polished and tight.\n\n{CRAFT}\n\n"
+                f"Match the language of the topic."
             ),
-            expected_output="One joke, in your style, in the language of the topic.",
+            expected_output="Your single funniest joke, in your style, in the language of the topic (the six drafts are scratch work — do not include them).",
             agent=agent,
         )
 
@@ -89,26 +111,38 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     t_obs = joke_task(observer, "observational")
     t_roast = joke_task(roaster, "playful roast")
     t_story = joke_task(storyteller, "short comic anecdote")
-    t_host = Task(
+
+    t_edit = Task(
         description=(
-            "Four comedians above have each told one joke about the topic. Present them as the "
-            "final answer: a one-line intro naming the topic, then each joke under a label "
-            "(Punslinger, Observational, Roast, Storyteller). Keep every joke intact and in the "
-            "language of the topic."
+            "Four comics have each handed you their best joke about the topic (Punslinger, Observational, "
+            "Roast, Storyteller). You are the quality gate.\n\n"
+            "1. Judge each joke HONESTLY against the craft below. Does it actually make you laugh, or just "
+            "nod? Is the punchline a surprise, or did you see it coming? Is it specific, or generic?\n"
+            "2. CUT any joke that doesn't land — a weak joke makes the whole set worse. It is fine to keep "
+            "only two or three if the others limp. Never pad the set with a joke you don't believe in.\n"
+            "3. SHARPEN the ones you keep: tighten the wording, fix the rhythm, make the punch-word land last.\n"
+            "4. Present the survivors as a clean lineup: a one-line intro naming the topic, then each kept "
+            "joke under its label. Keep the language of the topic.\n\n"
+            f"{CRAFT}"
         ),
-        expected_output="A short intro line, then the four labeled jokes.",
-        agent=host,
+        expected_output="A one-line intro, then only the jokes that genuinely land (2-4), each sharpened and labeled.",
+        agent=editor,
         context=[t_pun, t_obs, t_roast, t_story],
     )
 
     return (
-        [punslinger, observer, roaster, storyteller, host],
-        [t_pun, t_obs, t_roast, t_story, t_host],
+        [punslinger, observer, roaster, storyteller, editor],
+        [t_pun, t_obs, t_roast, t_story, t_edit],
     )
 
 
 def run() -> None:
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README))
+    # adapt_to_task: comedy classifies as 'creative' -> warm temperature (more divergent, funnier
+    # candidates) and no factual-grounding constraint. score_to_stats keeps the self-verify introspection.
+    run_crew(CrewSpec(
+        agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README,
+        adapt_to_task=True, score_to_stats=True,
+    ))
 
 
 if __name__ == "__main__":
