@@ -13,7 +13,7 @@ from __future__ import annotations
 from crewai import Agent, Task
 
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
-from crewaimeat.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is set, else []
+from crewaimeat.crew import _web_tools  # free SearXNG web search by default (USE_TAVILY=1 for Tavily)
 
 AGENT_NAME = "web-researcher"
 
@@ -108,7 +108,13 @@ def build_domain(ctx):
 
 
 def run() -> None:
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README))
+    # adapt_to_task: research tasks classify as 'fact' -> cool temp (0.15) + grounding rule (no invented
+    # specifics, honest "not found") + a final faithfulness-verify pass over the summary before publish,
+    # on top of the crew's own Source Verifier. score_to_stats: keep the self-verify as introspection.
+    run_crew(CrewSpec(
+        agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README,
+        adapt_to_task=True, score_to_stats=True,
+    ))
 
 
 if __name__ == "__main__":
