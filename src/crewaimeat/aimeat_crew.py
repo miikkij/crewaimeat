@@ -170,6 +170,11 @@ class CrewSpec:
     score_to_stats: bool = False          # when True (with verify="factcheck"), the Reviewer's
     #   faithfulness score is parsed and written to agents.stats.<agent>.review.<task>.verify (the
     #   reputation convention). Source-grounded judging — validated by POC v2. Spreads like verify.
+    self_monitor: bool = False            # when True, after each task the crew reads its OWN reputation
+    #   rollup and, if a gated signal fires (WEAK avg<2.5, or a bimodal SPLIT) with enough data
+    #   (n>=10 — the n=3 lesson) and not recently proposed, sends the owner a clickable "explore an
+    #   evolution?" prompt (metadata.prompt). Notice+propose only; building/A/B/promote are human-gated
+    #   /evolve steps (doc 20). Spreads like verify — opt-in per crew.
     contribute_to_library: bool = False   # when True, after each task the deliverable is classified
     #   (topic + shelf-life, junk dropped) and a compact pointer-entry is appended to
     #   agents.<agent>.library for the librarian to index. Spreads like `verify` — opt-in per crew.
@@ -1085,6 +1090,26 @@ def run_crew(spec: CrewSpec) -> None:
             finalize = _finalize_task(spec.agent_name, tid, mem_key, liaison)
             # Guarantee the task is closed even if the liaison never calls aimeat_task_complete.
             finalize.callback = _make_complete_cb(spec.agent_name, tid)
+
+        # Self-evolution monitor (doc 20 P1): after the task, read own reputation and, if a gated
+        # signal fires, propose an evolution to the owner. Chained after finalize; best-effort.
+        if spec.self_monitor:
+            _prev_fin = getattr(finalize, "callback", None)
+
+            def _monitor_cb(out, _prev=_prev_fin):
+                if _prev:
+                    try:
+                        _prev(out)
+                    except Exception:  # noqa: BLE001
+                        pass
+                try:
+                    from crewaimeat.evolve import self_monitor_check  # local: avoid import cycle
+
+                    self_monitor_check(spec.agent_name, spec.owner)
+                except Exception as exc:  # noqa: BLE001 — monitoring must never break the task
+                    print(f"[{spec.agent_name}] self-monitor skipped: {exc}", file=sys.stderr)
+
+            finalize.callback = _monitor_cb
 
         crew_kwargs: dict[str, Any] = {
             "agents": [liaison, *agents],

@@ -186,6 +186,7 @@ def run() -> None:
         agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README,
         temperature=0.7,
         clean_deliverable=_strip_editor_meta,  # enforce: no leaked KEPT/CUT scaffolding in the deliverable
+        self_monitor=True,  # propose an evolution if own reputation shows a WEAK/SPLIT signal (doc 20)
     ))
 
 

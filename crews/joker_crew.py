@@ -109,7 +109,9 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
 
 def run() -> None:
     # Comedy is a creative service — enforce a warm temperature (no per-task classification needed).
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README, temperature=0.7))
+    # self_monitor: after each task, check own reputation and propose an evolution if a signal fires (doc 20).
+    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README,
+                      temperature=0.7, self_monitor=True))
 
 
 if __name__ == "__main__":
