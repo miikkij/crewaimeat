@@ -538,6 +538,7 @@ def send_evolution_proposal(agent_name: str) -> str:
     <agent>` command — so clicking it lands a `/evolve` message back here and runs through crew-forge's
     normal command path. Triggered by /propose-evolution (which the agent's monitor calls)."""
     try:
+        from crewaimeat.aimeat_crew import _aimeat_call  # local import (avoids any cycle), like _token_exists
         from crewaimeat.evolve import latest_signal
     except Exception as exc:  # noqa: BLE001
         return f"Cannot propose: {exc}"
