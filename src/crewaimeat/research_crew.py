@@ -89,6 +89,7 @@ def run() -> None:
             agent_name=AGENT_NAME,
             build_domain=build_domain,
             poll_seconds=int(os.getenv("RESEARCH_CREW_POLL_SECONDS", "30")),
+            temperature=0.25,  # factual research — run cool to stay grounded
         )
     )
 
