@@ -62,7 +62,14 @@ def _describe_image(path: str, prompt: str) -> str:
         }
         r = requests.post(
             f"{base}/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                # OpenRouter app attribution — without these the dashboard shows App "Unknown".
+                # Cosmetic only (does not affect auth or routing), but keeps our usage labelled.
+                "HTTP-Referer": "https://github.com/crewaimeat",
+                "X-Title": "crewaimeat web-tester",
+            },
             json=body,
             timeout=60,
         )
