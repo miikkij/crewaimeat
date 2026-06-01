@@ -99,7 +99,8 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
 
 
 def run() -> None:
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README))
+    # Critical analysis wants consistency, not divergence — run cool.
+    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README, temperature=0.2))
 
 
 if __name__ == "__main__":

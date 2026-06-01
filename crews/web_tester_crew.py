@@ -69,7 +69,8 @@ def build_domain(ctx: BuildContext):
 
 def run() -> None:
     # verify="on": a reviewer checks the report is grounded in what the browser actually returned.
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README, verify="on"))
+    # Browser action-planning wants determinism, not divergence — run cool.
+    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README, verify="on", temperature=0.2))
 
 
 if __name__ == "__main__":

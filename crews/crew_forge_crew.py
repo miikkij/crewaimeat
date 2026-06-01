@@ -263,6 +263,9 @@ def run() -> None:
         CrewSpec(
             agent_name=AGENT_NAME,
             build_domain=build_domain,
+            # Mixed role: the Architect designs crews (creative) while the Builder writes/validates
+            # code (precise) — a balanced temperature suits both.
+            temperature=0.5,
             # Act on inbox messages too, so the fleet can be operated by messaging crew-forge.
             listen_for=("tasks", "messages"),
             # Declare capabilities at onboarding (Services), and publish the slash-command

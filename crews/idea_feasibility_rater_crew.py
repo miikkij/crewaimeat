@@ -92,7 +92,8 @@ def build_domain(ctx):
 
 
 def run() -> None:
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain))
+    # Feasibility analysis — a little reasoning latitude (balanced).
+    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, temperature=0.5))
 
 
 if __name__ == "__main__":

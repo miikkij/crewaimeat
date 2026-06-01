@@ -65,7 +65,8 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
 
 
 def run() -> None:
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README))
+    # Knowledge indexing / classification — run cool for consistency.
+    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README, temperature=0.25))
 
 
 if __name__ == "__main__":
