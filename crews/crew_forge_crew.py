@@ -41,7 +41,6 @@ HELP = (
     "  /reauth <agent>        re-run authorization so you can approve it again\n"
     "  /list   (or /status)   show your crews and which are running\n"
     "  /startall              launch any stopped crews (skip running ones; good after a reboot)\n"
-    "  /evolve <agent>        diagnose an agent's weak/split reputation and propose an evolution\n"
     "  /help                  show this list\n"
     "Plain text with no leading '/' is treated as a /build request."
 )
@@ -54,7 +53,6 @@ COMMANDS = [
     {"name": "/list", "description": "Show your crews and which are running", "category": "fleet"},
     {"name": "/status", "description": "Alias of /list: crews and their running state", "category": "fleet"},
     {"name": "/startall", "description": "Launch any stopped crews; skip running ones (also after a reboot)", "category": "fleet"},
-    {"name": "/evolve", "description": "Diagnose an agent's weak/split reputation and propose an evolution: /evolve <agent>", "category": "fleet"},
     {"name": "/help", "description": "List crew-forge's slash commands", "category": "meta"},
 ]
 
@@ -80,9 +78,6 @@ _BUILD_CMDS = {"build", "new", "make", "create"}
 _RESTART_CMDS = {"restart", "relaunch", "reboot", "start"}
 _LIST_CMDS = {"list", "ls", "status"}
 _RECONCILE_CMDS = {"startall", "start-all", "reconcile", "up"}
-_EVOLVE_CMDS = {"evolve"}
-_PROPOSE_CMDS = {"propose-evolution", "propose_evolution"}  # internal: an agent's monitor asks us to propose
-_DISMISS_CMDS = {"dismiss", "notnow", "not-now"}            # the "not now" option on an evolution proposal
 _HELP_CMDS = {"help", "commands", "?"}
 
 # Declared at onboarding (aimeat_onboarding_declare_services) so other agents and the owner
@@ -133,21 +128,6 @@ def _command_domain(ctx: BuildContext, cmd: str, arg: str) -> tuple[list[Agent],
             if arg
             else "No agent name was given. Reply asking the user to send '/restart <agent>'."
         )
-    elif cmd in _EVOLVE_CMDS:
-        instr = (
-            f"Call diagnose_evolution with agent_name='{arg}' and report its result verbatim."
-            if arg
-            else "No agent name was given. Reply asking the user to send '/evolve <agent>'."
-        )
-    elif cmd in _PROPOSE_CMDS:
-        instr = (
-            f"Call send_evolution_proposal with agent_name='{arg}' and report its result verbatim."
-            if arg
-            else "No agent name was given for the evolution proposal."
-        )
-    elif cmd in _DISMISS_CMDS:
-        instr = ("Report exactly this as the final answer: 'Okay — no evolution for now. The monitor "
-                 "will flag it again if the pattern persists.'")
     elif cmd == "reauth":
         instr = (
             f"Call reauth_crew with agent_name='{arg}' and report the result."

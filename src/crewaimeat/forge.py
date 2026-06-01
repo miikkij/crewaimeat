@@ -498,76 +498,10 @@ def make_forge_tools() -> list:
     return [write_and_validate_crew, register_and_launch_crew]
 
 
-@tool("diagnose_evolution")
-def diagnose_evolution(agent_name: str) -> str:
-    """Diagnose why a crew scores unevenly and propose an evolution direction (doc 20, /evolve step 1).
-
-    Reads the agent's OWN reputation, finds the signaled context (WEAK avg<2.5 or bimodal SPLIT, gated
-    n>=10), classifies its score clusters, and reports a targeted brief: what it's weak/strong at, the
-    proposed mode (specialist|replace), and what the evolved crew should change. Designing + A/B-testing
-    the candidate is the next step."""
-    try:
-        from crewaimeat.evolve import diagnose, latest_signal
-    except Exception as exc:  # noqa: BLE001
-        return f"Cannot diagnose: {exc}"
-    ctx, sig, detail = latest_signal(agent_name)
-    if not sig:
-        return (f"No evolution signal for '{agent_name}': no context past n>=10 shows a WEAK or SPLIT "
-                f"pattern. Nothing to evolve right now.")
-    d = diagnose(agent_name, ctx, sig)
-    if not d.get("ok"):
-        return f"'{agent_name}' / {ctx}: {sig.upper()} signal ({detail}), but cannot diagnose yet — {d.get('reason')}."
-    return (
-        f"Evolution diagnosis — {agent_name} / {ctx} ({sig.upper()}: {detail}):\n"
-        f"  • Distinction: {d.get('distinction')}\n"
-        f"  • Weak at: {d.get('weak_at')}\n"
-        f"  • Strong at: {d.get('strong_at')}\n"
-        f"  • Proposed mode: {d.get('mode')}\n"
-        f"  • Brief: {d.get('brief')}\n"
-        f"  • Clusters scored: {d.get('counts')}\n"
-        f"Next: design this candidate + A/B-test it against {agent_name} on its own tasks, then propose "
-        f"only if it's proven better."
-    )
-
-
-@tool("send_evolution_proposal")
-def send_evolution_proposal(agent_name: str) -> str:
-    """Send the owner a CLICKABLE evolution proposal for an agent whose self-monitor tripped a signal.
-
-    Re-detects the signal, then messages the owner a single-select prompt whose option IS the `/evolve
-    <agent>` command — so clicking it lands a `/evolve` message back here and runs through crew-forge's
-    normal command path. Triggered by /propose-evolution (which the agent's monitor calls)."""
-    try:
-        from crewaimeat.aimeat_crew import _aimeat_call  # local import (avoids any cycle), like _token_exists
-        from crewaimeat.evolve import latest_signal
-    except Exception as exc:  # noqa: BLE001
-        return f"Cannot propose: {exc}"
-    ctx, sig, detail = latest_signal(agent_name)
-    if not sig:
-        return f"No active self-monitor signal for '{agent_name}'; nothing to propose."
-    question = (
-        f"{agent_name} is inconsistent on '{ctx}' ({detail}) — strong on some inputs, weak on others. "
-        f"Explore an evolution?" if sig == "split"
-        else f"{agent_name} is scoring low on '{ctx}' ({detail}). Explore an evolution?"
-    )
-    body = {
-        "content": (
-            f"**Self-monitor — {agent_name} / {ctx}: {sig.upper()}**\n\n{detail}\n\n"
-            f"Clicking below runs /evolve {agent_name}: I diagnose the pattern, design candidate "
-            f"evolution(s), A/B-test them against {agent_name} on its own tasks, and bring back only the "
-            f"proven-better ones to choose from."
-        ),
-        "metadata": {"prompt": {
-            "prompt_id": f"evolve-{agent_name}-{ctx}",
-            "question": question,
-            "options": [f"/evolve {agent_name}", "/dismiss"],  # option values ARE commands -> click just works
-            "allow_other": False,
-        }},
-    }
-    res = _aimeat_call("crew-forge", "aimeat_message_send", body)
-    return f"Sent a clickable evolution proposal for {agent_name} ({ctx}/{sig}) to the owner: {bool(res)}"
-
-
 def make_manage_tools() -> list:
-    """crew-forge's fleet tools: restart, re-auth, list, start-all, diagnose + propose evolution."""
-    return [restart_crew, list_crews, reauth_crew, start_all_crews, diagnose_evolution, send_evolution_proposal]
+    """The tools crew-forge uses to operate the fleet: restart, re-auth, list, and start-all.
+
+    (Self-evolution lives ON each agent now — the agent self-diagnoses and proposes in its own thread,
+    via crewaimeat.evolve; crew-forge's only future role is the mechanical crew-file build, which will
+    be a dedicated handler, not these reverted /evolve detour commands.)"""
+    return [restart_crew, list_crews, reauth_crew, start_all_crews]
