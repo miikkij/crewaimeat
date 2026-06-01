@@ -19,7 +19,10 @@ from datetime import datetime, timezone
 
 import requests
 
+import re
+
 from crewaimeat.aimeat_crew import _aimeat_call, _aimeat_read_token
+from crewaimeat.llm import get_llm
 
 MIN_N = 10            # never propose on thin data (the n=3 lesson — see doc 20)
 WEAK_FLOOR = 2.5      # avgStars below this (with enough n) = consistently weak
@@ -126,6 +129,88 @@ def _propose(agent: str, ctx: str, signal: str, detail: str) -> bool:
     res = _aimeat_call(agent, "aimeat_message_send", body)
     print(f"[{agent}] self-monitor proposed evolution: {ctx}/{signal} -> {bool(res)}", file=sys.stderr)
     return bool(res)
+
+
+# --------------------------------------------------------------------------- #
+# Phase 2 — cluster classifier: explain WHY the scores split, to target the variant.
+# --------------------------------------------------------------------------- #
+_DIAGNOSE_PROMPT = (
+    "You are diagnosing why a crew performs unevenly. Crew: '{agent}', context: '{ctx}'. "
+    "Signal: {signal}.\n\nHere are its rated tasks grouped by the score a reviewer gave each one. "
+    "Find what DISTINGUISHES the low-rated tasks from the high-rated ones — what kind of input, topic, "
+    "or format does this crew handle WELL vs POORLY?\n\n"
+    "LOW (1-2★):\n{low}\n\nMID (3★):\n{mid}\n\nHIGH (4-5★):\n{high}\n\n"
+    "Then propose ONE concrete evolution direction. Choose 'specialist' if it's clearly strong on a "
+    "sub-type and should get a coexisting specialist for it; choose 'replace' if it's uniformly weak "
+    "and the whole design should be rebuilt.\n\n"
+    "Reply in EXACTLY this format, nothing else:\n"
+    "DISTINCTION: <one sentence: what separates low from high>\n"
+    "WEAK_AT: <short label of the weak cluster, e.g. puns / long-form / vague topics>\n"
+    "STRONG_AT: <short label of the strong cluster>\n"
+    "MODE: <specialist|replace>\n"
+    "BRIEF: <one or two sentences telling a crew-builder exactly what the evolved crew should change>"
+)
+_DIAG_RE = {k: re.compile(rf"(?im)^{k}:\s*(.+)$") for k in ("DISTINCTION", "WEAK_AT", "STRONG_AT", "MODE", "BRIEF")}
+
+
+def _strip_marker(text: str) -> str:
+    """Drop the appended <<AIMEAT_PUBLISH ...>> directive so the topic/ask is what the LLM clusters on."""
+    return (text or "").split("<<AIMEAT_PUBLISH")[0].strip()
+
+
+def _rated_tasks(agent: str, ctx: str, owner: str | None = None, limit: int = 40) -> list[dict]:
+    """The agent's done tasks carrying a rating in this context: [{title, instruction, stars}]."""
+    listing = _aimeat_call(agent, "aimeat_task_list", {"status": "done", "per_page": 100}) or {}
+    tasks = listing.get("tasks") or (listing.get("data") or {}).get("tasks") or (listing if isinstance(listing, list) else [])
+    out: list[dict] = []
+    for t in tasks[:limit]:
+        tid = t.get("id") if isinstance(t, dict) else None
+        if not tid:
+            continue
+        full = (_aimeat_call(agent, "aimeat_task_get", {"task_id": tid}) or {}).get("task") or {}
+        rating = full.get("rating") or {}
+        stars = rating.get("stars")
+        if stars is None or (rating.get("context") and rating.get("context") != ctx):
+            continue
+        out.append({
+            "title": full.get("title") or (t.get("title") if isinstance(t, dict) else "") or "",
+            "instruction": _strip_marker(full.get("description") or "")[:300],
+            "stars": stars,
+        })
+    return out
+
+
+def _fmt_cluster(tasks: list[dict]) -> str:
+    return "\n".join(f"  - [{t['stars']}★] {t['title']}: {t['instruction'][:160]}" for t in tasks) or "  (none)"
+
+
+def diagnose(agent: str, ctx: str, signal: str, owner: str | None = None) -> dict:
+    """Classify why scores split into clusters and propose a targeted evolution brief.
+
+    Returns {ok, distinction, weak_at, strong_at, mode, brief, counts}. ok=False if there aren't
+    enough rated tasks to diagnose (don't guess on thin data). Used by /evolve (P3) to design the
+    candidate(s); not run in the per-task monitor (it costs N task_get calls)."""
+    tasks = _rated_tasks(agent, ctx, owner)
+    if len(tasks) < MIN_N:
+        return {"ok": False, "reason": f"only {len(tasks)} rated tasks in '{ctx}' (need >= {MIN_N})"}
+    low = [t for t in tasks if t["stars"] <= 2]
+    mid = [t for t in tasks if t["stars"] == 3]
+    high = [t for t in tasks if t["stars"] >= 4]
+    prompt = _DIAGNOSE_PROMPT.format(agent=agent, ctx=ctx, signal=signal,
+                                     low=_fmt_cluster(low), mid=_fmt_cluster(mid), high=_fmt_cluster(high))
+    try:
+        reply = str(get_llm(for_tool_use=False, temperature=0.2).call(prompt))
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "reason": f"diagnosis LLM call failed: {exc}"}
+    out = {"ok": True, "counts": {"low": len(low), "mid": len(mid), "high": len(high)},
+           "signal": signal, "context": ctx}
+    for k, rx in _DIAG_RE.items():
+        m = rx.search(reply)
+        out[k.lower()] = m.group(1).strip() if m else None
+    # default mode if the model didn't say: split -> specialist, weak -> replace
+    if out.get("mode") not in ("specialist", "replace"):
+        out["mode"] = "specialist" if signal == "split" else "replace"
+    return out
 
 
 def self_monitor_check(agent_name: str, owner: str | None = None) -> None:
