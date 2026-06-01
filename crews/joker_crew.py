@@ -121,11 +121,16 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "2. CUT any joke that doesn't land — a weak joke makes the whole set worse. It is fine to keep "
             "only two or three if the others limp. Never pad the set with a joke you don't believe in.\n"
             "3. SHARPEN the ones you keep: tighten the wording, fix the rhythm, make the punch-word land last.\n"
-            "4. Present the survivors as a clean lineup: a one-line intro naming the topic, then each kept "
-            "joke under its label. Keep the language of the topic.\n\n"
+            "4. Steps 1-3 are your PRIVATE editing process — do them in your head. Your final answer is the "
+            "stage-ready lineup ONLY: a one-line intro naming the topic, then each surviving joke under its "
+            "label. Do NOT include your cut decisions, 'KEPT/CUT' notes, scores, or any commentary about "
+            "the editing — the audience sees jokes, not the editing room. Keep the language of the topic.\n\n"
             f"{CRAFT}"
         ),
-        expected_output="A one-line intro, then only the jokes that genuinely land (2-4), each sharpened and labeled.",
+        expected_output=(
+            "A one-line intro, then only the jokes that genuinely land (2-4), each sharpened and labeled. "
+            "No editorial notes, no cut/keep commentary — just the intro and the jokes."
+        ),
         agent=editor,
         context=[t_pun, t_obs, t_roast, t_story],
     )
