@@ -30,6 +30,7 @@ with ``requests.post`` without a subprocess.
 
 from __future__ import annotations
 
+import contextvars
 import json
 import os
 import subprocess
@@ -50,6 +51,12 @@ from crewai.events import (  # noqa: E402
 )
 
 HEARTBEAT_SECONDS = 5
+
+# The active AIMEAT task for the current execution context. Set in bind() (in the worker thread,
+# before kickoff); CrewAI copies the context into the threads it spawns during kickoff (its
+# "contextvars thread propagation"), so event handlers — even when fired from a CrewAI sub-thread —
+# resolve to the right task. Backed up by a thread map + a single-active fallback (see _tid).
+_CURRENT_TASK: contextvars.ContextVar = contextvars.ContextVar("aimeat_progress_task", default=None)
 
 
 def _now_iso() -> str:
@@ -88,9 +95,23 @@ class ProgressReporter:
         return f"agents.{self.agent_name}.tasks.{task_id}.live"
 
     def _tid(self) -> str | None:
-        """The task_id owned by the CALLING thread (where CrewAI fired this event)."""
+        """Resolve the AIMEAT task this event belongs to, most-reliable first:
+        1. the contextvar (propagated into CrewAI's kickoff threads),
+        2. the worker thread that called bind() (events fired inline in that thread),
+        3. single-active fallback — if exactly one task is running it's unambiguous (covers serial
+           mode and the case where CrewAI emits from a thread/context we did not tag).
+        Returns None only when 2+ tasks run AND neither contextvar nor thread resolves -> we drop
+        rather than misattribute to the wrong task."""
+        t = _CURRENT_TASK.get()
+        if t:
+            return t
         with self._lock:
-            return self._by_thread.get(threading.get_ident())
+            t = self._by_thread.get(threading.get_ident())
+            if t:
+                return t
+            if len(self._tasks) == 1:
+                return next(iter(self._tasks))
+            return None
 
     def _snapshot(self, task_id: str) -> dict | None:
         with self._lock:
@@ -135,7 +156,8 @@ class ProgressReporter:
 
     # --- lifecycle (called from the listener / _build) ------------------ #
     def bind(self, task_id: str, title: str) -> None:
-        """Bind THIS worker thread to its AIMEAT task, before crew.kickoff."""
+        """Bind the current execution context + worker thread to its AIMEAT task, before crew.kickoff."""
+        _CURRENT_TASK.set(task_id)  # propagated into CrewAI's kickoff threads
         with self._lock:
             self._by_thread[threading.get_ident()] = task_id
             self._tasks[task_id] = {
