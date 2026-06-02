@@ -252,6 +252,28 @@ def _gaii_map(coordinator_name: str) -> dict:
 EXPLORE_EVERY = 4
 
 
+def _explore_seq_path(coordinator_name: str) -> Path:
+    """File holding the coordinator's explore counter, so the 1-in-N cadence survives daemon restarts
+    (in-memory state would reset to 0 every restart and re-bunch exploration). Under logs/ → gitignored."""
+    return Path.cwd() / "logs" / ".explore" / f"{coordinator_name}.seq"
+
+
+def _read_explore_seq(coordinator_name: str) -> int:
+    try:
+        return int(_explore_seq_path(coordinator_name).read_text(encoding="utf-8").strip())
+    except Exception:  # noqa: BLE001 — missing/corrupt counter just restarts the cadence at 0
+        return 0
+
+
+def _write_explore_seq(coordinator_name: str, n: int) -> None:
+    try:
+        p = _explore_seq_path(coordinator_name)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(str(n), encoding="utf-8")
+    except Exception:  # noqa: BLE001 — persistence is best-effort; the cadence still works in-memory
+        pass
+
+
 def _reputation(coordinator_name: str, agent: str, gaii: str | None) -> tuple[str, dict | None, dict | None]:
     """Reputation for one candidate as (suffix, selection, benchmark).
 
@@ -365,7 +387,11 @@ def make_workflow_tools(
                 under.append((c["agent"], n))
         # Hybrid explore: a deterministic counter DECIDES which round explores and which crew gets it;
         # the LLM still matches lane/intent. Every ~EXPLORE_EVERY-th discovery becomes an explore turn.
-        state["disc_seq"] = state.get("disc_seq", 0) + 1
+        # The counter is loaded from disk once (survives daemon restarts) then persisted after each bump.
+        if "disc_seq" not in state:
+            state["disc_seq"] = _read_explore_seq(coordinator_name)
+        state["disc_seq"] += 1
+        _write_explore_seq(coordinator_name, state["disc_seq"])
         explore_line = ""
         if under and state["disc_seq"] % EXPLORE_EVERY == 0:
             pick, pn = under[(state["disc_seq"] // EXPLORE_EVERY - 1) % len(under)]

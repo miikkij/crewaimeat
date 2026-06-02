@@ -20,3 +20,6 @@ db/
 
 # Crew-prosessien lokit, README-välimuisti ja fleet-lukko
 logs/
+
+# Self-evolution staging — ehdokas-crewit ennen promootiota (ei committaa, ei skannata fleettiin)
+crews/.candidates/
