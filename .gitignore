@@ -5,7 +5,7 @@ __pycache__/
 *.egg-info/
 build/
 dist/
-
+docs/aimeat-guides
 # Salaisuudet
 .env
 
@@ -23,3 +23,5 @@ logs/
 
 # Self-evolution staging — ehdokas-crewit ennen promootiota (ei committaa, ei skannata fleettiin)
 crews/.candidates/
+.claude
+blueprint_test.json
