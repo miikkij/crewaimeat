@@ -247,31 +247,41 @@ def _gaii_map(coordinator_name: str) -> dict:
     return {a.get("name"): a.get("gaii") for a in agents if isinstance(a, dict) and a.get("name") and a.get("gaii")}
 
 
-def _reputation_suffix(coordinator_name: str, agent: str, gaii: str | None) -> str:
-    """A compact reputation tag for one candidate: live field score (selection) + lab benchmark (A/B).
+# Exploration cadence: roughly 1 in N delegation rounds is steered to an under-sampled crew so a
+# new/evolved variant earns field ratings instead of starving behind a proven incumbent (cold-start fix).
+EXPLORE_EVERY = 4
 
-    Reads the candidate's OWN public keys via memory_read_public. Best-effort — any miss yields "".
+
+def _reputation(coordinator_name: str, agent: str, gaii: str | None) -> tuple[str, dict | None, dict | None]:
+    """Reputation for one candidate as (suffix, selection, benchmark).
+
+    `suffix` is the compact [live … · benchmark …] tag for the roster line; `selection`/`benchmark`
+    are the parsed dicts (or None) so the caller can ALSO make the explore decision without re-reading.
+    Reads the candidate's OWN public keys via memory_read_public. Best-effort — any miss yields ("", None, None).
     Live = field reputation (coordinator ratings on real tasks); benchmark = cold-start lab prior."""
     if not gaii:
-        return ""
+        return "", None, None
     try:
         sel = _mem_value(_aimeat_call(coordinator_name, "aimeat_memory_read_public",
                                       {"gaii": gaii, "key": f"agents.{agent}.statistics.custom.selection"}))
         bench = _mem_value(_aimeat_call(coordinator_name, "aimeat_memory_read_public",
                                         {"gaii": gaii, "key": f"agents.{agent}.statistics.custom.benchmark"}))
     except Exception:  # noqa: BLE001 — reputation is advisory; never break discovery
-        return ""
+        return "", None, None
+    sel = sel if isinstance(sel, dict) else None
+    bench = bench if isinstance(bench, dict) else None
     parts: list[str] = []
-    if isinstance(sel, dict) and sel.get("normalized") is not None:
+    if sel and sel.get("normalized") is not None:
         conf = "confident" if sel.get("confident") else f"unproven, n={sel.get('n')}"
         parts.append(f"live {sel.get('context')} {sel.get('normalized')} ({conf})")
-    if isinstance(bench, dict) and bench.get("normalized") is not None:
+    if bench and bench.get("normalized") is not None:
         vs = bench.get("vs_baseline") or {}
         flag = f" vs {vs.get('base')}=PROMOTE" if vs.get("promote") else (f" vs {vs.get('base')}" if vs.get("base") else "")
         dom = bench.get("by_domain") or {}
         best = (f"; best@{max(dom, key=dom.get)}" if dom and any(v is not None for v in dom.values()) else "")
         parts.append(f"benchmark {bench.get('dimension')} {bench.get('normalized')}{flag}{best}")
-    return ("   [" + " · ".join(parts) + "]") if parts else "   [no reputation yet]"
+    suffix = ("   [" + " · ".join(parts) + "]") if parts else "   [no reputation yet]"
+    return suffix, sel, bench
 
 
 # A weak coordinator model sometimes copies its OWN standing directives into a delegated worker's
@@ -343,9 +353,28 @@ def make_workflow_tools(
         if gaii_map is None:
             gaii_map = state["gaii_map"] = _gaii_map(coordinator_name)
         lines = []
+        under: list[tuple[str, int]] = []  # under-sampled-but-plausible crews → explore candidates
         for c in roster:
-            rep = _reputation_suffix(coordinator_name, c["agent"], gaii_map.get(c["agent"]))
-            lines.append(f"- {c['agent']}: {c['summary']}{rep}")
+            suffix, sel, bench = _reputation(coordinator_name, c["agent"], gaii_map.get(c["agent"]))
+            lines.append(f"- {c['agent']}: {c['summary']}{suffix}")
+            n = int((sel or {}).get("n") or 0)
+            confident = bool(sel and sel.get("confident"))
+            # A crew worth exploring has SOME positive signal (a benchmark, i.e. it won an A/B, or live
+            # traction) yet is not confident yet. A cold crew with neither is left alone (avoid feeding junk).
+            if (bench is not None or n > 0) and not confident:
+                under.append((c["agent"], n))
+        # Hybrid explore: a deterministic counter DECIDES which round explores and which crew gets it;
+        # the LLM still matches lane/intent. Every ~EXPLORE_EVERY-th discovery becomes an explore turn.
+        state["disc_seq"] = state.get("disc_seq", 0) + 1
+        explore_line = ""
+        if under and state["disc_seq"] % EXPLORE_EVERY == 0:
+            pick, pn = under[(state["disc_seq"] // EXPLORE_EVERY - 1) % len(under)]
+            explore_line = (
+                f"\n\n⚡ EXPLORE QUOTA ACTIVE this round: if the task matches its lane, delegate it to "
+                f"**{pick}** (unproven, n={pn}) to gather field evidence — an under-sampled crew earns (or "
+                f"loses) its place only by getting rated. Once it is confident it competes on pure score. "
+                f"Still honor explicit task intent if it clearly points elsewhere."
+            )
         return (
             "Available crews (reputation in [brackets]: 'live' = field score from real ratings, "
             "'benchmark' = lab A/B result; both normalized 0-1, higher is better):\n"
@@ -354,6 +383,7 @@ def make_workflow_tools(
             "If a strong candidate has no live data yet but a benchmark marked PROMOTE, give it the "
             "subtask to gather field evidence (that is how a new/evolved crew earns its track record). "
             "Honor explicit task intent over the score when they conflict (e.g. a deliberately simple ask)."
+            + explore_line
         )
 
     def _dispatch_one(target_agent: str, title: str, instruction: str):
