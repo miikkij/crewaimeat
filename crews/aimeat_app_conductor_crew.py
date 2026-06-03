@@ -30,6 +30,7 @@ from crewai import Agent, Task
 
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 from crewaimeat.author_tool import make_author_tools
+from crewaimeat.scheduler import make_schedule_tools
 from crewaimeat.workflow import make_workflow_tools
 
 AGENT_NAME = "aimeat-app-conductor"
@@ -58,12 +59,16 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
         coordinator_name=AGENT_NAME, run_id=tid, task_id=tid, tag="workflow", timeout=2400,
     )
     deleg = [t for t in wf_tools if getattr(t, "name", "") in ("discover_crews", "delegate_and_wait", "rate_delegated_work")]
+    # Scheduler: set up AIMEAT server-run schedules (the node owns the cron clock; fires offline; owner
+    # controls them in Profile -> Scheduler). For recurring/automated deliverables (daily pipelines, etc.).
+    sched_tools = make_schedule_tools(AGENT_NAME)
 
     conductor = Agent(
         role="AIMEAT App Delivery Lead",
         goal=(
             "Deliver a WORKING AIMEAT app from the user's idea by orchestrating specialists and "
-            "enforcing the deterministic authed render gate — never completing an app that fails it."
+            "enforcing the deterministic authed render gate — never completing an app that fails it. When "
+            "the idea is RECURRING/automated, set it up on the AIMEAT scheduler so the node runs it on a cron."
         ),
         backstory=(
             "You are a delivery lead, not a coder. You first ROUTE the idea to the right specialist: by "
@@ -78,9 +83,14 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "never a pass you did not get. You do NOT forge when aimeat-app-builder can do the job. "
             "Finally, once the gate resolves you RATE the crew you delegated to, grounded in the objective "
             "verify outcome (PASS first-try=5 … never passed=1) — never opinion — so the fleet learns who "
-            "actually delivers working apps."
+            "actually delivers working apps. When a request is RECURRING or automated (a daily/periodic "
+            "pipeline, a scheduled refresh), you set it up on the AIMEAT scheduler with schedule_create so "
+            "the NODE runs it on a cron clock (fires even when agents are offline; the owner controls it in "
+            "Profile -> Scheduler) — pick the lightest kind that fits: 'extension' (0 tokens) or 'ai' "
+            "(server-side, owner's OpenRouter key) over 'agent_task' when no agent reasoning is needed; "
+            "stage multi-step pipelines by cron times and connect them through named memory keys."
         ),
-        tools=[*verify_tools, *deleg],
+        tools=[*verify_tools, *deleg, *sched_tools],
         llm=ctx.llm,
         max_iter=40,
         allow_delegation=False,
