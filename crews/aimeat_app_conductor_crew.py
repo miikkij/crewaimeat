@@ -1,7 +1,9 @@
 """aimeat-app-conductor — the delivery lead of the AIMEAT SDLC crew family (direct-build).
 
-It does NOT build apps itself. It ORCHESTRATES: delegates the build to aimeat-app-builder (which
-AUTHORS a cortex + app directly and installs/publishes them), then runs the DETERMINISTIC authed
+It does NOT build apps itself. It ORCHESTRATES: it ROUTES the idea to the right specialist (by default
+aimeat-app-builder, which AUTHORS a cortex + app directly and installs/publishes them; or — only when the
+idea needs a genuinely new KIND of building no existing crew can do — it ORDERS aimeat-crew-forge to
+forge a new specialist for that domain, then delegates to it). It then runs the DETERMINISTIC authed
 gate (verify_render — logs in as the owner and confirms real content renders with no console errors),
 and if it fails routes the exact fix to aimeat-cortex-fixer and re-verifies (a bounded loop). Only an
 app that PASSES the authed gate is completed — so a broken app never ships "green".
@@ -12,7 +14,8 @@ LLM judgement; the conductor enforces it and routes fixes to the repair speciali
 
 Prerequisites (human-gated, one time):
   - Onboard:  npx aimeat@latest connect add --agent aimeat-app-conductor --mode task-runner --url <node> --owner <you>
-  - Assign the shared tag "workflow" so it can delegate to aimeat-app-builder + aimeat-cortex-fixer.
+  - Assign the shared tag "workflow" so it can delegate to aimeat-app-builder + aimeat-cortex-fixer +
+    aimeat-crew-forge (the forge must also carry the "workflow" tag to be reachable for new-domain work).
   - The owner's app-login creds must be in .env (AIMEAT_APP_LOGIN_USER / AIMEAT_APP_LOGIN_PASSWORD) so
     verify_render can log in; the cortex-install grant must be deployed for the builder/fixer.
 Run:  uv run python crews/aimeat_app_conductor_crew.py
@@ -31,10 +34,12 @@ AGENT_NAME = "aimeat-app-conductor"
 README = """[[FIGLET:slant]["aimeat app conductor"]]
 
 I am the delivery lead for building AIMEAT apps. I don't write the app — I orchestrate it:
-delegate the build to **aimeat-app-builder** (which authors a cortex + app directly), then run the
-**deterministic authed gate** (`verify_render`: a real headless login as the owner + a check that the
-dashboard renders real content with no console errors). If it fails I route the exact fix to
-**aimeat-cortex-fixer** and re-verify. I only mark a project done when the gate is green.
+I ROUTE the idea to the right specialist (by default **aimeat-app-builder**, which authors a cortex +
+app directly; or, when the idea needs a genuinely new KIND of building, I ORDER **aimeat-crew-forge** to
+forge a new specialist for that domain and delegate to it). Then I run the **deterministic authed gate**
+(`verify_render`: a real headless login as the owner + a check that the app renders real content with no
+console errors). If it fails I route the exact fix to **aimeat-cortex-fixer** and re-verify. I only mark
+a project done when the gate is green.
 
 Give me a task whose description is the app idea, e.g.:
   "A dashboard listing my fleet's agents and each agent's latest task output, with a topic filter."
@@ -58,12 +63,16 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "enforcing the deterministic authed render gate — never completing an app that fails it."
         ),
         backstory=(
-            "You are a delivery lead, not a coder. You delegate the build to aimeat-app-builder, then "
-            "you INDEPENDENTLY verify the result with verify_render (a real logged-in browser render — "
-            "you never trust 'looks done'). When it fails you route the precise fix to "
-            "aimeat-cortex-fixer and re-verify. You stop only when the gate is green or you have "
-            "exhausted a bounded number of fix rounds — and then you report the truth, never a pass you "
-            "did not get."
+            "You are a delivery lead, not a coder. You first ROUTE the idea to the right specialist: by "
+            "default aimeat-app-builder (it builds the AIMEAT-native way — ONE cortex + ONE app, plus a "
+            "server-side extension when needed — and covers most apps). If, and ONLY if, the idea needs a "
+            "genuinely NEW kind of building that no existing crew can do, you ORDER aimeat-crew-forge to "
+            "forge a new specialist for that domain, then delegate to it (a freshly-forged agent needs the "
+            "owner's one-time approval before it can run). Then you INDEPENDENTLY verify the result with "
+            "verify_render (a real logged-in browser render — you never trust 'looks done'). When it fails "
+            "you route the precise fix to aimeat-cortex-fixer and re-verify. You stop only when the gate is "
+            "green or you have exhausted a bounded number of fix rounds — and then you report the truth, "
+            "never a pass you did not get. You do NOT forge when aimeat-app-builder can do the job."
         ),
         tools=[*verify_tools, *deleg],
         llm=ctx.llm,
@@ -75,21 +84,42 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     plan = Task(
         description=(
             f"{ctx.today}\n\n"
-            "PHASE 1 — DELEGATE THE BUILD. The app to build:\n\n"
+            "PHASE 1 — ROUTE, then DELEGATE THE BUILD. The app to build:\n\n"
             f"<<APP IDEA>>\n{ctx.prompt}\n<</APP IDEA>>\n\n"
-            "1. (Optional) discover_crews to confirm aimeat-app-builder is available.\n"
-            "2. delegate_and_wait(\"aimeat-app-builder\", \"<short title>\", \"<instruction>\") — the "
-            "instruction is ONE self-contained string: the full app idea above, plus: 'Build it the "
-            "direct AIMEAT-native way — ONE cortex + ONE app HTML, no generator. Report the app FILENAME "
-            "(e.g. something.html), the cortex name, the live inline URL, and the agent/topic names you "
-            "seeded.' Call it with exactly three positional string arguments.\n"
-            "3. From the builder's report, EXTRACT verbatim: (a) the app FILENAME (e.g. "
-            "'fleet-activity-dashboard.html'), and (b) a few of the seeded AGENT NAMES (you will pass "
-            "these to verify_render as proof the data renders). You need both in Phase 2."
+            "1. discover_crews — see which AIMEAT-SDLC specialists exist (e.g. aimeat-app-builder for "
+            "cortex+app and extension-backed apps; aimeat-extension-builder; plus any previously-forged "
+            "specialists).\n"
+            "2. ROUTE to the best specialist for THIS idea:\n"
+            "   - DEFAULT = aimeat-app-builder. It builds the AIMEAT-native way (ONE cortex + ONE app HTML, "
+            "plus a server-side extension when the app needs external HTTP / cron / server-validated work). "
+            "It covers the large majority of apps — own-data dashboards, tools, games, AND extension-backed "
+            "apps. Prefer it.\n"
+            "   - Use a different EXISTING specialist only if discover_crews shows one that clearly fits "
+            "better.\n"
+            "   - ONLY IF the idea needs a genuinely NEW kind of building that NO existing crew can do (a "
+            "new DOMAIN/capability, not merely a new app), ORDER one from the forge: "
+            "delegate_and_wait(\"aimeat-crew-forge\", \"Forge <kind> specialist\", \"<ONE string describing "
+            "the specialist to create: its domain, the kind of stack it authors, and that it must use "
+            "make_author_tools + start apps from read_app_template() and end in a verify_render gate>\"). "
+            "The forge designs, writes, validates, registers, and launches the new crew and reports its "
+            "agent name + the ONE owner-approval step. A freshly-forged agent must be APPROVED by the owner "
+            "(device flow) before it can run tasks — so after forging, TRY delegate_and_wait to the new "
+            "agent; if it is not yet reachable/approved, STOP and report: the new specialist was forged, the "
+            "exact approve step, and that the build will run once approved. Do NOT forge when "
+            "aimeat-app-builder can do it — forging is for new domains only.\n"
+            "3. delegate_and_wait(\"<chosen specialist>\", \"<short title>\", \"<instruction>\") — the "
+            "instruction is ONE self-contained string: the full app idea above, plus: 'Build it the direct "
+            "AIMEAT-native way — ONE cortex + ONE app HTML (start the app from read_app_template()), no "
+            "generator. Report the app FILENAME (e.g. something.html), the cortex name, the live inline URL, "
+            "and the agent/topic names you seeded.' Call it with exactly three positional string arguments.\n"
+            "4. From the chosen specialist's report, EXTRACT verbatim: (a) the app FILENAME (e.g. "
+            "'fleet-activity-dashboard.html'), and (b) a few of the seeded AGENT NAMES (you will pass these "
+            "to verify_render as proof the data renders). You need both in Phase 2."
         ),
         expected_output=(
-            "The builder's report, with the app filename, the cortex name, the live URL, and the seeded "
-            "agent names clearly stated."
+            "The routing decision (which specialist, and — if forged — the new agent name + the owner "
+            "approve step), then the chosen specialist's build report with the app filename, the cortex "
+            "name, the live URL, and the seeded agent names clearly stated."
         ),
         agent=conductor,
     )

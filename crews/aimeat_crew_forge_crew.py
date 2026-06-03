@@ -43,16 +43,18 @@ _SHAPE = '''def build_domain(ctx):
     specialist = Agent(
         role="<AIMEAT ... Specialist>",
         goal="<author + install + publish + verify the ... for the user's idea>",
-        backstory="<expert; uses make_author_tools; loads aimeat-auth.js+aimeat-data.js+the cortex+every "
-                  "AIMEAT.<lib> the cortex uses; boot = (await AIMEAT.auth.login()) || AIMEAT.auth.getSession(); "
-                  "for server logic authors an extension (export default async function(ctx,input))>",
+        backstory="<expert; uses make_author_tools; STARTS the app HTML from read_app_template() (correct auth "
+                  "wiring: loads aimeat-auth.js+aimeat-data.js, mounts the login bar, runs startApp(session) ONLY "
+                  "after await AIMEAT.auth.login() — no boot-order race); inside boot() adds loadScript for the "
+                  "cortex + every AIMEAT.<lib> it uses; for server logic authors an extension "
+                  "(export default async function(ctx,input))>",
         tools=[*author_tools, *deleg], llm=ctx.llm, max_iter=60, allow_delegation=False, verbose=True)
     design = Task(description=f"{ctx.today}\\n\\nDESIGN. <<IDEA>>\\n{ctx.prompt}\\n<</IDEA>>\\n"
-                  "read_lib_api + read_node_api + read_cortex_example; decide cortex(+extension?)+app; key map.",
+                  "read_lib_api + read_app_template + read_node_api + read_cortex_example; decide cortex(+extension?)+app; key map.",
                   expected_output="a compact design", agent=specialist)
-    build = Task(description="BUILD. Author ONE cortex (+ extension if server logic is needed) + ONE app that "
-                 "loads aimeat-auth.js, aimeat-data.js, every needed AIMEAT.<lib>, and the cortex; install_cortex "
-                 "(install_extension for server logic); publish_app.",
+    build = Task(description="BUILD. Author ONE cortex (+ extension if server logic is needed) + ONE app STARTED "
+                 "from read_app_template() (keep its await-login/startApp boot order; inside boot() add loadScript "
+                 "for the cortex + every needed AIMEAT.<lib>); install_cortex (install_extension for server logic); publish_app.",
                  expected_output="cortex/extension installed + app published with the live URL", agent=specialist, context=[design])
     verify = Task(description="VERIFY. verify_render(filename, expect_csv) until VERIFY PASS; fix + retry <=3.",
                   expected_output="VERIFY PASS + live URL", agent=specialist, context=[build])
@@ -66,12 +68,13 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
         goal="Design a new AIMEAT-SDLC specialist crew (a build_domain on the direct-build toolkit) for the requested domain",
         backstory=(
             "You design focused AIMEAT app/extension builder crews. Every crew you design uses "
-            "make_author_tools(AGENT_NAME, task_id=tid) — read_lib_api, read_node_api, read_cortex_example, "
-            "install_cortex, install_extension, invoke_extension, publish_app, seed_memory, app_inline_url, "
-            "verify_render — to author, install, publish and VERIFY real AIMEAT apps directly (no generator). "
-            "You know the gotchas cold: the app must loadScript aimeat-auth.js + aimeat-data.js + the cortex "
-            "+ every AIMEAT.<lib> the cortex uses; the boot line is "
-            "`let session = (await AIMEAT.auth.login()) || AIMEAT.auth.getSession();`; server-side logic is an "
+            "make_author_tools(AGENT_NAME, task_id=tid) — read_lib_api, read_cortex_example, read_app_template, "
+            "read_node_api, read_app_stack, install_cortex, install_extension, invoke_extension, publish_app, "
+            "seed_memory, app_inline_url, verify_render — to author, install, publish and VERIFY real AIMEAT apps "
+            "directly (no generator). You know the gotchas cold: every app STARTS from read_app_template() (it "
+            "wires auth correctly — loads aimeat-auth.js + aimeat-data.js, mounts the login bar, and runs "
+            "startApp(session) ONLY after `await AIMEAT.auth.login()`, so there is no boot-order race); inside "
+            "boot() you add a loadScript for the cortex + every AIMEAT.<lib> it uses; server-side logic is an "
             "extension (one top-level `export default async function (ctx, input)`); the build is not done "
             "until verify_render returns VERIFY PASS."
         ),

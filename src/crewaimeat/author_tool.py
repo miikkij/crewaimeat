@@ -51,6 +51,36 @@ def _check_js(code: str) -> tuple[bool, str]:
     return cortex_syntax_ok(code or "")
 
 
+def _verify_fail_hint(console_errors: Any, failed_resources: Any) -> str:
+    """Map a KNOWN verify-render failure signature to a targeted fix that names the RIGHT artifact, so the
+    agent's fix-loop converges instead of thrashing (observed: an edit reintroduced the boot-order race and
+    the agent kept reinstalling the cortex when the bug was in the app HTML). Returns '' if no signature
+    matches (then the agent diagnoses from the raw error as before)."""
+    blob = " ".join(str(x) for x in (console_errors or [])).lower()
+    fr = " ".join(str(x) for x in (failed_resources or [])).lower()
+    if "not logged in" in blob or "auth.login() first" in blob or "call aimeat.auth.login" in blob:
+        return ("HINT: BOOT-ORDER race in the APP HTML — a data/cortex/history call runs BEFORE "
+                "`await AIMEAT.auth.login()` resolves. Fix the APP HTML (run every data/cortex call inside "
+                "startApp(session) / after the awaited login), NOT the cortex; do not reinstall the cortex "
+                "for this error. read_app_template() shows the correct boot()/startApp wiring.")
+    if "reading 'then'" in blob or 'reading "then"' in blob:
+        return ("HINT: getSession() is SYNCHRONOUS — never call .then() on it. Boot with "
+                "`const session = await AIMEAT.auth.login();` (the read_app_template() pattern).")
+    if ("cannot read properties of undefined" in blob or "is not defined" in blob
+            or "is not a function" in blob):
+        return ("HINT: a needed lib/cortex global is UNDEFINED — the app used AIMEAT.<ns> (or a cortex "
+                "method) without loadScript-ing that lib first. In boot(), loadScript the EXACT cortex lib "
+                "URL install_cortex reported AND every AIMEAT.<lib> you use, BEFORE startApp uses them. "
+                "Fix the APP HTML, not the cortex.")
+    if "/v1/cortex/" in fr or "/v1/libs/" in fr:
+        return ("HINT: a loadScript URL 404/403'd — a lib/cortex URL is wrong. Use the EXACT URL "
+                "install_cortex reported (/v1/cortex/<name>/libs/<file>.js) and the /v1/libs/<lib>.js paths.")
+    if " 405" in blob or "method not allowed" in blob:
+        return ("HINT: 405 = cortex<->extension METHOD mismatch. Align the cortex's callExt HTTP method "
+                "with the extension action's method (the action is `export default async function(ctx,input)`).")
+    return ""
+
+
 def _extract_inline_js(html: str) -> str:
     """Concatenate the contents of every <script>…</script> with no src, for a syntax check."""
     import re
@@ -110,6 +140,40 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
         if not _ok(ex):
             return f"export failed for {target}: {_err(ex)}"
         return (ex.get("data") or {}).get("manifest", "(no manifest in export)")
+
+    @tool("read_app_template")
+    def read_app_template() -> str:
+        """Return the CANONICAL AIMEAT app starter template (fetched LIVE from the node's llms.txt) — the
+        HTML skeleton EVERY app should start from. It wires AIMEAT auth correctly, so it AVOIDS the
+        boot-order race ('Not logged in. Call AIMEAT.auth.login() first.'):
+          - loadScript('/v1/libs/aimeat-auth.js') + ('/v1/libs/aimeat-data.js') in boot(),
+          - mounts the login bar: AIMEAT.auth.mountLoginButton('#header-auth', {onLogin, onLogout}),
+          - runs your app (startApp(session)) ONLY AFTER `const session = await AIMEAT.auth.login();`.
+        Also returns the SDK Libraries table (which lib for what) + the Key rules (session.fetch returns
+        ALREADY-PARSED JSON — never call .json(); use relative '/' paths; no manual token/URL fields).
+        START HERE for every app: paste the skeleton, then put your UI + logic inside startApp(session),
+        and add any extra AIMEAT.<lib> loadScript lines you need. For a clean, no-login-bar app you MAY
+        drop the <nav> auth bar (and mountLoginButton), but KEEP the boot()/await-login/startApp order so
+        no data call runs before the session exists."""
+        if not base:
+            return "ERROR: no node url (agent token missing?)"
+        tok2, _u = _token(agent_name, owner)
+        try:
+            r = requests.get(base + "/llms.txt", headers={"Authorization": f"Bearer {tok2}"},
+                             timeout=AUTHOR_TIMEOUT)
+        except Exception as e:  # noqa: BLE001
+            return f"ERROR fetching llms.txt: {e!r}"
+        lines = (r.text or "").splitlines()
+        start = next((i for i, l in enumerate(lines)
+                      if "Starter Template" in l and l.lstrip().startswith("#")), None)
+        if start is None:
+            return ("could not find the Starter Template in llms.txt — fetch it yourself with "
+                    "read_node_api('llms.txt') and look for '### Starter Template'.")
+        end = next((i for i in range(start + 1, len(lines))
+                    if lines[i].startswith("### Other options") or lines[i].startswith("## ")), len(lines))
+        section = "\n".join(lines[start:end]).strip()
+        return ("AIMEAT APP STARTER TEMPLATE (start every app from this — it wires auth correctly and "
+                "avoids the boot-order race):\n\n" + section)
 
     @tool("read_node_api")
     def read_node_api(path: str) -> str:
@@ -420,13 +484,16 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
             return f"VERIFY SKIPPED: {r.get('skipped')}"
         if r.get("ok"):
             return f"VERIFY PASS: logged-in render OK, real content present. sample: {str(r.get('content_sample',''))[:220]}"
-        return (f"VERIFY FAIL: login={r.get('login')} | "
-                f"failed_resources(404/403/5xx)={r.get('failed_resources')} | "
-                f"console_errors={r.get('console_errors')} | raw_i18n_keys={r.get('raw_i18n_keys')} | "
-                f"content_sample={str(r.get('content_sample',''))[:200]}")
+        hint = _verify_fail_hint(r.get("console_errors"), r.get("failed_resources"))
+        msg = (f"VERIFY FAIL: login={r.get('login')} | "
+               f"failed_resources(404/403/5xx)={r.get('failed_resources')} | "
+               f"console_errors={r.get('console_errors')} | raw_i18n_keys={r.get('raw_i18n_keys')} | "
+               f"content_sample={str(r.get('content_sample',''))[:200]}")
+        return msg + (f"\n{hint}" if hint else "")
 
-    tools = [read_lib_api, read_cortex_example, read_node_api, read_app_stack, install_cortex,
-             install_extension, invoke_extension, publish_app, seed_memory, app_inline_url, verify_render]
+    tools = [read_lib_api, read_cortex_example, read_app_template, read_node_api, read_app_stack,
+             install_cortex, install_extension, invoke_extension, publish_app, seed_memory,
+             app_inline_url, verify_render]
     # Side-effecting / live-state tools must NOT be cached. crewai caches tool results by args, which
     # would serve a STALE verdict across fix-loop iterations (observed: verify_render "(from cache)"
     # returning the pre-fix FAIL after a re-publish). The read-only discovery tools may cache.

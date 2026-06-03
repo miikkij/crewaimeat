@@ -24,12 +24,22 @@ EXTENSION (server WASM)  → external HTTP, cron, server-validated writes, task 
 
 ## Build flow (what the builder agent does)
 1. **read_lib_api('aimeat-auth')** + **read_lib_api('aimeat-data')** — author against the REAL methods.
+1b. **read_app_template()** — the canonical AIMEAT app skeleton (fetched live from `llms.txt`). **Start
+   every app from it.** It already wires auth right — loads `aimeat-auth.js` + `aimeat-data.js`, mounts the
+   login bar (`AIMEAT.auth.mountLoginButton('#header-auth', {onLogin, onLogout})`), and runs
+   `startApp(session)` **only after** `const session = await AIMEAT.auth.login();`. That ordering PREVENTS
+   the boot-order race (`Not logged in. Call AIMEAT.auth.login() first.`). Both styles are supported: keep
+   the template's `<nav>` login bar (recommended), or for a clean no-login-bar look drop the `<nav>` bar +
+   `mountLoginButton` but **keep** the `boot()`/await-login/`startApp` order. Proven end-to-end 2026-06-03.
 2. **read_cortex_example()** — copy the EXACT manifest schema.
 3. **Design the memory key map** (the contract with the data-producing agents): ONE prefix, flat shape,
    e.g. `activity.<agentName>.<id>` = `{agentName, topic, latestOutput, writtenAt(ISO)}`.
 4. **Author the cortex lib** (IIFE on `AIMEAT.<name>`, uses `AIMEAT.data` directly) + its manifest YAML.
 5. **install_cortex(name, manifest_yaml, libs_json)** — syntax-gated; installs + activates.
-6. **Author the app HTML** (loads auth+data+cortex, restores session, renders via cortex methods only).
+6. **Author the app HTML** — start from the step-1b template; in `boot()` add a `loadScript` for the cortex
+   + every `AIMEAT.<lib>` it uses; put all rendering inside `startApp(session)`, calling cortex methods only
+   (plus `session.fetch(path)` for raw reads — returns parsed JSON, no `.json()`). The template's
+   tailwind/daisyui CDN is fine (CSP permits it); never use `eval`/`new Function` (unsafe-eval is blocked).
 7. **publish_app(...)** — inline publish; returns the live URL.
 8. **seed_memory(...)** — a few example entries so it shows content + demonstrates the contract.
 9. **Verify**: delegate an authed browser walkthrough to **web-tester** (logs in, checks real content).
