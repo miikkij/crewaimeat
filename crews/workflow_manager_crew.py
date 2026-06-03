@@ -18,6 +18,7 @@ from __future__ import annotations
 from crewai import Agent, Task
 
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
+from crewaimeat.scheduler import make_schedule_tools
 from crewaimeat.workflow import make_workflow_tools
 
 AGENT_NAME = "workflow-manager"
@@ -51,6 +52,9 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
         llm=ctx.llm,         # the grounded judge that rates each worker's deliverable
         rate_workers=True,   # coordinator -> worker reputation rating (AIMEAT POST /tasks/:id/rate)
     )
+    # Scheduler: for RECURRING goals (daily pipelines), set up AIMEAT server-run schedules (the node
+    # owns the cron clock; fires offline; owner controls them in Profile -> Scheduler).
+    sched_tools = make_schedule_tools(AGENT_NAME)
 
     dispatcher = Agent(
         role="Workflow Dispatcher",
@@ -60,7 +64,7 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "decide who should do what, hand each crew a complete instruction, and gather their outputs. "
             "You delegate everything first, then collect once, so the crews work in parallel."
         ),
-        tools=tools,
+        tools=[*tools, *sched_tools],
         llm=ctx.llm,
         verbose=True,
     )
@@ -97,9 +101,28 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "5. If a needed capability has NO matching crew, call commission_crew(agent_name, capability) "
             "to have crew-forge build one, then wait_for_crew(agent_name), then delegate to it. "
             "Only do this for a genuine gap — prefer existing crews.\n"
+            "5b. RECURRING / SCHEDULED goals (e.g. 'every morning fetch news and write an editorial'): do "
+            "NOT run the pipeline yourself now — the AIMEAT scheduler runs it on the node's cron clock "
+            "(fires even when crews are offline; the owner controls it in Profile -> Scheduler). Steps: "
+            "(a) ENSURE the crews exist — for content production prefer commissioning DEDICATED crews from "
+            "crew-forge (e.g. a multi-category WRITER that reads raw material from owner memory and writes "
+            "own-words articles to PUBLIC keys, and a separate EDITORIAL writer that combines the articles "
+            "into a styled editorial); commission_crew + wait_for_crew for any that are missing (forged "
+            "crews come up in task-runner mode, so the scheduler can run them unattended). (b) For each "
+            "stage call schedule_create(kind='agent_task', target_agent=<crew>, cron=<5-field>, "
+            "timezone='Europe/Helsinki', display_name, purpose, task_title, task_description). The "
+            "task_description is the per-fire instruction: name the EXACT memory keys to READ and the EXACT "
+            "keys to WRITE (with the visibility — articles/editorials PUBLIC), the category, and the "
+            "persona/style for that run (e.g. a Spider Jerusalem gonzo voice for the editorial). Schedules "
+            "have NO run-after-dependency: STAGE by cron times (fetch earliest, writers later, editorial "
+            "last) with buffer, and tell each downstream stage to READ its inputs first and STOP without "
+            "fabricating if they are missing. (c) Report the schedules you created (schedule_list) and any "
+            "crews you commissioned (the owner approves new ones in the dashboard; once approved the node "
+            "runs them). Use schedule_update (enabled=false to pause) / schedule_delete to adjust.\n"
             "6. After delegating every parallel subtask, call collect_results ONCE to gather their outputs "
             "(results you already got from delegate_and_wait are included automatically).\n"
-            "Then report all the collected materials verbatim as your result."
+            "Then report all the collected materials verbatim as your result (or, for a scheduling goal, "
+            "the schedules + commissioned crews you set up)."
         ),
         expected_output="The collected materials from every delegated crew.",
         agent=dispatcher,

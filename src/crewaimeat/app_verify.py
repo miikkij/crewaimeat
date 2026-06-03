@@ -193,6 +193,11 @@ def _split_failed_resources(failed: list[str]) -> "tuple[list[str], list[str]]":
             continue
         seen.add(k)
         if k.startswith("404 ") and "/v1/memory/" in k:
+            benign.append(k)  # unset-key read
+        elif "/v1/auth/refresh" in k:
+            # The auth lib's BACKGROUND token-refresh. In a verify run we log in fresh with
+            # loginWithPassword (no refresh-token flow), so this 401s — but the session is valid and the
+            # app renders. Benign noise, not an app failure (an agent can't suppress it from app code).
             benign.append(k)
         else:
             real.append(k)

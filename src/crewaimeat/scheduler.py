@@ -37,10 +37,11 @@ def make_schedule_tools(agent_name: str, owner: str | None = None) -> list:
     """Return the scheduler crewai tools (schedule_create / list / update / delete) for this agent."""
     owner = owner or _discover_owner(agent_name)
 
-    def _req(method: str, path: str, body: dict | None = None):
-        tok, url = _token(agent_name, owner)
+    def _req(method: str, path: str, body: dict | None = None, as_agent: str | None = None):
+        who = as_agent or agent_name
+        tok, url = _token(who, owner)
         if not tok or not url:
-            return None, "no token/url for this agent (is it registered + approved?)"
+            return None, f"no token/url for '{who}' (is it registered + approved? same owner?)"
         base = url.rstrip("/")
         try:
             r = requests.request(method, f"{base}{path}",
@@ -91,11 +92,16 @@ def make_schedule_tools(agent_name: str, owner: str | None = None) -> list:
         body: dict = {"kind": kind, "cron": cron, "display_name": display_name, "purpose": purpose}
         if timezone:
             body["timezone"] = timezone
+        post_as = agent_name  # ai/extension run server-side, created under this agent
         if kind == "agent_task":
             if not task_title:
                 return "FAILED: agent_task needs task_title (+ task_description)."
-            body["target_agent"] = target_agent or agent_name
             body["task_template"] = {"title": task_title, "description": task_description}
+            # Cross-agent dispatch: the TARGET is the URL path. The node resolves it under the CALLER's
+            # own owner, so this agent's OWN token may schedule a same-owner sibling (no token-borrow).
+            # AIMEAT-confirmed + deployed 2026-06-03 (incl. createdByAgent fix → the creating agent can
+            # also list/trigger/manage it). REST also accepts flat task_title/task_description now.
+            post_as = target_agent or agent_name
         elif kind == "ai":
             if not prompt:
                 return "FAILED: ai kind needs a prompt."
@@ -116,13 +122,14 @@ def make_schedule_tools(agent_name: str, owner: str | None = None) -> list:
             body["action_id"] = action_id
         else:
             return f"FAILED: unknown kind '{kind}'. Use 'extension', 'ai', or 'agent_task'."
-        data, err = _req("POST", f"/v1/agents/{agent_name}/schedules", body)
+        data, err = _req("POST", f"/v1/agents/{post_as}/schedules", body)  # caller's OWN token; path = target
         if err:
-            return f"FAILED to create schedule: {err}"
+            return f"FAILED to create schedule (target '{post_as}'): {err}"
         sched = (data or {}).get("data") or {}
         sid = sched.get("id") or (sched.get("schedule") or {}).get("id")
-        return (f"OK: schedule created (id={sid}, kind={kind}, cron='{cron}' {timezone}). The owner can "
-                f"see/pause/cancel it in Profile -> Scheduler. Use schedule_list to review.")
+        tgt = f", dispatches to '{post_as}'" if kind == "agent_task" else ""
+        return (f"OK: schedule created (id={sid}, kind={kind}, cron='{cron}' {timezone}{tgt}). The owner "
+                f"can see/pause/cancel it in Profile -> Scheduler.")
 
     @tool("schedule_list")
     def schedule_list() -> str:
