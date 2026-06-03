@@ -46,8 +46,9 @@ _SHAPE = '''def build_domain(ctx):
         backstory="<expert; uses make_author_tools; STARTS the app HTML from read_app_template() (correct auth "
                   "wiring: loads aimeat-auth.js+aimeat-data.js, mounts the login bar, runs startApp(session) ONLY "
                   "after await AIMEAT.auth.login() — no boot-order race); inside boot() adds loadScript for the "
-                  "cortex + every AIMEAT.<lib> it uses; for server logic authors an extension "
-                  "(export default async function(ctx,input))>",
+                  "cortex + every AIMEAT.<lib> it uses; AUTHORS STRICTLY AGAINST read_lib_api (it covers /v1/libs AND "
+                  "/lib libs and reports each lib's methods AND emitted EVENT names) — never GUESSES an API/event name; "
+                  "for server logic authors an extension (export default async function(ctx,input))>",
         tools=[*author_tools, *deleg], llm=ctx.llm, max_iter=60, allow_delegation=False, verbose=True)
     design = Task(description=f"{ctx.today}\\n\\nDESIGN. <<IDEA>>\\n{ctx.prompt}\\n<</IDEA>>\\n"
                   "read_lib_api + read_app_template + read_node_api + read_cortex_example; decide cortex(+extension?)+app; key map.",
@@ -56,8 +57,13 @@ _SHAPE = '''def build_domain(ctx):
                  "from read_app_template() (keep its await-login/startApp boot order; inside boot() add loadScript "
                  "for the cortex + every needed AIMEAT.<lib>); install_cortex (install_extension for server logic); publish_app.",
                  expected_output="cortex/extension installed + app published with the live URL", agent=specialist, context=[design])
-    verify = Task(description="VERIFY. verify_render(filename, expect_csv) until VERIFY PASS; fix + retry <=3.",
-                  expected_output="VERIFY PASS + live URL", agent=specialist, context=[build])
+    verify = Task(description="VERIFY. verify_render(filename, expect_csv) until VERIFY PASS; fix + retry <=3. "
+                  "If the app is INTERACTIVE (click/type to make something happen), ALSO verify_interaction("
+                  "filename, steps_json) — drive the core feature with the app's REAL selectors "
+                  "(fill/click/wait_enabled/expect_text) and fix until INTERACTION PASS (render alone gives a "
+                  "FALSE pass on a broken feature). Not done until both gates pass.",
+                  expected_output="verify_render PASS (and verify_interaction PASS for interactive apps) + live URL",
+                  agent=specialist, context=[build])
     return [specialist], [design, build, verify]
 '''
 

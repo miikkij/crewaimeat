@@ -276,3 +276,102 @@ def app_renders_authed(url: str, user: str, password: str, *, settle_ms: int = 4
     return {"ok": ok, "login": login, "console_errors": errors[:6], "failed_resources": fr,
             "benign_404s": benign_404s, "error_in_content": err_in_content, "raw_i18n_keys": raw_keys,
             "content_sample": text[:400]}
+
+
+def app_interaction_ok(url: str, user: str, password: str, steps: list, *, settle_ms: int = 3000,
+                       step_timeout_ms: int = 12000) -> dict:
+    """DRIVE a real authed interaction through the app and assert outcomes — the test render-only checks
+    cannot do (render != works). This is what would have caught the broken realtime chat: verify_render
+    PASSed it, but you could not actually send a message.
+
+    Logs in as the owner (loginWithPassword in-page), reloads so the app boots authed, then runs `steps`
+    in order. Each step is a dict with `do` + selectors/values. Supported actions:
+      {"do":"fill","selector":"#id","value":"x"}        — type into an input
+      {"do":"click","selector":"#id"}                    — click an element
+      {"do":"wait_enabled","selector":"#id"}             — wait until el.disabled === false
+      {"do":"expect_enabled","selector":"#id"}           — same, as an assertion
+      {"do":"wait","ms":1500}                             — pause
+      {"do":"expect_text","selector":"#id","text":"x"}   — assert text appears in the element
+    Returns {ok, login, failed_step (index or None), detail, console_errors, steps_run}. ok = login
+    succeeded AND every step passed AND no console errors. Requires playwright. Selectors use Playwright
+    syntax (CSS); interactions go through CDP so the inline-app CSP (no unsafe-eval) does not block them."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as e:  # noqa: BLE001
+        return {"ok": None, "skipped": f"playwright not installed: {e}"}
+    if not isinstance(steps, list) or not steps:
+        return {"ok": None, "skipped": "no interaction steps provided"}
+
+    errors: list[str] = []
+    login = "(not attempted)"
+    failed_step = None
+    detail = ""
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+        page.on("pageerror", lambda e: errors.append(f"PAGEERROR: {e}"))
+        try:
+            page.goto(url, wait_until="networkidle", timeout=45000)
+            for _ in range(30):
+                try:
+                    if page.evaluate("() => !!(window.AIMEAT && window.AIMEAT.auth)"):
+                        break
+                except Exception:  # noqa: BLE001
+                    pass
+                page.wait_for_timeout(500)
+            login = page.evaluate(
+                "async ([u, pw]) => { try { await AIMEAT.auth.loginWithPassword(u, pw); return 'ok'; }"
+                " catch (e) { return 'ERR: ' + (e && e.message || e); } }", [user, password])
+            page.reload(wait_until="networkidle")
+            page.wait_for_timeout(settle_ms)
+            for i, step in enumerate(steps):
+                if not isinstance(step, dict):
+                    failed_step, detail = i, "step is not an object"; break
+                act = str(step.get("do", "")).lower()
+                sel = step.get("selector")
+                try:
+                    if act == "fill":
+                        page.fill(sel, str(step.get("value", "")), timeout=step_timeout_ms)
+                    elif act == "click":
+                        page.click(sel, timeout=step_timeout_ms)
+                    elif act == "wait":
+                        page.wait_for_timeout(int(step.get("ms", 1000)))
+                    elif act in ("wait_enabled", "expect_enabled"):
+                        en, waited = False, 0
+                        while waited < step_timeout_ms:
+                            try:
+                                if page.eval_on_selector(sel, "el => !el.disabled") is True:
+                                    en = True; break
+                            except Exception:  # noqa: BLE001
+                                pass
+                            page.wait_for_timeout(500); waited += 500
+                        if not en:
+                            failed_step, detail = i, f"{sel} not enabled within timeout"; break
+                    elif act == "expect_text":
+                        want, found, waited = str(step.get("text", "")), False, 0
+                        while waited < step_timeout_ms:
+                            try:
+                                t = page.locator(sel).first.inner_text()
+                                if want in (t or ""):
+                                    found = True; break
+                            except Exception:  # noqa: BLE001
+                                pass
+                            page.wait_for_timeout(500); waited += 500
+                        if not found:
+                            failed_step, detail = i, f"'{want}' not found in {sel}"; break
+                    else:
+                        failed_step, detail = i, f"unknown action '{act}'"; break
+                except Exception as e:  # noqa: BLE001
+                    failed_step, detail = i, f"{act} {sel} raised: {e}"; break
+        except Exception as e:  # noqa: BLE001
+            failed_step, detail = -1, f"nav/login error: {e}"
+        browser.close()
+
+    # The steps passing IS the functional proof. Drop URL-less "Failed to load resource" console noise
+    # (e.g. a benign 401 on /v1/auth/refresh, the auth lib's background refresh) so it doesn't fail a
+    # working interaction — real JS errors (TypeError / is not defined / PAGEERROR) are kept.
+    real_errors = [e for e in errors if "Failed to load resource" not in e]
+    ok = (login == "ok") and failed_step is None and not real_errors
+    return {"ok": ok, "login": login, "failed_step": failed_step, "detail": detail,
+            "console_errors": real_errors[:6], "steps_run": len(steps)}

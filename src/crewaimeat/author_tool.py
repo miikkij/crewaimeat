@@ -103,25 +103,39 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
     # ── discovery: read the REAL lib + a real manifest, so the agent doesn't guess ──
     @tool("read_lib_api")
     def read_lib_api(lib_name: str) -> str:
-        """Read the public API surface of an AIMEAT browser lib (its self-documenting header), so you
-        author against the REAL methods rather than stale docs. lib_name e.g. 'aimeat-auth',
-        'aimeat-data', 'aimeat-storage', 'aimeat-ai'. (Reminder from the field: this node's
-        aimeat-auth.js has login()/loginWithPassword()/getSession() — there is NO ensureSession()."""
+        """Read the REAL public API of an AIMEAT browser lib so you author against truth, not guesses.
+        Covers BOTH /v1/libs/<name>.js (aimeat-auth, aimeat-data, aimeat-storage, aimeat-ai,
+        aimeat-agents, …) AND root /lib/<name>.js libs like 'realtime' (the AimeatRealtime class for
+        rooms / presence / multiplayer). Returns the header doc + method signatures + the EVENT NAMES the
+        lib EMITS (the exact strings you pass to rt.on(...)). Field reminders: aimeat-auth has
+        login()/loginWithPassword()/getSession() (NO ensureSession); AimeatRealtime emits
+        'open'/'close'/'broadcast'/'peer-joined'/'peer-left' (NOT 'connected'/'disconnected'/'message'),
+        you SEND with rt.broadcast(obj), and a RECEIVED 'broadcast' carries your object under .payload."""
         if not base:
             return "ERROR: no node url (agent token missing?)"
         name = lib_name if lib_name.endswith(".js") else f"{lib_name}.js"
-        try:
-            r = requests.get(f"{base}/v1/libs/{name}", timeout=AUTHOR_TIMEOUT)
-        except Exception as e:  # noqa: BLE001
-            return f"ERROR: {e!r}"
-        if r.status_code != 200:
-            return f"HTTP {r.status_code} for /v1/libs/{name}"
-        lines = r.text.splitlines()
-        # header comments + the method signatures (async name( … ) and  name: )
         import re
-        sig = [ln for ln in lines if re.match(r"\s*(async\s+)?[a-zA-Z_]+\s*\(", ln) or re.match(r"\s*[a-zA-Z_]+\s*:\s*", ln)]
-        head = "\n".join(lines[:40])
-        return f"// /v1/libs/{name} — header + method signatures\n{head}\n…\nSIGNATURES:\n" + "\n".join(sig[:60])
+        text, src = "", ""
+        for path in (f"/v1/libs/{name}", f"/lib/{name}"):  # /lib/ covers realtime.js etc.
+            try:
+                r = requests.get(f"{base}{path}", timeout=AUTHOR_TIMEOUT)
+            except Exception as e:  # noqa: BLE001
+                return f"ERROR: {e!r}"
+            if r.status_code == 200:
+                text, src = r.text, path
+                break
+        if not text:
+            return f"HTTP 404 — no lib at /v1/libs/{name} or /lib/{name}"
+        lines = text.splitlines()
+        # header comments + method signatures (async name( … ) / name: ) + EMITTED event names
+        sig = [ln.strip() for ln in lines
+               if re.match(r"\s*(async\s+)?[a-zA-Z_]+\s*\(", ln) or re.match(r"\s*[a-zA-Z_]+\s*:\s*", ln)]
+        events = sorted(set(re.findall(r"_?emit\(['\"]([\w-]+)['\"]", text)))
+        out = f"// {src} — header + API\n" + "\n".join(lines[:40]) + "\n…\nSIGNATURES:\n" + "\n".join(sig[:60])
+        if events:
+            out += ("\n\nEMITTED EVENTS — use these EXACT names in .on(...) (received payload is under "
+                    ".payload for 'broadcast'):\n" + ", ".join(events))
+        return out
 
     @tool("read_cortex_example")
     def read_cortex_example(name: str = "") -> str:
@@ -491,13 +505,52 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
                f"content_sample={str(r.get('content_sample',''))[:200]}")
         return msg + (f"\n{hint}" if hint else "")
 
+    @tool("verify_interaction")
+    def verify_interaction(filename: str, steps_json: str) -> str:
+        """DRIVE a real authed interaction through the published app and assert it actually WORKS — the
+        proof verify_render CANNOT give (render != function). Use this for ANY interactive app (chat,
+        forms, games, realtime) so a render-only PASS can't hide a broken feature. (This is exactly what
+        was missing when a realtime chat PASSed verify_render but you couldn't send a message.)
+
+        steps_json is a JSON array of steps run IN ORDER after logging in as the owner. Actions:
+          {"do":"fill","selector":"#id","value":"x"}      — type into an input
+          {"do":"click","selector":"#id"}                  — click an element
+          {"do":"wait_enabled","selector":"#id"}           — wait until the element is enabled
+          {"do":"expect_enabled","selector":"#id"}         — assert the element is enabled
+          {"do":"wait","ms":1500}                          — pause
+          {"do":"expect_text","selector":"#id","text":"x"} — assert text appears in the element
+        Example (chat): [{"do":"fill","selector":"#new-room-name","value":"t"},
+          {"do":"click","selector":"#btn-create-room"},{"do":"wait_enabled","selector":"#msg-input"},
+          {"do":"fill","selector":"#msg-input","value":"hi"},{"do":"click","selector":"#btn-send"},
+          {"do":"expect_text","selector":"#messages","text":"hi"}].
+        Run it AFTER verify_render PASSes. Returns INTERACTION PASS or INTERACTION FAIL with the failing
+        step index + reason — fix the app and re-run until it PASSes."""
+        import json as _json
+        import os
+        from crewaimeat.app_verify import app_interaction_ok
+        u = os.getenv("AIMEAT_APP_LOGIN_USER")
+        pw = os.getenv("AIMEAT_APP_LOGIN_PASSWORD")
+        if not u or not pw:
+            return "INTERACTION SKIPPED: AIMEAT_APP_LOGIN_USER / AIMEAT_APP_LOGIN_PASSWORD not set in env."
+        try:
+            steps = _json.loads(steps_json)
+        except Exception as e:  # noqa: BLE001
+            return f"INTERACTION FAIL: steps_json is not valid JSON ({e}). Pass a JSON array of step objects."
+        r = app_interaction_ok(f"{base}/v1/apps/{owner}/{filename}?mode=inline", u, pw, steps)
+        if r.get("ok") is None:
+            return f"INTERACTION SKIPPED: {r.get('skipped')}"
+        if r.get("ok"):
+            return f"INTERACTION PASS: all {r.get('steps_run')} steps succeeded (login ok, no console errors)."
+        return (f"INTERACTION FAIL: login={r.get('login')} | failed_step_index={r.get('failed_step')} | "
+                f"{r.get('detail')} | console_errors={r.get('console_errors')}")
+
     tools = [read_lib_api, read_cortex_example, read_app_template, read_node_api, read_app_stack,
              install_cortex, install_extension, invoke_extension, publish_app, seed_memory,
-             app_inline_url, verify_render]
+             app_inline_url, verify_render, verify_interaction]
     # Side-effecting / live-state tools must NOT be cached. crewai caches tool results by args, which
     # would serve a STALE verdict across fix-loop iterations (observed: verify_render "(from cache)"
     # returning the pre-fix FAIL after a re-publish). The read-only discovery tools may cache.
-    for _t in (install_cortex, install_extension, invoke_extension, publish_app, seed_memory, verify_render, read_node_api, read_app_stack):
+    for _t in (install_cortex, install_extension, invoke_extension, publish_app, seed_memory, verify_render, verify_interaction, read_node_api, read_app_stack):
         try:
             _t.cache_function = lambda *_a, **_k: False
         except Exception:  # noqa: BLE001

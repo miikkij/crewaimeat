@@ -53,7 +53,7 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     tid = (ctx.task or {}).get("id") or "manual"
     # The conductor verifies (it does not build): take only the authed render gate + the URL helper.
     author_tools, _state = make_author_tools(AGENT_NAME, task_id=tid)
-    verify_tools = [t for t in author_tools if getattr(t, "name", "") in ("verify_render", "app_inline_url")]
+    verify_tools = [t for t in author_tools if getattr(t, "name", "") in ("verify_render", "verify_interaction", "app_inline_url")]
     wf_tools = make_workflow_tools(
         coordinator_name=AGENT_NAME, run_id=tid, task_id=tid, tag="workflow", timeout=2400,
     )
@@ -117,10 +117,14 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "instruction is ONE self-contained string: the full app idea above, plus: 'Build it the direct "
             "AIMEAT-native way — ONE cortex + ONE app HTML (start the app from read_app_template()), no "
             "generator. Report the app FILENAME (e.g. something.html), the cortex name, the live inline URL, "
-            "and the agent/topic names you seeded.' Call it with exactly three positional string arguments.\n"
+            "and the agent/topic names you seeded. If the app is INTERACTIVE (click/type to make something "
+            "happen), ALSO report a verify_interaction steps_json — a JSON array of fill/click/wait_enabled/"
+            "expect_text steps with the app REAL selectors that proves the core feature works.' Call it with "
+            "exactly three positional string arguments.\n"
             "4. From the chosen specialist's report, EXTRACT verbatim: (a) the app FILENAME (e.g. "
-            "'fleet-activity-dashboard.html'), and (b) a few of the seeded AGENT NAMES (you will pass these "
-            "to verify_render as proof the data renders). You need both in Phase 2."
+            "'fleet-activity-dashboard.html'), (b) a few of the seeded AGENT NAMES (you will pass these to "
+            "verify_render as proof the data renders), and (c) IF interactive, the verify_interaction "
+            "steps_json. You need these in Phase 2."
         ),
         expected_output=(
             "The routing decision (which specialist, and — if forged — the new agent name + the owner "
@@ -138,7 +142,15 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "so the gate proves the real data renders, not just a login screen. It logs in as the owner "
             "and returns 'VERIFY PASS ...' or 'VERIFY FAIL ...' (with login status, console errors, and a "
             "content sample).\n"
-            "2. If VERIFY PASS: report success — the live app URL + 'authed render green'. Done.\n"
+            "2. If VERIFY PASS: for an INTERACTIVE app you are NOT done yet — verify_render only checks the "
+            "initial render and will FALSE-PASS a broken feature (this is exactly how a realtime chat that "
+            "couldn't send a message once shipped green). Run verify_interaction(filename, steps_json) using "
+            "the steps_json the builder reported in Phase 1 (if the app is clearly interactive but the builder "
+            "reported no steps, treat that as a gap: derive steps that exercise the core feature with the app's "
+            "real selectors). The app is GREEN only when verify_render PASSES AND (for interactive apps) "
+            "verify_interaction PASSES. If verify_interaction returns INTERACTION FAIL, treat it like a VERIFY "
+            "FAIL and go to step 3. For a non-interactive app, verify_render PASS alone is green. When green, "
+            "report success + the live app URL.\n"
             "3. If VERIFY FAIL: route the fix. delegate_and_wait(\"aimeat-cortex-fixer\", \"<title>\", "
             "\"<instruction>\") where the instruction is ONE self-contained string containing: the app "
             "FILENAME, the cortex name, and the EXACT verify_render FAIL text (login status + console "
@@ -146,10 +158,12 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "fix→verify loop AT MOST 3 times.\n"
             "4. If still FAIL after 3 rounds: STOP — do not loop further. Report the remaining failure "
             "honestly as a blocker (the exact verify_render reason) and name the likely fix site.\n"
-            "5. RATE the delegatee (verify-grounded reputation). Once the gate has resolved (PASS or "
+            "5. RATE the delegatee (verify-grounded reputation). Once the gates have resolved (green or "
             "exhausted), call rate_delegated_work(target_agent=<the crew you delegated the BUILD to in "
-            "Phase 1>, verify_passed=<true ONLY if the FINAL verify_render returned VERIFY PASS>, "
-            "fix_rounds=<how many fix->reverify cycles you ran; 0 if it passed first-try>). This records a "
+            "Phase 1>, verify_passed=<true ONLY if the app is GREEN: the FINAL verify_render PASSED AND, for "
+            "an interactive app, verify_interaction PASSED — a render-only pass on a broken interactive app "
+            "is NOT green>, fix_rounds=<how many fix->reverify cycles you ran; 0 if it passed first-try>). "
+            "This records a "
             "Quality-tab score grounded in the real render outcome (PASS first-try=5 … never passed=1) and "
             "feeds the builder's reputation. Do this whether the outcome was PASS or FAIL — honest signal "
             "either way. (If you also routed a fix to aimeat-cortex-fixer and it made the app pass, you MAY "
