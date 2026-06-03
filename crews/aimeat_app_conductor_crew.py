@@ -6,7 +6,10 @@ idea needs a genuinely new KIND of building no existing crew can do — it ORDER
 forge a new specialist for that domain, then delegates to it). It then runs the DETERMINISTIC authed
 gate (verify_render — logs in as the owner and confirms real content renders with no console errors),
 and if it fails routes the exact fix to aimeat-cortex-fixer and re-verifies (a bounded loop). Only an
-app that PASSES the authed gate is completed — so a broken app never ships "green".
+app that PASSES the authed gate is completed — so a broken app never ships "green". After the gate
+resolves it RATES the crew it delegated to (coordinator-rates-worker, AIMEAT /tasks/:id/rate), grounded
+in the deterministic verify outcome (PASS first-try=5 … never passed=1) — so the fleet accumulates real
+field reputation for who delivers working apps.
 
 Why a conductor (vs the builder alone): the builder self-verifies, but the conductor is an INDEPENDENT
 second gate + the fix-loop owner. The gate is deterministic CODE (a real headless login + render), not
@@ -54,7 +57,7 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     wf_tools = make_workflow_tools(
         coordinator_name=AGENT_NAME, run_id=tid, task_id=tid, tag="workflow", timeout=2400,
     )
-    deleg = [t for t in wf_tools if getattr(t, "name", "") in ("discover_crews", "delegate_and_wait")]
+    deleg = [t for t in wf_tools if getattr(t, "name", "") in ("discover_crews", "delegate_and_wait", "rate_delegated_work")]
 
     conductor = Agent(
         role="AIMEAT App Delivery Lead",
@@ -72,7 +75,10 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "verify_render (a real logged-in browser render — you never trust 'looks done'). When it fails "
             "you route the precise fix to aimeat-cortex-fixer and re-verify. You stop only when the gate is "
             "green or you have exhausted a bounded number of fix rounds — and then you report the truth, "
-            "never a pass you did not get. You do NOT forge when aimeat-app-builder can do the job."
+            "never a pass you did not get. You do NOT forge when aimeat-app-builder can do the job. "
+            "Finally, once the gate resolves you RATE the crew you delegated to, grounded in the objective "
+            "verify outcome (PASS first-try=5 … never passed=1) — never opinion — so the fleet learns who "
+            "actually delivers working apps."
         ),
         tools=[*verify_tools, *deleg],
         llm=ctx.llm,
@@ -140,12 +146,22 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "fix→verify loop AT MOST 3 times.\n"
             "4. If still FAIL after 3 rounds: STOP — do not loop further. Report the remaining failure "
             "honestly as a blocker (the exact verify_render reason) and name the likely fix site.\n"
-            "5. Final deliverable: the live app URL, the final verify_render verdict (PASS or the "
-            "remaining failure), and a short orchestration summary (build + any fix rounds)."
+            "5. RATE the delegatee (verify-grounded reputation). Once the gate has resolved (PASS or "
+            "exhausted), call rate_delegated_work(target_agent=<the crew you delegated the BUILD to in "
+            "Phase 1>, verify_passed=<true ONLY if the FINAL verify_render returned VERIFY PASS>, "
+            "fix_rounds=<how many fix->reverify cycles you ran; 0 if it passed first-try>). This records a "
+            "Quality-tab score grounded in the real render outcome (PASS first-try=5 … never passed=1) and "
+            "feeds the builder's reputation. Do this whether the outcome was PASS or FAIL — honest signal "
+            "either way. (If you also routed a fix to aimeat-cortex-fixer and it made the app pass, you MAY "
+            "additionally rate it: rate_delegated_work('aimeat-cortex-fixer', verify_passed=true, fix_rounds=0).)\n"
+            "6. Final deliverable: the live app URL, the final verify_render verdict (PASS or the "
+            "remaining failure), the rating you recorded, and a short orchestration summary (build + any "
+            "fix rounds)."
         ),
         expected_output=(
             "Final report: live app URL, final verify_render verdict (VERIFY PASS or the remaining "
-            "failure), and a short orchestration summary (build + any fix rounds)."
+            "failure), the verify-grounded rating recorded for the delegatee, and a short orchestration "
+            "summary (build + any fix rounds)."
         ),
         agent=conductor,
         context=[plan],

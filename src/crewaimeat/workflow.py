@@ -569,6 +569,58 @@ def make_workflow_tools(
             "approval. Proceed with what you have, or try again."
         )
 
+    @tool("rate_delegated_work")
+    def rate_delegated_work(target_agent: str, verify_passed: bool, fix_rounds: int = 0, note: str = "") -> str:
+        """Rate a crew you delegated to THIS run, grounded in the DETERMINISTIC verify outcome (not an
+        LLM opinion). Call this ONCE, AFTER your verify_render gate has resolved, for the crew that
+        delivered the build. The score is computed for you from the objective result:
+          verify PASS first-try (fix_rounds=0) -> 5 ; PASS after 1 fix round -> 4 ; 2 -> 3 ; 3+ -> 2 ;
+          never PASSED (verify_passed=false) -> 1.
+        It POSTs to that worker's task (AIMEAT /tasks/:id/rate, context=code) so the score shows on the
+        Quality tab and feeds the worker's reputation. Args: verify_passed (did the FINAL verify_render
+        PASS?), fix_rounds (how many fix->reverify cycles you ran), optional short note."""
+        jobs = [j for j in state["jobs"] if j.get("agent") == target_agent and j.get("tid")]
+        if not jobs:
+            return (f"Refused: no delegated job for '{target_agent}' in this run to rate. Only rate a crew "
+                    "you delegated to (via delegate_and_wait / delegate_subtask) this run.")
+        job = jobs[-1]
+        if job.get("rated"):
+            return f"Already rated {target_agent} for this run."
+        try:
+            fr = max(0, int(fix_rounds))
+        except Exception:  # noqa: BLE001
+            fr = 0
+        stars = 1 if not verify_passed else {0: 5, 1: 4, 2: 3}.get(fr, 2)
+        ectx = job.get("evalctx") or {}
+        meta = {k: ectx[k] for k in ("temperature", "tokens_in", "tokens_out", "tokens_total") if k in ectx}
+        verdict = "VERIFY PASS" if verify_passed else "VERIFY FAIL"
+        body = {
+            "stars": stars,
+            "context": "code",
+            "source_grounded": True,
+            "unsupported": 0,
+            "evaluated_model": ectx.get("model") or os.getenv("OPENROUTER_MODEL"),
+            "metadata": meta,
+            "comment": (f"verify-grounded: {verdict} after {fr} fix round(s) — conductor deterministic "
+                        "render gate") + (f". {note}" if note else ""),
+        }
+        ok, status, detail = _rate_task(coordinator_name, target_agent, job["tid"], body)
+        attempts = 1
+        while not ok and status not in (403, 422) and attempts < 5:
+            time.sleep(POLL_SECONDS)
+            ok, status, detail = _rate_task(coordinator_name, target_agent, job["tid"], body)
+            attempts += 1
+        job["rated"] = True
+        if ok:
+            msg = f"Rated {target_agent} {stars}/5 (verify-grounded: {verdict}, {fr} fix round(s))"
+        elif status == 403:
+            msg = f"Rating rejected 403 self-rating for {target_agent} (unexpected: coordinator≠worker)"
+        else:
+            msg = f"Rating not recorded for {target_agent} (status={status}): {detail[:80]}"
+        _event(msg)
+        print(f"[{coordinator_name}] {msg}", file=sys.stderr)
+        return msg
+
     @tool("collect_results")
     def collect_results() -> str:
         """Fan-in: wait for ALL delegated subtasks to finish and return each crew's deliverable. Call
@@ -705,7 +757,7 @@ def make_workflow_tools(
             f"'{question[:60]}' and note the assumption in your result."
         )
 
-    tools = [discover_crews, delegate_subtask, delegate_and_wait, collect_results, cancel_pending, commission_crew, wait_for_crew, ask_owner]
+    tools = [discover_crews, delegate_subtask, delegate_and_wait, rate_delegated_work, collect_results, cancel_pending, commission_crew, wait_for_crew, ask_owner]
     # Disable CrewAI's tool-result cache on ALL of these. They are stateful / side-effecting and
     # several are argument-identical across calls (collect_results / cancel_pending take no args), so
     # the cache would serve a stale first-call result for a later call — e.g. collect_results returning

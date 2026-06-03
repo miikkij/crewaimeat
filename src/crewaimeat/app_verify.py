@@ -176,6 +176,29 @@ def app_renders(url: str, *, settle_ms: int = 4500, rewrite_node: tuple[str, str
 # --------------------------------------------------------------------------- #
 # 5. Authed render — log in as the owner, then verify the logged-in view
 # --------------------------------------------------------------------------- #
+def _split_failed_resources(failed: list[str]) -> "tuple[list[str], list[str]]":
+    """Dedup failed HTTP responses ('<status> <url>') to distinct endpoints (strip query) and split
+    them into (real_failures, benign_404s).
+
+    BENIGN = a 404 on a GET /v1/memory/<key>: the key just isn't written yet, the data lib returns
+    null/default, and a well-built app renders fine. Failing the render on it is a false negative — it
+    dinged the counter app a star and made the editor's tic-tac-toe run thrash. 403/5xx on memory, and
+    ANY non-memory 4xx/5xx (libs, cortex, app, ext), stay REAL failures that fail the gate."""
+    seen: set[str] = set()
+    real: list[str] = []
+    benign: list[str] = []
+    for f in failed:
+        k = f.split("?")[0]
+        if k in seen:
+            continue
+        seen.add(k)
+        if k.startswith("404 ") and "/v1/memory/" in k:
+            benign.append(k)
+        else:
+            real.append(k)
+    return real[:8], benign[:8]
+
+
 def app_renders_authed(url: str, user: str, password: str, *, settle_ms: int = 4500,
                        content_selectors: tuple[str, ...] = ("#cards", "#app", ".wrap", "body"),
                        expect_any: list[str] | None = None) -> dict:
@@ -235,15 +258,14 @@ def app_renders_authed(url: str, user: str, password: str, *, settle_ms: int = 4
 
     raw_keys = [k for k in re.findall(r"\b[a-z][a-z0-9]*\.[a-z][a-zA-Z0-9.]+", text)
                 if k.split(".")[0] in ("app", "i18n", "ui")][:8]
-    # Dedup failed resources to the distinct endpoints (strip query) — the actionable signal.
-    seen: set[str] = set()
-    fr: list[str] = []
-    for f in failed:
-        k = f.split("?")[0]
-        if k not in seen:
-            seen.add(k)
-            fr.append(k)
-    fr = fr[:8]
+    # Dedup failed resources to the distinct endpoints (strip query) and split off BENIGN unset-key
+    # memory reads (see _split_failed_resources).
+    fr, benign_404s = _split_failed_resources(failed)
+    # "Failed to load resource ..." console messages are the URL-less duplicate of what the response
+    # handler already captured (with URLs + status) in failed/fr. Drop them from the console channel so a
+    # benign memory-404 doesn't fail the gate here too — real resource failures still fail via `fr`, and
+    # real JS errors (TypeError, ReferenceError, PAGEERROR, ...) are kept.
+    errors = [e for e in errors if "Failed to load resource" not in e]
     # A JS error caught by the app and DISPLAYED as content (not thrown to the console) is still a
     # broken render — catch the common shapes so a no-expect verify doesn't pass on an error screen.
     err_in_content = any(m in text for m in
@@ -252,4 +274,5 @@ def app_renders_authed(url: str, user: str, password: str, *, settle_ms: int = 4
     if expect_any:
         ok = ok and any(m in text for m in expect_any)
     return {"ok": ok, "login": login, "console_errors": errors[:6], "failed_resources": fr,
-            "error_in_content": err_in_content, "raw_i18n_keys": raw_keys, "content_sample": text[:400]}
+            "benign_404s": benign_404s, "error_in_content": err_in_content, "raw_i18n_keys": raw_keys,
+            "content_sample": text[:400]}

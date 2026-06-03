@@ -549,6 +549,49 @@ def _write_verify_stat(agent_name: str, tid: str | None, output_text: str, dimen
     print(f"[{agent_name}] self-verify score {score}/5 (unsupported={unsupported}, dim={dimension}) -> statistics.custom.self_verify: {bool(res)}", file=sys.stderr)
 
 
+def _publish_selection_rollup(agent_name: str, owner: str | None = None) -> None:
+    """Publish the agent's OWN field-reputation rollup to its PUBLIC memory key
+    agents.<agent>.statistics.custom.selection — the live-score key a coordinator's discover_crews reads.
+
+    The node aggregates real task ratings at GET /v1/agents/:agent/statistics, but that route is
+    owner-only — a coordinator's agent token 403s on a PEER's stats. An agent CAN read its OWN stats,
+    so each crew self-publishes its rollup to public memory, where any same-owner coordinator can read it
+    (memory_read_public). Without this writer the selection key never exists and discover_crews shows
+    '[no reputation yet]' forever. Normalizes avgStars (0-5) -> 0-1 and carries the node's confidence.
+    Best-effort; never raises."""
+    if _aimeat_read_token is None:
+        return
+    try:
+        token, node_url = _aimeat_read_token(agent_name, owner=owner)
+        r = requests.get(f"{node_url.rstrip('/')}/v1/agents/{agent_name}/statistics",
+                         headers={"Authorization": f"Bearer {token}"}, timeout=20)
+        if r.status_code != 200:
+            return
+        reviews = ((r.json() or {}).get("data") or {}).get("reviews") or {}
+        overall = reviews.get("overall") or {}
+        n = overall.get("n") or 0
+        avg = overall.get("avgStars")
+        if not n or avg is None:
+            return  # nothing rated yet — leave the key absent so discovery shows "[no reputation yet]"
+        byctx = reviews.get("byContext") or {}
+        ctx = max(byctx, key=lambda c: (byctx.get(c) or {}).get("n", 0)) if byctx else "overall"
+        low = (byctx.get(ctx) or {}).get("lowConfidence", n < 3)
+        value = {
+            "context": ctx,
+            "normalized": round(avg / 5.0, 2),
+            "n": n,
+            "confident": (not low),
+            "avg_stars": avg,
+            "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        _aimeat_call(agent_name, "aimeat_memory_write",
+                     {"key": f"agents.{agent_name}.statistics.custom.selection",
+                      "value": value, "visibility": "public"})
+        print(f"[{agent_name}] published field-reputation rollup -> selection {value}", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 — reputation publish is best-effort; never break the daemon
+        print(f"[{agent_name}] selection-rollup publish skipped: {exc}", file=sys.stderr)
+
+
 def _eval_ctx(eval_info: dict | None) -> dict:
     """Build the evaluation-context record {model, temperature, nature, tokens_*} for a run.
 
@@ -1151,11 +1194,18 @@ def run_crew(spec: CrewSpec) -> None:
     #    agent on AIMEAT. (SystemExit escapes the daemon's `except Exception` on_idle
     #    guard, so this cleanly stops the loop.)
     auth = {"fails": 0}
+    pub = {"last": 0.0}
 
     def _on_idle() -> None:
         alive = _auth_alive(spec.agent_name, spec.owner)
         if alive is True:
             auth["fails"] = 0
+            # Self-publish this crew's field-reputation rollup so coordinators' discover_crews can see
+            # its live score. Throttled to ~10 min (an idle daemon polls far more often than that).
+            now = time.time()
+            if now - pub["last"] > 600:
+                pub["last"] = now
+                _publish_selection_rollup(spec.agent_name, spec.owner)
         elif alive is False:
             auth["fails"] += 1
             print(
