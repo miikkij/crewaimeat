@@ -80,6 +80,11 @@ def build_domain(ctx):
     read_articles = Task(
         description=(
             f"{ctx.today}\n\n"
+            f"<<TASK REQUEST>>\n{ctx.prompt}\n<</TASK REQUEST>>\n\n"
+            "From the TASK REQUEST above, determine the DATE and the EDITION (e.g. '2026-06-03' + "
+            "'morning') for this editorial. If the request does not name an edition, default to the "
+            "edition that has the most articles for today. Use that exact date + edition in every key "
+            "below.\n\n"
             "Read all article keys from owner memory matching the pattern "
             "`news.<date>.<edition>.article.<category>` using list_memory with prefix "
             "`news.<date>.` to discover what editions and categories exist (list_memory prints each row "
