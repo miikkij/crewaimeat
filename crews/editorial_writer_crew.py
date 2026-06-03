@@ -23,7 +23,7 @@ README = '''[[FIGLET:slant]["Editorial Writer"]]
 
 Gonzo-journalism editorial writer in the style of Spider Jerusalem — brutal, sharp, unapologetic. Reads the day's articles from owner memory and forges them into a single scorched-earth daily editorial.
 
-**How to task me:** Run with a prompt containing the date (e.g. "2026-06-03") and edition label (e.g. "morning"). I'll pull every article keyed `news.<date>.<edition>.article.<category>`, synthesize them, and publish the editorial to `news.<date>.<edition>.editorial` plus update `news.index`. No articles? I stop — no fabrications.
+**How to task me:** Run with a prompt containing the date (e.g. "2026-06-03") and edition label (e.g. "morning"). I'll pull every article keyed `news.<date>.<edition>.article.<category>`, synthesize them, and publish the editorial to `news.<date>.<edition>.editorial`. As the LAST stage I also build the **public front-page index** `newspaper.frontpage` (under my own GAII) — a single PUBLIC key listing every article + the editorial with its `{gaii, key, title, date, summary}` — so an anonymous public newspaper app can read the whole edition without logging in. No articles? I stop — no fabrications.
 '''
 
 
@@ -59,12 +59,17 @@ def build_domain(ctx):
     publisher = Agent(
         role="Publisher",
         goal=(
-            "Write the completed editorial to the public-visible key and update the news index. "
-            "Ensure the index entry contains date, edition, and all categories found."
+            "Write the completed editorial to its public key, then build the PUBLIC front-page index "
+            "`newspaper.frontpage` (under this agent's own GAII) so an anonymous public newspaper app can "
+            "read the whole edition — every article + the editorial, each with its {gaii, key, title, "
+            "date, summary} — without anyone logging in."
         ),
         backstory=(
-            "You are the final gatekeeper. You take the finished editorial and publish it where the world can see it, "
-            "then update the index so the editorial is discoverable. You are precise and methodical."
+            "You are the final gatekeeper AND the front-page editor. You publish the editorial where the "
+            "world can see it, then assemble the single public index the public viewer reads: one entry per "
+            "article (pointing at the WRITER agent's GAII + key) plus the editorial (your own GAII + key). "
+            "You are precise: you copy each article's GAII verbatim, you set everything public, and you never "
+            "invent a key or a gaii — every entry points at a real public body you can name."
         ),
         llm=ctx.llm,
         tools=[*make_memory_tools(AGENT_NAME)],
@@ -77,19 +82,25 @@ def build_domain(ctx):
             f"{ctx.today}\n\n"
             "Read all article keys from owner memory matching the pattern "
             "`news.<date>.<edition>.article.<category>` using list_memory with prefix "
-            "`news.<date>.` to discover what editions and categories exist.\n\n"
+            "`news.<date>.` to discover what editions and categories exist (list_memory prints each row "
+            "as `- <key> | gaii=<owner_gaii> | <visibility>` — KEEP the gaii, you need it downstream).\n\n"
             "For each discovered article key, read its full content with read_memory.\n\n"
             "If NO article keys exist at all, STOP and return exactly: NO_ARTICLES_FOUND\n\n"
             "Otherwise, return a structured summary of every article you found, including:\n"
-            "- The full key for each article\n"
-            "- The category name\n"
+            "- The full key for each article (e.g. `news.2026-06-03.morning.article.talous`)\n"
+            "- The GAII that OWNS that key — copy it VERBATIM from the `gaii=` field list_memory prints for "
+            "that row (it is the article author's GAII, e.g. `news-writer#owner@node`). If the same "
+            "category appears under more than one gaii (one agent wrote it, another copied it), prefer the "
+            "row whose gaii is the news/article writer that actually produced the content.\n"
+            "- The date, edition, and category parsed from the key (`news.<date>.<edition>.article.<cat>`)\n"
             "- The full text of each article\n\n"
             "Do NOT fabricate any content. Only return what you actually read from memory."
         ),
         agent=article_reader,
         expected_output=(
-            "Either the string NO_ARTICLES_FOUND, or a structured collection of all articles "
-            "with their keys, categories, and full text."
+            "Either the string NO_ARTICLES_FOUND, or a structured collection of all articles — for each: "
+            "the full key, its owner GAII (verbatim from list_memory), the date/edition/category, and the "
+            "full text."
         ),
     )
 
@@ -118,22 +129,36 @@ def build_domain(ctx):
     publish_editorial = Task(
         description=(
             f"{ctx.today}\n\n"
-            "Take the editorial written by the Gonzo Editorialist and publish it.\n\n"
+            "Take the editorial written by the Gonzo Editorialist and publish it, then build the public "
+            "front-page index.\n\n"
             "If the editorial is NO_ARTICLES_FOUND, do nothing and return: NO_ARTICLES_FOUND\n\n"
             "Otherwise:\n"
             "1. Write the editorial to key `news.<date>.<edition>.editorial` with visibility='public' "
             "using write_memory.\n"
-            "2. Read the current `news.index` key (if it exists).\n"
-            "3. Update the index with an entry containing: date, edition, and list of categories "
-            "from the articles that were read. Append to existing entries if the index already exists.\n"
-            "4. Write the updated index back to `news.index` with visibility='public'.\n\n"
-            "Return a confirmation of what was published: the editorial key, the index entry added, "
-            "and the categories included."
+            "2. Find the editorial's OWN GAII: call list_memory with prefix `news.<date>.<edition>.editorial` "
+            "and read the `gaii=` of that row — that is YOUR GAII (the editorial author).\n"
+            "3. Build the PUBLIC FRONT-PAGE INDEX with index_frontpage. Pass entries_json = a JSON array "
+            "with ONE entry per ARTICLE plus ONE entry for the EDITORIAL:\n"
+            "   - article entry: {\"gaii\":\"<that article's owner GAII from read step — the WRITER agent>\", "
+            "\"key\":\"<the article's exact key>\", \"title\":\"<Category capitalized> | <date>\", "
+            "\"date\":\"<date>\", \"edition\":\"<edition>\", \"category\":\"<category>\", "
+            "\"summary\":\"<one sentence, ~140 chars, drawn from the article>\", \"kind\":\"article\"}\n"
+            "   - editorial entry: {\"gaii\":\"<YOUR GAII from step 2>\", "
+            "\"key\":\"news.<date>.<edition>.editorial\", \"title\":\"Editorial | <date> <edition>\", "
+            "\"date\":\"<date>\", \"edition\":\"<edition>\", \"category\":\"editorial\", "
+            "\"summary\":\"<one sentence teaser of the editorial>\", \"kind\":\"editorial\"}\n"
+            "   Use each article's REAL owner GAII (verbatim, do not guess) and its REAL key. Every body "
+            "these point at is already public. index_frontpage read-modify-writes `newspaper.frontpage` "
+            "under your GAII at visibility='public' and returns the PUBLISHER gaii + INDEX_KEY.\n"
+            "4. Return a confirmation: the editorial key, the number of front-page entries written, and — "
+            "VERBATIM — the PUBLISHER gaii and INDEX_KEY that index_frontpage reported (the public newspaper "
+            "app must be pointed at exactly those)."
         ),
         agent=publisher,
         context=[read_articles, write_editorial],
         expected_output=(
-            "Confirmation of publication: editorial key written, index updated with date/edition/categories. "
+            "Confirmation: editorial key written; `newspaper.frontpage` built with N entries "
+            "(articles + editorial); and the exact PUBLISHER gaii + INDEX_KEY for the viewer app. "
             "Or NO_ARTICLES_FOUND if no articles existed."
         ),
     )

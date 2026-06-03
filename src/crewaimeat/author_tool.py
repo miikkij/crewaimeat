@@ -156,19 +156,29 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
         return (ex.get("data") or {}).get("manifest", "(no manifest in export)")
 
     @tool("read_app_template")
-    def read_app_template() -> str:
-        """Return the CANONICAL AIMEAT app starter template (fetched LIVE from the node's llms.txt) — the
-        HTML skeleton EVERY app should start from. It wires AIMEAT auth correctly, so it AVOIDS the
-        boot-order race ('Not logged in. Call AIMEAT.auth.login() first.'):
-          - loadScript('/v1/libs/aimeat-auth.js') + ('/v1/libs/aimeat-data.js') in boot(),
-          - mounts the login bar: AIMEAT.auth.mountLoginButton('#header-auth', {onLogin, onLogout}),
-          - runs your app (startApp(session)) ONLY AFTER `const session = await AIMEAT.auth.login();`.
-        Also returns the SDK Libraries table (which lib for what) + the Key rules (session.fetch returns
-        ALREADY-PARSED JSON — never call .json(); use relative '/' paths; no manual token/URL fields).
-        START HERE for every app: paste the skeleton, then put your UI + logic inside startApp(session),
-        and add any extra AIMEAT.<lib> loadScript lines you need. For a clean, no-login-bar app you MAY
-        drop the <nav> auth bar (and mountLoginButton), but KEEP the boot()/await-login/startApp order so
-        no data call runs before the session exists."""
+    def read_app_template(variant: str = "") -> str:
+        """Return a CANONICAL AIMEAT app template (fetched LIVE from the node's llms.txt) — the HTML
+        skeleton to START your app from. START HERE for every app, then put your UI + logic inside
+        startApp() and add any extra AIMEAT.<lib> loadScript lines you need. Both variants also return the
+        SDK Libraries table (which lib for what) + the Key rules (session.fetch returns ALREADY-PARSED
+        JSON — never call .json(); use relative '/' paths; no manual token/URL fields).
+
+        variant='' (DEFAULT) — the STANDARD Starter Template: a LOGIN-GATED app for the owner's OWN data.
+        It wires auth correctly and AVOIDS the boot-order race ('Not logged in. Call AIMEAT.auth.login()
+        first.'): loadScript aimeat-auth.js + aimeat-data.js in boot(), mountLoginButton('#header-auth', …),
+        and runs startApp(session) ONLY AFTER `const session = await AIMEAT.auth.login();`. (For a clean
+        no-login-bar look you MAY drop the <nav> auth bar + mountLoginButton, but KEEP that boot order.)
+
+        variant='public_viewer' (or 'public'/'anon') — the PUBLIC VIEWER template: content readable by
+        ANYONE with NO account (public newspaper, directory, noticeboard, gallery). It differs in three
+        ways that MATTER: (1) startApp() runs UNCONDITIONALLY — NEVER `if (session) startApp()`, which
+        leaves anonymous visitors stuck on 'Loading…'; (2) shown content is read with getPublic(gaii, key)
+        ONLY (get/list/search/set all need a login and read the CALLER's namespace, not the publisher's);
+        (3) content lives behind ONE public index key — set `const PUBLISHER = '<agent>#<owner>@<node>'`
+        (the GAII that owns the index; for a pipeline feed, the publishing AGENT's GAII — find it with
+        find_public_index) and `const INDEX_KEY = 'newspaper.frontpage'`, read the index, then fan out
+        getPublic(item.gaii, item.key) per item. Everything shown MUST be visibility:'public', and public
+        content is untrusted — esc() it before the DOM. Verify a public app with verify_anon_render."""
         if not base:
             return "ERROR: no node url (agent token missing?)"
         tok2, _u = _token(agent_name, owner)
@@ -178,16 +188,36 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
         except Exception as e:  # noqa: BLE001
             return f"ERROR fetching llms.txt: {e!r}"
         lines = (r.text or "").splitlines()
-        start = next((i for i, l in enumerate(lines)
-                      if "Starter Template" in l and l.lstrip().startswith("#")), None)
-        if start is None:
-            return ("could not find the Starter Template in llms.txt — fetch it yourself with "
-                    "read_node_api('llms.txt') and look for '### Starter Template'.")
-        end = next((i for i in range(start + 1, len(lines))
-                    if lines[i].startswith("### Other options") or lines[i].startswith("## ")), len(lines))
-        section = "\n".join(lines[start:end]).strip()
-        return ("AIMEAT APP STARTER TEMPLATE (start every app from this — it wires auth correctly and "
-                "avoids the boot-order race):\n\n" + section)
+
+        def _section(pred) -> str:
+            # A '###' section runs until the NEXT '### ' or '## ' header.
+            start = next((i for i, l in enumerate(lines) if l.startswith("### ") and pred(l)), None)
+            if start is None:
+                return ""
+            end = next((i for i in range(start + 1, len(lines))
+                        if lines[i].startswith("### ") or lines[i].startswith("## ")), len(lines))
+            return "\n".join(lines[start:end]).strip()
+
+        v = (variant or "").strip().lower()
+        if v in ("public_viewer", "public-viewer", "public", "viewer", "anon"):
+            tpl = _section(lambda l: "Public viewer template" in l)
+            label = ("AIMEAT PUBLIC VIEWER TEMPLATE (start here for ANY app anonymous visitors must read — "
+                     "startApp() runs for everyone, reads via getPublic(gaii,key) only, content behind one "
+                     "public index key whose items carry each body's gaii)")
+            if not tpl:
+                return ("could not find the Public viewer template in llms.txt — fetch it with "
+                        "read_node_api('llms.txt') and look for '### Public viewer template'.")
+        else:
+            tpl = _section(lambda l: "Starter Template" in l)
+            label = ("AIMEAT APP STARTER TEMPLATE (start every login-gated app from this — it wires auth "
+                     "correctly and avoids the boot-order race)")
+            if not tpl:
+                return ("could not find the Starter Template in llms.txt — fetch it with "
+                        "read_node_api('llms.txt') and look for '### Starter Template'.")
+        sdk = _section(lambda l: l.startswith("### SDK Libraries"))
+        keyrules = _section(lambda l: l.startswith("### Key rules"))
+        extra = "\n\n".join(s for s in (sdk, keyrules) if s)
+        return f"{label}:\n\n{tpl}" + (f"\n\n{extra}" if extra else "")
 
     @tool("read_node_api")
     def read_node_api(path: str) -> str:
@@ -423,6 +453,34 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
         """Return the live inline URL for a published app (served under the owner)."""
         return f"{base}/v1/apps/{owner}/{filename}?mode=inline"
 
+    @tool("find_public_index")
+    def find_public_index(index_key: str = "newspaper.frontpage") -> str:
+        """For a PUBLIC VIEWER build: find WHICH GAII publishes a public index key — the PUBLISHER the
+        viewer app must point at — and confirm it is public. The viewer reads ONE index from PUBLISHER,
+        then fans out getPublic(item.gaii, item.key) to bodies that may live under MANY different author
+        agents (the index carries each item's full gaii), so the app never needs to know the authors up
+        front. Lists the owner's memory (owner-scope) for index_key and returns the owning GAII(s) +
+        visibility, so you set `const PUBLISHER = '<that gaii>'` and `const INDEX_KEY = '<index_key>'`
+        in the public_viewer template. If it returns NOT FOUND, the content pipeline has not published the
+        index yet (its editorial/publisher stage must run index_frontpage first) — say so, don't guess."""
+        from crewaimeat.aimeat_crew import _aimeat_call  # lazy — avoid import cycles
+        r = _aimeat_call(agent_name, "aimeat_memory_list", {"owner_scope": True, "prefix": index_key})
+        items = ((r or {}).get("items") if isinstance(r, dict) else None) or []
+        hits = [(it.get("owner_gaii"), it.get("visibility")) for it in items
+                if isinstance(it, dict) and it.get("key") == index_key]
+        if not hits:
+            return (f"NOT FOUND: no '{index_key}' published yet (owner-scope). The content pipeline's "
+                    "editorial/publisher stage must publish it first (index_frontpage). Without it the "
+                    "viewer has nothing to read — do not invent a PUBLISHER.")
+        pubs = [g for g, _v in hits if g]
+        public = any((v or "").lower() == "public" for _g, v in hits)
+        warn = "" if public else (" WARNING: the index is NOT public yet — the viewer cannot read it "
+                                  "anonymously until it is written with visibility:'public'.")
+        return (f"PUBLISHER for index '{index_key}': {', '.join(pubs)} (public={public}).{warn} Set the "
+                f"viewer's `const PUBLISHER = '{pubs[0] if pubs else '<gaii>'}'` and "
+                f"`const INDEX_KEY = '{index_key}'`. Each body is read via getPublic(item.gaii, item.key) "
+                "using the gaii carried IN the index — not this PUBLISHER.")
+
     @tool("read_app_stack")
     def read_app_stack(url: str) -> str:
         """RUN THIS FIRST before EDITING any existing app. Given the app's inline URL, it (1) CONFIRMS the
@@ -505,6 +563,44 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
                f"content_sample={str(r.get('content_sample',''))[:200]}")
         return msg + (f"\n{hint}" if hint else "")
 
+    @tool("verify_anon_render")
+    def verify_anon_render(filename: str, expect_csv: str = "") -> str:
+        """DETERMINISTIC PUBLIC / anonymous render gate — the proof a PUBLIC app works for a visitor who is
+        NOT logged in. verify_render logs in as the OWNER, so it CANNOT catch a public viewer that renders
+        only for a session: the `if (session) startApp()` mistake leaves anonymous visitors stuck on
+        'Loading…' yet verify_render PASSes (the owner sees content) — a false PASS on exactly the apps
+        meant to be public. This loads the published app headless with NO login and checks that real public
+        content renders. Use it for ANY app meant to be readable WITHOUT an account (public newspaper,
+        directory, noticeboard, gallery), IN ADDITION to verify_render — the app is GREEN only when BOTH
+        pass. Set expect_csv = comma-separated strings that MUST appear in the anonymous view (e.g. a
+        category name or an article title from the public index) so it proves the public data shows, not
+        just an empty shell. Returns 'ANON VERIFY PASS' or 'ANON VERIFY FAIL …'."""
+        from crewaimeat.app_verify import app_renders_anon
+        url = f"{base}/v1/apps/{owner}/{filename}?mode=inline"
+        expect = [x.strip() for x in expect_csv.split(",") if x.strip()] or None
+        r = app_renders_anon(url, expect_any=expect)
+        if r.get("ok") is None:
+            return f"ANON VERIFY SKIPPED: {r.get('skipped')}"
+        if r.get("ok"):
+            return (f"ANON VERIFY PASS: anonymous (no-login) render OK, public content present. "
+                    f"sample: {str(r.get('content_sample',''))[:220]}")
+        if r.get("still_loading"):
+            hint = ("HINT: the page is STUCK on the loading placeholder for an anonymous visitor — "
+                    "startApp() never ran without a session. Start from read_app_template('public_viewer'): "
+                    "call startApp() UNCONDITIONALLY (never `if (session) startApp()`), and read the shown "
+                    "content with AIMEAT.data.getPublic(PUBLISHER, key) only (get/list/set need a login).")
+        elif not str(r.get("content_sample", "")).strip():
+            hint = ("HINT: empty anonymous render. Read getPublic(PUBLISHER, INDEX_KEY) then fan out "
+                    "getPublic(item.gaii, item.key); confirm PUBLISHER is the publishing agent's GAII "
+                    "(find_public_index) and the index + every body are visibility:'public'.")
+        else:
+            hint = _verify_fail_hint(r.get("console_errors"), r.get("failed_resources"))
+        msg = (f"ANON VERIFY FAIL: still_loading={r.get('still_loading')} | "
+               f"failed_resources(404/403/5xx)={r.get('failed_resources')} | "
+               f"console_errors={r.get('console_errors')} | raw_i18n_keys={r.get('raw_i18n_keys')} | "
+               f"content_sample={str(r.get('content_sample',''))[:200]}")
+        return msg + (f"\n{hint}" if hint else "")
+
     @tool("verify_interaction")
     def verify_interaction(filename: str, steps_json: str) -> str:
         """DRIVE a real authed interaction through the published app and assert it actually WORKS — the
@@ -545,12 +641,13 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
                 f"{r.get('detail')} | console_errors={r.get('console_errors')}")
 
     tools = [read_lib_api, read_cortex_example, read_app_template, read_node_api, read_app_stack,
-             install_cortex, install_extension, invoke_extension, publish_app, seed_memory,
-             app_inline_url, verify_render, verify_interaction]
+             find_public_index, install_cortex, install_extension, invoke_extension, publish_app,
+             seed_memory, app_inline_url, verify_render, verify_anon_render, verify_interaction]
     # Side-effecting / live-state tools must NOT be cached. crewai caches tool results by args, which
     # would serve a STALE verdict across fix-loop iterations (observed: verify_render "(from cache)"
     # returning the pre-fix FAIL after a re-publish). The read-only discovery tools may cache.
-    for _t in (install_cortex, install_extension, invoke_extension, publish_app, seed_memory, verify_render, verify_interaction, read_node_api, read_app_stack):
+    for _t in (install_cortex, install_extension, invoke_extension, publish_app, seed_memory, verify_render,
+               verify_anon_render, verify_interaction, read_node_api, read_app_stack, find_public_index):
         try:
             _t.cache_function = lambda *_a, **_k: False
         except Exception:  # noqa: BLE001

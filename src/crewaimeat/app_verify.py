@@ -283,6 +283,67 @@ def app_renders_authed(url: str, user: str, password: str, *, settle_ms: int = 4
             "content_sample": text[:400]}
 
 
+def app_renders_anon(url: str, *, settle_ms: int = 5000,
+                     content_selectors: tuple[str, ...] = ("#app", "#cards", ".wrap", "body"),
+                     expect_any: list[str] | None = None,
+                     loading_markers: tuple[str, ...] = ("Loading…", "Loading...", "Loading")) -> dict:
+    """The PUBLIC / anonymous-view gate — does the app render real content for a visitor who is NOT logged
+    in? app_renders_authed logs IN as the owner, so it cannot catch a public viewer that only renders for
+    a session: the `if (session) startApp()` mistake leaves anonymous visitors stuck on 'Loading…' yet the
+    authed gate PASSes (the owner sees content) — a false PASS on exactly the class of app meant to be
+    public. This loads the app headless with NO login and asserts a real public render.
+
+    ok = no real failed resources AND no JS console/page errors AND content is not a bare loading
+    placeholder AND non-trivial content AND no leaked raw i18n keys AND (if expect_any) at least one of
+    those strings is present. Reuses _split_failed_resources so an unset-key memory 404 stays benign
+    (a public read of a not-yet-written key is not a failure). Requires playwright + chromium."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as e:  # noqa: BLE001
+        return {"ok": None, "skipped": f"playwright not installed: {e}"}
+
+    errors: list[str] = []
+    failed: list[str] = []
+    text = ""
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+        page.on("pageerror", lambda e: errors.append(f"PAGEERROR: {e}"))
+        page.on("response", lambda r: failed.append(f"{r.status} {r.url}") if r.status >= 400 else None)
+        try:
+            page.goto(url, wait_until="networkidle", timeout=45000)
+            page.wait_for_timeout(settle_ms)  # NO login — render as an anonymous visitor would see it
+            for sel in content_selectors:
+                try:
+                    t = page.locator(sel).first.inner_text()
+                    if t and len(t.strip()) > len(text.strip()):
+                        text = t
+                except Exception:  # noqa: BLE001
+                    pass
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"NAV: {e}")
+        browser.close()
+
+    raw_keys = [k for k in re.findall(r"\b[a-z][a-z0-9]*\.[a-z][a-zA-Z0-9.]+", text)
+                if k.split(".")[0] in ("app", "i18n", "ui")][:8]
+    fr, benign_404s = _split_failed_resources(failed)
+    errors = [e for e in errors if "Failed to load resource" not in e]
+    err_in_content = any(m in text for m in
+                         ("Cannot read properties of", "is not defined", "is not a function", "TypeError"))
+    stripped = text.strip()
+    # A short content that is still just the loading placeholder = the classic login-gated-startApp anon
+    # failure (the app never reached startApp without a session). A fully-rendered page replaces it.
+    still_loading = bool(stripped) and len(stripped) < 120 and any(m in stripped for m in loading_markers)
+    ok = (not errors and not fr and not err_in_content and not still_loading
+          and len(stripped) > 40 and not raw_keys)
+    if expect_any:
+        ok = ok and any(m in text for m in expect_any)
+    return {"ok": ok, "anon": True, "console_errors": errors[:6], "failed_resources": fr,
+            "benign_404s": benign_404s, "error_in_content": err_in_content, "still_loading": still_loading,
+            "raw_i18n_keys": raw_keys, "content_sample": text[:400]}
+
+
 def app_interaction_ok(url: str, user: str, password: str, steps: list, *, settle_ms: int = 3000,
                        step_timeout_ms: int = 12000) -> dict:
     """DRIVE a real authed interaction through the app and assert outcomes — the test render-only checks

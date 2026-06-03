@@ -83,16 +83,95 @@ def make_memory_tools(agent_name: str) -> list:
     @tool("list_memory")
     def list_memory(prefix: str) -> str:
         """List the owner memory keys under a prefix (e.g. 'news.2026-06-03.' to see what's been written
-        for today) ACROSS all same-owner agents (so you see siblings' keys too). Returns the matching
-        keys. Use to discover which categories/editions exist before reading."""
+        for today) ACROSS all same-owner agents (so you see siblings' keys too). Returns each key WITH the
+        GAII of the agent that owns it AND its visibility — `- <key> | gaii=<owner_gaii> | <visibility>`.
+        The GAII matters: it is what a public viewer / getPublic(gaii, key) needs to read a sibling's key,
+        and what you put in a front-page index entry. If the SAME key appears under several GAIIs (e.g. a
+        category written by one agent and copied by another), they are SEPARATE entries — pick the one
+        from the agent that actually produced the content. Use to discover what exists before reading."""
         r = _aimeat_call(agent_name, "aimeat_memory_list", {"owner_scope": True, "prefix": prefix or ""})
         items = ((r or {}).get("items") if isinstance(r, dict) else None) or []
-        keys = [it.get("key") for it in items if isinstance(it, dict) and it.get("key")]
-        if not keys:
+        rows = []
+        for it in items:
+            if isinstance(it, dict) and it.get("key"):
+                g = it.get("owner_gaii") or it.get("gaii") or "?"
+                vis = it.get("visibility") or "?"
+                rows.append(f"- {it['key']} | gaii={g} | {vis}")
+        if not rows:
             return f"No memory keys found under prefix '{prefix}'."
-        return f"keys under '{prefix}':\n" + "\n".join(f"- {k}" for k in keys[:60])
+        return f"keys under '{prefix}' (key | gaii | visibility):\n" + "\n".join(rows[:80])
 
-    tools = [write_memory, read_memory, list_memory]
+    @tool("index_frontpage")
+    def index_frontpage(entries_json: str, index_key: str = "newspaper.frontpage") -> str:
+        """Maintain the PUBLIC front-page INDEX that a public viewer app reads — the single key whose value
+        lists every item with its own {gaii, key, title, date, summary} so the viewer can fan out to bodies
+        that live under MANY different author agents WITHOUT knowing each one up front. Call this as the
+        LAST pipeline step (the editorial / publisher stage). It READ-MODIFY-WRITEs the index UNDER YOUR
+        OWN GAII at visibility='public' — that GAII is the PUBLISHER the viewer app is pointed at.
+
+        entries_json = a JSON array of items to add/refresh. Each item:
+          {"gaii":"<the GAII that owns the BODY key — from list_memory's gaii=… for that article>",
+           "key":"<the EXACT public memory key of the body>", "title":"<headline>",
+           "date":"<YYYY-MM-DD>", "summary":"<one-line teaser>", "edition":"<morning|evening|…>",
+           "category":"<talous|tiede|…>"}
+        Use the ARTICLE-AUTHOR's gaii for each article (the writer agent), and YOUR OWN gaii for the
+        editorial you just wrote. EVERY body the index points at MUST be visibility='public' (write
+        articles/editorials public) or the viewer cannot read it anonymously. Entries are deduped by
+        (date, edition, category) — a re-run REPLACES the stale entry for that slot — then sorted
+        newest-first and capped. Returns OK + the item count + the PUBLISHER gaii + INDEX_KEY to hand the
+        viewer app."""
+        try:
+            new = json.loads(entries_json) if isinstance(entries_json, str) else entries_json
+        except Exception as e:  # noqa: BLE001
+            return f"FAILED: entries_json is not valid JSON: {e}"
+        if not isinstance(new, list) or not new:
+            return "FAILED: entries_json must be a non-empty JSON array of {gaii,key,title,date,summary,…}."
+        clean = []
+        for it in new:
+            if isinstance(it, dict) and it.get("gaii") and it.get("key"):
+                clean.append({k: it.get(k) for k in ("gaii", "key", "title", "date", "summary",
+                                                      "edition", "category", "kind") if it.get(k) is not None})
+        if not clean:
+            return ("FAILED: each entry needs at least gaii + key (the body's owner GAII + its exact public "
+                    "key, both from list_memory). Nothing had both.")
+        # Read the current index (own GAII). _aimeat_call returns None for an unset key — start empty.
+        cur = _aimeat_call(agent_name, "aimeat_memory_read", {"key": index_key})
+        curval = cur.get("value") if isinstance(cur, dict) else None
+        existing = curval if isinstance(curval, list) else []
+
+        def _slot(e: dict):
+            # Dedup by the logical (date, edition, category) when present (so a re-run refreshes that
+            # article/editorial in place), else fall back to the concrete (gaii, key).
+            if e.get("date") or e.get("category") or e.get("edition") or e.get("kind"):
+                return ("logical", e.get("date"), e.get("edition"), e.get("category"), e.get("kind"))
+            return ("bykey", e.get("gaii"), e.get("key"))
+
+        merged: dict = {}
+        for e in existing:
+            if isinstance(e, dict) and e.get("gaii") and e.get("key"):
+                merged[_slot(e)] = e
+        for e in clean:  # incoming overrides any stale entry for the same slot
+            merged[_slot(e)] = e
+        out = sorted(merged.values(),
+                     key=lambda e: (str(e.get("date") or ""), str(e.get("edition") or "")), reverse=True)[:80]
+        w = _aimeat_call(agent_name, "aimeat_memory_write",
+                         {"key": index_key, "value": out, "visibility": "public"})
+        if w is None:
+            return f"FAILED to write the front-page index '{index_key}' (no result from memory_write)."
+        # Discover our own GAII (the PUBLISHER) from the just-written key's owner_gaii.
+        pub = ""
+        lr = _aimeat_call(agent_name, "aimeat_memory_list", {"prefix": index_key})
+        for it in (((lr or {}).get("items") if isinstance(lr, dict) else None) or []):
+            if isinstance(it, dict) and it.get("key") == index_key and it.get("owner_gaii"):
+                pub = it["owner_gaii"]
+                break
+        pub_txt = pub or "<your own GAII — list_memory the index key to read its gaii=…>"
+        return (f"OK: front-page index '{index_key}' now lists {len(out)} item(s), visibility=public. "
+                f"PUBLISHER (point the viewer app's `const PUBLISHER` at THIS) = {pub_txt}. "
+                f"INDEX_KEY = '{index_key}'. The viewer reads this index, then getPublic(item.gaii, item.key) "
+                "for each body.")
+
+    tools = [write_memory, read_memory, list_memory, index_frontpage]
     for _t in tools:  # side-effecting / live-state — never serve a cached result
         try:
             _t.cache_function = lambda *_a, **_k: False
