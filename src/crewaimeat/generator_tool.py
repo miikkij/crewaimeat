@@ -38,6 +38,11 @@ except Exception:  # pragma: no cover
 
 GEN_TIMEOUT = 90  # generator prompts/artifacts can be large; give the node room
 
+# Deterministic pre-submit quality gates — the "catch" a human gave the UI flow, automated. A cortex
+# that fails these (syntax error, or memory reads missing the service_slug prefix) must be fixed
+# BEFORE it registers, never shipped "green". See app_verify.py.
+from crewaimeat.app_verify import cortex_syntax_ok, cortex_uses_slug
+
 
 # --------------------------------------------------------------------------- #
 # Auth + owner discovery
@@ -122,6 +127,39 @@ def make_generator_tools(agent_name: str, owner: str | None = None, task_id: str
     def _need_pid() -> str | None:
         return state.get("pid")
 
+    def _blueprint_meta() -> tuple[str, list[str]]:
+        """(service_slug, seeded-key prefixes) from the blueprint, cached. The slug-gate needs these
+        to know which memory-key first-segments (i18n, settings, the domain namespace) the cortex must
+        read slug-prefixed."""
+        if state.get("_bp_meta") is not None:
+            return state["_bp_meta"]
+        slug, prefixes = "", []
+        pid = state.get("pid")
+        if pid:
+            g = _call(agent_name, owner, "GET", f"/v1/generator/{pid}")
+            bp = (((g.get("data") or {}).get("project") or {}).get("blueprint")) or {}
+            if isinstance(bp, str):
+                try:
+                    bp = json.loads(bp)
+                except Exception:  # noqa: BLE001
+                    bp = {}
+            slug = bp.get("service_slug") or ""
+            mk = (bp.get("dataModel") or {}).get("memoryKeys") or {}
+            # Blueprints sometimes store keys already slug-qualified ('<slug>.i18n.en') and sometimes
+            # bare ('i18n.en'); normalise to the seeded first-segment either way, and never let the
+            # slug itself become a "prefix" (that yields an impossible double-prefix in the gate).
+            pfxset: set[str] = set()
+            for k in mk.keys():
+                ks = str(k)
+                if slug and ks.startswith(f"{slug}."):
+                    ks = ks[len(slug) + 1:]
+                first = ks.split(".")[0]
+                if first and first != slug:
+                    pfxset.add(first)
+            prefixes = sorted(pfxset)
+        state["_bp_meta"] = (slug, prefixes)
+        return state["_bp_meta"]
+
     def _event(message: str) -> None:
         """Best-effort: post a human-readable progress event to the AIMEAT task timeline."""
         if not task_id:
@@ -144,6 +182,18 @@ def make_generator_tools(agent_name: str, owner: str | None = None, task_id: str
         pid = (env.get("data") or {}).get("projectId")
         state["pid"] = pid
         return f"Project created (projectId={pid}, stored). Next: gen_get_interview_prompt."
+
+    @tool("gen_open_project")
+    def gen_open_project(project_id: str) -> str:
+        """Open an EXISTING generator project so the other gen_* tools operate on it (sets the active
+        projectId). Use this when fixing/finishing a project someone else built — NOT gen_create_project."""
+        env = _call(agent_name, owner, "GET", f"/v1/generator/{project_id}")
+        if not _ok(env):
+            return f"FAILED to open project {project_id}: {_err(env)}"
+        state["pid"] = project_id
+        state["_bp_meta"] = None  # recompute slug/key-prefixes for the opened project
+        proj = ((env.get("data") or {}).get("project") or {})
+        return f"Opened project {project_id} (name={proj.get('name')}, status={proj.get('status')}). The gen_* tools now act on it."
 
     @tool("gen_get_interview_prompt")
     def gen_get_interview_prompt() -> str:
@@ -353,6 +403,28 @@ def make_generator_tools(agent_name: str, owner: str | None = None, task_id: str
         pid = _need_pid()
         if not pid:
             return "No project yet — call gen_create_project first."
+        # PRE-SUBMIT QUALITY GATE (cortex only) — catch the two failure modes that pass server-side
+        # validation but break at runtime, BEFORE the component registers "green":
+        #   (1) JS syntax error (e.g. a missing dot → SyntaxError), (2) memory reads that drop the
+        #   service_slug prefix (→ 404 → raw i18n keys / empty data). The agent fixes, then resubmits.
+        if ctype == "cortex":
+            import re as _re
+            jsm = _re.search(r"```(?:javascript|js)\s*\n([\s\S]*?)```", content)
+            js = jsm.group(1) if jsm else ""
+            if js:
+                ok_syntax, syn_err = cortex_syntax_ok(js)
+                if not ok_syntax:
+                    return (f"PRE-SUBMIT BLOCKED ({component_id}): the cortex JavaScript has a SYNTAX "
+                            f"ERROR — {syn_err}. Fix the JS and resubmit; do NOT register broken code.")
+                slug, prefixes = _blueprint_meta()
+                if slug and prefixes:
+                    ok_slug, offenders = cortex_uses_slug(js, slug, prefixes)
+                    if not ok_slug:
+                        eg = offenders[0]
+                        return (f"PRE-SUBMIT BLOCKED ({component_id}): the cortex reads memory key(s) "
+                                f"WITHOUT the service_slug prefix: {offenders}. Seeded data is stored "
+                                f"namespaced as '{slug}.<key>'. Read every seeded key slug-prefixed, e.g. "
+                                f"AIMEAT.data.get('{slug}.{eg}...'), then resubmit.")
         env = _call(agent_name, owner, "POST", f"/v1/generator/{pid}/components/{component_id}/submit",
                     {"type": ctype, "content": content})
         if not _ok(env):
@@ -413,7 +485,7 @@ def make_generator_tools(agent_name: str, owner: str | None = None, task_id: str
         return f"{base}/v1/apps/{own}/{filename}?mode=inline"
 
     tools = [
-        gen_create_project, gen_get_interview_prompt, gen_import_spec,
+        gen_create_project, gen_open_project, gen_get_interview_prompt, gen_import_spec,
         gen_get_blueprint_prompt, gen_import_blueprint, gen_save_settings,
         gen_list_components, gen_component_prompt, gen_submit_spec, gen_submit_component,
         gen_register_component, gen_activate_extension, gen_complete, gen_app_inline_url,
