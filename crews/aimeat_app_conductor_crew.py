@@ -55,10 +55,14 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     # The conductor verifies (it does not build): take only the authed render gate + the URL helper.
     author_tools, _state = make_author_tools(AGENT_NAME, task_id=tid)
     verify_tools = [t for t in author_tools if getattr(t, "name", "") in ("verify_render", "verify_anon_render", "verify_interaction", "app_inline_url")]
+    # timeout=7200 (2h): the wait must exceed the worst-case specs-designer interview (its ask_owner can
+    # block on an absent owner), so a slow human answering the interview never orphans the Phase-0 wait.
     wf_tools = make_workflow_tools(
-        coordinator_name=AGENT_NAME, run_id=tid, task_id=tid, tag="workflow", timeout=2400,
+        coordinator_name=AGENT_NAME, run_id=tid, task_id=tid, tag="workflow", timeout=7200,
     )
-    deleg = [t for t in wf_tools if getattr(t, "name", "") in ("discover_crews", "delegate_and_wait", "rate_delegated_work")]
+    # cancel_pending lets the conductor stop an orphaned delegatee on timeout (a builder/fixer that exceeds
+    # the wait keeps running and could republish after the conductor moved on — cancel it before proceeding).
+    deleg = [t for t in wf_tools if getattr(t, "name", "") in ("discover_crews", "delegate_and_wait", "rate_delegated_work", "cancel_pending")]
     # Scheduler: set up AIMEAT server-run schedules (the node owns the cron clock; fires offline; owner
     # controls them in Profile -> Scheduler). For recurring/automated deliverables (daily pipelines, etc.).
     sched_tools = make_schedule_tools(AGENT_NAME)
@@ -115,7 +119,12 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "(keys/namespaces/visibility), image handling, a build checklist, and a verify plan.\n"
             "CAPTURE the returned spec VERBATIM — Phase 1 hands it to the builder so the app matches the "
             "agreed design. If aimeat-app-specs-designer is unreachable (not approved, missing the 'workflow' "
-            "tag, or the fleet is down), STOP and report exactly that — the build needs the spec first."
+            "tag, or the fleet is down), STOP and report exactly that — the build needs the spec first.\n"
+            "TIMEOUT HANDLING: if delegate_and_wait returns a '[no result ... within the timeout]' string "
+            "(the spec interview is still pending — usually the owner has not answered in the dashboard "
+            "Messages tab), call cancel_pending() to stop the still-running specs-designer, then STOP and "
+            "report that the spec is pending the owner's answers. Do NOT proceed to Phase 1 without a spec — "
+            "building without the agreed design is exactly what this phase exists to prevent."
         ),
         expected_output=(
             "The complete technical spec returned by aimeat-app-specs-designer (data layer + rationale, data "
@@ -171,6 +180,10 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "item. Confirm it with verify_anon_render (no-login), not just verify_render.' Also report a "
             "couple of strings that should appear in the PUBLIC view (e.g. a category name or article "
             "title) so Phase 2 can assert the anonymous render.\n"
+            "3c. ORPHAN GUARD: if delegate_and_wait returns a '[no result ... within the timeout]' string, "
+            "the build crew is still running — call cancel_pending() to stop it BEFORE you retry or proceed, "
+            "so it cannot publish/republish the app after you have moved on; then report that the build did "
+            "not return in time (do not silently proceed as if it succeeded).\n"
             "4. From the chosen specialist's report, EXTRACT verbatim: (a) the app FILENAME (e.g. "
             "'fleet-activity-dashboard.html'), (b) a few of the seeded AGENT NAMES or — for a public app — "
             "strings that appear in the PUBLIC view (you pass these to the verify gate as proof real data "
@@ -213,7 +226,10 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "   The app is GREEN only when verify_render PASSES AND (if interactive) verify_interaction PASSES "
             "AND (if public/anon-readable) verify_anon_render PASSES. A non-interactive owner-only app is green "
             "on verify_render alone. When green, report success + the live app URL.\n"
-            "3. If VERIFY FAIL: route the fix. delegate_and_wait(\"aimeat-cortex-fixer\", \"<title>\", "
+            "3. If VERIFY FAIL: route the fix. (ORPHAN GUARD: if any delegate_and_wait — build or fix — "
+            "returns a '[no result ... within the timeout]' string, call cancel_pending() to stop the "
+            "still-running delegatee before you retry or rate, so it cannot republish the app after you "
+            "have moved on.) delegate_and_wait(\"aimeat-cortex-fixer\", \"<title>\", "
             "\"<instruction>\") where the instruction is ONE self-contained string containing: the app "
             "FILENAME, the app INLINE URL, the cortex name, the FULL TECHNICAL SPEC from Phase 0 (so the "
             "fixer knows the COMPLETE feature set and PRESERVES it — fixing only the failure without dropping "

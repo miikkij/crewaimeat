@@ -32,8 +32,8 @@ DEFAULT_TIMEOUT = 1800  # default per collect_results / delegate_and_wait / wait
                         # lands, and deep workers (e.g. multi-search research) can run long, so the
                         # coordinator's wait must be generous (workflow-manager uses 60 min).
 MAX_SUBTASKS = 6       # hard cap so a coordinator can't fan out a token storm
-CLARIFY_TIMEOUT = 1800  # ask_owner: max seconds to wait for the human to answer (30 min)
-MAX_CLARIFICATIONS = 2  # cap clarification questions per run so it can't ping-pong with the owner
+CLARIFY_TIMEOUT = 300  # ask_owner: max seconds to wait for the human to answer (5 min/question)
+MAX_CLARIFICATIONS = 5  # cap clarification questions per run (covers the specs-designer's 3-5 question interview)
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
 _AGENT_NAME_RE = re.compile(r'^\s*AGENT_NAME\s*=\s*["\']([^"\']+)["\']', re.M)

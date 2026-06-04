@@ -243,6 +243,64 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
         body = (r.text or "")[:2600]
         return f"GET {p} -> {r.status_code}\n{body}"
 
+    @tool("name_available")
+    def name_available(kind: str, name: str) -> str:
+        """CHECK (before CREATING a new app) that an artifact NAME is free, so install_cortex /
+        install_extension / publish_app create a NEW artifact instead of overwriting an UNRELATED one
+        (they redeploy/update a colliding name in place). kind is 'cortex', 'extension', or 'app'; for
+        'app' pass the full filename (e.g. 'fleet-dashboard.html'). Returns FREE or TAKEN; on TAKEN it
+        names the existing artifact so you can judge whether it is the SAME app you are (re)building (reuse
+        it — install/publish then updates it in place) or a DIFFERENT one (pick a more specific name). It
+        reads the COMPLETE list (paginated), unlike read_node_api which truncates to the first ~5 entries."""
+        k = (kind or "").strip().lower()
+        spec = {
+            "cortex": ("/v1/cortex", "extensions", "name"),
+            "extension": ("/v1/extensions", "extensions", "name"),
+            "ext": ("/v1/extensions", "extensions", "name"),
+            "app": ("/v1/apps", "apps", "filename"),
+            "apps": ("/v1/apps", "apps", "filename"),
+        }.get(k)
+        if not spec:
+            return "ERROR: kind must be 'cortex', 'extension', or 'app'."
+        path, listkey, field = spec
+        target = (name or "").strip()
+        if not target:
+            return "ERROR: name is empty."
+        is_app = listkey == "apps"
+        items_by_name: dict = {}
+        offset = 0
+        for _page in range(30):  # bounded so a server that ignores offset can't loop forever
+            sep = "&" if "?" in path else "?"
+            r = _call(agent_name, owner, "GET", f"{path}{sep}limit=200&offset={offset}")
+            if not _ok(r):
+                return f"ERROR: could not list {k} to check the name: {_err(r)}"
+            data = r.get("data") or {}
+            rows = data.get(listkey) or []
+            for it in rows:
+                if is_app and it.get("owner") and it.get("owner") != owner:
+                    continue  # app filenames collide only within the SAME owner
+                nm = it.get(field)
+                if nm:
+                    items_by_name[str(nm)] = it
+            total = data.get("total")
+            offset += len(rows)
+            if not rows or total is None or offset >= total:
+                break
+        hit = next(((nm, it) for nm, it in items_by_name.items() if nm.lower() == target.lower()), None)
+        if not hit:
+            return (f"FREE: no {k} named '{target}' exists ({len(items_by_name)} existing {k}(s) checked). "
+                    f"Safe to create it new.")
+        nm, it = hit
+        scoped = "app" if is_app else k
+        if is_app:
+            man = it.get("manifest") or {}
+            detail = f"app '{nm}' — manifest name {man.get('name')!r}, usesCortex {man.get('usesCortex')}, owner {it.get('owner')}"
+        else:
+            detail = f"{k} '{nm}' — {str(it.get('description') or '')[:120]}"
+        return (f"TAKEN: {detail}. If this is the SAME app/idea you are (re)building, reuse this exact name "
+                f"(install/publish updates it IN PLACE). If it is a DIFFERENT artifact, choose a more "
+                f"specific app-scoped name (e.g. '<app-slug>-{scoped}') so you do NOT overwrite it.")
+
     # ── install the cortex (author supplies manifest YAML + libs) ──
     @tool("install_cortex")
     def install_cortex(name: str, manifest_yaml: str, libs_json: str) -> str:
@@ -672,14 +730,16 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
         return (f"INTERACTION FAIL: login={r.get('login')} | failed_step_index={r.get('failed_step')} | "
                 f"{r.get('detail')} | console_errors={r.get('console_errors')}")
 
-    tools = [read_lib_api, read_cortex_example, read_app_template, read_node_api, read_app_stack, read_app_source,
-             find_public_index, install_cortex, install_extension, invoke_extension, publish_app,
-             seed_memory, app_inline_url, verify_render, verify_anon_render, verify_interaction]
+    tools = [read_lib_api, read_cortex_example, read_app_template, read_node_api, name_available,
+             read_app_stack, read_app_source, find_public_index, install_cortex, install_extension,
+             invoke_extension, publish_app, seed_memory, app_inline_url, verify_render, verify_anon_render,
+             verify_interaction]
     # Side-effecting / live-state tools must NOT be cached. crewai caches tool results by args, which
     # would serve a STALE verdict across fix-loop iterations (observed: verify_render "(from cache)"
     # returning the pre-fix FAIL after a re-publish). The read-only discovery tools may cache.
     for _t in (install_cortex, install_extension, invoke_extension, publish_app, seed_memory, verify_render,
-               verify_anon_render, verify_interaction, read_node_api, read_app_stack, read_app_source, find_public_index):
+               verify_anon_render, verify_interaction, read_node_api, name_available, read_app_stack,
+               read_app_source, find_public_index):
         try:
             _t.cache_function = lambda *_a, **_k: False
         except Exception:  # noqa: BLE001

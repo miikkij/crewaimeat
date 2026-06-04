@@ -96,13 +96,27 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "BLOCKED or an error, read the exact reason, correct it, and resubmit (at most 3 rounds per "
             "artifact). If install returns INSTALL DENIED (403), report it — the node needs the agent "
             "cortex-install grant.\n"
-            "4. Report each artifact you fixed -> redeployed (with its served/live URL), and any you "
-            "could not fix after 3 rounds, with the exact blocking error. Be honest; do not claim a fix "
-            "that did not deploy."
+            "3.5. CONFIRM THE FIX ACTUALLY RENDERS — a clean redeploy is NOT done. install_cortex/publish_app "
+            "run only a SYNTAX check (node --check); a parseable artifact can still fail at runtime, which is "
+            "exactly the class of bug you were sent to repair (raw i18n keys, '[object Object]', a blank "
+            "render, a boot-order race, an empty list from a wrong key prefix — they ALL pass node --check). "
+            "After a clean redeploy, run verify_render(filename, expect_csv) with expect_csv = a few strings "
+            "that MUST appear. ALSO run verify_anon_render(filename, expect_csv) if the app is a PUBLIC / "
+            "anon-readable viewer, and verify_interaction(filename, steps_json) if the original failure was "
+            "BEHAVIORAL (a control that does not work) — using ONLY non-destructive, read-or-create-your-own "
+            "steps (never click controls that hide/delete/modify shared or other users' content; a test must "
+            "not mutate live/shared state). If a gate returns FAIL, read its reason, feed it back into steps "
+            "1-3, re-author, redeploy, and re-run the gate — AT MOST 3 rounds. A fix is DONE only when the "
+            "applicable gate(s) return PASS, not when the redeploy merely succeeds.\n"
+            "4. Report each artifact you fixed -> redeployed -> verified (with its served/live URL and the "
+            "PASS verdict), and any you could not get to PASS after 3 rounds, with the exact blocking error "
+            "or failing-gate reason. Be honest; report only fixes that actually deployed clean AND passed "
+            "their gate."
         ),
         expected_output=(
-            "A per-artifact result: each fixed artifact -> redeployed (with URL), or -> still blocked "
-            "with the exact error. Be honest; do not claim a fix that did not deploy."
+            "A per-artifact result: each fixed artifact -> redeployed -> gate PASS (with URL + which gate), "
+            "or -> still blocked with the exact error / failing-gate reason. Report only fixes that deployed "
+            "clean AND passed their verify gate."
         ),
         agent=fixer,
     )
