@@ -15,6 +15,7 @@ The idea behind crewaimeat is to make building a CrewAI crew fast (an AI assista
 - [CrewSpec options](#crewspec-options)
 - [The agent's README, commands, and services](#the-agents-readme-commands-and-services)
 - [crew-forge: an agent that makes agents](#crew-forge-an-agent-that-makes-agents)
+- [Running the fleet (scripts)](#running-the-fleet-scripts)
 
 ## Overview
 
@@ -219,4 +220,22 @@ That handles everything except the first link: after a reboot, something has to 
 ./scripts/install-autostart.ps1     # one-time; creates a Scheduled Task "crewaimeat-forge"
 ```
 
-Then on every boot, crew-forge starts under the watchdog and brings the rest of the fleet back up on its own. (Remove with `Unregister-ScheduledTask -TaskName crewaimeat-forge -Confirm:$false`.)
+Then on every boot, crew-forge starts under the watchdog and brings the rest of the fleet back up on its own. (Remove with `Unregister-ScheduledTask -TaskName crewaimeat-forge -Confirm:$false`.) To start crew-forge **manually** instead (or right now), use `./scripts/start_fleet.ps1` — see below.
+
+## Running the fleet (scripts)
+
+Run one crew at a time, or manage the whole fleet with the scripts in `scripts/`. Each has a `.ps1` (Windows) and a `.sh` (macOS/Linux).
+
+| I want to… | Use | What it does |
+|---|---|---|
+| Run / develop a single crew | `uv run python crews/<x>_crew.py` | Runs one crew in the foreground (Ctrl+C stops it). |
+| Keep one crew alive (auto-restart) | `./scripts/watchdog.ps1 crews/<x>_crew.py` | Re-launches that crew if it ever exits. The building block the others use. |
+| Start the **whole fleet** now | `./scripts/start_fleet.ps1` | `uv sync`, then starts crew-forge, which **reconciles the fleet** — launches every approved crew (skipping running ones). crew-forge stays in that terminal; the rest run detached. |
+| Start the fleet on **every boot** | `./scripts/install-autostart.ps1` | One-time: registers crew-forge to start at logon, so the fleet returns by itself after a reboot. |
+| See **what's running** | `./scripts/view_fleet.ps1` | Read-only: each crew's state (running / down) and the live-daemon count. Kills nothing. |
+| **Stop everything** | `./scripts/terminate_fleet.ps1` | Kills all watchdogs, crew daemons, and connectors (in that order). `-DryRun` lists first. |
+| Re-reconcile while crew-forge is up | crew-forge `/startall` (send as a task) | Brings stopped crews back without restarting crew-forge. |
+
+**Which and when, in short:** for day-to-day dev, run one crew with `uv run python crews/<x>_crew.py`. To bring everything up in one go (or after `terminate_fleet`), use `start_fleet`. To have the fleet survive reboots unattended, run `install-autostart` once. Use `view_fleet` to check state, `terminate_fleet` to stop, and crew-forge's `/startall` to re-reconcile while it's running.
+
+**Why there's no "launch every crew" loop:** starting the fleet is crew-forge's *idempotent reconcile* (in code) — it skips crews already running and never double-launches. `start_fleet` and `install-autostart` only bootstrap crew-forge; it brings up the rest (see [Surviving a reboot](#surviving-a-reboot-the-fleet-supervisor)). `terminate_fleet` is the blunt inverse (kill all).
