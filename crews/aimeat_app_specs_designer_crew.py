@@ -22,6 +22,7 @@ from __future__ import annotations
 from crewai import Agent, Task
 
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
+from crewaimeat.author_tool import make_author_tools
 from crewaimeat.memory_tools import make_memory_tools
 from crewaimeat.workflow import make_workflow_tools
 
@@ -63,9 +64,11 @@ index so bodies can live under many authors.
 
 IMAGES / FILES (AIMEAT storage): upload with a token via POST /v1/storage {key, visibility:'public', data:
 base64, mime_type}; store the returned key. An ANONYMOUS uploader uses a key prefixed 'anonymous/'; a
-logged-in user uses their own namespace. DISPLAY an image by fetching /v1/storage/<key> WITH a token, then
-URL.createObjectURL(blob) → img.src (storage serves through auth even for public files). The viewer gets an
-anon token (POST /v1/auth/anonymous, which carries storage:read/write) for display.
+logged-in user uses their own namespace. DISPLAY a PUBLIC image with a plain <img src="{base}/v1/pub/<gaii>/
+<key>"> — the tokenless public route serves visibility:'public' files for direct <img>/links (no fetch/blob
+needed). Reserve the fetch-with-token → blob → URL.createObjectURL(blob) → img.src path for OWNER-PRIVATE
+files the logged-in owner reads from their OWN namespace; /v1/storage/<key> is scoped to the CALLER's gaii,
+so a viewer's anon token cannot read another owner's file via /v1/storage — public display uses /v1/pub.
 
 AUTH: AIMEAT.auth.login() returns the owner session or null for anonymous; gate write/admin UI on a real
 session (session.ghii). Anonymous visitors read public content; logged-in users write their own namespace.
@@ -89,6 +92,11 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     wf = make_workflow_tools(coordinator_name=AGENT_NAME, run_id=tid, task_id=tid, tag="workflow", timeout=1800)
     ask = [t for t in wf if getattr(t, "name", "") == "ask_owner"]
     mem = make_memory_tools(AGENT_NAME)
+    # Read-only discovery tools so the architect can GROUND the spec in the LIVE node (current template/lib
+    # surface + a real PUBLISHER gaii) rather than only the static PLAYBOOK. No install/publish power.
+    author_tools, _ = make_author_tools(AGENT_NAME, task_id=tid)
+    discovery = [t for t in author_tools if getattr(t, "name", "") in
+                 ("read_app_template", "read_lib_api", "read_node_api", "find_public_index")]
 
     architect = Agent(
         role="AIMEAT Solutions Architect",
@@ -107,7 +115,7 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "choice needs server-side ownership or an external API you flag the extension (owner-installed) "
             "path clearly.\n\n" + PLAYBOOK
         ),
-        tools=[*ask, *mem],
+        tools=[*ask, *mem, *discovery],
         llm=ctx.llm,
         max_iter=25,
         allow_delegation=False,

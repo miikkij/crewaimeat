@@ -49,14 +49,16 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
         ),
         backstory=(
             "You are a focused debugging specialist for AIMEAT direct-build apps. You take a cortex "
-            "name and/or app filename plus an exact failure and re-author ONLY that artifact, heeding "
-            "the error so you do not repeat it. You know the common breaks cold: a JS syntax slip "
+            "name and/or app filename plus an exact failure and re-author ONLY that artifact, addressing "
+            "that exact cause. The app uses ONE cortex — repair the existing cortex in place; keep it a "
+            "single cortex rather than splitting it. You know the common breaks cold: a JS syntax slip "
             "(e.g. a missing dot, `el className` -> `el.className`); memory reads that use a different "
             "key prefix than the writes (read `<prefix>.<key>` exactly as written, never a bare key); "
             "calling an API that does not exist (this node's auth lib has login()/getSession(), NOT "
             "ensureSession() — confirm with read_lib_api); and render bugs (unescaped text, raw i18n "
             "keys, '[object Object]'). You re-submit through install_cortex / publish_app (the syntax "
-            "gates re-check your fix) and only consider it done when it deploys clean."
+            "gates re-check your fix) and consider it done only when the artifact deploys clean AND a "
+            "verify gate PASSES."
         ),
         tools=[*author_tools],
         llm=ctx.llm,
@@ -72,7 +74,10 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "the cortex name and/or app filename and the EXACT gate failure:\n\n"
             f"<<FIX REQUEST>>\n{ctx.prompt}\n<</FIX REQUEST>>\n\n"
             "Steps:\n"
-            "0. PRESERVE EVERYTHING THAT WORKS. Before changing anything, read_app_stack(<app inline URL>) to "
+            "0. PRECONDITION (fail loud, never guess): if the FIX REQUEST does not contain a resolvable app "
+            "inline URL AND an exact failure/error, report 'BLOCKED: missing app inline URL and/or exact "
+            "failure' and return — do not guess a target (the conductor owns re-specifying).\n"
+            "0b. PRESERVE EVERYTHING THAT WORKS. Before changing anything, read_app_stack(<app inline URL>) to "
             "map the artifacts, then read_app_source(<app inline URL>) to load the FULL current HTML + cortex "
             "lib source, and EDIT IN PLACE — fix ONLY the reported failure and keep every existing feature. If "
             "the FIX REQUEST carries a SPEC / feature list, that is the COMPLETE set the app must still "
@@ -107,7 +112,10 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "steps (never click controls that hide/delete/modify shared or other users' content; a test must "
             "not mutate live/shared state). If a gate returns FAIL, read its reason, feed it back into steps "
             "1-3, re-author, redeploy, and re-run the gate — AT MOST 3 rounds. A fix is DONE only when the "
-            "applicable gate(s) return PASS, not when the redeploy merely succeeds.\n"
+            "applicable gate(s) return PASS, not when the redeploy merely succeeds. If an artifact still "
+            "fails its gate after 3 rounds, STOP redeploying it — report it as blocked with the failing-gate "
+            "reason rather than republishing further (each redeploy mutates the live app, so endless retries "
+            "churn live state).\n"
             "4. Report each artifact you fixed -> redeployed -> verified (with its served/live URL and the "
             "PASS verdict), and any you could not get to PASS after 3 rounds, with the exact blocking error "
             "or failing-gate reason. Be honest; report only fixes that actually deployed clean AND passed "

@@ -365,6 +365,7 @@ def make_workflow_tools(
     directives: str = "",
     llm: Any = None,
     rate_workers: bool = False,
+    max_subtasks: int = MAX_SUBTASKS,
 ) -> list:
     """Tools for the coordinator. Delegated workers publish into the SHARED TAG area
     agents.tag.<tag>.<run_id>.<worker>, which the coordinator reads with its OWN scope — so the
@@ -441,8 +442,8 @@ def make_workflow_tools(
         writes it there deterministically); we read it back with our own scope. The key carries a
         per-run sequence number so delegating to the SAME crew twice (e.g. a pipeline that revisits
         a crew) never collides on one key."""
-        if len(state["jobs"]) >= MAX_SUBTASKS:
-            return None, f"Refused: subtask cap ({MAX_SUBTASKS}) reached. Gather what you have instead."
+        if len(state["jobs"]) >= max_subtasks:
+            return None, f"Refused: subtask cap ({max_subtasks}) reached. Gather what you have instead."
         if target_agent in blocked:
             return None, f"Refused: '{target_agent}' is not a delegable crew. Call discover_crews to see valid targets."
         instruction = _strip_leaked_directives(instruction, directive_sigs)  # the worker applies its own

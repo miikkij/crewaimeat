@@ -27,7 +27,6 @@ from crewai import Agent, Task
 
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 from crewaimeat.author_tool import make_author_tools
-from crewaimeat.workflow import make_workflow_tools
 
 AGENT_NAME = "aimeat-app-builder"
 
@@ -50,11 +49,6 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     tid = (ctx.task or {}).get("id") or "manual"
     author_tools, _state = make_author_tools(AGENT_NAME, task_id=tid)
 
-    wf_tools = make_workflow_tools(
-        coordinator_name=AGENT_NAME, run_id=tid, task_id=tid, tag="workflow", timeout=1800,
-    )
-    web_tools = [t for t in wf_tools if getattr(t, "name", "") in ("discover_crews", "delegate_and_wait")]
-
     builder = Agent(
         role="AIMEAT App Builder",
         goal=(
@@ -66,15 +60,16 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "presentation only) that calls ONLY a CORTEX lib (the clean domain API), which reads/writes "
             "the owner's memory and (only when truly needed) an extension. You hold the whole design in "
             "one head, so your memory-key usage is consistent end to end — you read keys exactly as you "
-            "write them, with ONE prefix. You do NOT trust remembered API names: you call read_lib_api "
-            "first and author against the REAL methods (this node's auth lib has login()/getSession() — "
-            "there is no ensureSession()). You prefer NO extension (own-data apps via AIMEAT.data). You "
-            "verify, you don't assume: the app is not done until a real browser test passes. Your tools "
-            "syntax-check your code before it ships, so you fix BLOCKED errors before moving on."
+            "write them, with ONE prefix. You ground API names in reality: you call read_lib_api first and "
+            "author against the REAL methods it returns (this node's auth lib exposes login()/getSession(); "
+            "there is no ensureSession()). You default to NO extension (own-data apps use AIMEAT.data "
+            "directly). You verify rather than assume: the app is done when the deterministic verify gate "
+            "PASSES in a real browser. Your tools syntax-check your code before it ships, so you fix "
+            "BLOCKED errors before moving on."
         ),
-        tools=[*author_tools, *web_tools],
+        tools=[*author_tools],
         llm=ctx.llm,
-        max_iter=60,
+        max_iter=80,  # design reads + build + up to 3 fix rounds across 3 gates can exceed 60 on a complex app
         allow_delegation=False,
         verbose=True,
     )
@@ -137,7 +132,11 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "the idea/spec says any user CREATES or POSTS (a marketplace, a board, a form, a tool that saves), "
             "the create/write UI and its cortex write method are REQUIRED parts of the design, not optional — "
             "a read-only viewer is an INCOMPLETE build for such an idea. The app calls ONLY cortex methods "
-            "(plus AIMEAT.auth/AIMEAT.data for boot/session)."
+            "(plus AIMEAT.auth/AIMEAT.data for boot/session).\n"
+            "7. ASSUMPTIONS (fail loud, never silently guess): if a load-bearing choice is ambiguous and the "
+            "task gave you no spec to resolve it — public-vs-private, read-only-vs-write, or which live data "
+            "source — pick the sensible default AND state that assumption LOUDLY at the top of your design "
+            "(an 'ASSUMPTIONS:' line), so a wrong guess is visible to the owner rather than buried in the build."
         ),
         expected_output=(
             "A compact design: the chosen architecture (cortex+app, extension yes/no + why), the memory "
@@ -173,6 +172,11 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "The tool syntax-checks the lib first; if it returns PRE-INSTALL BLOCKED, fix the JS and "
             "retry. If it returns INSTALL DENIED (403), report it — the owner's node still needs the "
             "agent cortex-install grant deployed.\n"
+            "2b. IF (and only if) you built an EXTENSION for genuine server-only work: install_extension("
+            "name, manifest_yaml, scripts_json), then invoke_extension(name, action, input_json) to "
+            "SMOKE-TEST that EACH action returns the expected shape BEFORE the cortex/app rely on it. An "
+            "extension action that 4xx/5xxs is the usual root cause of a later INTERACTION FAIL — catch it "
+            "here, not in Phase 3.\n"
             "3. APP html: START FROM the read_app_template() skeleton — do NOT hand-roll the auth/boot "
             "logic. The template already: loads /v1/libs/aimeat-auth.js + /v1/libs/aimeat-data.js in "
             "boot(), mounts the login bar with AIMEAT.auth.mountLoginButton('#header-auth', "
@@ -233,8 +237,10 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "1. app_inline_url(filename) — the live URL.\n"
             "2. verify_render(filename, expect_csv) — THE GATE. It logs in as the owner (credentials from "
             "env, you never see them) and confirms real content renders with no console errors and no raw "
-            "i18n keys. Set expect_csv to a few agent names you seeded (e.g. 'web-researcher,data-analyst') "
-            "so it asserts your data actually shows. \n"
+            "i18n keys. Set expect_csv to a few strings that MUST appear in the rendered view — for a "
+            "LIVE-data app use REAL values you expect (e.g. actual agent names from /v1/agents); for a "
+            "SEEDED app use names from your seed entries. Pick values you are confident render, so the gate "
+            "asserts real content rather than an empty shell (it passes if ANY listed string appears).\n"
             "   - If it returns VERIFY FAIL, READ the reason (console error / missing content / raw i18n "
             "keys / login failure) and FIX THE CAUSE: re-author the cortex lib or the app HTML and "
             "re-install_cortex / re-publish_app, then call verify_render AGAIN. Loop AT MOST 3 times.\n"
@@ -262,11 +268,7 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "startApp() or a wrong getPublic target — fix that one cause.\n"
             "   The build is GREEN when verify_render PASSES, AND verify_interaction PASSES (interactive "
             "apps), AND verify_anon_render PASSES (public/anon-readable apps).\n"
-            "3. (Optional, extra coverage) you MAY also delegate a visual walkthrough to web-tester: "
-            "delegate_and_wait(\"web-tester\", \"Browser-test <app name>\", \"<one instruction string with "
-            "the URL + features to click>\") — three positional strings. NON-FATAL: at most one call, ignore "
-            "errors. verify_render (step 2) is what decides pass/fail, not web-tester.\n"
-            "4. Final deliverable: the cortex name, the live app URL, a one-line feature summary, and the "
+            "3. Final deliverable: the cortex name, the live app URL, a one-line feature summary, and the "
             "verify_render verdict (VERIFY PASS + the content sample). If you could not reach PASS within 3 "
             "rounds, report the exact blocking reason honestly — do not claim a pass you did not get."
         ),
@@ -283,7 +285,8 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
 
 def run() -> None:
     # 0.4 keeps JS/JSON precise yet varied enough to recover from a fix-loop (a too-cold model repeats
-    # the same wrong output every retry). Real verification is the Phase 3 web-tester browser test.
+    # the same wrong output every retry). Real verification is the Phase 3 deterministic verify gate
+    # (verify_render / verify_interaction / verify_anon_render), not an LLM's say-so.
     run_crew(
         CrewSpec(
             agent_name=AGENT_NAME,

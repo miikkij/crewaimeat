@@ -11,54 +11,49 @@ Run: uv run python crews/aimeat_app_editor_crew.py
 from __future__ import annotations
 
 from crewaimeat.author_tool import make_author_tools
-from crewaimeat.workflow import make_workflow_tools
 
 from crewai import Agent, Task
 
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
-from crewaimeat.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is set, else []
 
 AGENT_NAME = "aimeat-app-editor"
 
-README = '''  ___ _            _       _       ___    _ _ _
- / _ (_) __ _ _ __| |_    /_\\   _  | __|__| (_) |__
- / /_\\/ |/ _` | '__| __|  / _ \\ (_) | _/ _` | | '_ \\
-/ /_\\\\| | (_| | |  | |_  /_/ \\_\\     | (_| | | |_./
-\\____/|_|\\__,_|_|   \\__|           /__\\__,_|_|___|
+README = '''[[FIGLET:slant]["aimeat app editor"]]
 
 Edit any existing AIMEAT app safely — in place, surgically, verified.
-How to task me: Give me the app's inline URL + the change you want. I investigate the stack, modify only what's needed, re-install/publish, and verify_render until PASS.
+How to task me: Give me the app's inline URL + the change you want. I investigate the stack, modify only what's needed, re-install/publish, and verify until the applicable gates PASS.
 '''
 
 
-def build_domain(ctx):
+def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     tid = (ctx.task or {}).get("id") or "manual"
     author_tools, _state = make_author_tools(AGENT_NAME, task_id=tid)
-    wf = make_workflow_tools(coordinator_name=AGENT_NAME, run_id=tid, task_id=tid, tag="workflow", timeout=1800)
-    deleg = [t for t in wf if getattr(t, "name", "") in ("discover_crews", "delegate_and_wait")]
 
     specialist = Agent(
         role="AIMEAT App Editor Specialist",
-        goal="Safely edit and update an EXISTING AIMEAT app (and its cortex/extension) in place — never create duplicates, never touch unrelated artifacts, and always verify_render until VERIFY PASS.",
+        goal="Safely edit an EXISTING AIMEAT app (and its cortex/extension) IN PLACE — reuse the same names so every change updates the existing artifact, modify only artifacts in the app's stack map, and continue until the applicable verify gates PASS.",
         backstory=(
             "You are an expert AIMEAT app editor. You use make_author_tools to read, modify, re-install, "
             "re-publish, and verify existing apps. You ALWAYS start by calling read_app_stack(url) to confirm "
             "the app exists and to get the full stack map (app filename/owner, cortex(es) + methods, "
-            "extension(es) + actions, memory key hints). You modify ONLY artifacts that appear in that stack map: "
-            "UI changes → the app HTML; data-logic changes → the cortex; server-side changes → the extension. "
-            "You re-author and re-install_cortex / install_extension / publish_app using the SAME names so "
-            "everything updates in place. You preserve everything that already works. You load aimeat-auth.js, "
-            "aimeat-data.js, the cortex, and every AIMEAT.<lib> the cortex uses, and you keep the golden rule: "
-            "NO data/cortex call runs before the session exists — app code runs only AFTER "
-            "`await AIMEAT.auth.login()` resolves (read_app_template() shows the canonical boot()/startApp "
-            "wiring). Preserve the existing app's working boot; but if your edit touches data loading or the "
-            "boot sequence, keep that await-login-first order so you do not introduce the 'Not logged in' race. "
-            "For server-side logic you author an extension with `export default async function(ctx, input)`. "
-            "You never stop until verify_render returns VERIFY PASS."
+            "extension(es) + actions, memory key hints), then read_app_source(url) for the FULL verbatim "
+            "source. You modify ONLY artifacts that appear in that stack map: UI changes → the app HTML; "
+            "data-logic changes → the cortex; server-side changes → the extension. This app uses ONE cortex — "
+            "modify the existing cortex in place; keep it a single cortex rather than adding a second "
+            "component/widget cortex. You re-author and re-install_cortex / install_extension / publish_app "
+            "using the SAME names so everything updates in place, and you preserve every feature that already "
+            "works. You load aimeat-auth.js, aimeat-data.js, the cortex, and every AIMEAT.<lib> the cortex "
+            "uses, and you keep the golden rule: run every data/cortex call only AFTER "
+            "`await AIMEAT.auth.login()` resolves, inside startApp(session) (read_app_template() shows the "
+            "canonical boot()/startApp wiring). Preserve the existing app's working boot; if your edit touches "
+            "data loading or the boot sequence, keep that await-login-first order so the 'Not logged in' race "
+            "stays prevented. For server-side logic you author an extension with "
+            "`export default async function(ctx, input)`. You continue the fix loop until the applicable "
+            "verify gates PASS (at most 3 rounds)."
         ),
-        tools=[*author_tools, *deleg],
+        tools=[*author_tools],
         llm=ctx.llm,
-        max_iter=60,
+        max_iter=60,  # investigate + edit + up to 3 verify-fix rounds (re-author/re-install/re-publish/re-verify)
         allow_delegation=False,
         verbose=True
     )
@@ -125,7 +120,9 @@ def build_domain(ctx):
             "For a UI change:\n"
             "  - Modify the app HTML file surgically.\n"
             "  - Ensure the app still loads aimeat-auth.js, aimeat-data.js, every needed AIMEAT.<lib>, and the cortex.\n"
-            "  - Ensure the boot line is: `let session = (await AIMEAT.auth.login()) || AIMEAT.auth.getSession();`\n"
+            "  - Preserve the app's existing boot; if you touch it, keep read_app_template()'s canonical order: "
+            "`const session = await AIMEAT.auth.login();` then run startApp(session) only after it resolves. "
+            "For a PUBLIC/anon viewer keep startApp() UNCONDITIONAL (no `if (session)`) so anonymous visitors render.\n"
             "  - Call publish_app to update the app in place.\n\n"
             "For a data-logic / cortex change:\n"
             "  - Modify the cortex source surgically.\n"
@@ -171,8 +168,10 @@ def build_domain(ctx):
             "interactive) verify_interaction PASSES. If any applicable extra gate FAILS, treat it like a "
             "VERIFY FAIL and go to Step 3. When GREEN, report PASS + the live URL, then STOP — do not "
             "re-publish or re-verify after GREEN.\n\n"
-            "Step 3: If verify_render returns VERIFY FAIL:\n"
-            "  - Diagnose the failure from the verify_render output.\n"
+            "Step 3: If a verify gate returns FAIL:\n"
+            "  - Read the HINT line in the verify output (it maps the failure signature to the likely "
+            "artifact) and follow it. Before editing, re-read read_app_source(url) so you fix ONLY the "
+            "failure and keep every other feature byte-for-byte.\n"
             "  - If the console error is 'Not logged in. Call AIMEAT.auth.login() first.' the bug is BOOT "
             "ORDER in the APP HTML — a data/cortex/history call runs before `await AIMEAT.auth.login()` "
             "resolves. Fix the APP HTML (move that call into startApp(session) / after the awaited login), "
@@ -198,7 +197,7 @@ def build_domain(ctx):
 
 
 def run() -> None:
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README, temperature=0.4))
+    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README, temperature=0.4, poll_seconds=30))
 
 
 if __name__ == "__main__":

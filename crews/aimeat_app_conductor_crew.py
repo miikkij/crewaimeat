@@ -59,6 +59,7 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     # block on an absent owner), so a slow human answering the interview never orphans the Phase-0 wait.
     wf_tools = make_workflow_tools(
         coordinator_name=AGENT_NAME, run_id=tid, task_id=tid, tag="workflow", timeout=7200,
+        max_subtasks=10,  # spec + (forge + forged-builder) + 3 fix rounds can exceed the default cap of 6
     )
     # cancel_pending lets the conductor stop an orphaned delegatee on timeout (a builder/fixer that exceeds
     # the wait keeps running and could republish after the conductor moved on — cancel it before proceeding).
@@ -75,7 +76,7 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "the idea is RECURRING/automated, set it up on the AIMEAT scheduler so the node runs it on a cron."
         ),
         backstory=(
-            "You are a delivery lead, not a coder. You FIRST gather requirements by delegating to "
+            "You are a delivery lead who orchestrates rather than codes. You FIRST gather requirements by delegating to "
             "aimeat-app-specs-designer, which interviews the owner and returns a precise technical spec, so "
             "the build matches what the owner actually wants (the owner never has to relay anything). THEN "
             "you ROUTE the build to the right specialist: by "
@@ -90,7 +91,7 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "honestly, reporting only a pass you actually got. You route to aimeat-app-builder for "
             "everything it can do, and forge only for a genuinely new domain no existing crew covers. "
             "Finally, once the gate resolves you RATE the crew you delegated to, grounded in the objective "
-            "verify outcome (PASS first-try=5 … never passed=1) — never opinion — so the fleet learns who "
+            "verify outcome (PASS first-try=5 … never passed=1) — grounded in code, not opinion — so the fleet learns who "
             "actually delivers working apps. When a request is RECURRING or automated (a daily/periodic "
             "pipeline, a scheduled refresh), you set it up on the AIMEAT scheduler with schedule_create so "
             "the NODE runs it on a cron clock (fires even when agents are offline; the owner controls it in "
@@ -249,15 +250,24 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "This records a "
             "Quality-tab score grounded in the real render outcome (PASS first-try=5 … never passed=1) and "
             "feeds the builder's reputation. Do this whether the outcome was PASS or FAIL — honest signal "
-            "either way. (If you also routed a fix to aimeat-cortex-fixer and it made the app pass, you MAY "
-            "additionally rate it: rate_delegated_work('aimeat-cortex-fixer', verify_passed=true, fix_rounds=0).)\n"
+            "either way.\n"
+            "   ALSO rate the OTHER crews you delegated to this run, so the WHOLE chain accrues field "
+            "reputation (rate every crew you actually delegated to):\n"
+            "     (a) the spec-designer from Phase 0 — rate_delegated_work('aimeat-app-specs-designer', "
+            "verify_passed=<same as the build: true if the app ultimately reached GREEN>, fix_rounds=<the "
+            "SAME fix_rounds as the build — a good spec yields a first-try PASS (fix_rounds=0 → top score), "
+            "a vague spec shows up as more fix rounds>). This is how the fleet learns whether the spec phase "
+            "is reliable.\n"
+            "     (b) if you routed a fix to aimeat-cortex-fixer, rate it too — "
+            "rate_delegated_work('aimeat-cortex-fixer', verify_passed=<true if its fix made the app GREEN>, "
+            "fix_rounds=0).\n"
             "6. Final deliverable: the live app URL, the final verify_render verdict (PASS or the "
-            "remaining failure), the rating you recorded, and a short orchestration summary (build + any "
-            "fix rounds)."
+            "remaining failure), the ratings you recorded (build crew + spec-designer + any fixer), and a "
+            "short orchestration summary (build + any fix rounds)."
         ),
         expected_output=(
             "Final report: live app URL, final verify_render verdict (VERIFY PASS or the remaining "
-            "failure), the verify-grounded rating recorded for the delegatee, and a short orchestration "
+            "failure), the verify-grounded ratings recorded for each delegatee, and a short orchestration "
             "summary (build + any fix rounds)."
         ),
         agent=conductor,
