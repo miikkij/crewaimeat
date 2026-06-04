@@ -412,8 +412,9 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
             uses_cortex = json.loads(uses_cortex_json) if isinstance(uses_cortex_json, str) else list(uses_cortex_json or [])
         except Exception:  # noqa: BLE001
             uses_cortex = []
-        # delete any prior version so a stale one can't shadow the update
-        _call(agent_name, owner, "DELETE", f"/v1/apps/{filename}")
+        # Update IN PLACE: POST /v1/apps with the same filename versions the app on the node and keeps the
+        # full version history (so you can roll back). We intentionally do NOT delete-then-recreate — that
+        # reset every app to v1 and threw away history. (?mode=inline serves the latest version.)
         meta = {
             "filename": filename,
             "content": base64.b64encode(html.encode("utf-8")).decode(),
@@ -534,6 +535,37 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
             "memory_key_hints": prefixes,
         }, indent=1)[:2200]
 
+    @tool("read_app_source")
+    def read_app_source(url: str) -> str:
+        """RUN THIS before EDITING an existing app (after read_app_stack maps it). Returns the FULL current
+        SOURCE — the app's HTML verbatim PLUS every cortex lib it loads verbatim — so you edit IN PLACE and
+        KEEP every existing feature, instead of rewriting from memory and silently dropping things (the
+        classic regression: 'fixed the viewer, lost the post form'). Pass the app's inline URL. Aborts if it
+        is not an app URL or the app is gone."""
+        import re as _re, urllib.parse as _up
+        m = _re.search(r"/v1/apps/([^/]+)/([^/?#]+)", url or "")
+        if not m:
+            return (f"BLOCKED: not an app URL. Provide the inline URL, e.g. {base}/v1/apps/{owner}/<file>.html?mode=inline")
+        app_owner, filename = _up.unquote(m.group(1)), _up.unquote(m.group(2))
+        try:
+            g = requests.get(f"{base}/v1/apps/{app_owner}/{filename}?mode=inline", timeout=AUTHOR_TIMEOUT)
+        except Exception as e:  # noqa: BLE001
+            return f"ERROR fetching {url}: {e!r}"
+        if g.status_code != 200:
+            return (f"APP NOT FOUND (HTTP {g.status_code}) at {url}. Confirm the URL — REFUSING so no wrong app is edited.")
+        html = g.text
+        parts = [f"=== APP HTML: {filename} ({len(html)} bytes) — edit IN PLACE, preserve every feature ===\n{html}"]
+        for cname, cfile in sorted(set(_re.findall(r"/v1/cortex/([a-zA-Z0-9_-]+)/libs/([a-zA-Z0-9_.-]+)", html))):
+            try:
+                lib = requests.get(f"{base}/v1/cortex/{cname}/libs/{cfile}", timeout=AUTHOR_TIMEOUT).text
+            except Exception:  # noqa: BLE001
+                lib = "(could not fetch)"
+            parts.append(f"=== CORTEX LIB: {cname}/{cfile} ({len(lib)} bytes) ===\n{lib}")
+        out = "\n\n".join(parts)
+        if len(out) > 24000:
+            out = out[:24000] + "\n\n...[TRUNCATED — source is large; edit the one artifact you need and keep the rest intact]"
+        return out
+
     @tool("verify_render")
     def verify_render(filename: str, expect_csv: str = "") -> str:
         """DETERMINISTIC authed render gate — the real proof the app works for a logged-in owner. Loads the
@@ -640,14 +672,14 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
         return (f"INTERACTION FAIL: login={r.get('login')} | failed_step_index={r.get('failed_step')} | "
                 f"{r.get('detail')} | console_errors={r.get('console_errors')}")
 
-    tools = [read_lib_api, read_cortex_example, read_app_template, read_node_api, read_app_stack,
+    tools = [read_lib_api, read_cortex_example, read_app_template, read_node_api, read_app_stack, read_app_source,
              find_public_index, install_cortex, install_extension, invoke_extension, publish_app,
              seed_memory, app_inline_url, verify_render, verify_anon_render, verify_interaction]
     # Side-effecting / live-state tools must NOT be cached. crewai caches tool results by args, which
     # would serve a STALE verdict across fix-loop iterations (observed: verify_render "(from cache)"
     # returning the pre-fix FAIL after a re-publish). The read-only discovery tools may cache.
     for _t in (install_cortex, install_extension, invoke_extension, publish_app, seed_memory, verify_render,
-               verify_anon_render, verify_interaction, read_node_api, read_app_stack, find_public_index):
+               verify_anon_render, verify_interaction, read_node_api, read_app_stack, read_app_source, find_public_index):
         try:
             _t.cache_function = lambda *_a, **_k: False
         except Exception:  # noqa: BLE001

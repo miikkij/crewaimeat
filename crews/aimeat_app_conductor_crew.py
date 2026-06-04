@@ -67,20 +67,24 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
         role="AIMEAT App Delivery Lead",
         goal=(
             "Deliver a WORKING AIMEAT app from the user's idea by orchestrating specialists and "
-            "enforcing the deterministic authed render gate — never completing an app that fails it. When "
+            "enforcing the deterministic authed render gate — completing an app only once it passes. When "
             "the idea is RECURRING/automated, set it up on the AIMEAT scheduler so the node runs it on a cron."
         ),
         backstory=(
-            "You are a delivery lead, not a coder. You first ROUTE the idea to the right specialist: by "
+            "You are a delivery lead, not a coder. You FIRST gather requirements by delegating to "
+            "aimeat-app-specs-designer, which interviews the owner and returns a precise technical spec, so "
+            "the build matches what the owner actually wants (the owner never has to relay anything). THEN "
+            "you ROUTE the build to the right specialist: by "
             "default aimeat-app-builder (it builds the AIMEAT-native way — ONE cortex + ONE app, plus a "
             "server-side extension when needed — and covers most apps). If, and ONLY if, the idea needs a "
             "genuinely NEW kind of building that no existing crew can do, you ORDER aimeat-crew-forge to "
             "forge a new specialist for that domain, then delegate to it (a freshly-forged agent needs the "
             "owner's one-time approval before it can run). Then you INDEPENDENTLY verify the result with "
-            "verify_render (a real logged-in browser render — you never trust 'looks done'). When it fails "
+            "verify_render (a real logged-in browser render — you rely on the gate over 'looks done'). When it fails "
             "you route the precise fix to aimeat-cortex-fixer and re-verify. You stop only when the gate is "
             "green or you have exhausted a bounded number of fix rounds — and then you report the truth, "
-            "never a pass you did not get. You do NOT forge when aimeat-app-builder can do the job. "
+            "honestly, reporting only a pass you actually got. You route to aimeat-app-builder for "
+            "everything it can do, and forge only for a genuinely new domain no existing crew covers. "
             "Finally, once the gate resolves you RATE the crew you delegated to, grounded in the objective "
             "verify outcome (PASS first-try=5 … never passed=1) — never opinion — so the fleet learns who "
             "actually delivers working apps. When a request is RECURRING or automated (a daily/periodic "
@@ -97,10 +101,33 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
         verbose=True,
     )
 
+    spec_task = Task(
+        description=(
+            f"{ctx.today}\n\n"
+            "PHASE 0 — GATHER REQUIREMENTS (so the app is built right the first time). The user's request:\n\n"
+            f"<<APP IDEA>>\n{ctx.prompt}\n<</APP IDEA>>\n\n"
+            "Delegate to the requirements specialist, which interviews the owner and returns a precise, "
+            "AIMEAT-correct technical spec:\n"
+            "  delegate_and_wait(\"aimeat-app-specs-designer\", \"Spec: <short idea>\", \"<the full app idea "
+            "above as ONE self-contained string>\")  — exactly three positional string args.\n"
+            "It asks the owner a few short questions (the owner answers them in the dashboard Messages tab), "
+            "then returns the spec: the DATA LAYER, who reads/writes, the auth model, the data model "
+            "(keys/namespaces/visibility), image handling, a build checklist, and a verify plan.\n"
+            "CAPTURE the returned spec VERBATIM — Phase 1 hands it to the builder so the app matches the "
+            "agreed design. If aimeat-app-specs-designer is unreachable (not approved, missing the 'workflow' "
+            "tag, or the fleet is down), STOP and report exactly that — the build needs the spec first."
+        ),
+        expected_output=(
+            "The complete technical spec returned by aimeat-app-specs-designer (data layer + rationale, data "
+            "model with keys/namespaces/visibility, auth model, image handling, build checklist, verify plan)."
+        ),
+        agent=conductor,
+    )
+
     plan = Task(
         description=(
             f"{ctx.today}\n\n"
-            "PHASE 1 — ROUTE, then DELEGATE THE BUILD. The app to build:\n\n"
+            "PHASE 1 — ROUTE, then DELEGATE THE BUILD to the SPEC from Phase 0.\n\n"
             f"<<APP IDEA>>\n{ctx.prompt}\n<</APP IDEA>>\n\n"
             "1. discover_crews — see which AIMEAT-SDLC specialists exist (e.g. aimeat-app-builder for "
             "cortex+app and extension-backed apps; aimeat-extension-builder; plus any previously-forged "
@@ -124,7 +151,8 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "exact approve step, and that the build will run once approved. Do NOT forge when "
             "aimeat-app-builder can do it — forging is for new domains only.\n"
             "3. delegate_and_wait(\"<chosen specialist>\", \"<short title>\", \"<instruction>\") — the "
-            "instruction is ONE self-contained string: the full app idea above, plus: 'Build it the direct "
+            "instruction is ONE self-contained string: the FULL TECHNICAL SPEC from Phase 0 (verbatim — the "
+            "data layer, data model, auth, image handling, build checklist), plus: 'Build to THIS SPEC, the direct "
             "AIMEAT-native way — ONE cortex + ONE app HTML (start the app from read_app_template()), no "
             "generator. Report the app FILENAME (e.g. something.html), the cortex name, the live inline URL, "
             "and the agent/topic names you seeded. If the app is INTERACTIVE (click/type to make something "
@@ -135,7 +163,8 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "newspaper, directory, noticeboard, gallery, or a viewer over a content pipeline's public "
             "memory): the build instruction MUST additionally say: 'This must render for ANYONE with NO "
             "account. Start from read_app_template(\"public_viewer\") — startApp() runs UNCONDITIONALLY "
-            "(never `if (session) startApp()`), read shown content with getPublic(gaii,key) ONLY. The "
+            "(call startApp() unconditionally so anonymous visitors render), read shown content with "
+            "getPublic(gaii,key) ONLY. The "
             "content lives behind ONE public index key: call find_public_index(\"<the index key, e.g. "
             "newspaper.frontpage>\") to get the PUBLISHER gaii, set `const PUBLISHER` to it and "
             "`const INDEX_KEY` to that key, read the index, then fan out getPublic(item.gaii, item.key) per "
@@ -154,6 +183,7 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "name, the live URL, and the seeded agent names clearly stated."
         ),
         agent=conductor,
+        context=[spec_task],
     )
 
     verify = Task(
@@ -166,10 +196,14 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "content sample).\n"
             "2. If VERIFY PASS: you may NOT be done yet — verify_render logs in as the OWNER and checks only "
             "the initial render, so it FALSE-PASSes two classes of app:\n"
-            "   (a) INTERACTIVE apps (click/type to make something happen): run verify_interaction(filename, "
-            "steps_json) using the steps_json the builder reported in Phase 1 (if the app is clearly "
-            "interactive but the builder reported no steps, derive steps that exercise the core feature with "
-            "the app's real selectors). INTERACTION FAIL → treat like VERIFY FAIL, go to step 3.\n"
+            "   (a) INTERACTIVE apps — and ESPECIALLY any app whose SPEC says users CREATE / POST / EDIT "
+            "something (e.g. a marketplace where registered users list items): run verify_interaction(filename, "
+            "steps_json) that exercises the SPEC'd WRITE path end-to-end — log in if required, CREATE/POST an "
+            "item with the app's real selectors, then expect_text that new item appearing — not just reading. "
+            "Use the steps_json the builder reported in Phase 1; if it only tests viewing, ADD steps that "
+            "perform the write the spec requires. A render-only or view-only pass on an app whose spec requires "
+            "posting/creating is NOT green. INTERACTION FAIL (or no write path present) → treat like VERIFY "
+            "FAIL, go to step 3.\n"
             "   (b) PUBLIC / ANON-READABLE apps (the idea required reading WITHOUT logging in): verify_render "
             "logged in as the owner, so it CANNOT catch a viewer that renders only for a session (the "
             "`if (session) startApp()` bug leaves anonymous visitors stuck on 'Loading…'). Run "
@@ -181,9 +215,11 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "on verify_render alone. When green, report success + the live app URL.\n"
             "3. If VERIFY FAIL: route the fix. delegate_and_wait(\"aimeat-cortex-fixer\", \"<title>\", "
             "\"<instruction>\") where the instruction is ONE self-contained string containing: the app "
-            "FILENAME, the cortex name, and the EXACT verify_render FAIL text (login status + console "
-            "errors + content sample, OR the ANON VERIFY FAIL / INTERACTION FAIL text — pass whichever gate "
-            "failed). Then re-run the gate(s) that applied — verify_render, and verify_anon_render for a "
+            "FILENAME, the app INLINE URL, the cortex name, the FULL TECHNICAL SPEC from Phase 0 (so the "
+            "fixer knows the COMPLETE feature set and PRESERVES it — fixing only the failure without dropping "
+            "any spec'd feature like a working create/post form), and the EXACT FAIL text (verify_render "
+            "login status + console errors + content sample, OR the ANON VERIFY FAIL / INTERACTION FAIL text "
+            "— pass whichever gate failed). Then re-run the gate(s) that applied — verify_render, and verify_anon_render for a "
             "public app, and verify_interaction for an interactive app — AGAIN. Repeat this "
             "fix→verify loop AT MOST 3 times.\n"
             "4. If still FAIL after 3 rounds: STOP — do not loop further. Report the remaining failure "
@@ -209,10 +245,10 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "summary (build + any fix rounds)."
         ),
         agent=conductor,
-        context=[plan],
+        context=[spec_task, plan],
     )
 
-    return [conductor], [plan, verify]
+    return [conductor], [spec_task, plan, verify]
 
 
 def run() -> None:

@@ -167,6 +167,26 @@ def _find_thread_id(resp) -> str | None:
     return None
 
 
+def _read_agent_messages(agent_name: str) -> dict | None:
+    """Read this agent's message history via REST. The `aimeat` connector CLI exposes NO
+    message_history tool (it answers "Unknown CLI-callable tool: aimeat_message_history"), so the
+    owner's prompt answer is read straight from GET /v1/agents/<agent>/messages with the agent's own
+    token. Returns the parsed JSON (e.g. {"messages":[...]}) or None."""
+    try:
+        import os as _os
+        import requests as _requests
+        from aimeat_crewai.daemon import _read_token as _rt
+        token, node = _rt(agent_name, owner=_os.environ.get("AIMEAT_OWNER") or None)
+        r = _requests.get(
+            f"{node.rstrip('/')}/v1/agents/{agent_name}/messages",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"per_page": 50}, timeout=20,
+        )
+        return r.json() if r.status_code == 200 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _find_prompt_answer(resp, prompt_id: str):
     """Find the owner's single-select answer matching prompt_id in a message-history response.
     Returns the chosen value (or free-text 'other'), or None if not answered yet."""
@@ -174,7 +194,9 @@ def _find_prompt_answer(resp, prompt_id: str):
         meta = d.get("metadata")
         if isinstance(meta, dict):
             pa = meta.get("prompt_answer") or meta.get("promptAnswer")
-            if isinstance(pa, dict) and pa.get("prompt_id") == prompt_id:
+            # The node stores/returns camelCase (promptId), even though the MCP tool docs say
+            # prompt_id — accept BOTH so the owner's answer is actually matched.
+            if isinstance(pa, dict) and (pa.get("prompt_id") or pa.get("promptId")) == prompt_id:
                 return pa.get("choice") or pa.get("other") or pa.get("value")
     return None
 
@@ -741,11 +763,7 @@ def make_workflow_tools(
         thread_id = _find_thread_id(send)
         waited = 0
         while waited < CLARIFY_TIMEOUT:
-            hist = _aimeat_call(
-                coordinator_name,
-                "aimeat_message_history",
-                {"thread_id": thread_id} if thread_id else {"per_page": 50},
-            )
+            hist = _read_agent_messages(coordinator_name)  # REST: the CLI has no message_history tool
             ans = _find_prompt_answer(hist, pid)
             if ans is not None:
                 _event(f"Owner answered: {str(ans)[:80]}")
