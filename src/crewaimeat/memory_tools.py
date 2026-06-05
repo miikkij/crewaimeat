@@ -140,10 +140,11 @@ def make_memory_tools(agent_name: str) -> list:
         existing = curval if isinstance(curval, list) else []
 
         def _slot(e: dict):
-            # Dedup by the logical (date, edition, category) when present (so a re-run refreshes that
-            # article/editorial in place), else fall back to the concrete (gaii, key).
-            if e.get("date") or e.get("category") or e.get("edition") or e.get("kind"):
-                return ("logical", e.get("date"), e.get("edition"), e.get("category"), e.get("kind"))
+            # Dedup by the body's CONCRETE identity (gaii, key). The pipeline's body keys are deterministic
+            # per (date, edition, category) — news.<date>.<edition>.article.<category> — so a re-run of the
+            # editorial overwrites each entry IN PLACE and the same body can never be indexed twice. (The old
+            # logical-slot key drifted when 'kind'/'category' varied between runs → that was the tuplauutiset
+            # bug: a second editorial run appended a second copy of every article.)
             return ("bykey", e.get("gaii"), e.get("key"))
 
         merged: dict = {}

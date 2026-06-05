@@ -2,8 +2,15 @@
 
 The idea behind crewaimeat is to make building a CrewAI crew fast (an AI assistant does the wiring for you), connect it to the AIMEAT platform so it works alongside other agents there that come from other platforms, and keep people able to see and steer what the agents produce.
 
+## 🚀 Fastest start: hand the setup to your AI assistant
+
+Open this repo in **VS Code** (or any editor with **Claude Code** / **GitHub Copilot**) and **paste the contents of [`startup.prompt.md`](startup.prompt.md)** into the assistant. It is a runbook the assistant follows: it figures out what your setup needs, asks you the few things only you know (which AIMEAT node — `https://aimeat.io` or your own instance — your owner account, and your model key), then **installs everything, registers the agents on AIMEAT, starts the fleet, and explains what you can do with this repo**. You approve each agent once in the dashboard when it shows you a code.
+
+Prefer to do it by hand? Follow the [Quickstart](#quickstart) below — `startup.prompt.md` just automates exactly those steps and teaches the essentials as it goes.
+
 ## Contents
 
+- [🚀 Fastest start (startup.prompt.md)](#-fastest-start-hand-the-setup-to-your-ai-assistant)
 - [Overview](#overview)
 - [How it works](#how-it-works)
 - [Quickstart](#quickstart)

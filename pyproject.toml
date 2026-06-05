@@ -14,6 +14,7 @@ dependencies = [
     "python-dotenv>=1.0.1",
     "tzdata",  # zoneinfo tz database (needed on Windows for current-time injection)
     "pyfiglet>=1.0.0",  # deterministic ASCII-art for [[FIGLET]] README directives
+    "trafilatura>=2.0.0",
 ]
 
 [project.scripts]

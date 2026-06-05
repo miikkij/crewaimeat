@@ -88,6 +88,21 @@ def _extract_inline_js(html: str) -> str:
     return "\n;\n".join(blocks)
 
 
+def _utf8_text(r) -> str:
+    """Decode a response body as UTF-8. `requests` defaults text/html to ISO-8859-1 (Latin-1) when the
+    server sends no charset header, which CORRUPTS UTF-8 content (e.g. Scandinavian ä/ö → Ã¤/Ã¶) the moment
+    an agent reads-then-republishes it. Force UTF-8 so read_app_source / revert_app round-trips are
+    byte-faithful and the re-published app keeps its characters."""
+    try:
+        r.encoding = "utf-8"
+        return r.text
+    except Exception:  # noqa: BLE001
+        try:
+            return r.content.decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001
+            return getattr(r, "text", "")
+
+
 # --------------------------------------------------------------------------- #
 # Run-scoped verify-gate verdicts — so the scaffold can gate task completion on the DETERMINISTIC gate
 # outcome ({ok} from app_verify) rather than the agent's self-reported text. Keyed by task_id; each gate
@@ -152,7 +167,7 @@ def _revert_app_rest(agent_name: str, owner: "str | None", base: str, filename: 
                           headers={"Authorization": f"Bearer {tok}"}, timeout=AUTHOR_TIMEOUT)
         if cr.status_code != 200 or not (cr.text or "").strip():
             return False, f"could not fetch v{to_version} ({cr.status_code})"
-        html = cr.text
+        html = _utf8_text(cr)
         name, desc, category, icon, uses_cortex = filename.replace(".html", ""), "", "utility", "", []
         try:
             vr = requests.get(f"{base}/v1/apps/{owner}/{filename}/versions",
@@ -230,7 +245,7 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
             except Exception as e:  # noqa: BLE001
                 return f"ERROR: {e!r}"
             if r.status_code == 200:
-                text, src = r.text, path
+                text, src = _utf8_text(r), path
                 break
         if not text:
             return f"HTTP 404 — no lib at /v1/libs/{name} or /lib/{name}"
@@ -295,7 +310,7 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
                              timeout=AUTHOR_TIMEOUT)
         except Exception as e:  # noqa: BLE001
             return f"ERROR fetching llms.txt: {e!r}"
-        lines = (r.text or "").splitlines()
+        lines = (_utf8_text(r) or "").splitlines()
 
         def _section(pred) -> str:
             # A '###' section runs until the NEXT '### ' or '## ' header.
@@ -348,7 +363,7 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
             r = requests.get(url, headers={"Authorization": f"Bearer {tok2}"}, timeout=AUTHOR_TIMEOUT)
         except Exception as e:  # noqa: BLE001
             return f"ERROR: {e!r}"
-        body = (r.text or "")[:2600]
+        body = (_utf8_text(r) or "")[:2600]
         return f"GET {p} -> {r.status_code}\n{body}"
 
     @tool("name_available")
@@ -568,7 +583,7 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
         blob = html
         for cname, cfile in _re.findall(r"/v1/cortex/([a-zA-Z0-9_-]+)/libs/([a-zA-Z0-9_.-]+)", html):
             try:
-                blob += "\n" + requests.get(f"{base}/v1/cortex/{cname}/libs/{cfile}", timeout=20).text
+                blob += "\n" + _utf8_text(requests.get(f"{base}/v1/cortex/{cname}/libs/{cfile}", timeout=20))
             except Exception:  # noqa: BLE001
                 pass
         dep_missing = [f"/v1/libs/{lib} (used: {ns})" for ns, lib in LIBMAP.items() if ns in blob and lib not in html]
@@ -656,7 +671,7 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
             return f"REVERT FAILED: {e!r}"
         if cr.status_code != 200 or not (cr.text or "").strip():
             return f"REVERT FAILED: could not fetch {filename} v{to_version} ({cr.status_code})."
-        html = cr.text
+        html = _utf8_text(cr)
         # Recover that version's manifest so the catalogue entry (name/icon/uses_cortex) is preserved.
         name, desc, category, icon, uses_cortex = filename.replace(".html", ""), "", "utility", "", []
         try:
@@ -755,7 +770,7 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
         cortexes, ext_names = [], set()
         for cname, cfile in sorted(set(_re.findall(r"/v1/cortex/([a-zA-Z0-9_-]+)/libs/([a-zA-Z0-9_.-]+)", html))):
             try:
-                lib = requests.get(f"{base}/v1/cortex/{cname}/libs/{cfile}", timeout=AUTHOR_TIMEOUT).text
+                lib = _utf8_text(requests.get(f"{base}/v1/cortex/{cname}/libs/{cfile}", timeout=AUTHOR_TIMEOUT))
             except Exception:  # noqa: BLE001
                 lib = ""
             blob += "\n" + lib
@@ -799,11 +814,11 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
             return f"ERROR fetching {url}: {e!r}"
         if g.status_code != 200:
             return (f"APP NOT FOUND (HTTP {g.status_code}) at {url}. Confirm the URL — REFUSING so no wrong app is edited.")
-        html = g.text
+        html = _utf8_text(g)
         parts = [f"=== APP HTML: {filename} ({len(html)} bytes) — edit IN PLACE, preserve every feature ===\n{html}"]
         for cname, cfile in sorted(set(_re.findall(r"/v1/cortex/([a-zA-Z0-9_-]+)/libs/([a-zA-Z0-9_.-]+)", html))):
             try:
-                lib = requests.get(f"{base}/v1/cortex/{cname}/libs/{cfile}", timeout=AUTHOR_TIMEOUT).text
+                lib = _utf8_text(requests.get(f"{base}/v1/cortex/{cname}/libs/{cfile}", timeout=AUTHOR_TIMEOUT))
             except Exception:  # noqa: BLE001
                 lib = "(could not fetch)"
             parts.append(f"=== CORTEX LIB: {cname}/{cfile} ({len(lib)} bytes) ===\n{lib}")

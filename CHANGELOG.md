@@ -34,6 +34,22 @@ Dates are the working dates; entries are **uncommitted and take effect on the ne
   `docs/aimeat-guides/nextgeneration/` (an audit of this scaffold + 27 crews against those guides, with a
   prioritized roadmap and ready-to-run Claude Code eval prompts), plus an AIMEAT API request doc for the
   cortex/extension upsert (now delivered — see below).
+- **`startup.prompt.md`** — a paste-into-Claude-Code/Copilot **runbook** that onboards a fresh clone
+  end-to-end: it asks only what it can't know (which AIMEAT node — `aimeat.io` or self-hosted — the owner
+  account, the model key), then installs, registers + approves the agents, starts the fleet, and teaches the
+  essentials of working with AIMEAT. `README.md` now leads with it.
+- **`fetch_article_text` author tool** (`src/crewaimeat/article_extract.py`) — full article-text extraction
+  (**trafilatura** primary, Playwright-render fallback) with **top-N domain-diverse** URL selection, wired
+  into `news-fetcher` so writers work from real article bodies, not 1-line search snippets.
+- **Content pipeline greatly expanded** (the `(L)AIMEAT Sanomat` newspaper): **21 news sections, each with a
+  named persona**, and **`news-writer` split into two parallel desks** (`news-writer` + new
+  **`news-writer-b`**, ~12 agents each) so the write stage stays fast. New **`daily-features-writer`** crew
+  (päivän koodausosio / prompt-niksinurkka / matematiikkahetki + an **interactive uutisvisa** generated from
+  the day's news) and **`space-weather-writer`** (avaruussää article from NOAA/NASA). Newspaper widgets:
+  Finland-oriented **moon phase**, **Sää tänään + huomenna** (Open-Meteo, CORS, incl. FMI HARMONIE), avaruussää
+  images (NOAA SWPC + NASA SDO), **nimipäivät** from a shared public `almanac.namedays` key, per-article
+  **🔊 Puhu** (Web-Speech TTS), the interactive quiz, and a **päivävalitsin** edition navigator that scales to
+  many editions. Daily schedules run the whole thing twice a day autonomously (aamu/ilta).
 
 ### Changed
 - **`install_cortex` / `install_extension`** now redeploy via the new idempotent **`PUT /v1/cortex/{name}`
@@ -55,6 +71,15 @@ Dates are the working dates; entries are **uncommitted and take effect on the ne
   `write_memory(...)`, so articles never reached memory. Added `make_memory_tools` to all three.
 - **`finnish_corporate_researcher`** — the synthesis report header was a non-f-string, so it printed the
   literal `{ctx.today}` / `{ctx.prompt}`. Now interpolated (clean date + the real query).
+- **UTF-8 read fix** (`author_tool`) — all app/lib content reads (`read_app_source`, `revert_app`,
+  `read_app_template`, `read_node_api`) force UTF-8; `requests`' Latin-1 default for `text/html` was
+  corrupting Scandinavian text (`ä`→`Ã¤`) on every read-then-republish.
+- **Newspaper view counter** — rewritten from one-key-per-view (which hit the `/v1/mm` **100-keys-per-set**
+  cap and started 400-ing) to a **per-edition counter** (read → +1 → overwrite); historical views migrated,
+  counts preserved.
+- **`index_frontpage` dedups by concrete `(gaii, key)`** — the old logical-slot key drifted when `kind`
+  varied between two editorial runs, so every article got a second front-page entry ("tuplauutiset"). The
+  public viewer also dedups client-side as a belt-and-suspenders.
 
 ### Notes
 - The **`max_iter` audit recommendation was reversed by field data**: `max_iter` is a justified backstop

@@ -16,6 +16,7 @@ from crewai import Agent, Task
 
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 from crewaimeat.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is set, else []
+from crewaimeat.article_extract import fetch_article_text  # full article text (trafilatura + playwright)
 
 AGENT_NAME = "news-fetcher"
 
@@ -40,7 +41,7 @@ def build_domain(ctx):
         goal="Perform precise SearXNG web searches for Finnish news articles across specified categories, returning structured raw results with titles, URLs, snippets, and publication dates.",
         backstory="You are a meticulous Finnish news researcher who specializes in finding up-to-date, relevant news from Finnish sources. You craft precise search queries in Finnish and English to maximize result quality across categories like economy, local news, weather, science, domestic politics, global politics, and daily headlines. You never fabricate results — if a search returns nothing, you report that honestly.",
         llm=ctx.llm,
-        tools=_web_tools(),
+        tools=[*_web_tools(), fetch_article_text],
     )
 
     memory_writer = Agent(
@@ -56,9 +57,18 @@ def build_domain(ctx):
             f"{ctx.today} — Parse the user request: '{ctx.prompt}'. "
             "Determine: (1) the target date for news (default: today), "
             "(2) the edition number (default: 'am' for morning run, or extract from request), "
-            "(3) which categories to fetch from: talous, paikallinen, saa, tiede, politiikka-suomi, politiikka-globaali, paivankohtaiset. "
-            "If the user specifies only certain categories, use those. Otherwise, fetch all seven. "
-            "Output a structured plan: date, edition, and list of categories with their Finnish-language search queries optimized for SearXNG."
+            "(3) which categories to fetch from: talous, paikallinen, saa, tiede, politiikka-suomi, "
+            "politiikka-globaali, paivankohtaiset, urheilu, kulttuuri, terveys, kevennykset, tekoaly, "
+            "pelit, pelidevaus, startup, huhut, yliluonnolliset, ruoka, luonto, mieli, filosofia. "
+            "If the user specifies only certain categories, use those. Otherwise, fetch all twenty-one. "
+            "For EACH category also decide: (a) the search LANGUAGE — 'fi' for Finnish/local categories "
+            "(talous, paikallinen, saa, tiede, politiikka-suomi, urheilu, kulttuuri, terveys, kevennykset, "
+            "paivankohtaiset, pelit, huhut, yliluonnolliset, ruoka, luonto, mieli, filosofia) and 'en' for "
+            "globally-sourced/tech ones (politiikka-globaali, tekoaly, "
+            "pelidevaus, startup — for startup ALSO include Finnish startup news, not only global); "
+            "(b) recency — use "
+            "time_range='day' for fresh daily news (fall back to 'week' only if a category yields nothing). "
+            "Output a structured plan: date, edition, and per-category {query, language, time_range}."
         ),
         agent=coordinator,
         expected_output="A structured plan with date, edition, category list, and optimized Finnish search queries for each category.",
@@ -67,9 +77,37 @@ def build_domain(ctx):
     search_task = Task(
         description=(
             f"{ctx.today} — Using the fetch plan from the coordinator, perform SearXNG web searches for each Finnish news category. "
-            "For each category, construct a targeted search query in Finnish (e.g., 'talous uutiset tänään' for economy, 'paikallisuutiset Suomi' for local, 'sääennuste Suomi' for weather, 'tiedeuutiset Suomi' for science, 'Suomi politiikka uutiset' for domestic politics, 'kansainvälinen politiikka uutiset' for global politics, 'päivän uutiset Suomi' for daily headlines). "
-            "Return structured results per category: list of articles with title, url, snippet, and published date. "
-            "Aim for 5-10 quality results per category. If a category yields no results, note that explicitly."
+            "For each category, construct a targeted query (e.g. 'talous uutiset tänään' economy, "
+            "'Tapiola Espoo uutiset' local, 'Suomi sää varoitus helle myrsky rajuilma' weather, "
+            "'tiedeuutiset Suomi' science, "
+            "'Suomi politiikka uutiset' domestic politics, 'world politics news today' global politics (EN), "
+            "'päivän uutiset Suomi' daily, 'urheilu uutiset Suomi tänään' sports, 'kulttuuri viihde uutiset "
+            "Suomi' culture/entertainment, 'terveys hyvinvointi uutiset Suomi' health, 'positiiviset hyvät "
+            "uutiset Suomi' feel-good/kevennykset, 'tekoäly AI uutiset' / 'artificial intelligence news' AI "
+            "(tekoaly), 'peliuutiset' / 'video game news' games (pelit), 'pelinkehitys työkalut Unity Unreal "
+            "Godot' / 'game development tools news' gamedev (pelidevaus), 'startup uutiset Suomi rahoitus' + "
+            "'startup funding news' Finnish & global (startup), 'julkkis huhut juorut Suomi' gossip/rumors "
+            "(huhut), 'yliluonnolliset ilmiöt kummitukset UFO uutiset' paranormal (yliluonnolliset), 'ruoka "
+            "ruokauutiset reseptit Suomi' food (ruoka), 'luonto ympäristö eläimet uutiset Suomi' nature "
+            "(luonto), 'mielenterveys mieli hyvinvointi uutiset Suomi' mental-health (mieli), 'filosofia "
+            "ajattelu etiikka' philosophy (filosofia)). "
+            "RESULT QUALITY (this is why some categories came up empty): keep ONLY real dated news ARTICLES. "
+            "DISCARD non-articles — forecast-SERVICE pages (ilmatieteenlaitos.fi / foreca.fi / a 'Sää <kaupunki>' "
+            "widget is NOT news), TV guides (areena.yle.fi TV-opas), portal/landing/homepages (a site's "
+            "etusivu), and social media. For PAIKALLINEN always use a SPECIFIC place (Tapiola/Espoo), never a "
+            "generic 'Suomi' query (it returns portals, not articles). For SÄÄ search weather NEWS/warnings "
+            "(varoitus/helle/myrsky/rajuilma); if there is no weather story today, 0 is the correct answer. "
+            "Call the Web Search tool WITH the planned per-category params: pass language ('fi' or 'en' as "
+            "planned), time_range='day' (fall back to 'week' only if 'day' returns nothing), and "
+            "max_results=8. "
+            "THEN DEEPEN each category: collect that category's result URLs in ranked order and call "
+            "fetch_article_text(urls_json='[\"url1\",\"url2\",...]', max_articles=5) — it pulls the FULL "
+            "article body from up to 5 DIFFERENT-domain sources (1-line snippets are too thin for good "
+            "articles). Use the EXTRACTED FULL TEXT as each article's content; keep title+url+date alongside "
+            "it. If a source returns '(could not extract...)', fall back to its snippet for that one source. "
+            "Return structured results per category: list of articles with title, url, FULL TEXT (snippet "
+            "only as fallback), and published date. "
+            "Aim for 5-8 quality results per category. If a category yields no results, note that explicitly."
         ),
         agent=researcher,
         expected_output="Structured raw search results for each Finnish news category, with title, URL, snippet, and date per article.",

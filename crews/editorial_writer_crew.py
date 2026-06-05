@@ -122,7 +122,8 @@ def build_domain(ctx):
             "- Open with a hook that grabs by the throat; close with a line that lingers\n"
             "- This is GONZO journalism: subjective, immersive, literary, angry\n\n"
             "If the previous task returned NO_ARTICLES_FOUND, output exactly: NO_ARTICLES_FOUND\n\n"
-            "Otherwise, write the full editorial as plain text. No metadata headers — just the column."
+            "Otherwise, write the full editorial as plain text. No metadata headers — just the column. "
+            "End with the byline '— S.J.' on its own line (just the initials; do not spell out the name)."
         ),
         agent=editorial_writer,
         context=[read_articles],
