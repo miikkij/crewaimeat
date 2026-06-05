@@ -63,6 +63,7 @@ Then queue a task for `research-crew` from the AIMEAT dashboard (its Tasks tab, 
 | Run the reference crew | `uv run python -m crewaimeat.research_crew` |
 | Scaffold a new crew | `uv run crewaimeat new-crew <name>` |
 | Run an example crew | `uv run python -m crewaimeat.examples.marketing_crew` |
+| Run the test floor | `uv run pytest` |
 | Add or remove a dependency | `uv add <pkg>` / `uv remove <pkg>` |
 
 ### Picking a model
@@ -126,6 +127,10 @@ Output language follows the agent's judgment unless the task asks for a specific
 
 - `SCAFFOLD_CANON.md`: how to build crews on the scaffold, and the reason each piece is there.
 - `CREW_AUTHORING_PROMPT.md`: the prompt that has an assistant build a crew with you.
+- `CHANGELOG.md`: notable changes.
+- `tests/README.md`: the deterministic test floor (`uv run pytest`).
+- `docs/aimeat-guides/crewairesearch/`: researched CrewAI best-practices guides (architecture, prompting, efficiency, pitfalls, model selection, memory/tools, testing).
+- `docs/aimeat-guides/nextgeneration/`: an audit of this scaffold + crews against those guides — strengths, gaps, a prioritized roadmap, and ready-to-run Claude Code eval prompts.
 - AIMEAT integration reference: https://aimeat.io/docs/integrations/crewai
 
 ## CrewSpec options
@@ -146,8 +151,12 @@ Output language follows the agent's judgment unless the task asks for a specific
 | `services` | `None` | `[{name, description}]` declared at onboarding; shown on the agent's **Services** tab. |
 | `commands` | `None` | `[{name, description, category}]` published to `agents.<agent>.commands` (the Messages slash-command palette) and usable in the README via `[[AVAILABLE_COMMANDS]]`. |
 | `readme_md` | `None` | Markdown for the agent's **README** tab (`agents.<agent>.readme`); supports the directives below. |
+| `require_verify_pass` | `False` | For build/SDLC crews that run the app **verify gates** (`verify_render` / `verify_interaction`): gate task completion on the gate's deterministic outcome — a build that failed a gate (or never ran one) is **failed**, not marked done. Status-only; never touches the live app. Off by default. |
+| `auto_revert_on_fail` | `False` | With `require_verify_pass`, also roll the **live app** back to its last-good version when the gate fails (re-publishes the prior version). A separate opt-in from the gate above, so live rollback is enabled deliberately. Off by default. |
 
 > **Messages note:** `listen_for=("tasks","messages")` makes the daemon also pick up inbox messages (each message body becomes `ctx.prompt`). This needs a build of `aimeat-crewai` whose inbox polling matches your node; if messages don't dispatch, drive the crew with **tasks** (the Tasks tab), which always works.
+
+> **Runaway bound (optional):** set `AIMEAT_AGENT_MAX_EXECUTION_TIME=<seconds>` in `.env` to give every agent a wall-clock per-task limit (off by default). It stops a *stuck* run without truncating a long-but-progressing one — safer than lowering `max_iter`.
 
 ## The agent's README, commands, and services
 

@@ -92,6 +92,17 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "   - JS syntax error -> fix it.\n"
             "   - 404 / empty list / wrong data -> make the memory reads use the SAME prefix as the "
             "writes (e.g. AIMEAT.data.list({prefix:'activity.'}), get('activity.<id>')), never a bare key.\n"
+            "     EXTENSION-OWNED DATA (the #1 'created items never appear' bug): if the WRITE goes through a "
+            "server-side extension (session.fetch('/v1/ext/<ext>/<action>')), that data lives in the "
+            "extension's OWN namespace `ext:<ext>` — so the READ must target THAT SAME namespace: "
+            "AIMEAT.data.getPublic('ext:<ext>', '<the index key the extension writes>') (if the extension "
+            "writes it with public visibility — confirm with a tokenless GET /v1/memory/ext:<ext>/<key>), then "
+            "fan out getPublic(ptr.gaii, ptr.key) where ptr.gaii is 'ext:<ext>'. Reading getPublic('<some "
+            "agent gaii>', '<key>') for data an extension wrote is THE mismatch (it reads a different, usually "
+            "seed-only, store). NOTE: AIMEAT.data.set('ext:<ext>/<k>', ...) does NOT write the extension's "
+            "namespace — AIMEAT.data writes the CALLER's own namespace under that literal key string; ONLY the "
+            "extension's server-side action can write `ext:<ext>`. So fix the READ to match where the extension "
+            "ALREADY writes; do not try to client-write the ext namespace.\n"
             "   - 'X is not a function' -> use the real lib method (login/getSession, data.list/get/"
             "getPublic/set).\n"
             "   - raw i18n keys / '[object Object]' / blank render -> fix the render (escape text, read "
@@ -115,7 +126,18 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "applicable gate(s) return PASS, not when the redeploy merely succeeds. If an artifact still "
             "fails its gate after 3 rounds, STOP redeploying it — report it as blocked with the failing-gate "
             "reason rather than republishing further (each redeploy mutates the live app, so endless retries "
-            "churn live state).\n"
+            "churn live state). ROLLBACK SAFETY: at the START, list_app_versions(filename) and note the current "
+            "top version_number as your BASELINE; if you exhaust 3 rounds WITHOUT green, call "
+            "revert_app(filename, <baseline>) to restore the last-good version — never leave the live app worse "
+            "than you found it.\n"
+            "3.9. DEPLOY + VERIFY ARE MANDATORY — authoring a corrected artifact is NOT a fix. If you read the "
+            "source and wrote corrected cortex/app code but did NOT call install_cortex / publish_app to DEPLOY "
+            "it AND then get a verify gate to PASS, you have fixed NOTHING — the live app is still broken. Never "
+            "end by merely describing or returning the corrected code; you MUST deploy it and prove it with a "
+            "PASSing gate (verify_render and, for created/posted items, verify_interaction that the new item "
+            "APPEARS, and verify_anon_render for public viewers), or else report 'BLOCKED: <exact reason>'. A "
+            "deliverable that contains only corrected code with no deploy and no PASS is a FAILED task — say so; "
+            "do not imply success.\n"
             "4. Report each artifact you fixed -> redeployed -> verified (with its served/live URL and the "
             "PASS verdict), and any you could not get to PASS after 3 rounds, with the exact blocking error "
             "or failing-gate reason. Be honest; report only fixes that actually deployed clean AND passed "
@@ -140,6 +162,7 @@ def run() -> None:
             readme_md=README,
             temperature=0.4,
             poll_seconds=30,
+            require_verify_pass=True,  # SYS-1 pilot: do not complete a fix that never deployed / failed verify
         )
     )
 

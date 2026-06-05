@@ -41,21 +41,30 @@ Task me with the app idea, e.g.:
 # The AIMEAT technical playbook the architect applies — POSITIVE framing throughout.
 PLAYBOOK = """AIMEAT TECHNICAL PLAYBOOK (apply these to choose the right architecture):
 
-DATA LAYER — pick the ONE that matches who writes + the ownership/scale needs:
-- OWNER-CURATED (only the owner writes; anyone reads): the owner (logged in) writes items to their OWN
-  GHII namespace via AIMEAT.data.set(..., {visibility:'public'}) and maintains ONE public index key; the
-  viewer reads the index and fans out getPublic(gaii,key). Best for a shop/blog/noticeboard the owner curates.
-- MULTI-USER, LOGIN-GATED writes (any logged-in user writes; anyone reads): each user writes their item to
-  THEIR OWN namespace (real per-user ownership) via AIMEAT.data.set public; discovery uses ONE shared index
-  — a micro-memory public_write set holding lightweight {gaii,key,...} pointers that logged-in users append
-  to; the viewer reads the index and getPublic's each item. Images upload with each user's own token. Best
-  for a marketplace/community where registered users contribute.
-- OPEN (anyone writes, including anonymous): a micro-memory public_write set holds the items; any visitor
-  adds via GET /v1/mm?op=add. Anonymous writers use storage keys prefixed 'anonymous/'. This is demo-grade
-  (shared writes, ~100 keys/set, ≤1KB values) — choose it only when open + no-ownership is acceptable.
-- SERVER-BACKED (real ownership + server validation + external APIs + schedules): a server-side EXTENSION
-  owns the ext:{name} namespace and exposes actions; the app calls them through a data cortex. The owner
-  installs the extension (install is owner-gated), so flag this as an owner step / v2 when it applies.
+DATA LAYER — ALWAYS use regular memory (AIMEAT.data: set/get/getPublic — per-identity namespaces, quotas,
+versioning, schema validation) as the #1 store. Pick the layer that matches who writes + ownership/scale:
+- OWNER-CURATED (only the owner — or one publisher identity — writes; anyone reads) — the common default:
+  the publisher (logged in) writes items to their OWN GHII namespace via AIMEAT.data.set(..., {visibility:
+  'public'}) and maintains ONE public index key; the viewer reads that index and fans out getPublic(gaii,key).
+  Pure regular memory. Best for a shop/blog/noticeboard/dashboard one identity curates.
+- MULTI-USER, LOGIN-GATED writes (any logged-in user contributes; anyone reads): each user writes their OWN
+  items to their OWN public namespace via AIMEAT.data.set — real per-user ownership, regular memory. The
+  cross-user DISCOVERY index is the one hard part: regular memory is per-writer-namespace (a user writes only
+  their own keys), so MANY users CANNOT append to ONE shared index key with regular memory alone. Use a
+  server-side EXTENSION (owner-installed) that owns ext:{name} and mediates the shared index (e.g. addListing
+  validates + appends, browse returns all); the anon viewer reads ext:{name} public memory + getPublic items.
+  Flag the extension as an owner-install step. If an extension is too heavy for v1, scope v1 to OWNER-CURATED
+  (one publisher lists everything) and add per-user writes in v2. (Do NOT reach for micro-memory here — the
+  writers are logged in, and an extension gives real ownership + validation.)
+- SERVER-BACKED (real shared/multi-user state + server validation + external APIs + schedules): a server-side
+  EXTENSION owns the ext:{name} namespace and exposes actions the data cortex calls. THE robust answer
+  whenever many writers share one structure. Owner-installed (owner-gated) — flag it as an owner step / v2.
+- ANONYMOUS-WRITE fallback (micro-memory) — NICHE, last resort, never a default: use ONLY when not-logged-in
+  visitors must WRITE something simple and neither a login nor an extension is acceptable. It is a tokenless
+  GET /v1/mm public_write set (read+write, no auth); anonymous uploaders use storage keys prefixed 'anonymous/'.
+  IMPORTANT: this tokenless anonymous-write path needs the node's anonymous mode (AIMEAT_ANONYMOUS) ENABLED —
+  it may be unavailable, so confirm it or require a login instead. Demo-grade only: ~100 keys/set, ≤1KB/value,
+  no atomic increment. Regular memory stays #1; micro-memory is only for the anonymous-write case.
 
 READ + RENDER for everyone (public apps): start from read_app_template('public_viewer') — startApp() runs
 unconditionally so anonymous visitors render; read shown content with getPublic(gaii,key) (the one
@@ -63,7 +72,7 @@ anonymous read). Point PUBLISHER at the GAII that owns the index; carry each ite
 index so bodies can live under many authors.
 
 IMAGES / FILES (AIMEAT storage): upload with a token via POST /v1/storage {key, visibility:'public', data:
-base64, mime_type}; store the returned key. An ANONYMOUS uploader uses a key prefixed 'anonymous/'; a
+base64, mime_type}; store the returned key. An ANONYMOUS uploader (only when the node's anonymous mode is enabled) uses a key prefixed 'anonymous/'; a
 logged-in user uses their own namespace. DISPLAY a PUBLIC image with a plain <img src="{base}/v1/pub/<gaii>/
 <key>"> — the tokenless public route serves visibility:'public' files for direct <img>/links (no fetch/blob
 needed). Reserve the fetch-with-token → blob → URL.createObjectURL(blob) → img.src path for OWNER-PRIVATE
@@ -74,12 +83,14 @@ AUTH: AIMEAT.auth.login() returns the owner session or null for anonymous; gate 
 session (session.ghii). Anonymous visitors read public content; logged-in users write their own namespace.
 
 CONVENTIONS: use static inline JS (the app CSP supports inline scripts + the jsdelivr CDN for tailwind/
-daisyui; it runs without eval). Escape every user-supplied value with esc() before the DOM. Keep
-micro-memory values ≤1KB and rotate sets past ~100 keys.
+daisyui; it runs without eval). Escape every user-supplied value with esc() before the DOM. (Only if you use
+the micro-memory anonymous-write fallback: values cap at ≤1KB and ~100 keys/set — rotate sets past that.)
 
 NAMESPACING: memory keys are scoped to the WRITING identity's GAII. To read another identity's PUBLIC key
-use getPublic(gaii,key); to aggregate across many writers use a shared index (above). An agent writes its
-deliverable under its own GAII (so an index it maintains is the PUBLISHER the viewer points at).
+use getPublic(gaii,key). Regular memory gives a single-owner-published, many-readers index (perfect for
+OWNER-CURATED); a many-writers-one-key shared index needs a server-side extension (or, for the anonymous-
+write case only, a micro-memory public_write set). An agent writes its deliverable under its own GAII (so an
+index it maintains is the PUBLISHER the viewer points at).
 
 VERIFY: plan the gates the builder will run — verify_render (logged-in owner) for every app;
 verify_anon_render (no login) for anything anonymous visitors must read; verify_interaction (drive the core
@@ -155,7 +166,7 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "  - TITLE + one-line summary.\n"
             "  - ARCHITECTURE: the chosen data layer + a one-line rationale; the app template to start from "
             "(public_viewer for anon-readable apps).\n"
-            "  - DATA MODEL: the exact memory/micro-memory keys, their namespaces, visibility, and value "
+            "  - DATA MODEL: the exact memory keys (micro-memory keys only if you chose the anonymous-write fallback), their namespaces, visibility, and value "
             "shape; the discovery index (if any) and its PUBLISHER gaii.\n"
             "  - AUTH MODEL: what anonymous visitors do, what logged-in users do, what the owner does.\n"
             "  - IMAGES/FILES (if needed): the storage upload + display recipe with the right key prefix.\n"

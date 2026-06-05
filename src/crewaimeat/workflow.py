@@ -450,14 +450,24 @@ def make_workflow_tools(
         state["seq"] += 1
         pub_key = f"agents.tag.{tag}.{run_id}.{target_agent}.{state['seq']}"
         full_instruction = f'{instruction}\n\n<<AIMEAT_PUBLISH key="{pub_key}" tag="{tag}">>'
-        resp = _aimeat_call(
-            coordinator_name,
-            "aimeat_task_create",
-            {"target_agent": target_agent, "title": title, "description": full_instruction, "status": "queued"},
-        )
-        tid = _find_id(resp)
+        # Retry transient create failures before surfacing one. Under connector load the node can return
+        # a null/HTML (non-JSON) response for a moment; a real "agent missing" error repeats, a transient
+        # blip clears on retry. Retrying here stops a coordinator from forging a REDUNDANT specialist over
+        # a momentary null when the target crew actually exists and is reachable.
+        tid, resp = None, None
+        for _attempt in range(3):
+            resp = _aimeat_call(
+                coordinator_name,
+                "aimeat_task_create",
+                {"target_agent": target_agent, "title": title, "description": full_instruction, "status": "queued"},
+            )
+            tid = _find_id(resp)
+            if tid:
+                break
+            if _attempt < 2:
+                time.sleep(3)
         if not tid:
-            return None, f"Failed to create subtask for {target_agent}: {json.dumps(resp)[:200]}"
+            return None, f"Failed to create subtask for {target_agent} after 3 attempts: {json.dumps(resp)[:200]}"
         job = {"agent": target_agent, "tid": tid, "title": title, "pub_key": pub_key, "instruction": instruction}
         state["jobs"].append(job)
         _event(f"Delegated to {target_agent}: {title}")
@@ -742,15 +752,31 @@ def make_workflow_tools(
     @tool("ask_owner")
     def ask_owner(question: str, options: str) -> str:
         """Ask the HUMAN owner a single-select question when an instruction is genuinely ambiguous —
-        do NOT guess. `options` is a comma-separated list of 2-6 likely interpretations (an 'Other'
-        free-text choice is offered automatically; do not add it yourself). Blocks until the owner
-        picks one (or a timeout), then returns their choice so you can proceed. Use sparingly: only
-        for real ambiguity that changes the work."""
+        do NOT guess. `options` is 2-6 likely interpretations (an 'Other' free-text choice is offered
+        automatically; do not add it yourself). PREFER a JSON array — e.g. ["Text only (date, title,
+        body)", "With photos"] — so an option may itself contain commas; a plain comma-separated string
+        also works but then NO option may contain a comma (it would be split into pieces). Blocks until
+        the owner picks one (or a timeout), then returns their choice so you can proceed. Use sparingly:
+        only for real ambiguity that changes the work."""
         if state["clarifications"] >= MAX_CLARIFICATIONS:
             return "Clarification limit reached — proceed with your best assumption and state it in your result."
-        opts = [o.strip() for o in (options or "").split(",") if o.strip()]
+        # Parse options robustly: a JSON array (option text may contain commas), else a '|'-delimited
+        # list, else comma-split. Plain comma-split alone shatters an option like
+        # "Text only (date, title, body)" into 3 bogus options — accept the safer forms first.
+        _raw = (options or "").strip()
+        opts = None
+        if _raw.startswith("["):
+            try:
+                _parsed = json.loads(_raw)
+                if isinstance(_parsed, list):
+                    opts = [str(o).strip() for o in _parsed if str(o).strip()]
+            except Exception:  # noqa: BLE001
+                opts = None
+        if opts is None:
+            _delim = "|" if "|" in _raw else ","
+            opts = [o.strip() for o in _raw.split(_delim) if o.strip()]
         if len(opts) < 2:
-            return "Refused: give at least 2 comma-separated options covering the likely interpretations."
+            return "Refused: give at least 2 options (a JSON array, or a comma- or '|'-separated list) covering the likely interpretations."
         state["clarifications"] += 1
         pid = f"{run_id}-clarify-{state['clarifications']}"
         payload = {

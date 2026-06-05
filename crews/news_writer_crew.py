@@ -41,6 +41,7 @@ def build_domain(ctx):
         goal="Rewrite raw Finnish political news material into an original, engaging article written entirely in Finnish and in own words.",
         backstory="A seasoned Finnish political journalist with a sharp, analytical yet accessible writing style. Specializes in domestic and EU politics, known for clear prose that makes complex policy understandable to everyday readers.",
         llm=ctx.llm,
+        tools=[*make_memory_tools(AGENT_NAME)],  # needs write_memory to publish its article key
     )
 
     business_writer = Agent(
@@ -48,6 +49,7 @@ def build_domain(ctx):
         goal="Rewrite raw Finnish business and economy news material into an original, insightful article written entirely in Finnish and in own words.",
         backstory="An experienced Finnish business reporter with a talent for translating market data and corporate developments into compelling narratives. Writing style is precise, data-informed, and reader-friendly.",
         llm=ctx.llm,
+        tools=[*make_memory_tools(AGENT_NAME)],  # needs write_memory to publish its article key
     )
 
     culture_writer = Agent(
@@ -55,6 +57,7 @@ def build_domain(ctx):
         goal="Rewrite raw Finnish culture, arts, and lifestyle news material into an original, vibrant article written entirely in Finnish and in own words.",
         backstory="A creative Finnish culture correspondent with a warm, evocative writing voice. Covers arts, entertainment, sports, and lifestyle with enthusiasm and a distinctly Finnish perspective.",
         llm=ctx.llm,
+        tools=[*make_memory_tools(AGENT_NAME)],  # needs write_memory to publish its article key
     )
 
     editor = Agent(

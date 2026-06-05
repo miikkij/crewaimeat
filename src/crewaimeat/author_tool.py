@@ -88,12 +88,120 @@ def _extract_inline_js(html: str) -> str:
     return "\n;\n".join(blocks)
 
 
+# --------------------------------------------------------------------------- #
+# Run-scoped verify-gate verdicts — so the scaffold can gate task completion on the DETERMINISTIC gate
+# outcome ({ok} from app_verify) rather than the agent's self-reported text. Keyed by task_id; each gate
+# records its last result. The scaffold reads get_verify_verdicts(task_id) at finalize (aimeat_crew.py,
+# CrewSpec.require_verify_pass). This is the SYS-1 fix: a direct build that FAILED verify (or never ran
+# it) must NOT complete 'green'.
+# --------------------------------------------------------------------------- #
+_VERIFY_VERDICTS: "dict[str, dict]" = {}
+
+
+def reset_verify_verdicts(task_id: "str | None") -> None:
+    """Start a clean verify-verdict slate for a task (called when its author tools are built)."""
+    if task_id:
+        _VERIFY_VERDICTS[task_id] = {}
+
+
+def get_verify_verdicts(task_id: "str | None") -> dict:
+    """The verify-gate outcomes recorded for a task: {gate: {'ok': True/False/None, 'skipped': bool}}."""
+    return dict(_VERIFY_VERDICTS.get(task_id or "", {}))
+
+
+def _record_verify(task_id: "str | None", gate: str, r: "dict | None") -> None:
+    """Record one gate's deterministic outcome (ok True=pass, False=fail, None=skipped)."""
+    if not task_id:
+        return
+    ok = (r or {}).get("ok")
+    _VERIFY_VERDICTS.setdefault(task_id, {})[gate] = {"ok": ok, "skipped": ok is None}
+
+
+# --------------------------------------------------------------------------- #
+# Run-scoped published-app rollback baselines — {task_id: {filename: pre-run version_number or None}}.
+# So the scaffold can AUTO-REVERT a live app to its last-good version when SYS-1 fails a build, instead of
+# leaving a broken/unverified app live. publish_app records the baseline here (mirroring its own `state`).
+# --------------------------------------------------------------------------- #
+_PUBLISHED_BASELINES: "dict[str, dict]" = {}
+
+
+def reset_published_baselines(task_id: "str | None") -> None:
+    if task_id:
+        _PUBLISHED_BASELINES[task_id] = {}
+
+
+def get_published_baselines(task_id: "str | None") -> dict:
+    """{filename: baseline_version_or_None} for a task — the version each app was at BEFORE this run."""
+    return dict(_PUBLISHED_BASELINES.get(task_id or "", {}))
+
+
+def _record_publish_baseline(task_id: "str | None", filename: str, version) -> None:
+    if not task_id or not filename:
+        return
+    _PUBLISHED_BASELINES.setdefault(task_id, {}).setdefault(filename, version)  # first publish = baseline
+
+
+def _revert_app_rest(agent_name: str, owner: "str | None", base: str, filename: str, to_version: int) -> tuple:
+    """Re-publish a prior app version as the current one (the programmatic core of the revert_app tool).
+    Returns (ok, detail). Best-effort; never raises."""
+    try:
+        tok, _u = _token(agent_name, owner)
+        if not tok or not base:
+            return False, "no token/base"
+        cr = requests.get(f"{base}/v1/apps/{owner}/{filename}?version={to_version}",
+                          headers={"Authorization": f"Bearer {tok}"}, timeout=AUTHOR_TIMEOUT)
+        if cr.status_code != 200 or not (cr.text or "").strip():
+            return False, f"could not fetch v{to_version} ({cr.status_code})"
+        html = cr.text
+        name, desc, category, icon, uses_cortex = filename.replace(".html", ""), "", "utility", "", []
+        try:
+            vr = requests.get(f"{base}/v1/apps/{owner}/{filename}/versions",
+                              headers={"Authorization": f"Bearer {tok}"}, timeout=AUTHOR_TIMEOUT)
+            vlist = (vr.json() or {}).get("data", {}).get("versions") or []
+            man = next((v.get("manifest", {}) for v in vlist if v.get("version_number") == to_version), {})
+            name = man.get("name") or name; desc = man.get("description") or desc
+            category = man.get("category") or category; icon = man.get("icon") or icon
+            uses_cortex = man.get("usesCortex") or man.get("uses_cortex") or []
+        except Exception:  # noqa: BLE001 — manifest recovery is best-effort
+            pass
+        meta = {"filename": filename, "content": base64.b64encode(html.encode("utf-8")).decode(),
+                "name": name, "description": desc, "category": category, "tags": [], "uses_cortex": uses_cortex}
+        if icon:
+            meta["icon"] = icon
+        r = _call(agent_name, owner, "POST", "/v1/apps", meta)
+        return (_ok(r), "" if _ok(r) else _err(r))
+    except Exception as e:  # noqa: BLE001
+        return False, repr(e)
+
+
+def revert_apps_to_baseline(agent_name: str, task_id: "str | None", owner: "str | None" = None) -> list:
+    """Restore every app published during `task_id` to its pre-run (baseline) version — used by the
+    scaffold when SYS-1 fails a build, so a broken/unverified app is not left live. Apps with no prior
+    version (brand-new this run) are skipped (nothing good to restore). Returns a list of
+    {filename, to_version, ok, detail}. Best-effort; never raises."""
+    baselines = get_published_baselines(task_id)
+    if not baselines:
+        return []
+    owner = owner or _discover_owner(agent_name)
+    base = _node_base(agent_name, owner)
+    out = []
+    for filename, ver in baselines.items():
+        if ver is None:
+            out.append({"filename": filename, "to_version": None, "ok": False, "detail": "no prior version (new app) — skipped"})
+            continue
+        ok, detail = _revert_app_rest(agent_name, owner, base, filename, int(ver))
+        out.append({"filename": filename, "to_version": int(ver), "ok": ok, "detail": detail})
+    return out
+
+
 def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | None = None) -> tuple[list, dict]:
     """Return (tools, state). Attach tools to the builder agent. `state` carries the node base + owner
     and tracks what got installed/published, for a clean final report."""
     owner = owner or _discover_owner(agent_name)
     base = _node_base(agent_name, owner)
     state: dict = {"owner": owner, "node": base, "cortexes": [], "apps": [], "task_id": task_id}
+    reset_verify_verdicts(task_id)  # fresh verify-verdict slate for this run (SYS-1 completion gating)
+    reset_published_baselines(task_id)  # fresh rollback-baseline slate for this run (SYS-1 auto-revert)
 
     def _event(msg: str) -> None:
         if task_id:
@@ -321,10 +429,12 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
                 return f"PRE-INSTALL BLOCKED ({fn}): JS syntax error -> {err}. Fix and resubmit."
         body = {"manifest": manifest_yaml, "libs": libs}
         r = _call(agent_name, owner, "POST", "/v1/cortex", body)
-        if r.get("_status") == 409:  # already installed -> redeploy
-            _call(agent_name, owner, "POST", f"/v1/cortex/{name}/deactivate")
-            _call(agent_name, owner, "DELETE", f"/v1/cortex/{name}")
-            r = _call(agent_name, owner, "POST", "/v1/cortex", body)
+        if r.get("_status") == 409:  # already installed -> idempotent UPSERT in place via PUT.
+            # AIMEAT shipped PUT /v1/cortex/<name> (2026-06-05): it overwrites the libs in place with NO
+            # delete — so there is no live gap and no cortex-quota churn — and re-runs init for an active
+            # cortex (returns action: updated|unchanged). This replaces the old deactivate->DELETE->re-POST
+            # redeploy (a brief outage + the 50-cortex-quota churn) and is idempotent on identical bytes.
+            r = _call(agent_name, owner, "PUT", f"/v1/cortex/{name}", body)
         if not _ok(r):
             if r.get("_status") == 403:
                 return ("INSTALL DENIED (403, owner role required). Cortex install is owner-gated on "
@@ -390,10 +500,11 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
                         f"(keys present: {list(scripts)}). Put the action's code under that exact filename in scripts_json.")
         body = {"manifest": manifest_yaml, "scripts": scripts}
         r = _call(agent_name, owner, "POST", "/v1/extensions", body)
-        if r.get("_status") == 409:  # already installed -> redeploy
-            _call(agent_name, owner, "POST", f"/v1/extensions/{name}/deactivate")
-            _call(agent_name, owner, "DELETE", f"/v1/extensions/{name}")
-            r = _call(agent_name, owner, "POST", "/v1/extensions", body)
+        if r.get("_status") == 409:  # already installed -> idempotent UPSERT via PUT /v1/extensions/<name>
+            # (AIMEAT shipped it 2026-06-05): updates the action scripts + manifest atomically with NO
+            # delete — the endpoint never disappears, the ext:<name> namespace memory + instances survive,
+            # and it re-registers schedules / re-runs @activate jobs. Replaces deactivate->DELETE->re-POST.
+            r = _call(agent_name, owner, "PUT", f"/v1/extensions/{name}", body)
         if not _ok(r):
             if r.get("_status") == 403:
                 return ("INSTALL DENIED (403). Extension install is owner-gated on this node "
@@ -489,8 +600,85 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
             return f"publish failed: {_err(r)}"
         url = f"{base}/v1/apps/{owner}/{filename}?mode=inline"
         state["apps"].append(filename)
+        # Record the PRE-publish version as this run's rollback baseline (the last-known-good before this
+        # task touched the app) — the first time we publish a given filename this run. Lets the agent (or
+        # the scaffold finalize) revert_app to it if the fix/edit loop ends WORSE than it started.
+        state.setdefault("baseline_version", {})
+        if filename not in state["baseline_version"]:
+            state["baseline_version"][filename] = state.pop("_pre_publish_version", {}).get(filename)
+        # Mirror the baseline into the run-scoped registry so the scaffold can auto-revert on a SYS-1 fail.
+        _record_publish_baseline(task_id, filename, state["baseline_version"].get(filename))
         _event(f"published app '{filename}'")
         return f"OK: app published. Live (logged-in owner): {url}"
+
+    def _current_app_version(filename: str):
+        """Best-effort current version_number of an app (for the rollback baseline)."""
+        try:
+            tok2, _u = _token(agent_name, owner)
+            r = requests.get(f"{base}/v1/apps/{owner}/{filename}/versions",
+                             headers={"Authorization": f"Bearer {tok2}"}, timeout=AUTHOR_TIMEOUT)
+            vers = (r.json() or {}).get("data", {}).get("versions") or []
+            return max((v.get("version_number", 0) for v in vers), default=None)
+        except Exception:  # noqa: BLE001
+            return None
+
+    @tool("list_app_versions")
+    def list_app_versions(filename: str) -> str:
+        """List an app's saved versions (version_number, semver, size, created_at) — your rollback safety
+        net. EVERY publish_app is kept, so a prior working version can ALWAYS be restored with revert_app.
+        Use this to find the last-known-GOOD version (e.g. the one BEFORE a fix loop that went wrong)."""
+        tok2, _u = _token(agent_name, owner)
+        try:
+            r = requests.get(f"{base}/v1/apps/{owner}/{filename}/versions",
+                             headers={"Authorization": f"Bearer {tok2}"}, timeout=AUTHOR_TIMEOUT)
+        except Exception as e:  # noqa: BLE001
+            return f"ERROR: {e!r}"
+        if r.status_code != 200:
+            return f"could not list versions ({r.status_code}): {r.text[:200]}"
+        vers = (r.json() or {}).get("data", {}).get("versions") or []
+        if not vers:
+            return f"No versions found for {filename}."
+        return f"{filename} versions (newest first):\n" + "\n".join(
+            f"  v{v.get('version_number')} ({v.get('version')}) {v.get('size')}B  {v.get('created_at','')}"
+            for v in vers)
+
+    @tool("revert_app")
+    def revert_app(filename: str, to_version: int) -> str:
+        """RECOVER: restore an app to a PRIOR version by re-publishing that version's content as the new
+        current version (the live app reverts; full history is preserved). Use this the moment a fix/edit
+        loop has left the live app WORSE than before — never leave a broken app live. Find the target with
+        list_app_versions and pick the last version that WORKED; to_version is its version_number."""
+        tok2, _u = _token(agent_name, owner)
+        try:
+            cr = requests.get(f"{base}/v1/apps/{owner}/{filename}?version={int(to_version)}",
+                              headers={"Authorization": f"Bearer {tok2}"}, timeout=AUTHOR_TIMEOUT)
+        except Exception as e:  # noqa: BLE001
+            return f"REVERT FAILED: {e!r}"
+        if cr.status_code != 200 or not (cr.text or "").strip():
+            return f"REVERT FAILED: could not fetch {filename} v{to_version} ({cr.status_code})."
+        html = cr.text
+        # Recover that version's manifest so the catalogue entry (name/icon/uses_cortex) is preserved.
+        name, desc, category, icon, uses_cortex = filename.replace(".html", ""), "", "utility", "", []
+        try:
+            vr = requests.get(f"{base}/v1/apps/{owner}/{filename}/versions",
+                              headers={"Authorization": f"Bearer {tok2}"}, timeout=AUTHOR_TIMEOUT)
+            vlist = (vr.json() or {}).get("data", {}).get("versions") or []
+            man = next((v.get("manifest", {}) for v in vlist if v.get("version_number") == int(to_version)), {})
+            name = man.get("name") or name; desc = man.get("description") or desc
+            category = man.get("category") or category; icon = man.get("icon") or icon
+            uses_cortex = man.get("usesCortex") or man.get("uses_cortex") or []
+        except Exception:  # noqa: BLE001
+            pass
+        meta = {"filename": filename, "content": base64.b64encode(html.encode("utf-8")).decode(),
+                "name": name, "description": desc, "category": category, "tags": [], "uses_cortex": uses_cortex}
+        if icon:
+            meta["icon"] = icon
+        r = _call(agent_name, owner, "POST", "/v1/apps", meta)
+        if not _ok(r):
+            return f"REVERT FAILED on republish: {_err(r)}"
+        _event(f"reverted app '{filename}' to v{to_version}")
+        return (f"OK: reverted {filename} to v{to_version} (re-published as the current version; "
+                f"{len(html)} bytes). Live: {base}/v1/apps/{owner}/{filename}?mode=inline")
 
     @tool("seed_memory")
     def seed_memory(key: str, value_json: str, visibility: str = "public") -> str:
@@ -642,6 +830,7 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
         url = f"{base}/v1/apps/{owner}/{filename}?mode=inline"
         expect = [x.strip() for x in expect_csv.split(",") if x.strip()] or None
         r = app_renders_authed(url, u, pw, expect_any=expect)
+        _record_verify(task_id, "verify_render", r)
         if r.get("ok") is None:
             return f"VERIFY SKIPPED: {r.get('skipped')}"
         if r.get("ok"):
@@ -669,6 +858,7 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
         url = f"{base}/v1/apps/{owner}/{filename}?mode=inline"
         expect = [x.strip() for x in expect_csv.split(",") if x.strip()] or None
         r = app_renders_anon(url, expect_any=expect)
+        _record_verify(task_id, "verify_anon_render", r)
         if r.get("ok") is None:
             return f"ANON VERIFY SKIPPED: {r.get('skipped')}"
         if r.get("ok"):
@@ -723,6 +913,7 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
         except Exception as e:  # noqa: BLE001
             return f"INTERACTION FAIL: steps_json is not valid JSON ({e}). Pass a JSON array of step objects."
         r = app_interaction_ok(f"{base}/v1/apps/{owner}/{filename}?mode=inline", u, pw, steps)
+        _record_verify(task_id, "verify_interaction", r)
         if r.get("ok") is None:
             return f"INTERACTION SKIPPED: {r.get('skipped')}"
         if r.get("ok"):
@@ -732,12 +923,13 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
 
     tools = [read_lib_api, read_cortex_example, read_app_template, read_node_api, name_available,
              read_app_stack, read_app_source, find_public_index, install_cortex, install_extension,
-             invoke_extension, publish_app, seed_memory, app_inline_url, verify_render, verify_anon_render,
-             verify_interaction]
+             invoke_extension, publish_app, list_app_versions, revert_app, seed_memory, app_inline_url,
+             verify_render, verify_anon_render, verify_interaction]
     # Side-effecting / live-state tools must NOT be cached. crewai caches tool results by args, which
     # would serve a STALE verdict across fix-loop iterations (observed: verify_render "(from cache)"
     # returning the pre-fix FAIL after a re-publish). The read-only discovery tools may cache.
-    for _t in (install_cortex, install_extension, invoke_extension, publish_app, seed_memory, verify_render,
+    for _t in (install_cortex, install_extension, invoke_extension, publish_app, list_app_versions,
+               revert_app, seed_memory, verify_render,
                verify_anon_render, verify_interaction, read_node_api, name_available, read_app_stack,
                read_app_source, find_public_index):
         try:

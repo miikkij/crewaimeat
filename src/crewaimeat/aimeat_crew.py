@@ -181,6 +181,17 @@ class CrewSpec:
     verify: str = "off"                   # "on" appends a Reviewer pass that checks the deliverable
     #   against the goal and FIXES gaps before publish (one pass, no loop). Per-task <<VERIFY>> /
     #   <<NOVERIFY>> in the task description overrides this. "feeling lucky" (off) vs "serious" (on).
+    require_verify_pass: bool = False     # SYS-1: gate task COMPLETION on the app verify gates'
+    #   DETERMINISTIC outcome (verify_render/verify_anon_render/verify_interaction, via author_tool's
+    #   recorded {ok} — not the agent's self-report). When True, a direct (non-conductor) build that
+    #   FAILED a gate, or never ran one, is FAILED (aimeat_task_fail) instead of completing 'green'. This
+    #   only changes the TASK STATUS — it never touches the live app. Off by default; opt-in for build/fix
+    #   crews that run the app gates. (The conductor already withholds completion until green.)
+    auto_revert_on_fail: bool = False     # When True AND require_verify_pass fails a build, ALSO restore
+    #   each app this run published to its pre-run last-good version (revert_apps_to_baseline) — so the
+    #   LIVE app is rolled back, not just left un-'done'. This re-publishes the previous version (an
+    #   outward-facing change), so it is a SEPARATE opt-in from the (safe, status-only) gate above; off by
+    #   default so the gate can be watched before live rollback is enabled.
     readme_md: str | None = None          # markdown for the agent's README tab; may contain
     #   [[FIGLET[:font]]["text"]] (deterministic ASCII-art) and [[LLM]["prompt"]] (LLM output)
     #   directives expanded at publish time. Written to agents.<agent>.readme (owner).
@@ -215,6 +226,23 @@ def _now_context() -> str:
         f"of truth for 'today'/'now' references. "
         f"Verify up-to-date facts with web search."
     )
+
+
+def _runtime_max_execution_time() -> "int | None":
+    """Optional fleet-wide wall-clock bound (seconds) for each agent's task, from
+    AIMEAT_AGENT_MAX_EXECUTION_TIME. A wall-clock bound stops a STUCK run while letting a
+    progressing-but-long build finish — which a raw max_iter cap cannot distinguish (field finding
+    2026-06-05: max_iter only fires on non-convergent re-authoring loops, so it cannot tell thrashing
+    from legitimate build depth). Default None (off) so it changes nothing until the operator opts in;
+    a per-agent value an author set themselves is never overridden."""
+    raw = os.getenv("AIMEAT_AGENT_MAX_EXECUTION_TIME")
+    if not raw:
+        return None
+    try:
+        v = int(raw)
+    except ValueError:
+        return None
+    return v if v > 0 else None
 
 
 def _auth_alive(agent_name: str, owner: str | None) -> bool | None:
@@ -688,10 +716,55 @@ def _make_publish_cb(agent_name: str, primary_key: str, shared_key: str | None =
     return _cb
 
 
-def _make_complete_cb(agent_name: str, tid: str):
+def _make_complete_cb(agent_name: str, tid: str, require_verify: bool = False, owner: str | None = None,
+                      auto_revert: bool = False):
     """Task callback: close the AIMEAT task deterministically (no LLM). Attached to the finalize
-    task so the task is completed even if the liaison never calls aimeat_task_complete."""
+    task so the task is completed even if the liaison never calls aimeat_task_complete.
+
+    When require_verify is True (CrewSpec.require_verify_pass — SYS-1), completion is GATED on the app
+    verify gates' deterministic outcome: a build whose verify_render / verify_interaction FAILED, or that
+    never ran a gate at all, is FAILED (aimeat_task_fail) instead of shipping 'green'. The verdicts come
+    from the gate {ok} recorded by the verify tools (author_tool.get_verify_verdicts), never the agent's
+    self-reported text — the whole point is to not trust the self-report. The gate is STATUS-ONLY.
+
+    When auto_revert is True (CrewSpec.auto_revert_on_fail), a gate-fail ALSO restores each app this run
+    published to its pre-run last-good version (revert_apps_to_baseline) — an outward-facing live rollback,
+    kept a SEPARATE opt-in from the safe status gate."""
     def _cb(_task_output) -> None:
+        if require_verify:
+            try:
+                from crewaimeat.author_tool import get_verify_verdicts
+                verdicts = get_verify_verdicts(tid)
+            except Exception as exc:  # noqa: BLE001 — never break finalize on the lookup
+                print(f"[{agent_name}] verify-gate lookup failed ({exc}); completing without gating", file=sys.stderr)
+                verdicts = None
+            if verdicts is not None:
+                failed = sorted(g for g, v in verdicts.items() if v.get("ok") is False)
+                passed = [g for g, v in verdicts.items() if v.get("ok") is True]
+                reason = None
+                if failed:
+                    reason = (f"Not shipping a broken build: verify gate(s) FAILED — {', '.join(failed)}. "
+                              "Fix the app and re-queue.")
+                elif not passed:
+                    reason = ("Not shipping unverified: no verify gate produced a PASS. A build must prove "
+                              "itself with verify_render / verify_interaction before it can complete.")
+                if reason:
+                    # The gate itself only fails the task (status-only). Optional, separate opt-in:
+                    if auto_revert:
+                        # also restore each app this run published to its pre-run last-good version, so the
+                        # LIVE app is rolled back, not just left un-'done' (the recorded rollback baseline).
+                        restored = []
+                        try:
+                            from crewaimeat.author_tool import revert_apps_to_baseline
+                            restored = [r for r in revert_apps_to_baseline(agent_name, tid, owner) if r.get("ok")]
+                        except Exception as exc:  # noqa: BLE001 — revert is best-effort; still fail the task
+                            print(f"[{agent_name}] auto-revert skipped ({exc})", file=sys.stderr)
+                        if restored:
+                            names = ", ".join(f"{r['filename']}->v{r['to_version']}" for r in restored)
+                            reason += f" Auto-restored {len(restored)} app(s) to last-good: {names}."
+                    fr = _aimeat_call(agent_name, "aimeat_task_fail", {"task_id": tid, "message": reason})
+                    print(f"[{agent_name}] require_verify_pass GATE -> task_fail {tid}: {reason[:90]} ({bool(fr)})", file=sys.stderr)
+                    return
         res = _aimeat_call(
             agent_name,
             "aimeat_task_complete",
@@ -1151,8 +1224,10 @@ def run_crew(spec: CrewSpec) -> None:
             finalize = _finalize_message_task(spec.agent_name, mem_key, sender, liaison)
         else:
             finalize = _finalize_task(spec.agent_name, tid, mem_key, liaison)
-            # Guarantee the task is closed even if the liaison never calls aimeat_task_complete.
-            finalize.callback = _make_complete_cb(spec.agent_name, tid)
+            # Guarantee the task is closed even if the liaison never calls aimeat_task_complete; when
+            # require_verify_pass is set, the close is GATED on the app verify gates' outcome (SYS-1).
+            finalize.callback = _make_complete_cb(spec.agent_name, tid, require_verify=spec.require_verify_pass,
+                                                  owner=spec.owner, auto_revert=spec.auto_revert_on_fail)
 
         # Self-evolution monitor (doc 20 P1): after the task, read own reputation and, if a gated
         # signal fires, propose an evolution to the owner. Chained after finalize; best-effort.
@@ -1173,6 +1248,18 @@ def run_crew(spec: CrewSpec) -> None:
                     print(f"[{spec.agent_name}] self-monitor skipped: {exc}", file=sys.stderr)
 
             finalize.callback = _monitor_cb
+
+        # Optional wall-clock runaway bound (field finding 2026-06-05: safer than lowering max_iter —
+        # it kills a STUCK loop without truncating a long-but-progressing build). Off unless
+        # AIMEAT_AGENT_MAX_EXECUTION_TIME is set; never overrides an agent that declared its own.
+        _met = _runtime_max_execution_time()
+        if _met is not None:
+            for _a in agents:
+                if getattr(_a, "max_execution_time", None) in (None, 0):
+                    try:
+                        _a.max_execution_time = _met
+                    except Exception:  # noqa: BLE001 — never break the build if the model rejects the assignment
+                        pass
 
         crew_kwargs: dict[str, Any] = {
             "agents": [liaison, *agents],
