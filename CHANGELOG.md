@@ -7,14 +7,18 @@ Dates are the working dates; entries are **uncommitted and take effect on the ne
 ## [Unreleased] — 2026-06-04 → 2026-06-05
 
 ### Added
-- **Deterministic content pipeline** — the CrewAI crews left deterministic steps to the LLM (whether to
-  scrape, which categories to write, copy-vs-rewrite the editorial) and grok skipped them → stub raw, empty
-  articles, a clobbered editorial. Rewrote fetch/write/features/editorial as CODE orchestration (grok only
-  writes prose):  (feeds+SearXNG + ALWAYS trafilatura → rich raw),  (code
-  loop, full article per category),  (koodaus/prompt-niksi/matikka + validated quiz JSON),
-   (gonzo S.J. verbatim + deterministic ). The crews are now thin
-  wrappers that resolve date+edition and call one tool. Also: grok-4.3 primary via litellm-xai, curated RSS
-  feed registry (), per-article source counts + provenance badges, once-daily 18:00 edition.
+- **Deterministic content pipeline** — the CrewAI crews left deterministic steps to the LLM (whether to run
+  trafilatura, which categories to write, copy-vs-rewrite the editorial) and grok skipped them → stub
+  RSS-snippet raw, skipped/empty articles, a polite "Päätoimittaja" clobber of the gonzo editorial. Rewrote
+  fetch/write/features/editorial as CODE orchestration (grok only writes prose):
+  `fetch_pipeline` (curated feeds + SearXNG + ALWAYS trafilatura → rich raw),
+  `write_pipeline` (code loop, a full article per category from the raw — no skips),
+  `features_pipeline` (koodaus/prompt-niksi/matikka + parsed-and-validated quiz JSON),
+  `editorial_pipeline` (gonzo S.J. editorial stored VERBATIM + deterministic `index_frontpage_auto` with
+  per-article source counts — no publisher clobber). The news-fetcher / news-writer(+b) / editorial-writer /
+  daily-features-writer crews are now thin wrappers that resolve the target date+edition and call one tool.
+  Also: grok-4.3 primary via litellm-xai, curated RSS feed registry (`feed_sources.py`), per-article source
+  counts + provenance badges in the newspaper, once-daily evening (18:00) schedule.
 - **Automated test floor** (`tests/`, run with `uv run pytest`) — the first test suite in the repo.
   Deterministic, no LLM, no network: pure-function tests for the scaffold publish/verify path; a
   per-crew `build_domain` contract across all 27 crews (returns agents+tasks, in-crew agents, context
