@@ -1,52 +1,84 @@
 {
-  "_about": "OpenClaw-style provider + model priority chain. Copy to llm_providers.json (gitignored) to use it; get_llm() then tries providers top-to-bottom, and within each provider its models in order, falling through on ANY error (across providers). A paid model is used ONLY if you list AND enable it. Delete the file to fall back to env (OPENROUTER_MODEL).",
+  "_about": "Per-crew LLM routing. Copy to llm_providers.json (gitignored) to use it. 'profiles' are named provider chains; 'crews' maps an agent_name to a profile; every other crew uses 'default'. So content crews route to one model (grok) and code crews to another (a real coder). get_llm() tries each provider in the chosen profile top-to-bottom, and within a provider its models in order, falling through on ANY error (across providers). Delete the file to fall back to env (OPENROUTER_MODEL).",
   "_fields": {
-    "name": "free label for logs",
-    "type": "openrouter | ollama | xai | openai | generic (decides the litellm prefix + default base_url)",
-    "api_key_env": "name of the .env var holding the key (omit for keyless providers like local ollama); a provider whose key is missing is skipped, not fatal",
-    "base_url": "optional override (defaults: openrouter=https://openrouter.ai/api/v1, ollama=http://localhost:11434)",
-    "context": "optional provider-level default context-window (tokens) for its string models",
-    "models": "models IN PRIORITY ORDER. Each is either an id string, or {id, context}. id has NO litellm prefix (e.g. 'openai/gpt-oss-120b:free' for openrouter, 'qwen2.5:7b' for ollama). context = that model's MAX context window in tokens — set it so CrewAI never over-fills a small model (check the model's OpenRouter page; local Ollama is whatever you set in the Ollama app, ~32k). The chain uses the SMALLEST window across all endpoints to size prompts safely.",
+    "default": "profile name used by any crew not listed in 'crews'",
+    "profiles": "name -> { providers:[...] }. A provider: {name, type, api_key_env?, base_url?, context?, models:[...], enabled?}",
+    "crews": "agent_name -> profile name (the agent_name from `aimeat connect add --agent ...`)",
+    "type": "openrouter | ollama (local, keyless) | xai | openai | generic (decides the litellm prefix + default base_url)",
+    "api_key_env": "name of the .env var holding the key (omit for keyless local ollama); a provider whose key is missing is skipped, not fatal",
+    "models": "models IN PRIORITY ORDER, each an id string or {id, context}. id has NO litellm prefix. context = that model's MAX context window (tokens) so CrewAI never over-fills a small model.",
     "enabled": "optional false to keep a provider in the file but skip it"
   },
-  "providers": [
-    {
-      "name": "openrouter-free",
-      "type": "openrouter",
-      "api_key_env": "OPENROUTER_API_KEY",
-      "models": [
-        { "id": "openai/gpt-oss-120b:free", "context": 131072 },
-        { "id": "google/gemma-4-31b-it:free", "context": 262144 }
+  "default": "content",
+  "profiles": {
+    "content": {
+      "_use": "news / editorial / features / research — grok is strong at prose; free + local fall back if grok dies.",
+      "providers": [
+        {
+          "name": "xai",
+          "type": "xai",
+          "api_key_env": "XAI_API_KEY",
+          "models": [
+            { "id": "grok-4.3", "context": 1000000 }
+          ]
+        },
+        {
+          "name": "openrouter-free",
+          "type": "openrouter",
+          "api_key_env": "OPENROUTER_API_KEY",
+          "models": [
+            { "id": "openai/gpt-oss-120b:free", "context": 131072 },
+            { "id": "google/gemma-4-31b-it:free", "context": 262144 }
+          ]
+        },
+        {
+          "name": "ollama-local",
+          "type": "ollama",
+          "base_url": "http://localhost:11434",
+          "context": 32768,
+          "models": [
+            { "id": "qwen2.5:7b" },
+            { "id": "llama3.2:3b" }
+          ]
+        }
       ]
     },
-    {
-      "name": "ollama-local",
-      "type": "ollama",
-      "base_url": "http://localhost:11434",
-      "context": 32768,
-      "models": [
-        { "id": "qwen2.5:7b" },
-        { "id": "llama3.2:3b" }
-      ]
-    },
-    {
-      "name": "xai",
-      "type": "xai",
-      "api_key_env": "XAI_API_KEY",
-      "enabled": false,
-      "models": [
-        { "id": "grok-4-fast", "context": 2000000 }
-      ]
-    },
-    {
-      "name": "openrouter-paid",
-      "type": "openrouter",
-      "api_key_env": "OPENROUTER_API_KEY",
-      "enabled": false,
-      "models": [
-        { "id": "openai/gpt-4o-mini", "context": 128000 },
-        { "id": "anthropic/claude-3.5-haiku", "context": 200000 }
+    "coding": {
+      "_use": "app / cortex / extension / test crews. Do NOT put grok here (weak at code). Slot your strongest coder as the FIRST provider (e.g. a paid deepseek/claude via OpenRouter, or a local code model). The free model below is only a placeholder.",
+      "providers": [
+        {
+          "name": "openrouter-coder",
+          "type": "openrouter",
+          "api_key_env": "OPENROUTER_API_KEY",
+          "models": [
+            { "id": "openai/gpt-oss-120b:free", "context": 131072 }
+          ]
+        },
+        {
+          "name": "ollama-local",
+          "type": "ollama",
+          "base_url": "http://localhost:11434",
+          "context": 32768,
+          "models": [
+            { "id": "qwen2.5:7b" }
+          ]
+        }
       ]
     }
-  ]
+  },
+  "crews": {
+    "aimeat-app-builder": "coding",
+    "aimeat-app-conductor": "coding",
+    "aimeat-app-editor": "coding",
+    "aimeat-app-designer": "coding",
+    "aimeat-app-specs-designer": "coding",
+    "aimeat-cortex-fixer": "coding",
+    "aimeat-realtime-builder": "coding",
+    "aimeat-realtime-presence-board-builder": "coding",
+    "aimeat-extension-builder": "coding",
+    "aimeat-sdlc-architect": "coding",
+    "crew-forge": "coding",
+    "aimeat-crew-forge": "coding",
+    "web-tester": "coding"
+  }
 }

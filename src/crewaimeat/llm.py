@@ -40,15 +40,40 @@ def _providers_file() -> str | None:
     return p if os.path.isfile(p) else None
 
 
-def _flatten_endpoints(cfg: dict, for_tool_use: bool) -> list[dict]:
-    """Turn the provider config into a flat, ordered list of endpoints (provider-major, model-minor).
+def _select_chain(cfg: dict, agent_name: str | None) -> tuple[list, str]:
+    """Pick the provider chain for a crew.
+
+    NEW format — per-crew profiles:
+        {"profiles": {"content": {"providers": [...]}, "coding": {"providers": [...]}},
+         "default": "content", "crews": {"aimeat-app-builder": "coding", ...}}
+    A crew listed in `crews` uses that profile; everything else uses `default`. So content crews route to
+    grok and code crews route to a real coder.
+
+    OLD format — one flat chain for all crews: {"providers": [...]} (still supported).
+
+    Returns (providers_list, profile_label).
+    """
+    profiles = cfg.get("profiles")
+    if isinstance(profiles, dict) and profiles:
+        name = (cfg.get("crews") or {}).get(agent_name or "") or cfg.get("default") or next(iter(profiles))
+        prof = profiles.get(name)
+        if not isinstance(prof, dict):  # bad mapping → fall back to default, then first profile
+            name = cfg.get("default") or next(iter(profiles))
+            prof = profiles.get(name) or next(iter(profiles.values()))
+        return ((prof or {}).get("providers") or [], str(name))
+    return (cfg.get("providers") or [], "providers")
+
+
+def _flatten_endpoints(providers: list, for_tool_use: bool) -> list[dict]:
+    """Turn a provider list (one profile's chain) into a flat, ordered list of endpoints (provider-major,
+    model-minor).
 
     A provider whose `api_key_env` is set but missing is skipped (logged), not fatal — so a machine with no
     OpenRouter key still runs on its local Ollama provider. Each model may be a plain id string or an object
     `{"id": ..., "context": N}`; a provider-level `"context"` is the default for its string models.
     """
     eps: list[dict] = []
-    for prov in cfg.get("providers", []):
+    for prov in providers or []:
         if not prov.get("enabled", True):
             continue
         ptype = (prov.get("type") or "openrouter").lower()
@@ -140,7 +165,8 @@ class MultiProviderLLM(BaseLLM):
             return True
 
 
-def get_llm(for_tool_use: bool = True, temperature: float | None = None) -> BaseLLM:
+def get_llm(for_tool_use: bool = True, temperature: float | None = None,
+            agent_name: str | None = None) -> BaseLLM:
     """Build an LLM instance.
 
     for_tool_use=True (default) adds parallel_tool_calls=False for the tool-calling crews. Pass False for a
@@ -149,18 +175,25 @@ def get_llm(for_tool_use: bool = True, temperature: float | None = None) -> Base
 
     `temperature` overrides the LLM_TEMPERATURE env default — the task-nature gate uses this to run factual
     work cool (~0.15) and creative work warm (~0.7).
+
+    `agent_name` selects the per-crew provider profile from llm_providers.json (e.g. content crews -> grok,
+    code crews -> a real coder). When omitted (the deterministic content pipelines call get_llm() directly),
+    the `default` profile is used.
     """
     temperature = temperature if temperature is not None else float(os.getenv("LLM_TEMPERATURE", "0.5"))
 
-    # --- Provider config (priority chain across providers + models) — wins when present ---
+    # --- Provider config (per-crew profile -> priority chain across providers + models) — wins when present ---
     pf = _providers_file()
     if pf:
         try:
             cfg = json.loads(open(pf, encoding="utf-8").read())
-            eps = _flatten_endpoints(cfg, for_tool_use)
+            providers, profile = _select_chain(cfg, agent_name)
+            eps = _flatten_endpoints(providers, for_tool_use)
             if eps:
+                if agent_name:
+                    print(f"[llm] {agent_name} -> profile '{profile}' (primary {eps[0]['label']})", file=sys.stderr)
                 return MultiProviderLLM(eps, temperature)
-            print(f"[llm] {pf}: no usable endpoints; using env config", file=sys.stderr)
+            print(f"[llm] {pf}: profile '{profile}' has no usable endpoints; using env config", file=sys.stderr)
         except Exception as e:
             print(f"[llm] failed to load {pf} ({e}); using env config", file=sys.stderr)
 

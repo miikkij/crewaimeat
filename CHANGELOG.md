@@ -7,6 +7,14 @@ Dates are the working dates; entries are **uncommitted and take effect on the ne
 ## [Unreleased] — 2026-06-04 → 2026-06-05
 
 ### Added
+- **Per-crew LLM routing (`llm_providers.json` profiles)** — `get_llm(agent_name=...)` now picks a named
+  provider **profile** per crew: `{"profiles": {"content": {...}, "coding": {...}}, "default": "content",
+  "crews": {"aimeat-app-builder": "coding", ...}}`. So content crews (news/editorial/features) route to
+  **grok** and code/app crews (app-builder, conductor, cortex-fixer, realtime-builder, web-tester, crew-forge,
+  …) route to a **non-grok coder** — grok is strong at prose, weak at code. The scaffold passes
+  `spec.agent_name` when building each crew's `ctx.llm`; the deterministic content pipelines call `get_llm()`
+  with no agent and so use `default`. The old flat `{"providers": [...]}` format still works (one chain for
+  all). See `llm_providers.example.json`.
 - **Deterministic content pipeline** — the CrewAI crews left deterministic steps to the LLM (whether to run
   trafilatura, which categories to write, copy-vs-rewrite the editorial) and grok skipped them → stub
   RSS-snippet raw, skipped/empty articles, a polite "Päätoimittaja" clobber of the gonzo editorial. Rewrote

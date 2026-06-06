@@ -1060,7 +1060,10 @@ def run_crew(spec: CrewSpec) -> None:
         _temp = spec.temperature if spec.temperature is not None else (gate["temperature"] if gate else None)
         if spec.temperature is not None:
             print(f"[{spec.agent_name}] enforced temperature={spec.temperature} (creative-nature crew)", file=sys.stderr)
-        llm = get_llm(temperature=_temp) if _temp is not None else get_llm()
+        # Per-crew provider routing: the domain agents (ctx.llm) use this crew's profile in llm_providers.json
+        # (e.g. content crews -> grok, code crews -> a real coder).
+        llm = get_llm(temperature=_temp, agent_name=spec.agent_name) if _temp is not None \
+            else get_llm(agent_name=spec.agent_name)
         verify_mode = verify_override or (gate["verify"] if gate else None) or spec.verify
         mem_key = _memory_key(spec.agent_name, spec.memory_key_prefix, {"id": tid, "description": prompt})
         print(
