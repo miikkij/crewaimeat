@@ -130,7 +130,8 @@ def make_memory_tools(agent_name: str) -> list:
         for it in new:
             if isinstance(it, dict) and it.get("gaii") and it.get("key"):
                 clean.append({k: it.get(k) for k in ("gaii", "key", "title", "date", "summary",
-                                                      "edition", "category", "kind") if it.get(k) is not None})
+                                                      "edition", "category", "kind", "sources")
+                              if it.get(k) is not None})
         if not clean:
             return ("FAILED: each entry needs at least gaii + key (the body's owner GAII + its exact public "
                     "key, both from list_memory). Nothing had both.")
@@ -172,7 +173,81 @@ def make_memory_tools(agent_name: str) -> list:
                 f"INDEX_KEY = '{index_key}'. The viewer reads this index, then getPublic(item.gaii, item.key) "
                 "for each body.")
 
-    tools = [write_memory, read_memory, list_memory, index_frontpage]
+    @tool("index_frontpage_auto")
+    def index_frontpage_auto(date: str, edition: str, index_key: str = "newspaper.frontpage") -> str:
+        """Build the PUBLIC front-page index for a date+edition DETERMINISTICALLY — no hand-built JSON, so it
+        cannot miss an article or miscount. Discovers every news.<date>.<edition>.article.<category> (+ the
+        .editorial) key with its owner gaii, reads each body for a title+teaser, and COUNTS each news
+        article's web sources from its raw (news.<date>.<edition>.raw.<category>) so the viewer can show
+        'Pohjana N verkkolähdettä'. Read-modify-writes the index under YOUR OWN gaii at visibility='public'.
+        Prefer this over index_frontpage in the editorial/publisher stage. Args: date (YYYY-MM-DD), edition
+        (morning|evening). Returns OK + item count + PUBLISHER gaii + INDEX_KEY."""
+        date, edition = (date or "").strip(), (edition or "").strip()
+        if not date or not edition:
+            return "FAILED: date (YYYY-MM-DD) and edition (morning|evening) are required."
+        apref = f"news.{date}.{edition}.article."
+        epref = f"news.{date}.{edition}.editorial"
+        lr = _aimeat_call(agent_name, "aimeat_memory_list", {"owner_scope": True, "prefix": f"news.{date}.{edition}."})
+        rows = ((lr or {}).get("items") if isinstance(lr, dict) else None) or []
+        raw_counts: dict = {}
+        for it in rows:
+            k = it.get("key") or ""
+            if k.startswith(f"news.{date}.{edition}.raw."):
+                v = it.get("value")
+                if v is None:
+                    v = _owner_scope_value(k)
+                try:
+                    if isinstance(v, str) and v.strip()[:1] == "[":
+                        v = json.loads(v)
+                    raw_counts[k.rsplit(".", 1)[-1]] = len(v) if isinstance(v, list) else 0
+                except Exception:  # noqa: BLE001
+                    raw_counts[k.rsplit(".", 1)[-1]] = 0
+        FEATURE = {"koodaus", "prompt-niksi", "matikka"}
+        clean = []
+        for it in rows:
+            k = it.get("key") or ""
+            is_ed = (k == epref)
+            if not (k.startswith(apref) or is_ed):
+                continue
+            cat = "editorial" if is_ed else k.rsplit(".", 1)[-1]
+            body = it.get("value")
+            if body is None:
+                body = _owner_scope_value(k)
+            txt = body if isinstance(body, str) else (json.dumps(body, ensure_ascii=False) if body is not None else "")
+            lines = [ln.strip().lstrip("#").strip() for ln in txt.splitlines() if ln.strip()]
+            entry = {"gaii": it.get("owner_gaii") or it.get("gaii"), "key": k, "date": date, "edition": edition,
+                     "category": cat, "summary": (" ".join(lines))[:140],
+                     "kind": "editorial" if is_ed else "article",
+                     "title": (f"Editorial | {date} {edition}" if is_ed else f"{cat.capitalize()} | {date}")}
+            if (not is_ed) and (cat not in FEATURE) and (cat in raw_counts):
+                entry["sources"] = raw_counts[cat]
+            clean.append(entry)
+        if not clean:
+            return f"FAILED: no article/editorial keys found for {date} {edition}."
+        cur = _aimeat_call(agent_name, "aimeat_memory_read", {"key": index_key})
+        existing = cur.get("value") if isinstance(cur, dict) else None
+        merged: dict = {}
+        for e in (existing if isinstance(existing, list) else []):
+            if isinstance(e, dict) and e.get("gaii") and e.get("key"):
+                merged[(e.get("gaii"), e.get("key"))] = e
+        for e in clean:
+            merged[(e.get("gaii"), e.get("key"))] = e
+        out = sorted(merged.values(),
+                     key=lambda e: (str(e.get("date") or ""), str(e.get("edition") or "")), reverse=True)[:120]
+        w = _aimeat_call(agent_name, "aimeat_memory_write", {"key": index_key, "value": out, "visibility": "public"})
+        if w is None:
+            return f"FAILED to write the front-page index '{index_key}'."
+        pub = ""
+        for it in (((_aimeat_call(agent_name, "aimeat_memory_list", {"prefix": index_key}) or {}).get("items")) or []):
+            if isinstance(it, dict) and it.get("key") == index_key and it.get("owner_gaii"):
+                pub = it["owner_gaii"]
+                break
+        ev = sum(1 for e in out if e.get("date") == date and e.get("edition") == edition)
+        return (f"OK: front-page index '{index_key}' rebuilt for {date} {edition} — {ev} items this edition, "
+                f"{len(out)} total, visibility=public. PUBLISHER = {pub or '<list_memory the index key>'}. "
+                f"INDEX_KEY = '{index_key}'.")
+
+    tools = [write_memory, read_memory, list_memory, index_frontpage, index_frontpage_auto]
     for _t in tools:  # side-effecting / live-state — never serve a cached result
         try:
             _t.cache_function = lambda *_a, **_k: False

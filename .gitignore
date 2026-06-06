@@ -25,3 +25,6 @@ logs/
 crews/.candidates/
 .claude
 blueprint_test.json
+
+# user-specific provider/model priority config (the .example is committed)
+llm_providers.json

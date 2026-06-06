@@ -1,14 +1,13 @@
-"""news-writer (GROUP A): core-news writers for (L)AIMEAT Sanomat.
+"""news-writer (DESK A): deterministic article writing for (L)AIMEAT Sanomat.
 
-Reads the day's raw material (news.<date>.<edition>.raw.<category>) and writes original Finnish articles
-(news.<date>.<edition>.article.<category>), each in its own named persona's voice + byline. This is HALF
-the newsroom — the tech/lifestyle/feature desks live in news_writer_b_crew.py (news-writer-b), which runs
-in PARALLEL so the write stage stays fast. Both read the same raw; the editorial/index stage discovers
-whatever article.* keys exist regardless of which crew wrote them.
+The category loop runs in code (crewaimeat.write_pipeline) — every desk-A category with non-empty raw gets a
+full-length article written by a direct grok call from the rich scraped raw. The old crew left "which
+categories to write" to the LLM, which skipped ~30% and wrote some empty. This crew is a thin wrapper: the
+agent resolves the target date+edition and calls write_edition_articles ONCE.
 
-Register + approve:
+Register + approve, then run:
   npx aimeat@latest connect add --agent news-writer --mode task-runner --url https://aimeat.io --owner <you>
-Run: uv run python crews/news_writer_crew.py
+  uv run python crews/news_writer_crew.py
 """
 
 from __future__ import annotations
@@ -16,111 +15,44 @@ from __future__ import annotations
 from crewai import Agent, Task
 
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
-from crewaimeat.memory_tools import make_memory_tools
+from crewaimeat.write_pipeline import make_write_tools
 
 AGENT_NAME = "news-writer"
-
 README = '''[[FIGLET:slant]["News Writer A"]]
 
-Core-news desk: politiikka, talous, paikallinen, kulttuuri, urheilu, tiede, terveys, kevennykset,
-päivänkohtaiset — original Finnish articles, each with its own named byline. Runs in parallel with
-news-writer-b.
-
-**How to task me:** "Kirjoita <date> <edition> ydinuutisartikkelit raaka-aineistosta."
+Core-news desk (politiikka, talous, paikallinen, kulttuuri, urheilu, tiede, terveys, kevennykset,
+päivänkohtaiset). Writes a full Finnish article per category from the scraped raw — deterministic loop, grok
+prose, each in its named persona's voice. Runs in parallel with news-writer-b.
 '''
-
-# (category slug, persona NAME, role, voice) — Group A
-_DESK = [
-    ("politiikka-suomi", "Valtteri Valta", "Finnish Domestic Politics Writer",
-     "sharp, analytical, accessible; domestic politics"),
-    ("politiikka-globaali", "Maija Maailma", "Finnish Global Politics Writer",
-     "world politics, crises, great powers — backgrounded clearly for Finnish readers"),
-    ("talous", "Markus Markka", "Finnish Business & Economy Writer",
-     "precise, data-informed, reader-friendly; markets & business"),
-    ("paikallinen", "Eila Espoo", "Finnish Local (Tapiola/Espoo) Writer",
-     "close, concrete; Tapiola/Espoo city & everyday life"),
-    ("paivankohtaiset", "Antti Ajankohtainen", "Finnish Daily Roundup Writer",
-     "brisk, clear roundup of the day's biggest talking points"),
-    ("kulttuuri", "Tuula Taide", "Finnish Culture & Lifestyle Writer",
-     "warm, evocative; arts, entertainment, lifestyle"),
-    ("urheilu", "Tapio Kenttä", "Finnish Sports Writer",
-     "lively, equal parts stats and heart; jääkiekko/jalkapallo/yleisurheilu"),
-    ("tiede", "Aino Virta", "Finnish Science Writer",
-     "clear and exciting without dumbing down; tiede/teknologia/avaruus/ympäristö"),
-    ("terveys", "Liisa Terve", "Finnish Health & Wellbeing Writer",
-     "warm, careful; never alarmist or unsourced medical advice"),
-    ("kevennykset", "Pekka Pilke", "Finnish Feel-Good & Lighter Writer",
-     "uplifting, gently humorous, dry Finnish humour, never mean"),
-]
 
 
 def build_domain(ctx: BuildContext):
-    raw_reader = Agent(
-        role="Raw Material Reader",
-        goal="Read raw news material from owner memory and validate availability before rewriting begins.",
-        backstory="A meticulous Finnish newsroom archivist who checks that raw material exists for each "
-                  "category and extracts it faithfully. Never fabricates — if a key is missing, that "
-                  "category is skipped.",
+    writer = Agent(
+        role="Desk-A Write Runner",
+        goal="Resolve the target date + edition from the request and trigger the deterministic desk-A write.",
+        backstory="You do not write articles by hand or choose which to write. You read the request, work out "
+                  "the target date and edition, and call write_edition_articles ONCE — the tool writes a full "
+                  "article for every desk-A category that has raw. You then report what it wrote.",
         llm=ctx.llm,
-        tools=[*make_memory_tools(AGENT_NAME)],
+        tools=[*make_write_tools(AGENT_NAME, "A")],
     )
-
-    task_read_raw = Task(
-        description=(f"{ctx.today} — {ctx.prompt}\n\n"
-                     "Read raw news material from owner memory. Use list_memory(prefix='news.<date>."
-                     "<edition>.raw.') to discover available raw keys, then read_memory each. Return a "
-                     "structured summary: for each available category, the category name + the full raw "
-                     "content. List which were missing. Never fabricate."),
-        agent=raw_reader,
-        expected_output="Each available category with its raw content, plus the skipped list.",
+    task = Task(
+        description=(
+            f"Today is {ctx.today}. Request: '{ctx.prompt}'\n\n"
+            "1. Resolve the TARGET DATE (YYYY-MM-DD — the date in the request, else today) and EDITION "
+            "('evening' if the request mentions ilta/evening, else 'morning').\n"
+            "2. Call write_edition_articles(date=<resolved>, edition=<resolved>) EXACTLY ONCE. It writes a "
+            "full article for every desk-A category that has raw — you do NOT write articles yourself.\n"
+            "3. Return the per-category char-count report it gives you."
+        ),
+        agent=writer,
+        expected_output="The write_edition_articles report: each desk-A article key + char count, or skips.",
     )
-
-    writers, write_tasks = [], []
-    for slug, name, role, voice in _DESK:
-        w = Agent(
-            role=role,
-            goal=f"Rewrite raw '{slug}' material into an original Finnish article in own words, signed '— {name}'.",
-            backstory=f"You are {name.upper()}, the paper's {role} — {voice}. You rewrite in your own "
-                      f"Finnish words, never copy verbatim, and always end with the byline '— {name}'.",
-            llm=ctx.llm,
-            tools=[*make_memory_tools(AGENT_NAME)],
-        )
-        t = Task(
-            description=(f"{ctx.today} — Write an original Finnish article for the '{slug}' category.\n"
-                         f"1. Use the raw '{slug}' material from context (raw key suffix '{slug}').\n"
-                         "2. Rewrite into a completely original Finnish article in your own words — never copy verbatim.\n"
-                         f"3. write_memory(key='news.<date>.<edition>.article.{slug}', value=<article>, visibility='public').\n"
-                         f"4. End with the byline '— {name}'. If no '{slug}' raw material exists, skip and note it."),
-            agent=w,
-            context=[task_read_raw],
-            expected_output=f"The {slug} article (signed '— {name}') + the key written, or a skip note.",
-        )
-        writers.append(w)
-        write_tasks.append(t)
-
-    editor = Agent(
-        role="Finnish News Editor (Desk A)",
-        goal="Review the core-news articles and compile a short publication summary for this desk.",
-        backstory="A detail-oriented Finnish news editor who confirms each article meets standards and "
-                  "lists the published keys + any skipped categories for desk A.",
-        llm=ctx.llm,
-        tools=[*make_memory_tools(AGENT_NAME)],
-    )
-    task_editor = Task(
-        description=(f"{ctx.today} — Review desk-A articles. list_memory(prefix='news.<date>.<edition>."
-                     "article.') to find what was published, read a few to confirm quality, and report the "
-                     "published keys + any skipped categories. (Do not write a summary key — the editorial "
-                     "stage owns the front page.)"),
-        agent=editor,
-        context=write_tasks,
-        expected_output="A short report: published desk-A article keys + skipped categories.",
-    )
-
-    return ([raw_reader, *writers, editor], [task_read_raw, *write_tasks, task_editor])
+    return ([writer], [task])
 
 
 def run() -> None:
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README, temperature=0.7))
+    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README, temperature=0.2))
 
 
 if __name__ == "__main__":

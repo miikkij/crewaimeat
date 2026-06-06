@@ -77,6 +77,17 @@ Then queue a task for `research-crew` from the AIMEAT dashboard (its Tasks tab, 
 
 `openrouter/owl-alpha` is free and fine for testing; the scaffold already copes with its occasional empty responses. For production, add credit on OpenRouter and switch to a stronger paid model, which is faster and more likely to get the task right on the first try. The model is set in `.env` via `OPENROUTER_MODEL`.
 
+### Providers and model fallback (`llm_providers.json`)
+
+For resilience and local-first setups, drop an `llm_providers.json` in the repo root (copy [`llm_providers.example.json`](llm_providers.example.json)). It lists **providers in priority order**, each with **models in priority order**; `get_llm` tries them top-to-bottom, falling through on any error **across providers** — so a local **Ollama** model can back up OpenRouter (or you can run local-first and never touch a paid model unless you list it). Each model carries its **context window**, and the chain sizes prompts to the *smallest* one, so a 32k local model is never over-filled behind a 128k one. Types: `openrouter`, `ollama` (keyless), `xai`, `openai`, `generic`; a provider whose key is missing is skipped, not fatal. The file is gitignored; delete it to fall back to the `.env` `OPENROUTER_MODEL` path.
+
+Before trusting a new free or local model, check it can actually drive crewaimeat:
+
+```bash
+uv run python scripts/check_models.py          # scorecard (completion / JSON / real search-crew) for llm_providers.json
+uv run python scripts/check_models.py --quick  # skip the slow search-crew test
+```
+
 ## Scaffold a new crew
 
 ```bash

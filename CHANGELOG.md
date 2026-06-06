@@ -7,6 +7,14 @@ Dates are the working dates; entries are **uncommitted and take effect on the ne
 ## [Unreleased] — 2026-06-04 → 2026-06-05
 
 ### Added
+- **Deterministic content pipeline** — the CrewAI crews left deterministic steps to the LLM (whether to
+  scrape, which categories to write, copy-vs-rewrite the editorial) and grok skipped them → stub raw, empty
+  articles, a clobbered editorial. Rewrote fetch/write/features/editorial as CODE orchestration (grok only
+  writes prose):  (feeds+SearXNG + ALWAYS trafilatura → rich raw),  (code
+  loop, full article per category),  (koodaus/prompt-niksi/matikka + validated quiz JSON),
+   (gonzo S.J. verbatim + deterministic ). The crews are now thin
+  wrappers that resolve date+edition and call one tool. Also: grok-4.3 primary via litellm-xai, curated RSS
+  feed registry (), per-article source counts + provenance badges, once-daily 18:00 edition.
 - **Automated test floor** (`tests/`, run with `uv run pytest`) — the first test suite in the repo.
   Deterministic, no LLM, no network: pure-function tests for the scaffold publish/verify path; a
   per-crew `build_domain` contract across all 27 crews (returns agents+tasks, in-crew agents, context
@@ -25,6 +33,26 @@ Dates are the working dates; entries are **uncommitted and take effect on the ne
   crew. Off everywhere by default.
 - **`AIMEAT_AGENT_MAX_EXECUTION_TIME`** env (default off) — an optional per-agent wall-clock bound that
   stops a *stuck* run without truncating a long-but-progressing build (safer than lowering `max_iter`).
+- **`OPENROUTER_FALLBACK_MODELS`** env (default off) — a comma-separated **model-fallback chain** passed to
+  OpenRouter as its `models` array (via litellm `extra_body`). OpenRouter tries each id IN ORDER and skips
+  one that errors — **including a provider `400`** (verified against a cloaked/"alpha" model whose upstream
+  went down). Keeps the fleet running when the primary model dies, and auto-resumes the primary if it
+  recovers. E.g. `openai/gpt-oss-120b:free,openai/gpt-oss-20b:free,openrouter/owl-alpha`.
+- **Multi-provider LLM routing (`llm_providers.json`, OpenClaw-style)** — a provider + model **priority
+  chain**: `get_llm` tries providers in order and each provider's models in order, falling through on ANY
+  error **across providers** (e.g. OpenRouter free → local **Ollama** → xAI). Each model carries its
+  **context window**, and the chain sizes prompts to the *smallest* window so a 32k local model is never
+  over-filled behind a 128k one. Types: `openrouter`, `ollama` (local, keyless), `xai`, `openai`, `generic`;
+  a provider whose key env is missing is skipped (not fatal). `MultiProviderLLM` is **composition** over
+  CrewAI's `LLM` (a `BaseLLM` subclass — CrewAI's `LLM` is a factory that re-dispatches subclasses). The env
+  path (`OPENROUTER_MODEL` + `OPENROUTER_FALLBACK_MODELS`) still works when no config file is present.
+  Gitignored; see `llm_providers.example.json`. Born from owl-alpha's outage: free models needed prioritising
+  and a local fallback.
+- **`scripts/check_models.py`** — a **model-capability check**: runs a battery (completion, JSON output, and a
+  real SearXNG **search-crew**) against the models in `llm_providers.json` (or `--models a,b,c`) and prints a
+  scorecard of which can actually drive crewaimeat. Surfaced the real fetch failure — weak models build
+  garbage search queries (e.g. putting the date/edition in the query) and return nothing — so a model is
+  vetted before the fleet trusts it. `--quick` skips the slow search test.
 - **`revert_app` / `list_app_versions`** author tools + a per-run rollback **baseline** recorded by
   `publish_app`, so a crew (or the scaffold) can restore a prior working app version.
 - **New crew `aimeat-app-designer`** — the SDLC "Web Designer": re-skins a functionally-ready app
