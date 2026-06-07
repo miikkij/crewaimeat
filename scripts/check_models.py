@@ -83,6 +83,27 @@ def t_json(ep) -> str:
         return f"ERR:{type(e).__name__}"
 
 
+def t_tools(ep) -> str:
+    """Live tool-call probe: does the model actually invoke a provided tool (function-calling)?"""
+    try:
+        from crewai.tools import tool
+
+        @tool("multiply")
+        def _multiply(a: int, b: int) -> int:
+            """Multiply two integers and return the product."""
+            return a * b
+
+        ag = Agent(role="Calculator", goal="Compute products using the multiply tool.",
+                   backstory="You ALWAYS use the multiply tool to multiply; you never compute it in your head.",
+                   llm=_build_llm(ep), tools=[_multiply], max_iter=4, verbose=False, allow_delegation=False)
+        tk = Task(description="Use the multiply tool to compute 12 * 7. Return ONLY the resulting number.",
+                  agent=ag, expected_output="84")
+        out = str(Crew(agents=[ag], tasks=[tk], verbose=False).kickoff()).strip()
+        return "PASS" if "84" in out else "no-call"
+    except Exception as e:
+        return f"ERR:{type(e).__name__}"
+
+
 def t_search(ep) -> str:
     try:
         agent = Agent(role="Finnish news researcher",
@@ -112,13 +133,19 @@ def main() -> None:
             print("No llm_providers.json found and no --models given.", file=sys.stderr)
             sys.exit(2)
         cfg = json.loads(open(pf, encoding="utf-8").read())
-        eps = _flatten_endpoints(cfg, for_tool_use=True)
+        if isinstance(cfg.get("profiles"), dict):  # per-crew profiles format
+            providers = [p for prof in cfg["profiles"].values() for p in (prof.get("providers") or [])]
+        else:  # legacy flat format
+            providers = cfg.get("providers") or []
+        eps = _flatten_endpoints(providers, for_tool_use=True)
     if not eps:
         print("No endpoints to test.", file=sys.stderr)
         sys.exit(2)
+    seen_m: set = set()  # the same model can appear in several profiles — test each once
+    eps = [e for e in eps if not (e["model"] in seen_m or seen_m.add(e["model"]))]
 
-    print(f"{'MODEL':40s} {'completion':12s} {'json':10s} " + ("" if args.quick else f"{'search':12s} ") + "VERDICT")
-    print("-" * (64 if args.quick else 78))
+    print(f"{'MODEL':40s} {'completion':12s} {'json':10s} " + ("" if args.quick else f"{'tools':10s} {'search':12s} ") + "VERDICT")
+    print("-" * (64 if args.quick else 90))
     for ep in eps:
         comp = t_completion(ep)
         js = t_json(ep)
@@ -126,9 +153,10 @@ def main() -> None:
             verdict = "ok" if comp == "PASS" and js == "PASS" else "weak"
             print(f"{ep['label']:40s} {comp:12s} {js:10s} {verdict}")
         else:
+            tls = t_tools(ep)
             srch = t_search(ep)
-            verdict = "CAPABLE" if srch == "PASS" else ("partial" if comp == "PASS" else "FAIL")
-            print(f"{ep['label']:40s} {comp:12s} {js:10s} {srch:12s} {verdict}")
+            verdict = "CAPABLE" if (srch == "PASS" and tls == "PASS") else ("partial" if comp == "PASS" else "FAIL")
+            print(f"{ep['label']:40s} {comp:12s} {js:10s} {tls:10s} {srch:12s} {verdict}")
 
 
 if __name__ == "__main__":
