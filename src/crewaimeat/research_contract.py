@@ -113,11 +113,19 @@ def process_research_requests(max_items: int = 5, targets: list[tuple[str, str]]
         if not data or data.get("manifest") is None:
             continue
         reqs = (data.get("objects", {}) or {}).get(IN_SPACE) or []
+        # Output-dedup (the primary guard — it survives restarts): a request whose result already exists is
+        # already fulfilled, so just settle it. The result lives in a different space than the request, so
+        # this stays reliable even if the request's own status is slow to reflect a write.
+        done_results = {r.get("id") for r in ((data.get("objects", {}) or {}).get(OUT_SPACE) or [])}
         for req in reqs:
             rid = req.get("id")
             if req.get("status") != "requested" or not rid:
                 continue
             if rid in _PROCESSED:  # already handled this run — guard against a stale 'requested' read
+                continue
+            if f"res-{rid}" in done_results:  # result already exists -> fulfilled; settle without re-running
+                _PROCESSED.add(rid)
+                _advance(oid, wid, req, status="done", result_ref=f"res-{rid}")
                 continue
             if processed + failed >= max_items:
                 break
