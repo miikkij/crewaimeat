@@ -80,10 +80,16 @@ def _activity_events(org_id: str, ws: str) -> list[dict]:
         return []
 
 
-def _gather(org_id: str, ws_spec: str, member_ws: list[tuple[str, str]], since: str) -> list[dict]:
-    """Events since `since` for one ws, or for ALL the agent's member workspaces in this org if ws_spec=='*'."""
+def _gather(org_id: str, ws_spec: str, since: str) -> list[dict]:
+    """Events since `since` for one ws, or for EVERY workspace in this organism if ws_spec=='*'.
+
+    For "*" we list the host organism's workspaces DIRECTLY (workspace_list(org_id)) rather than filtering a
+    pre-built member list — organism_list may not surface every org the agent can actually read, but a direct
+    workspace_list(org_id) does, so the organism-delta covers all of its workspaces.
+    """
     if ws_spec == "*":
-        wss = [w for (o, w) in member_ws if o == org_id]
+        wl = _call("aimeat_workspace_list", {"organism_id": org_id}) or {}
+        wss = [w["id"] for w in (wl.get("workspaces") or []) if w.get("id")]
     else:
         wss = [ws_spec]
     out: list[dict] = []
@@ -167,7 +173,7 @@ def process_activity_reports(targets: list[tuple[str, str]] | None = None) -> di
             scope = "the whole organism" if ws_spec == "*" else f"workspace '{ws_spec}'"
             _advance(org_id, ws_id, rec, status="in-progress")
             try:
-                events = _gather(org_id, ws_spec, member_ws, since)
+                events = _gather(org_id, ws_spec, since)
                 report = _distill(events, scope, since, rec.get("narrator") or _DEFAULT_NARRATOR)
             except Exception as exc:  # noqa: BLE001
                 _advance(org_id, ws_id, rec, status="failed", error=repr(exc)[:300])
