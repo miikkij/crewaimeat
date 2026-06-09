@@ -76,9 +76,10 @@ def do_research(brief: str, depth: int = 5, focus: str = "") -> tuple[str | None
         "if the sources don't answer part of the brief, say so plainly."
     )
     # Route the distillation through the 'coding' profile (owl-alpha -> gpt-oss-120b -> minimax) — factual
-    # reasoning over sources, not creative content, so a frontier reasoner beats grok. (web-researcher is
-    # mapped to the 'coding' profile in llm_providers.json.)
-    llm = get_llm(for_tool_use=False, temperature=0.3, agent_name=AGENT)
+    # reasoning over sources beats grok. Uses a DEDICATED profile key 'research-contract' (mapped to 'coding'
+    # in llm_providers.json) so ONLY this contract distill uses owl-alpha — the ad-hoc web-researcher crew
+    # keeps its own default profile + model unchanged.
+    llm = get_llm(for_tool_use=False, temperature=0.3, agent_name="research-contract")
     summary = (llm.call([{"role": "user", "content": prompt}]) or "").strip()
     return (summary or None), [d["url"] for d in docs]
 

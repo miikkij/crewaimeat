@@ -29,30 +29,6 @@ def build_domain(ctx):
     """Build a web research crew that searches for recent articles, reports, and news on a given topic,
     producing sourced summaries with proper citations."""
 
-    # Contract mode: when triggered to process workspace research-request records (e.g. by a schedule),
-    # run the deterministic `research` workspace contract instead of the ad-hoc topic-research crew.
-    _p = (ctx.prompt or "").lower()
-    if "process_research_requests" in _p or "research-request" in _p:
-        from crewaimeat.research_contract import make_research_contract_tools
-        runner = Agent(
-            role="Research Contract Runner",
-            goal="Fulfil pending research-request records in member workspaces — read, research, write results.",
-            backstory="You process the 'research' workspace contract: call process_research_requests ONCE; it "
-                      "claims each pending request, researches it live (web search + fetch + distill), writes a "
-                      "research-result, and advances the request to done. You never post anywhere external; you "
-                      "never fabricate.",
-            llm=ctx.llm,
-            tools=[*make_research_contract_tools(AGENT_NAME)],
-        )
-        contract_task = Task(
-            description=(f"Today is {ctx.today}. Request: '{ctx.prompt}'\n\n"
-                         "Call process_research_requests() EXACTLY ONCE to fulfil pending research-request "
-                         "records across your member workspaces, then report the processed/failed counts."),
-            agent=runner,
-            expected_output="The process_research_requests report (processed/failed counts).",
-        )
-        return ([runner], [contract_task])
-
     # --- Agents ---
 
     search_agent = Agent(
