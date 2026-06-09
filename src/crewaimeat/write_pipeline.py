@@ -20,15 +20,14 @@ PERSONAS: dict[str, str] = {
     "paikallinen": "Eila Espoo", "paivankohtaiset": "Antti Ajankohtainen", "kulttuuri": "Tuula Taide",
     "urheilu": "Tapio Kenttä", "tiede": "Aino Virta", "terveys": "Liisa Terve", "kevennykset": "Pekka Pilke",
     "saa": "Sää-Salla", "tekoaly": "Neela Verkko", "pelit": "Lumi Peliranta", "pelidevaus": "Devi Koodimaa",
-    "startup": "Yrjö Kasvu", "huhut": "Juoru-Jaana", "yliluonnolliset": "Aave-Aino", "ruoka": "Maku-Matti",
+    "startup": "Yrjö Kasvu", "yliluonnolliset": "Aave-Aino", "ruoka": "Maku-Matti",
     "luonto": "Erä-Eero", "mieli": "Mielen-Mervi", "filosofia": "Sofia Pohdiskelu",
 }
 DESK_A = ["talous", "paikallinen", "saa", "tiede", "politiikka-suomi", "politiikka-globaali",
           "paivankohtaiset", "urheilu", "kulttuuri", "terveys", "kevennykset"]
-DESK_B = ["tekoaly", "pelit", "pelidevaus", "startup", "huhut", "yliluonnolliset", "ruoka", "luonto",
+DESK_B = ["tekoaly", "pelit", "pelidevaus", "startup", "yliluonnolliset", "ruoka", "luonto",
           "mieli", "filosofia"]
 _NEEDS = {  # extra per-category steer
-    "huhut": "Kehystä KAIKKI selvästi huhuiksi (ei faktoina), ei yksityishenkilöiden mustamaalausta.",
     "yliluonnolliset": "Raportoi väitteet KRIITTISESTI, älä esitä yliluonnollista todistettuna.",
     "mieli": "Ei hälyttävä eikä diagnosoiva; kannusta hakemaan apua raskaissa aiheissa.",
 }

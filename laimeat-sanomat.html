@@ -1,0 +1,1572 @@
+<!DOCTYPE html>
+<html lang="fi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>(L)AIMEAT Sanomat</title>
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="(L)AIMEAT Sanomat">
+  <meta property="og:title" content="(L)AIMEAT Sanomat — Päivän pääkirjoitus">
+  <meta property="og:description" content="Päivän pääkirjoitus, uutiset ja uutisvisa — autonominen suomenkielinen sanomalehti.">
+  <meta property="og:url" content="https://aimeat.io/v1/apps/happydude500001%40aimeat-finland-001-genesis/laimeat-sanomat.html?mode=inline">
+  <meta property="og:image" content="https://aimeat.io/v1/pub/happydude500001%40aimeat-finland-001-genesis/aimeat_logo.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="(L)AIMEAT Sanomat — Päivän pääkirjoitus">
+  <meta name="twitter:description" content="Päivän pääkirjoitus, uutiset ja uutisvisa — autonominen suomenkielinen sanomalehti.">
+  <meta name="twitter:image" content="https://aimeat.io/v1/pub/happydude500001%40aimeat-finland-001-genesis/aimeat_logo.png">
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --paper: #faf6f0;
+      --paper-warm: #f5f0e8;
+      --ink: #1a1a1a;
+      --ink-light: #3d3d3d;
+      --ink-muted: #8a8078;
+      --ink-faint: #b5a99a;
+      --accent: #8b2500;
+      --accent-soft: #a52d00;
+      --accent-pale: #f2e6e0;
+      --rule: #d4c5b0;
+      --rule-light: #e8e0d4;
+      --rule-faint: #f0ebe3;
+      --card-bg: #fffdf9;
+      --card-bg-hover: #fffefc;
+      --shadow-sm: 0 1px 3px rgba(26,26,26,0.04), 0 1px 2px rgba(26,26,26,0.03);
+      --shadow-md: 0 4px 12px rgba(26,26,26,0.06), 0 2px 4px rgba(26,26,26,0.04);
+      --shadow-lg: 0 8px 24px rgba(26,26,26,0.08), 0 4px 8px rgba(26,26,26,0.04);
+    }
+
+    *, *::before, *::after {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background-color: var(--paper);
+      color: var(--ink);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      text-rendering: optimizeLegibility;
+    }
+
+    .font-serif {
+      font-family: 'Libre Baskerville', Georgia, 'Times New Roman', serif;
+    }
+
+    /* ── MASTHEAD ── */
+    .masthead {
+      border-top: 3px solid var(--ink);
+      border-bottom: 1px solid var(--rule);
+      padding: 1.75rem 0 0.75rem;
+      margin-bottom: 0.25rem;
+      position: relative;
+    }
+
+    .masthead::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, transparent 0%, var(--accent) 15%, var(--accent) 85%, transparent 100%);
+      opacity: 0.6;
+    }
+
+    .masthead-inner {
+      border-bottom: 1px solid var(--ink);
+      padding-bottom: 1.25rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .masthead-title {
+      font-family: 'Libre Baskerville', Georgia, serif;
+      font-weight: 700;
+      letter-spacing: -0.015em;
+      line-height: 1.05;
+      color: var(--ink);
+      text-rendering: optimizeLegibility;
+    }
+
+    .masthead-initial {
+      font-size: 1.2em;
+      color: var(--accent);
+      font-style: italic;
+      font-weight: 700;
+      position: relative;
+      top: 0.02em;
+    }
+
+    .masthead-title .closing-paren {
+      font-size: 1.2em;
+      color: var(--accent);
+      font-style: italic;
+      font-weight: 700;
+    }
+
+    .dateline {
+      font-family: 'Inter', sans-serif;
+      font-size: 0.65rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.2em;
+      color: var(--ink-muted);
+    }
+
+    .tagline {
+      font-family: 'Libre Baskerville', Georgia, serif;
+      font-style: italic;
+      font-size: 0.9rem;
+      color: var(--ink-light);
+      letter-spacing: 0.03em;
+      opacity: 0.85;
+    }
+
+    .edition-badge {
+      display: inline-block;
+      font-family: 'Inter', sans-serif;
+      font-size: 0.6rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      padding: 0.15em 0.5em;
+      border: 1px solid var(--rule);
+      color: var(--ink-muted);
+      margin-left: 0.5em;
+      vertical-align: middle;
+    }
+
+    /* ── SECTION HEADERS ── */
+    .section-header {
+      font-family: 'Inter', sans-serif;
+      font-weight: 600;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.25em;
+      color: var(--accent);
+      border-bottom: 1px solid var(--rule);
+      padding-bottom: 0.5rem;
+      margin-bottom: 1.25rem;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .section-header::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--rule-light);
+    }
+
+    /* ── ARTICLE CARDS ── */
+    .article-card {
+      background: var(--card-bg);
+      border: 1px solid var(--rule-light);
+      border-radius: 3px;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .article-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: var(--accent);
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+
+    .article-card:hover {
+      background: var(--card-bg-hover);
+      box-shadow: var(--shadow-md);
+      transform: translateY(-2px);
+      border-color: var(--rule);
+    }
+
+    .article-card:hover::before {
+      opacity: 0.4;
+    }
+
+    .article-card .kicker {
+      font-family: 'Inter', sans-serif;
+      font-size: 0.6rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.2em;
+      color: var(--accent);
+    }
+
+    .prov-badge {
+      display: inline-block;
+      margin-top: 0.4rem;
+      font-family: 'Inter', sans-serif;
+      font-size: 0.62rem;
+      font-weight: 500;
+      padding: 0.1rem 0.5rem;
+      border-radius: 999px;
+      border: 1px solid currentColor;
+      opacity: 0.75;
+    }
+    .prov-badge.prov-sourced { color: #2e6b3e; }
+    .prov-badge.prov-synth   { color: #8a5a00; }
+    .prov-badge.prov-data    { color: #2b5a8a; }
+    .edition-provenance {
+      font-family: 'Inter', sans-serif;
+      font-size: 0.72rem;
+      opacity: 0.7;
+      margin-top: 0.35rem;
+    }
+
+    .article-card .headline {
+      font-family: 'Libre Baskerville', Georgia, serif;
+      font-weight: 700;
+      line-height: 1.2;
+      color: var(--ink);
+      text-rendering: optimizeLegibility;
+      hyphens: auto;
+      word-break: break-word;
+    }
+
+    .article-card .body-text {
+      font-family: 'Libre Baskerville', Georgia, serif;
+      font-size: 0.95rem;
+      line-height: 1.75;
+      color: var(--ink-light);
+      text-rendering: optimizeLegibility;
+    }
+
+    .article-card .body-text p {
+      margin-bottom: 0.75em;
+    }
+
+    .article-card .body-text h1,
+    .article-card .body-text h2,
+    .article-card .body-text h3 {
+      font-family: 'Libre Baskerville', Georgia, serif;
+      color: var(--ink);
+      font-weight: 700;
+    }
+
+    .article-card .body-text strong {
+      font-weight: 700;
+      color: var(--ink);
+    }
+
+    .article-card .body-text em {
+      font-style: italic;
+    }
+
+    .article-card .body-text hr {
+      border-color: var(--rule-light);
+      margin: 1em 0;
+    }
+
+    .article-card .body-text li {
+      color: var(--ink-light);
+    }
+
+    /* ── DROP CAP ── */
+    .drop-cap::first-letter {
+      float: left;
+      font-family: 'Libre Baskerville', Georgia, serif;
+      font-size: 3.5em;
+      line-height: 0.75;
+      padding-right: 0.06em;
+      padding-top: 0.04em;
+      margin-bottom: -0.05em;
+      color: var(--accent);
+      font-weight: 700;
+    }
+
+    /* ── EDITORIAL TEASER (anon visitors) — clip VISUALLY only; full text stays in the DOM so read-aloud reads it all ── */
+    .editorial-teaser {
+      max-height: 5.4em;
+      overflow: hidden;
+      -webkit-mask-image: linear-gradient(180deg, #000 48%, transparent 100%);
+      mask-image: linear-gradient(180deg, #000 48%, transparent 100%);
+    }
+    .editorial-cta {
+      margin-top: 0.6rem;
+      padding: 0.9rem 1rem;
+      border: 1px dashed var(--rule);
+      border-radius: 6px;
+      background: var(--accent-pale);
+      font-family: 'Inter', sans-serif;
+      font-size: 0.85rem;
+      line-height: 1.55;
+      color: var(--ink-light);
+    }
+    .editorial-cta .cta-lead { font-weight: 600; color: var(--ink); }
+    .editorial-cta .cta-hint { opacity: 0.8; }
+    .editorial-cta .editorial-reg-btn {
+      display: inline-block;
+      margin: 0.15rem 0.4rem 0.15rem 0;
+      padding: 0.35rem 0.85rem;
+      border: 1px solid var(--accent);
+      border-radius: 4px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+      font-size: 0.8rem;
+      cursor: pointer;
+    }
+    .editorial-cta .editorial-reg-btn:hover { background: var(--accent-soft); }
+
+    /* ── DIVIDERS ── */
+    .story-divider {
+      border: none;
+      border-top: 1px solid var(--rule-light);
+      margin: 1.75rem 0;
+    }
+
+    /* ── EDITION TABS ── */
+    .edition-tabs-container {
+      background: linear-gradient(180deg, var(--paper) 0%, var(--paper-warm) 100%);
+      border-bottom: 1px solid var(--rule-light);
+      padding: 1rem 0;
+      margin-bottom: 2rem;
+    }
+
+    .edition-tab {
+      font-family: 'Inter', sans-serif;
+      font-size: 0.7rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      padding: 0.5rem 1.1rem;
+      border: 1px solid var(--rule);
+      border-radius: 2px;
+      background: var(--card-bg);
+      color: var(--ink-muted);
+      cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      position: relative;
+    }
+
+    .edition-tab:hover {
+      border-color: var(--ink-faint);
+      color: var(--ink-light);
+      background: var(--card-bg-hover);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .edition-tab.active {
+      background: var(--ink);
+      color: var(--paper);
+      border-color: var(--ink);
+      font-weight: 600;
+      box-shadow: var(--shadow-md);
+    }
+
+    .edition-tab.active::after {
+      content: '';
+      position: absolute;
+      bottom: -5px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 6px;
+      height: 6px;
+      background: var(--ink);
+      border-radius: 50%;
+    }
+
+    /* ── ADMIN PANEL ── */
+    .admin-panel {
+      background: var(--paper-warm);
+      border: 1px solid var(--rule);
+      border-radius: 3px;
+      position: relative;
+    }
+
+    .admin-panel::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 3px;
+      height: 100%;
+      background: var(--accent);
+      opacity: 0.3;
+      border-radius: 3px 0 0 3px;
+    }
+
+    .admin-btn {
+      font-family: 'Inter', sans-serif;
+      font-size: 0.6rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      padding: 0.25rem 0.7rem;
+      border: 1px solid var(--rule);
+      border-radius: 2px;
+      background: var(--card-bg);
+      color: var(--ink-muted);
+      cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .admin-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: var(--accent-pale);
+    }
+
+    .admin-btn:active {
+      transform: scale(0.97);
+    }
+
+    /* ── NAVBAR ── */
+    .top-nav {
+      background: var(--paper);
+      border-bottom: 1px solid var(--rule-light);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      backdrop-filter: blur(8px);
+      background: rgba(250, 246, 240, 0.92);
+    }
+
+    .top-nav-title {
+      font-family: 'Libre Baskerville', Georgia, serif;
+      font-weight: 700;
+      font-size: 0.85rem;
+      letter-spacing: 0.04em;
+      color: var(--ink);
+    }
+
+    /* ── READ ALOUD BUTTON ── */
+    .read-aloud-btn {
+      font-family: 'Inter', sans-serif;
+      font-size: 0.65rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      padding: 0.3rem 0.8rem;
+      border: 1px solid var(--rule);
+      border-radius: 2px;
+      background: var(--card-bg);
+      color: var(--ink-muted);
+      cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      white-space: nowrap;
+    }
+
+    .read-aloud-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: var(--accent-pale);
+    }
+
+    .read-aloud-btn.speaking {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: var(--accent-pale);
+    }
+
+    .read-aloud-btn .icon {
+      font-size: 0.85rem;
+      line-height: 1;
+    }
+
+    /* ── LOADING / EMPTY / ERROR STATES ── */
+    .loading-text {
+      font-family: 'Libre Baskerville', Georgia, serif;
+      font-style: italic;
+      color: var(--ink-muted);
+      text-align: center;
+      padding: 3rem 0;
+    }
+
+    .loading-text::after {
+      content: '';
+      display: inline-block;
+      width: 1em;
+      height: 1em;
+      margin-left: 0.5em;
+      border: 1px solid var(--rule);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      vertical-align: middle;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .empty-text {
+      font-family: 'Libre Baskerville', Georgia, serif;
+      font-style: italic;
+      color: var(--ink-muted);
+      text-align: center;
+      padding: 3rem 0;
+    }
+
+    .error-text {
+      font-family: 'Inter', sans-serif;
+      color: var(--accent);
+      font-weight: 500;
+      text-align: center;
+      padding: 2rem 0;
+    }
+
+    /* ── VIEWS PANEL ── */
+    .views-text {
+      font-family: 'Inter', sans-serif;
+      font-size: 0.75rem;
+      color: var(--ink-muted);
+    }
+
+    .views-count {
+      font-weight: 600;
+      color: var(--ink);
+    }
+
+    /* ── MULTI-COLUMN LAYOUT ── */
+    @media (min-width: 1024px) {
+      .newspaper-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 2.5rem;
+        column-rule: 1px solid var(--rule-light);
+        column-gap: 2.5rem;
+      }
+
+      .newspaper-grid > * {
+        break-inside: avoid;
+      }
+    }
+
+    /* ── PROSE OVERRIDES ── */
+    .prose h1, .prose h2, .prose h3 {
+      font-family: 'Libre Baskerville', Georgia, serif;
+      color: var(--ink);
+      font-weight: 700;
+    }
+
+    .prose strong {
+      font-weight: 700;
+      color: var(--ink);
+    }
+
+    .prose hr {
+      border-color: var(--rule-light);
+    }
+
+    .prose li {
+      color: var(--ink-light);
+    }
+
+    /* ── FOOTER AREA ── */
+    .paper-footer {
+      border-top: 1px solid var(--rule);
+      padding-top: 1.5rem;
+      margin-top: 3rem;
+      text-align: center;
+    }
+
+    .footer-mark {
+      font-family: 'Libre Baskerville', Georgia, serif;
+      font-style: italic;
+      font-size: 0.75rem;
+      color: var(--ink-faint);
+      letter-spacing: 0.05em;
+    }
+
+    /* ── RESPONSIVE REFINEMENTS ── */
+    @media (max-width: 639px) {
+      .masthead-title {
+        font-size: 2.25rem;
+      }
+
+      .article-card .headline {
+        font-size: 1.15rem;
+      }
+
+      .article-card .body-text {
+        font-size: 0.9rem;
+      }
+
+      .newspaper-grid {
+        gap: 1.25rem;
+      }
+    }
+
+    @media (min-width: 640px) and (max-width: 1023px) {
+      .masthead-title {
+        font-size: 3rem;
+      }
+    }
+
+    /* ── REDUCED MOTION ── */
+    @media (prefers-reduced-motion: reduce) {
+      .article-card {
+        transition: none;
+      }
+
+      .article-card:hover {
+        transform: none;
+      }
+
+      .edition-tab {
+        transition: none;
+      }
+
+      .admin-btn {
+        transition: none;
+      }
+
+      .loading-text::after {
+        animation: none;
+        content: '…';
+        border: none;
+        margin-left: 0.25em;
+      }
+    }
+
+    /* ── PRINT STYLES ── */
+    @media print {
+      .top-nav,
+      .edition-tabs-container,
+      .admin-panel,
+      .admin-btn {
+        display: none !important;
+      }
+
+      .article-card {
+        break-inside: avoid;
+        box-shadow: none !important;
+        border: 1px solid #ccc !important;
+      }
+
+      body {
+        background: white !important;
+      }
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col">
+  <!-- Top nav bar -->
+  <nav class="top-nav px-4 py-2.5">
+    <div class="max-w-5xl mx-auto w-full flex items-center justify-between">
+      <span class="top-nav-title">(L)AIMEAT Sanomat</span>
+      <div class="flex items-center gap-3">
+        <button id="btn-read-aloud" class="read-aloud-btn" aria-label="Kuuntele ääneen">
+          <span class="icon">&#128266;</span>
+          <span id="read-aloud-label">Kuuntele</span>
+        </button>
+        <span id="header-auth"></span>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Main paper container -->
+  <div id="paper" class="flex-1 px-4 sm:px-6 py-6 max-w-5xl mx-auto w-full">
+    <p class="loading-text">Ladataan</p>
+  </div>
+
+  <!-- Hidden slots for JS -->
+  <div id="slot-tabs" class="hidden"></div>
+  <div id="views-panel" class="hidden"></div>
+
+  <script>
+    // ── Constants ──
+    const PUBLISHER = 'editorial-writer#happydude500001@aimeat-finland-001-genesis';
+    const INDEX_KEY = 'newspaper.frontpage';
+    const OWNER     = 'happydude500001@aimeat-finland-001-genesis';
+    const ADMIN_KEY = 'newspaper.admin.hidden';
+    const VIEWS_URL = location.origin + '/v1/mm';
+    const NAMEDAYS_GAII = 'news-fetcher#happydude500001@aimeat-finland-001-genesis';  // shared public almanac.namedays
+    const FEATURES_GAII = 'daily-features-writer#happydude500001@aimeat-finland-001-genesis';  // päivän uutisvisa quiz
+    var _quizData = null;
+
+    const EDITION_LABELS = { morning: 'Aamu', day: 'Päivä', evening: 'Ilta' };
+    const EDITION_RANK   = { morning: 0, day: 1, evening: 2 };
+
+    // FIX 1: Finnish category label map
+    const CATEGORY_LABELS = {
+      'talous':            'Talous',
+      'paikallinen':       'Paikallinen',
+      'saa':               'Sää',
+      'tiede':             'Tiede',
+      'paivankohtaiset':   'Päivänkohtaiset',
+      'politiikka-suomi':  'Politiikka – Suomi',
+      'politiikka-globaali': 'Politiikka – maailma',
+      'editorial':         'Satiirinen pääkirjoitus',
+      // writer article categories (news-writer + space-weather-writer)
+      'politics':          'Politiikka',
+      'business':          'Talous',
+      'culture':           'Kulttuuri',
+      'sports':            'Urheilu',
+      'science':           'Tiede',
+      'health':            'Terveys',
+      'kevennykset':       'Kevennykset',
+      'avaruussaa':        'Avaruussää',
+      'tekoaly':           'Tekoäly',
+      'pelit':             'Pelit',
+      'pelidevaus':        'Pelinkehitys',
+      'startup':           'Startup',
+      'koodaus':           'Päivän koodausosio',
+      'prompt-niksi':      'Prompt-niksinurkka',
+      'matikka':           'Matematiikkahetki',
+      'huhut':             'Huhut',
+      'yliluonnolliset':   'Yliluonnolliset',
+      'ruoka':             'Ruoka',
+      'luonto':            'Luonto',
+      'mieli':             'Mieli & mielenterveys',
+      'filosofia':         'Filosofia',
+    };
+
+    function categoryLabel(slug) {
+      if (CATEGORY_LABELS[slug]) return CATEGORY_LABELS[slug];
+      // Fallback: capitalize first letter
+      return slug.charAt(0).toUpperCase() + slug.slice(1);
+    }
+
+    // Provenance: how much is web-sourced vs AI-synthesized. News desks rewrite real web sources;
+    // the editorial synthesizes the day's news; the tidbits are AI-generated; space weather is live data.
+    var _SYNTH_CATS = { 'koodaus': 1, 'prompt-niksi': 1, 'matikka': 1 };
+    function provenance(cat) {
+      cat = cat || '';
+      if (cat === 'editorial') return { icon: '🤖', text: 'AI:n syntetisoima päivän uutisista', kind: 'synth' };
+      if (cat === 'avaruussaa') return { icon: '🛰️', text: 'NOAA/NASA-mittausdataa', kind: 'data' };
+      if (_SYNTH_CATS[cat]) return { icon: '🤖', text: 'AI-generoitu (ei ulkoista lähdettä)', kind: 'synth' };
+      return { icon: '🌐', text: 'Pohjana verkkolähteet, kirjoitettu uudelleen', kind: 'sourced' };
+    }
+
+    function formatDate(isoStr) {
+      if (!isoStr) return '';
+      const d = new Date(isoStr);
+      if (isNaN(d.getTime())) return String(isoStr);
+      return d.getDate() + '.' + (d.getMonth() + 1) + '.' + d.getFullYear();
+    }
+
+    function formatDateLong(isoStr) {
+      if (!isoStr) return '';
+      const d = new Date(isoStr);
+      if (isNaN(d.getTime())) return String(isoStr);
+      const months = ['tammikuuta', 'helmikuuta', 'maaliskuuta', 'huhtikuuta', 'toukokuuta', 'kesäkuuta', 'heinäkuuta', 'elokuuta', 'syyskuuta', 'lokakuuta', 'marraskuuta', 'joulukuuta'];
+      const days = ['sunnuntai', 'maanantai', 'tiistai', 'keskiviikko', 'torstai', 'perjantai', 'lauantai'];
+      return days[d.getDay()] + 'n ' + d.getDate() + '. ' + months[d.getMonth()] + ' ' + d.getFullYear();
+    }
+
+    // A "slot" is one date+edition (e.g. morning of 3.6.2026). The index carries `edition`, not `slot`.
+    function slotKeyOf(it) { return (it.date || '') + '|' + (it.edition || 'day'); }
+    function slotLabelOf(key) {
+      const parts = String(key).split('|'); const date = parts[0]; const ed = parts[1] || 'day';
+      const lbl = EDITION_LABELS[ed] || ed;
+      return date ? (lbl + ' ' + formatDate(date)) : lbl;
+    }
+    function slotCmp(a, b) {
+      const pa = String(a).split('|'); const pb = String(b).split('|');
+      if (pa[0] !== pb[0]) return pa[0] < pb[0] ? -1 : 1;            // by date asc
+      return (EDITION_RANK[pa[1]] || 0) - (EDITION_RANK[pb[1]] || 0); // then edition
+    }
+
+    // ── State ──
+    let allItems  = [];
+    let hiddenKeys = new Set();
+    let activeSlot = null;
+    let canManage  = false;
+    let session    = null;
+
+    // ── Helpers ──
+    function loadScript(src) {
+      return new Promise(function (resolve, reject) {
+        var s = document.createElement('script');
+        s.src = src; s.onload = resolve; s.onerror = reject;
+        document.head.appendChild(s);
+      });
+    }
+
+    function esc(s) {
+      var d = document.createElement('div');
+      d.textContent = s == null ? '' : String(s);
+      return d.innerHTML;
+    }
+
+    function mdToSafeHtml(raw) {
+      if (raw == null) return '';
+      var safe = esc(String(raw));
+      safe = safe.replace(/^### (.+)$/gm, '<h3 class="text-lg font-bold mt-3 mb-1">$1</h3>');
+      safe = safe.replace(/^## (.+)$/gm, '<h2 class="text-xl font-bold mt-4 mb-1">$1</h2>');
+      safe = safe.replace(/^# (.+)$/gm, '<h1 class="text-2xl font-bold mt-4 mb-2">$1</h1>');
+      safe = safe.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      safe = safe.replace(/\*(.+?)\*/g, '<em>$1</em>');
+      safe = safe.replace(/^---$/gm, '<hr class="my-3 border-base-300">');
+      safe = safe.replace(/^- (.+)$/gm, '<li class="ml-4 list-disc">$1</li>');
+      safe = safe.replace(/\n\n/g, '</p><p class="mb-2">');
+      safe = safe.replace(/\n/g, '<br>');
+      return '<p class="mb-2">' + safe + '</p>';
+    }
+
+    // ── READ ALOUD (Web Speech API — no auth, no server, works for anonymous) ──
+    var _raState = 'idle'; // 'idle' | 'speaking' | 'paused'
+    var _raUtterance = null;
+    var _raFinnishVoice = null;
+
+    function _raPickFinnishVoice() {
+      var voices = window.speechSynthesis ? window.speechSynthesis.getVoices() : [];
+      for (var i = 0; i < voices.length; i++) {
+        if (voices[i].lang && voices[i].lang.toLowerCase().indexOf('fi') === 0) {
+          return voices[i];
+        }
+      }
+      return null;
+    }
+
+    function _raInitVoice() {
+      _raFinnishVoice = _raPickFinnishVoice();
+    }
+
+    // voices are loaded asynchronously in most browsers
+    if (window.speechSynthesis) {
+      _raInitVoice();
+      if (window.speechSynthesis.onvoiceschanged !== undefined) {
+        window.speechSynthesis.onvoiceschanged = _raInitVoice;
+      }
+    }
+
+    // ── Paragraph-paced speaking: split into chunks + speak one utterance per chunk with a gap ──
+    // (The engine only pauses on . ! ? — a single utterance collapses \n\n, so paragraphs rush together.)
+    var _raChain = { items: [], idx: 0, timer: null, active: false, onDone: null };
+    // Chrome fires onend EARLY on long utterances (then queues the rest with no gap). Keep every
+    // utterance short so onend is reliable; put the big pause only at paragraph ends.
+    var _RA_MAXLEN = 160, _RA_BIG = 1800, _RA_SENT = 200, _RA_COMMA = 80;
+    function _raSentences(t) { return (t.match(/[^.!?]+[.!?]+(?:["'”’)\]]+)?|\S[^.!?]*$/g) || [t]); }
+    function _raAtomize(s) {            // ONE long sentence -> <=MAXLEN pieces (split on commas, then words)
+      s = (s || '').trim();
+      if (s.length <= _RA_MAXLEN) return s ? [s] : [];
+      var out = [], clauses = s.replace(/([,;:])\s+/g, '$1@@RA@@').split('@@RA@@'), buf = '';
+      for (var j = 0; j < clauses.length; j++) {
+        var c = clauses[j].trim(); if (!c) continue;
+        if (c.length > _RA_MAXLEN) {       // a single clause still too long -> hard word-split
+          if (buf) { out.push(buf); buf = ''; }
+          var words = c.split(/\s+/), w = '';
+          for (var k = 0; k < words.length; k++) {
+            if (w && (w.length + words[k].length + 1) > _RA_MAXLEN) { out.push(w); w = words[k]; }
+            else { w = w ? (w + ' ' + words[k]) : words[k]; }
+          }
+          if (w) out.push(w);
+        } else if (buf && (buf.length + c.length + 1) > _RA_MAXLEN) { out.push(buf); buf = c; }
+        else { buf = buf ? (buf + ' ' + c) : c; }
+      }
+      if (buf) out.push(buf);
+      return out;
+    }
+    function _raPackPara(text) {          // paragraph -> [{text, gap}]: pack short sentences, sub-split long ones
+      text = (text || '').trim(); if (!text) return [];
+      var sents = _raSentences(text), pieces = [], cur = '';
+      function flush() { if (cur) { pieces.push({ text: cur, sentEnd: true }); cur = ''; } }
+      for (var i = 0; i < sents.length; i++) {
+        var s = (sents[i] || '').trim(); if (!s) continue;
+        if (s.length > _RA_MAXLEN) {                 // long sentence -> sub-pieces; only the LAST ends the sentence
+          flush();
+          var atoms = _raAtomize(s);
+          for (var a = 0; a < atoms.length; a++) {
+            if (atoms[a]) pieces.push({ text: atoms[a], sentEnd: (a === atoms.length - 1) });
+          }
+        } else if (cur && (cur.length + s.length + 1) > _RA_MAXLEN) { pieces.push({ text: cur, sentEnd: true }); cur = s; }
+        else { cur = cur ? (cur + ' ' + s) : s; }
+      }
+      flush();
+      // gap AFTER each piece: tiny at a mid-sentence (comma) split, short at a sentence boundary, big at paragraph end
+      return pieces.map(function (p, idx) {
+        var gap = (idx === pieces.length - 1) ? _RA_BIG : (p.sentEnd ? _RA_SENT : _RA_COMMA);
+        return { text: p.text, gap: gap };
+      });
+    }
+    function _raChunks(el) {
+      if (!el) return [];
+      // Clone so we can turn <br> and block-element boundaries into real newline delimiters,
+      // because textContent IGNORES <br> (so "a.<br><br>b" would otherwise read as one blob).
+      var clone = el.cloneNode(true);
+      var brs = clone.querySelectorAll('br');
+      for (var k = 0; k < brs.length; k++) {
+        if (brs[k].parentNode) brs[k].parentNode.replaceChild(document.createTextNode('\n'), brs[k]);
+      }
+      var bl = clone.querySelectorAll('p,div,li,blockquote,h1,h2,h3,h4,h5,h6');
+      for (var m = 0; m < bl.length; m++) { bl[m].appendChild(document.createTextNode('\n\n')); }
+      var txt = (clone.textContent || '');
+      var parts = txt.split(/\n[ \t]*\n+/).map(function (s) {
+        return s.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/[*_`#>~]/g, '').replace(/\s+/g, ' ').trim();
+      }).filter(Boolean);
+      if (parts.length <= 1) {
+        // one blob -> split into ~2-sentence chunks so there is still a pause after periods
+        var base = parts[0] || txt.replace(/\s+/g, ' ').trim();
+        var sents = base.match(/[^.!?]+[.!?]+(?:["'”’)\]]+)?|\S[^.!?]*$/g) || [base];
+        parts = [];
+        for (var n = 0; n < sents.length; n += 2) {
+          var t = sents.slice(n, n + 2).join(' ').replace(/\s+/g, ' ').trim();
+          if (t) parts.push(t);
+        }
+      }
+      return parts.map(function (p) { return /[.!?:]$/.test(p) ? p : p + '.'; }).filter(Boolean);
+    }
+    function _raBuildChunks() {
+      var cards = document.querySelectorAll('#paper .article-card'), out = [];
+      cards.forEach(function (card) {
+        var h = card.querySelector('.headline'), b = card.querySelector('.body-text');
+        if (h) { var ht = (h.textContent || '').replace(/\s+/g, ' ').trim(); if (ht) out.push({ text: /[.!?:]$/.test(ht) ? ht : ht + '.', gap: _RA_BIG }); }
+        if (b) _raChunks(b).forEach(function (c) { _raPackPara(c).forEach(function (it) { out.push(it); }); });
+      });
+      return out;
+    }
+    function _raStop() {
+      _raChain.active = false;
+      if (_raChain.timer) { clearTimeout(_raChain.timer); _raChain.timer = null; }
+      if (window.speechSynthesis) window.speechSynthesis.cancel();
+    }
+    function _raNext() {
+      if (!_raChain.active) return;
+      if (_raChain.idx >= _raChain.items.length) {
+        _raChain.active = false;
+        var cb = _raChain.onDone; _raChain.onDone = null;
+        if (cb) cb();
+        return;
+      }
+      var item = _raChain.items[_raChain.idx++];
+      var gap = (item && typeof item.gap === 'number') ? item.gap : _RA_BIG;
+      var u = new SpeechSynthesisUtterance(item && item.text != null ? item.text : item);
+      u.lang = 'fi-FI';
+      if (_raFinnishVoice) u.voice = _raFinnishVoice;
+      u.onend = function () { if (_raChain.active) _raChain.timer = setTimeout(_raNext, gap); };
+      u.onerror = function () { if (_raChain.active) _raChain.timer = setTimeout(_raNext, gap); };
+      window.speechSynthesis.speak(u);
+    }
+    function _raStart(items, onDone) {
+      _raStop();
+      _raChain.items = items || []; _raChain.idx = 0; _raChain.onDone = onDone || null; _raChain.active = true;
+      _raNext();
+    }
+
+    function _raStripHtml(html) {
+      var tmp = document.createElement('div');
+      tmp.innerHTML = html;
+      return tmp.textContent || tmp.innerText || '';
+    }
+
+    function _raBuildText() {
+      var articles = document.querySelectorAll('#paper .article-card');
+      var parts = [];
+      articles.forEach(function (card) {
+        var headlineEl = card.querySelector('.headline');
+        var bodyEl = card.querySelector('.body-text');
+        if (headlineEl) parts.push(_raStripHtml(headlineEl.innerHTML));
+        if (bodyEl) parts.push(_raStripHtml(bodyEl.innerHTML));
+      });
+      return parts.join('\n\n');
+    }
+
+    function _raUpdateBtn() {
+      var btn = document.getElementById('btn-read-aloud');
+      var label = document.getElementById('read-aloud-label');
+      if (!btn || !label) return;
+      if (_raState === 'speaking') {
+        label.textContent = 'Tauko';
+        btn.classList.add('speaking');
+        btn.setAttribute('aria-label', 'Tauko');
+      } else if (_raState === 'paused') {
+        label.textContent = 'Jatka';
+        btn.classList.remove('speaking');
+        btn.setAttribute('aria-label', 'Jatka');
+      } else {
+        label.textContent = 'Kuuntele';
+        btn.classList.remove('speaking');
+        btn.setAttribute('aria-label', 'Kuuntele ääneen');
+      }
+    }
+
+    function _raCancel() {
+      _raStop();
+      _raState = 'idle';
+      _raUpdateBtn();
+    }
+
+    function _raToggle() {
+      if (!window.speechSynthesis) return;
+      if (_raState === 'speaking') {
+        window.speechSynthesis.pause();
+        _raState = 'paused';
+        _raUpdateBtn();
+        return;
+      }
+      if (_raState === 'paused') {
+        window.speechSynthesis.resume();
+        _raState = 'speaking';
+        _raUpdateBtn();
+        return;
+      }
+      // idle → start fresh (paragraph-by-paragraph, with a pause between chunks)
+      var items = _raBuildChunks();
+      if (!items.length) return;
+      _raClearCardBtns();
+      _raState = 'speaking';
+      _raUpdateBtn();
+      _raStart(items, function () { _raState = 'idle'; _raUpdateBtn(); });
+    }
+
+    // ── PER-ARTICLE read aloud (one "Puhu" button per card) ──
+    function _raClearCardBtns() {
+      var bs = document.querySelectorAll('.puhu-btn.speaking');
+      for (var i = 0; i < bs.length; i++) { bs[i].classList.remove('speaking'); bs[i].textContent = '🔊 Puhu'; }
+    }
+    function _raSpeakCard(btn) {
+      if (!window.speechSynthesis) return;
+      var wasSpeaking = btn.classList.contains('speaking');
+      _raStop();   // stop the global reader or any other card
+      _raClearCardBtns();
+      _raState = 'idle'; _raUpdateBtn();
+      if (wasSpeaking) return;            // clicking the active card again = stop
+      var card = btn.closest ? btn.closest('.article-card') : null;
+      if (!card) return;
+      var h = card.querySelector('.headline');
+      var b = card.querySelector('.body-text');
+      var items = [];
+      if (h) { var ht = (h.textContent || '').replace(/\s+/g, ' ').trim(); if (ht) items.push({ text: /[.!?:]$/.test(ht) ? ht : ht + '.', gap: _RA_BIG }); }
+      if (b) _raChunks(b).forEach(function (c) { _raPackPara(c).forEach(function (it) { items.push(it); }); });
+      if (!items.length) return;
+      btn.classList.add('speaking'); btn.textContent = '⏹ Lopeta';
+      _raStart(items, function () { btn.classList.remove('speaking'); btn.textContent = '🔊 Puhu'; });
+    }
+
+    // ── SKY TODAY: moon phase drawn as seen from Finland (NH orientation) + space weather ──
+    function _moonPhase(date) {
+      var known = Date.UTC(2000, 0, 6, 18, 14) / 86400000;
+      var syn = 29.530588853;
+      var now = date.getTime() / 86400000;
+      var age = (((now - known) % syn) + syn) % syn;
+      var illum = (1 - Math.cos(2 * Math.PI * age / syn)) / 2;
+      var waxing = age < syn / 2;
+      var names = ['uusikuu', 'kasvava sirppi', 'ensimmäinen neljännes', 'kasvava kupera',
+                   'täysikuu', 'vähenevä kupera', 'viimeinen neljännes', 'vähenevä sirppi'];
+      var idx = Math.floor((age / syn) * 8 + 0.5) % 8;
+      return { age: age, illum: illum, waxing: waxing, name: names[idx] };
+    }
+    function _moonSvg(p) {
+      var r = 42, c = 50, lit = '#f3efe2', dark = '#2b2b33';
+      // NH (Finland): waxing → lit on the RIGHT, waning → lit on the LEFT.
+      var halfPath = p.waxing
+        ? 'M' + c + ',' + (c - r) + ' A' + r + ',' + r + ' 0 0 1 ' + c + ',' + (c + r) + ' Z'
+        : 'M' + c + ',' + (c - r) + ' A' + r + ',' + r + ' 0 0 0 ' + c + ',' + (c + r) + ' Z';
+      var rx = (r * Math.abs(1 - 2 * p.illum)).toFixed(1);     // terminator ellipse half-width
+      var ellipseFill = p.illum < 0.5 ? dark : lit;            // crescent eats in / gibbous extends out
+      return '<svg viewBox="0 0 100 100" width="86" height="86" role="img" aria-label="Kuun vaihe">' +
+        '<circle cx="' + c + '" cy="' + c + '" r="' + r + '" fill="' + dark + '"/>' +
+        '<path d="' + halfPath + '" fill="' + lit + '"/>' +
+        '<ellipse cx="' + c + '" cy="' + c + '" rx="' + rx + '" ry="' + r + '" fill="' + ellipseFill + '"/>' +
+        '<circle cx="' + c + '" cy="' + c + '" r="' + r + '" fill="none" stroke="#9a8f73" stroke-width="1.5"/>' +
+        '</svg>';
+    }
+    function buildSkyPanel() {
+      var p = _moonPhase(new Date());
+      var pct = Math.round(p.illum * 100);
+      var moonHtml = '<div class="flex items-center gap-4">' + _moonSvg(p) +
+        '<div class="text-sm leading-snug"><div class="font-semibold">Kuu tänään</div>' +
+        '<div>Suomesta katsottuna kuu näyttää nyt tältä taivaalla.</div>' +
+        '<div class="opacity-70 mt-1">' + esc(p.name) + ' — ' + pct + ' % valaistu</div></div></div>';
+      var SW = [
+        ['https://services.swpc.noaa.gov/images/animations/ovation/north/latest.jpg', 'Revontulisoikko', 'NOAA SWPC'],
+        ['https://sdo.gsfc.nasa.gov/assets/img/latest/latest_512_0193.jpg', 'Koronan aukot', 'NASA SDO 193Å'],
+        ['https://sdo.gsfc.nasa.gov/assets/img/latest/latest_512_HMIIC.jpg', 'Aurinko tänään', 'NASA SDO']
+      ];
+      var sw = '<div class="grid grid-cols-3 gap-3 mt-1">';
+      for (var i = 0; i < SW.length; i++) {
+        sw += '<figure class="text-center m-0">' +
+          '<img src="' + SW[i][0] + '" alt="' + esc(SW[i][1]) + '" loading="lazy" referrerpolicy="no-referrer" class="w-full rounded-md border border-base-300" style="aspect-ratio:1/1;object-fit:cover;background:#111;">' +
+          '<figcaption class="text-xs mt-1 opacity-75">' + esc(SW[i][1]) + '<span class="block opacity-60">' + esc(SW[i][2]) + '</span></figcaption></figure>';
+      }
+      sw += '</div>';
+      return '<section class="sky-section mb-8 p-4 rounded-lg border border-base-300">' +
+        '<div class="section-header">Taivas tänään</div>' +
+        '<div class="grid md:grid-cols-2 gap-5 items-center">' + moonHtml +
+        '<div><div class="font-semibold text-sm mb-1">Avaruussää</div>' + sw +
+        '<div class="text-xs opacity-60 mt-2">Lähteet: NOAA SWPC &amp; NASA SDO — julkista dataa, päivittyy automaattisesti.</div></div>' +
+        '</div></section>';
+    }
+
+    // ── SÄÄ TÄNÄÄN — Tapiola/Espoo, Open-Meteo (client-side, CORS-ok; incl. FMI HARMONIE model) ──
+    var _SAA_CODES = {
+      0: ['Selkeää', '☀️'], 1: ['Enimmäkseen selkeää', '🌤️'], 2: ['Puolipilvistä', '⛅'], 3: ['Pilvistä', '☁️'],
+      45: ['Sumua', '🌫️'], 48: ['Huurresumua', '🌫️'],
+      51: ['Heikkoa tihkua', '🌦️'], 53: ['Tihkusadetta', '🌦️'], 55: ['Voimakasta tihkua', '🌦️'],
+      56: ['Jäätävää tihkua', '🌧️'], 57: ['Jäätävää tihkua', '🌧️'],
+      61: ['Heikkoa vesisadetta', '🌧️'], 63: ['Vesisadetta', '🌧️'], 65: ['Voimakasta vesisadetta', '🌧️'],
+      66: ['Jäätävää sadetta', '🌧️'], 67: ['Jäätävää sadetta', '🌧️'],
+      71: ['Heikkoa lumisadetta', '🌨️'], 73: ['Lumisadetta', '🌨️'], 75: ['Voimakasta lumisadetta', '❄️'], 77: ['Lumijyväsiä', '🌨️'],
+      80: ['Sadekuuroja', '🌦️'], 81: ['Sadekuuroja', '🌦️'], 82: ['Rajuja sadekuuroja', '🌧️'],
+      85: ['Lumikuuroja', '🌨️'], 86: ['Lumikuuroja', '🌨️'],
+      95: ['Ukkosta', '⛈️'], 96: ['Ukkosta ja rakeita', '⛈️'], 99: ['Ukkosta ja rakeita', '⛈️']
+    };
+    function loadWeather() {
+      var el = document.getElementById('saa-box');
+      if (!el) return;
+      fetch('https://api.open-meteo.com/v1/forecast?latitude=60.18&longitude=24.81&current=temperature_2m,weather_code,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=Europe%2FHelsinki&wind_speed_unit=ms&forecast_days=2')
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          var c = d.current || {}, dd = d.daily || {};
+          var code = (c.weather_code != null) ? c.weather_code : (dd.weather_code ? dd.weather_code[0] : 0);
+          var m = _SAA_CODES[code] || ['Vaihtelevaa', '🌡️'];
+          var temp = (c.temperature_2m != null) ? Math.round(c.temperature_2m) : '–';
+          var hi = (dd.temperature_2m_max ? Math.round(dd.temperature_2m_max[0]) : '–');
+          var lo = (dd.temperature_2m_min ? Math.round(dd.temperature_2m_min[0]) : '–');
+          var wind = (c.wind_speed_10m != null) ? Math.round(c.wind_speed_10m) : '–';
+          var prec = (dd.precipitation_sum != null && dd.precipitation_sum.length) ? dd.precipitation_sum[0] : 0;
+          // tomorrow's forecast (huomenna)
+          var tcode = (dd.weather_code && dd.weather_code[1] != null) ? dd.weather_code[1] : null;
+          var tm = (tcode != null) ? (_SAA_CODES[tcode] || ['Vaihtelevaa', '🌡️']) : null;
+          var thi = (dd.temperature_2m_max && dd.temperature_2m_max[1] != null) ? Math.round(dd.temperature_2m_max[1]) : '–';
+          var tlo = (dd.temperature_2m_min && dd.temperature_2m_min[1] != null) ? Math.round(dd.temperature_2m_min[1]) : '–';
+          el.innerHTML =
+            '<div class="section-header">Sää tänään</div>' +
+            '<div class="flex items-center gap-4">' +
+            '<div style="font-size:3rem;line-height:1">' + m[1] + '</div>' +
+            '<div><div class="text-sm opacity-70">Tapiola, Espoo</div>' +
+            '<div class="text-2xl font-bold">' + temp + ' °C <span class="text-base font-normal opacity-70">' + esc(m[0]) + '</span></div>' +
+            '<div class="text-sm opacity-75">Ylin ' + hi + '° · Alin ' + lo + '° · Tuuli ' + wind + ' m/s · Sade ' + prec + ' mm</div>' +
+            '</div></div>' +
+            (tm ? '<div class="text-sm opacity-80 mt-2 pt-2 border-t border-base-300"><span class="font-semibold">Huomenna:</span> ' + tm[1] + ' ' + esc(tm[0]) + ', ylin ' + thi + '° · alin ' + tlo + '°</div>' : '') +
+            '<div class="text-xs opacity-50 mt-2">Lähde: Open-Meteo (sis. mm. Ilmatieteen laitoksen HARMONIE-mallin)</div>';
+        })
+        .catch(function () { el.innerHTML = '<div class="section-header">Sää tänään</div><div class="text-sm opacity-50">Säätietojen lataus epäonnistui.</div>'; });
+    }
+
+    // ── NIMIPÄIVÄ — reads the shared public almanac.namedays key (one source for the whole node) ──
+    function loadNameDay(selDate) {
+      var el = document.getElementById('nameday');
+      if (!el || !window.AIMEAT || !AIMEAT.data || !AIMEAT.data.getPublic) return;
+      var d = selDate ? new Date(selDate + 'T12:00:00') : new Date();   // the SELECTED edition's date
+      AIMEAT.data.getPublic(NAMEDAYS_GAII, 'almanac.namedays')
+        .then(function (nd) {
+          var key = (d.getMonth() + 1) + '/' + d.getDate();
+          var names = (nd && nd[key]) ? nd[key] : [];
+          el.textContent = names.length ? ('Nimipäivä: ' + names.join(', ')) : '';
+        })
+        .catch(function () { el.textContent = ''; });
+    }
+
+    // ── PÄIVÄN UUTISVISA — interactive quiz (5 Q × 5 options, one-or-more correct, scored) ──
+    function loadQuiz(selDate, edition) {
+      var el = document.getElementById('quiz-box');
+      if (!el || !window.AIMEAT || !AIMEAT.data || !AIMEAT.data.getPublic) { if (el) el.style.display = 'none'; return; }
+      var key = 'news.' + selDate + '.' + edition + '.quiz';
+      AIMEAT.data.getPublic(FEATURES_GAII, key)
+        .then(function (q) {
+          if (typeof q === 'string') { try { q = JSON.parse(q); } catch (e) { q = null; } }
+          if (!q || !Array.isArray(q.questions) || !q.questions.length) { el.style.display = 'none'; return; }
+          el.style.display = '';
+          _quizData = q;
+          var html = '<div class="section-header">' + esc(q.title || 'Päivän uutisvisa') + '</div>' +
+            '<div class="text-sm opacity-70 mb-3">Useampi vaihtoehto voi olla oikein. Valitse ja tarkista.</div>';
+          q.questions.forEach(function (qq, qi) {
+            html += '<div class="quiz-q mb-4"><div class="font-semibold mb-2">' + (qi + 1) + '. ' + esc(qq.q || '') + '</div>';
+            (qq.options || []).forEach(function (opt, oi) {
+              html += '<label class="block mb-1 cursor-pointer"><input type="checkbox" data-qi="' + qi + '" data-oi="' + oi + '" class="mr-2 align-middle">' + esc(opt) + '</label>';
+            });
+            html += '<div class="quiz-fb text-sm mt-1" data-qi="' + qi + '"></div></div>';
+          });
+          html += '<button type="button" class="btn btn-sm" style="border:1px solid var(--fallback-bc,#9a8f73);padding:.35rem .8rem;border-radius:.4rem" onclick="_checkQuiz()">Tarkista vastaukset</button>' +
+            '<div id="quiz-score" class="font-bold mt-3"></div>';
+          el.innerHTML = html;
+        })
+        .catch(function () { el.style.display = 'none'; });
+    }
+    function _normCorrect(arr) {
+      // Tolerate correct answers as 0-based indices (0..4) OR letters ('A'..'E') OR '1'..'5' strings.
+      return (arr || []).map(function (c) {
+        if (typeof c === 'number') return c;
+        var s = String(c).trim().toUpperCase();
+        if (/^[A-E]$/.test(s)) return s.charCodeAt(0) - 65;           // A->0
+        var n = parseInt(s, 10);
+        return isNaN(n) ? -1 : n;
+      }).filter(function (n) { return n >= 0; });
+    }
+    function _checkQuiz() {
+      if (!_quizData || !_quizData.questions) return;
+      var score = 0;
+      _quizData.questions.forEach(function (qq, qi) {
+        var correct = _normCorrect(qq.correct);
+        var chosen = [];
+        document.querySelectorAll('input[data-qi="' + qi + '"]').forEach(function (cb) {
+          var oi = parseInt(cb.getAttribute('data-oi'), 10);
+          if (cb.checked) chosen.push(oi);
+          cb.parentElement.style.fontWeight = (correct.indexOf(oi) >= 0) ? '700' : '400';
+          cb.parentElement.style.opacity = (correct.indexOf(oi) >= 0) ? '1' : '0.65';
+        });
+        var ok = correct.length === chosen.length && correct.every(function (c) { return chosen.indexOf(c) >= 0; });
+        if (ok) score++;
+        var fb = document.querySelector('.quiz-fb[data-qi="' + qi + '"]');
+        if (fb) {
+          var rightTxt = correct.map(function (c) { return esc((qq.options || [])[c] || ''); }).join(', ');
+          fb.innerHTML = (ok ? '<span style="color:#2e7d32">✓ Oikein</span>'
+                             : '<span style="color:#b3261e">✗ Väärin</span> — oikea: ' + rightTxt) +
+                         (qq.explain ? ' <span class="opacity-70">— ' + esc(qq.explain) + '</span>' : '');
+        }
+      });
+      var sc = document.getElementById('quiz-score');
+      if (sc) sc.textContent = 'Pisteet: ' + score + ' / ' + _quizData.questions.length;
+    }
+
+    // ── Boot ──
+    async function boot() {
+      await loadScript('/v1/libs/aimeat-auth.js');
+      await loadScript('/v1/libs/aimeat-data.js');
+
+      AIMEAT.auth.mountLoginButton('#header-auth', {
+        onLogin:  () => location.reload(),
+        onLogout: () => location.reload(),
+      });
+
+      session = await AIMEAT.auth.login();   // null for anonymous visitors
+      canManage = !!session && session.ghii === OWNER;
+
+      startApp();  // ALWAYS render — anonymous visitors included
+    }
+
+    // ── Main ──
+    async function startApp() {
+      const paper = document.getElementById('paper');
+      paper.innerHTML = '<p class="loading-text">Ladataan</p>';
+
+      // Load public index
+      let index = [];
+      try {
+        index = await AIMEAT.data.getPublic(PUBLISHER, INDEX_KEY) || [];
+      } catch (e) {
+        paper.innerHTML = '<p class="error-text">Virhe ladattaessa sisältöä.</p>';
+        return;
+      }
+
+      // Load the owner's hidden-keys list as PUBLIC so ANONYMOUS readers honor the owner's curation too
+      try {
+        const admin = await AIMEAT.data.getPublic(OWNER, ADMIN_KEY);
+        hiddenKeys = new Set(Array.isArray(admin) ? admin : ((admin && Array.isArray(admin.hidden)) ? admin.hidden : []));
+      } catch (e) { /* no hides yet */ }
+
+      // Fan out to each article body
+      allItems = (await Promise.all(index.map(async function (item) {
+        try {
+          const body = await AIMEAT.data.getPublic(item.gaii, item.key);
+          return body ? { ...item, body } : null;
+        } catch (e) { return null; }
+      }))).filter(Boolean);
+
+      // Dedupe by (gaii|key) — the frontpage index can carry duplicate entries (avoids tuplauutiset)
+      var _seenItem = {};
+      allItems = allItems.filter(function (it) {
+        var k = (it.gaii || '') + '|' + (it.key || '');
+        if (_seenItem[k]) return false;
+        _seenItem[k] = 1;
+        return true;
+      });
+
+      // Filter hidden
+      if (!canManage) {
+        allItems = allItems.filter(function (it) { return !hiddenKeys.has(it.key); });
+      }
+
+      // Determine slots (one per date+edition) and default to the NEWEST
+      const slots = [...new Set(allItems.map(slotKeyOf))];
+      slots.sort(slotCmp);
+      activeSlot = slots[slots.length - 1] || null;
+
+      renderPaper();
+      sendBeacon();
+    }
+
+    // ── Render: paper content ──
+    function cardHtml(it, wide) {
+      var label = categoryLabel(it.category || 'muu');
+      var dateStr = formatDate(it.date);
+      var bodyObj = (it.body && typeof it.body === 'object') ? it.body : null;
+      var raw = (typeof it.body === 'string') ? it.body
+              : bodyObj ? (bodyObj.body || bodyObj.text || bodyObj.content || '') : '';
+      var bodyHtml = mdToSafeHtml(raw);
+      var hasTitle = !!(bodyObj && bodyObj.title);
+      var headline = esc(hasTitle ? bodyObj.title : (label + (dateStr ? ' — ' + dateStr : '')));
+      var kicker = hasTitle ? esc(label + (dateStr ? ' · ' + dateStr : '')) : '';
+      var measure = wide ? 'prose-base max-w-3xl' : 'prose-sm max-w-none';
+      var adminBtn = '';
+      if (canManage) {
+        var isHidden = hiddenKeys.has(it.key);
+        adminBtn = '<button class="admin-btn ml-auto shrink-0" data-toggle="' + esc(it.key) + '">' +
+          (isHidden ? 'Näytä' : 'Piilota') + '</button>';
+      }
+      var dim = (canManage && hiddenKeys.has(it.key)) ? ' opacity-50' : '';
+      var dropCapClass = wide ? ' drop-cap' : '';
+      var isEd = (it.kind === 'editorial' || it.category === 'editorial');
+      var teaser = isEd && !session;   // anon: teaser only; full text stays in the DOM so read-aloud reads ALL of it (easter egg)
+      var prov = provenance(it.category || '');
+      var provText = prov.text;
+      if (prov.kind === 'sourced' && typeof it.sources === 'number') {
+        provText = it.sources > 0
+          ? ('Pohjana ' + it.sources + (it.sources === 1 ? ' verkkolähde' : ' verkkolähdettä'))
+          : 'Ei suoria verkkolähteitä (niukka pohja)';
+      }
+      var provBadge = '<div class="prov-badge prov-' + prov.kind + '" title="' + esc(prov.text) + '">' +
+        prov.icon + ' ' + esc(provText) + '</div>';
+      return '<article class="article-card mb-6' + dim + '"><div class="p-5 md:p-6 lg:p-7">' +
+        '<div class="flex items-start justify-between gap-3 mb-3"><div>' +
+        (kicker ? '<div class="kicker mb-1.5">' + kicker + '</div>' : '') +
+        '<h2 class="headline text-xl md:text-2xl break-words">' + headline + '</h2>' +
+        provBadge +
+        '</div>' +
+        '<div class="flex items-center gap-2 ml-auto shrink-0">' +
+        '<button type="button" class="puhu-btn text-xs px-2 py-1 rounded-md border border-base-300 hover:bg-base-200 whitespace-nowrap" aria-label="Lue artikkeli ääneen" onclick="_raSpeakCard(this)">🔊 Puhu</button>' +
+        adminBtn +
+        '</div>' +
+        '</div>' +
+        '<div class="body-text' + dropCapClass + (teaser ? ' editorial-teaser' : '') + ' leading-relaxed">' + bodyHtml + '</div>' +
+        (teaser ? '<div class="editorial-cta"><span class="cta-lead">📖 Tämä on vasta alkua.</span> <button type="button" class="editorial-reg-btn">Rekisteröidy AIMEAT-käyttäjäksi — helppoa</button> <span class="cta-hint">niin luet koko pääkirjoituksen. (Tai kuuntele se kokonaan tästä yltä 🎧)</span></div>' : '') +
+        '</div></article>';
+    }
+
+    function renderPaper() {
+      const paper = document.getElementById('paper');
+      const slotItems = allItems.filter(function (it) { return slotKeyOf(it) === activeSlot; });
+
+      if (!slotItems.length) {
+        paper.innerHTML = '<p class="empty-text">Ei artikkeleja tähän numeroon.</p>';
+        return;
+      }
+
+      function isEditorial(it) { return it.kind === 'editorial' || it.category === 'editorial'; }
+      var editorials = slotItems.filter(isEditorial);
+      var articles   = slotItems.filter(function (it) { return !isEditorial(it) && it.category !== 'huhut'; });
+      articles.sort(function (a, b) {
+        return categoryLabel(a.category || '').localeCompare(categoryLabel(b.category || ''), 'fi');
+      });
+
+      // Get the date for the masthead dateline
+      var slotDate = activeSlot ? activeSlot.split('|')[0] : '';
+      var datelineDate = slotDate ? formatDateLong(slotDate) : '';
+      var editionLabel = activeSlot ? (EDITION_LABELS[activeSlot.split('|')[1]] || '') : '';
+
+      // Edition provenance: how much is web-sourced vs AI-synthesized in THIS edition.
+      var provCounts = { sourced: 0, synth: 0, data: 0 };
+      var totalSources = 0;
+      slotItems.forEach(function (it) {
+        var k = provenance(it.category || '').kind; provCounts[k] = (provCounts[k] || 0) + 1;
+        if (k === 'sourced' && typeof it.sources === 'number') totalSources += it.sources;
+      });
+      var srcTxt = totalSources > 0 ? (' (' + totalSources + ' verkkolähdettä)') : '';
+      var provSummary = '🌐 ' + provCounts.sourced + ' verkkopohjaista' + srcTxt + ' · 🤖 ' + provCounts.synth +
+        ' AI-generoitua' + (provCounts.data ? ' · 🛰️ ' + provCounts.data + ' datapohjaista' : '');
+
+      // Build masthead — header + tagline ONLY (the date/edition selector lives below the "now" widgets)
+      var masthead = '<header class="masthead mb-6">' +
+        '<div class="masthead-inner text-center">' +
+        '<h1 class="masthead-title text-4xl sm:text-5xl md:text-5xl lg:text-6xl mb-3">' +
+        '<span class="masthead-initial">(</span>L<span class="masthead-initial closing-paren">)</span> AIMEAT Sanomat</h1>' +
+        '<p class="tagline">AIMEAT-yhteisön ääni</p>' +
+        '</div>' +
+        '</header>';
+
+      // Build the EDITION SELECTOR — selected date + nimipäivä + aamu/ilta + a date picker (päivävalitsin)
+      // + prev/next arrows. Scales to hundreds of editions (no wall of tabs).
+      var slotsAll = [...new Set(allItems.map(slotKeyOf))];
+      slotsAll.sort(slotCmp);  // chronological (oldest → newest)
+      var allDates = [...new Set(slotsAll.map(function (s) { return s.split('|')[0]; }))].sort();
+      var minDate = allDates[0] || '', maxDate = allDates[allDates.length - 1] || '';
+      var edsOnDate = slotsAll.filter(function (s) { return s.split('|')[0] === slotDate; })
+        .map(function (s) { return s.split('|')[1]; });
+      var curIdx = slotsAll.indexOf(activeSlot);
+      var prevSlot = curIdx > 0 ? slotsAll[curIdx - 1] : '';
+      var nextSlot = (curIdx >= 0 && curIdx < slotsAll.length - 1) ? slotsAll[curIdx + 1] : '';
+      var editionSelector =
+        '<div class="edition-selector mb-8 p-3 rounded-lg border border-base-300">' +
+        '<div class="flex flex-wrap items-center justify-between gap-2 dateline">' +
+        '<span class="font-semibold">' + (datelineDate || '') + '</span>' +
+        '<span id="nameday" class="opacity-80"></span>' +
+        '<span>' + editionLabel + '-numero</span>' +
+        '</div>' +
+        '<div class="edition-provenance text-center" title="Kuinka suuri osa tästä numerosta pohjautuu verkkolähteisiin vs. AI:n generoimaa">' +
+        'Tämä numero: ' + provSummary + '</div>' +
+        '<div class="flex flex-wrap items-center justify-center gap-2 mt-3">' +
+        (prevSlot ? '<button class="edition-tab" data-slot="' + esc(prevSlot) + '" title="Edellinen numero">‹</button>' : '') +
+        '<input type="date" id="date-picker" class="px-2 py-1 rounded-md border border-base-300 bg-base-100 text-sm" value="' + esc(slotDate) + '"' +
+        (minDate ? ' min="' + esc(minDate) + '"' : '') + (maxDate ? ' max="' + esc(maxDate) + '"' : '') + '>' +
+        edsOnDate.map(function (ed) {
+          var s = slotDate + '|' + ed;
+          return '<button class="edition-tab' + (s === activeSlot ? ' active' : '') + '" data-slot="' + esc(s) + '">' + esc(EDITION_LABELS[ed] || ed) + '</button>';
+        }).join('') +
+        (nextSlot ? '<button class="edition-tab" data-slot="' + esc(nextSlot) + '" title="Seuraava numero">›</button>' : '') +
+        '</div></div>';
+
+      // Build admin views panel
+      var adminHtml = '';
+      if (canManage) {
+        adminHtml = '<div id="views-panel" class="admin-panel px-5 py-4 mb-8">' +
+          '<div class="views-text">Ladataan näyttökertoja…</div>' +
+          '</div>';
+      }
+
+      // Build editorial(s) — full width
+      var editorialsHtml = '';
+      if (editorials.length) {
+        editorialsHtml = '<section class="mb-10">' +
+          '<div class="section-header">Satiirinen pääkirjoitus · gonzo</div>' +
+          '<p style="font-size:0.72rem;opacity:0.7;font-style:italic;line-height:1.5;margin:-0.4rem 0 1rem 0">Satiirinen mielipidekirjoitus gonzo-tyylillä. Perustuu päivän uutisiin, mutta sisältää liioittelua, ironiaa ja subjektiivista kommentointia — ei faktapohjaista journalismia. Kaikki AI-syntetisoitua.</p>' +
+          editorials.map(function (it) { return cardHtml(it, true); }).join('') +
+          '</section>';
+      }
+
+      // Build articles grid
+      var articlesHtml = '';
+      if (articles.length) {
+        articlesHtml = '<section>' +
+          '<div class="section-header">Artikkelit</div>' +
+          '<div class="newspaper-grid">' +
+          articles.map(function (it) { return cardHtml(it, false); }).join('') +
+          '</div></section>';
+      }
+
+      // Build footer
+      var footerHtml = '<footer class="paper-footer mt-12">' +
+        '<p class="footer-mark">(L)AIMEAT Sanomat — AIMEAT-yhteisön ääni</p>' +
+        '</footer>';
+
+      // Assemble full paper
+      // ORDER: masthead → "now" widgets (Sää tänään, Taivas tänään, aina nykyhetki) → edition selector
+      // (päivämäärä + nimipäivä + aamu/ilta + päivävalitsin) → näyttökerrat → pääkirjoitus → artikkelit.
+      var editionKey = activeSlot ? activeSlot.split('|')[1] : '';
+      paper.innerHTML = masthead +
+        '<section id="saa-box" class="sky-section mb-8 p-4 rounded-lg border border-base-300"><div class="text-sm opacity-50">Ladataan säätä…</div></section>' +
+        buildSkyPanel() + editionSelector + adminHtml + editorialsHtml + articlesHtml +
+        '<section id="quiz-box" class="quiz-section mb-8 p-4 rounded-lg border border-base-300" style="display:none"></section>' +
+        footerHtml;
+      loadWeather();                 // current conditions (the "now" section)
+      loadNameDay(slotDate);         // name day of the SELECTED edition's date
+      loadQuiz(slotDate, editionKey);  // päivän uutisvisa for the selected edition (if published)
+
+      // Bind edition tab clicks (aamu/ilta + prev/next arrows)
+      paper.querySelectorAll('.edition-tab').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var newSlot = this.getAttribute('data-slot');
+          if (newSlot && newSlot !== activeSlot) {
+            _raCancel(); // stop reading when switching edition
+            activeSlot = newSlot;
+            renderPaper();
+          }
+        });
+      });
+
+      // Editorial teaser CTA (anon) → trigger the header login/register flow
+      paper.querySelectorAll('.editorial-reg-btn').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var host = document.getElementById('header-auth');
+          var hb = host && (host.querySelector('button, a, [role="button"]') || host.firstElementChild);
+          if (hb && hb.click) hb.click();
+        });
+      });
+
+      // Bind the date picker (päivävalitsin) — jump to any day's edition (scales to hundreds)
+      var _dp = document.getElementById('date-picker');
+      if (_dp) {
+        _dp.addEventListener('change', function () {
+          var picked = this.value;
+          var matches = slotsAll.filter(function (s) { return s.split('|')[0] === picked; });
+          if (!matches.length) return;  // no edition published that day
+          var curEd = activeSlot ? activeSlot.split('|')[1] : '';
+          var chosen = (matches.indexOf(picked + '|' + curEd) >= 0) ? (picked + '|' + curEd) : matches[matches.length - 1];
+          if (chosen !== activeSlot) { _raCancel(); activeSlot = chosen; renderPaper(); }
+        });
+      }
+
+      // Bind admin hide/show clicks
+      paper.querySelectorAll('.admin-btn[data-toggle]').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+          var key = this.getAttribute('data-toggle');
+          if (hiddenKeys.has(key)) {
+            hiddenKeys.delete(key);
+          } else {
+            hiddenKeys.add(key);
+          }
+          // Persist
+          try {
+            await AIMEAT.data.set(ADMIN_KEY, { hidden: [...hiddenKeys] });
+          } catch (e) { /* ignore */ }
+          renderPaper();
+        });
+      });
+
+      // Load views count
+      if (canManage) {
+        loadViews();
+      }
+    }
+
+    // ── Views counter ──
+    function loadViews() {
+      var el = document.getElementById('views-panel');
+      if (!el) return;
+      el.innerHTML = '<div class="views-text opacity-50">Ladataan näyttökertoja…</div>';
+      // GET-based micro-memory (/v1/mm op=list); set 'sanomat_views' is public_write so anon visitors count too.
+      fetch(VIEWS_URL + '?op=list&set=sanomat_views', { credentials: 'omit' })
+        .then(function (r) { return r.json(); })
+        .then(function (resp) {
+          var entries = (resp && resp.data && resp.data.entries) ? resp.data.entries : {};
+          var viewCount = 0, editionCounts = {};
+          Object.keys(entries).forEach(function (k) {
+            if (k.indexOf('c_') !== 0) return;          // per-edition counter keys: c_<date>_<edition>=count
+            var n = parseInt(entries[k], 10) || 0;
+            viewCount += n;
+            var rest = k.slice(2), i = rest.lastIndexOf('_');
+            var slot = (i > 0) ? (rest.slice(0, i) + '|' + rest.slice(i + 1)) : rest;
+            editionCounts[slot] = (editionCounts[slot] || 0) + n;
+          });
+          var html = '<span class="views-text font-semibold">Näyttökerrat: ' + viewCount + '</span>';
+          var ks = Object.keys(editionCounts).sort();
+          if (ks.length) {
+            html += ' <span class="opacity-60">(' + ks.map(function (s) {
+              return slotLabelOf(s) + ': ' + editionCounts[s];
+            }).join(', ') + ')</span>';
+          }
+          el.innerHTML = html;
+        })
+        .catch(function () { el.innerHTML = '<div class="views-text opacity-40">Näyttökertojen lataus epäonnistui</div>'; });
+    }
+
+    // ── Beacon ──
+    function sendBeacon() {
+      var slot = activeSlot || 'unknown';
+      var ck = 'c_' + slot.replace('|', '_');
+      // Per-edition COUNTER (read current → write back +1; op=add overwrites). One key per edition, not one
+      // per view, so it never hits the 100-keys/set micro-memory cap. Tokenless (set is public_write).
+      fetch(VIEWS_URL + '?op=list&set=sanomat_views', { credentials: 'omit' })
+        .then(function (r) { return r.json(); })
+        .then(function (resp) {
+          var entries = (resp && resp.data && resp.data.entries) ? resp.data.entries : {};
+          var cur = parseInt(entries[ck], 10) || 0;
+          fetch(VIEWS_URL + '?op=add&set=sanomat_views&key=' + ck + '&value=' + (cur + 1), { credentials: 'omit' }).catch(function () {});
+        })
+        .catch(function () { /* silent */ });
+    }
+
+    // ── Read Aloud button binding ──
+    document.getElementById('btn-read-aloud').addEventListener('click', function () {
+      if (_raState === 'idle' || _raState === 'paused') {
+        _raToggle();
+      } else {
+        // speaking → pause
+        _raToggle();
+      }
+    });
+
+    // ── Start ──
+    boot();
+  </script>
+</body>
+</html>

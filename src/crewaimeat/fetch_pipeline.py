@@ -21,7 +21,7 @@ from crewaimeat.aimeat_crew import _aimeat_call
 from crewaimeat.article_extract import _MIN_CHARS, _playwright_text, _trafilatura_text
 from crewaimeat.feed_sources import FEED_REGISTRY, _parse_feed, _recent_seen_urls
 
-# category -> (keyword query, language, time_range) for categories with no/thin feed (paikallinen/saa/huhut…)
+# category -> (keyword query, language, time_range) for categories with no/thin feed (paikallinen/saa…)
 CATEGORY_QUERY: dict[str, tuple[str, str, str]] = {
     "talous": ("talous uutiset Suomi", "fi", "day"),
     "paikallinen": ("Tapiola Espoo uutiset", "fi", "week"),
@@ -38,7 +38,6 @@ CATEGORY_QUERY: dict[str, tuple[str, str, str]] = {
     "pelit": ("peliuutiset video game news", "fi", "week"),
     "pelidevaus": ("game development Unity Unreal Godot news", "en", "month"),
     "startup": ("startup uutiset Suomi rahoitus funding", "en", "week"),
-    "huhut": ("julkkis huhut juorut Suomi", "fi", "week"),
     "yliluonnolliset": ("yliluonnolliset ilmiöt kummitukset UFO", "fi", "month"),
     "ruoka": ("ruoka ruokatrendit reseptit Suomi", "fi", "month"),
     "luonto": ("luonto ympäristö eläimet Suomi", "fi", "month"),
