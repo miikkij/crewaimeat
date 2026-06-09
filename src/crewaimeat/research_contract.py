@@ -3,7 +3,8 @@
 The contract (the convention any organism workspace can adopt):
   inputs : `research-request` (records)  — trigger: status == 'requested'
              { id, brief(required), depth?, focus?, status, requested_by?, result_ref?, error? }
-  outputs: `research-result`  (records)  — { id, request_ref, brief, summary, sources[], created }
+  outputs: `research-result`  (DOCUMENT) — a markdown note { title, markdown } (id = res-<request id>),
+             so the distilled research renders as a proper page, not a record field.
   lifecycle: requested -> in-progress (claim) -> done (+result_ref) | failed (+error)
 
 The loop is plain code (discover -> claim -> work -> write -> advance); only the distillation of the
@@ -26,7 +27,7 @@ from crewaimeat.llm import get_llm
 
 AGENT = "web-researcher"
 IN_SPACE, IN_NS = "research-request", "shared.research_requests"
-OUT_SPACE, OUT_NS = "research-result", "shared.research_results"
+OUT_SPACE, OUT_NS = "research-result", "shared.research_docs"  # a DOCUMENT space (fresh namespace)
 
 
 def _call(tool_name: str, payload: dict):
@@ -126,10 +127,13 @@ def process_research_requests(max_items: int = 5, targets: list[tuple[str, str]]
                 failed += 1
                 continue
             out_id = f"res-{rid}"
-            res = {"id": out_id, "request_ref": rid, "brief": req.get("brief", ""),
-                   "summary": summary, "sources": sources, "created": today}
+            # research-result is a DOCUMENT space → write a markdown note (renders as a page), not a record.
+            title = (req.get("brief", "") or "Research note").strip()[:90]
+            srcs = "\n".join(f"- {u}" for u in sources)
+            md = f"{summary}\n\n## Sources\n{srcs}\n\n*Research brief: {req.get('brief','')} · requested by {req.get('requested_by','?')} · {today}*"
             wrote = _call("aimeat_workspace_write",
-                          {"organism_id": oid, "ws": wid, "space": OUT_SPACE, "id": out_id, "value": res})
+                          {"organism_id": oid, "ws": wid, "space": OUT_SPACE, "id": out_id,
+                           "value": {"title": title, "markdown": md}})
             pub = _call("aimeat_workspace_publish",
                         {"organism_id": oid, "ws": wid, "namespace": OUT_NS, "id": out_id}) if wrote else None
             if wrote and pub:
