@@ -138,6 +138,7 @@ def process_activity_reports(targets: list[tuple[str, str]] | None = None) -> di
         if not d or d.get("manifest") is None:
             continue
         cfgs = (d.get("objects", {}) or {}).get(IN_SPACE) or []
+        existing_reports = {r.get("id") for r in ((d.get("objects", {}) or {}).get(OUT_SPACE) or [])}
         for rec in cfgs:
             status, rid = rec.get("status"), rec.get("id")
             if not rid:
@@ -145,14 +146,20 @@ def process_activity_reports(targets: list[tuple[str, str]] | None = None) -> di
             period_h = int(rec.get("period_hours") or 168)
             last = rec.get("last_run")
             due = status == "requested"
-            if not due and status == "active" and last:
-                try:
-                    due = (now - datetime.datetime.fromisoformat(last)).total_seconds() >= period_h * 3600
-                except Exception:  # noqa: BLE001
-                    due = False
+            if not due and status == "active":
+                if not last:
+                    due = True  # active but never run -> due now (the first report)
+                else:
+                    try:
+                        due = (now - datetime.datetime.fromisoformat(last)).total_seconds() >= period_h * 3600
+                    except Exception:  # noqa: BLE001
+                        due = True
             if not due:
                 continue
             if rid in _REPORTED:  # already generated this run — guard against a stale 'due' read
+                continue
+            if f"report-{rid}-{nowiso[:10]}" in existing_reports:  # already reported today -> output-dedup
+                _REPORTED.add(rid)
                 continue
             _REPORTED.add(rid)
             since = rec.get("since") or last or (now - datetime.timedelta(hours=period_h)).isoformat()
