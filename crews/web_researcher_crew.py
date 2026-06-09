@@ -135,9 +135,23 @@ def run() -> None:
     # adapt_to_task: research tasks classify as 'fact' -> cool temp (0.15) + grounding rule (no invented
     # specifics, honest "not found") + a final faithfulness-verify pass over the summary before publish,
     # on top of the crew's own Source Verifier. score_to_stats: keep the self-verify as introspection.
+    #
+    # idle_hook: a DETERMINISTIC `research` workspace-contract poll every ~60s — it checks this agent's
+    # member workspaces for new research-request records and fulfils them. The CHECK uses NO LLM (workspace
+    # read + filter); the LLM (owl-alpha) runs only to distil a request that actually exists. This replaces
+    # an agent_task schedule (which would burn one LLM call per fire just to orchestrate the tool), so idle
+    # minutes cost zero tokens.
+    from crewaimeat.research_contract import process_research_requests
+
+    def _contract_poll() -> None:
+        res = process_research_requests(max_items=3)
+        if res.get("processed") or res.get("failed"):
+            print(f"[{AGENT_NAME}] research-contract poll: {res}")
+
     run_crew(CrewSpec(
         agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README,
         adapt_to_task=True, score_to_stats=True,
+        idle_hook=_contract_poll, idle_hook_seconds=60,
     ))
 
 

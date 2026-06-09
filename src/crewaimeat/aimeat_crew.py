@@ -151,6 +151,11 @@ class CrewSpec:
     manager_agent: Any = None             # only for Process.hierarchical
     owner: str | None = None              # AIMEAT owner; set only if the agent name is ambiguous
     max_idle_auth_failures: int = 10      # idle cycles with a rejected token before exiting for re-auth
+    idle_hook: Any = None                 # optional DETERMINISTIC callable run on idle cycles (throttled to
+    #   idle_hook_seconds) while the token is alive — e.g. a workspace-contract poll. The call itself uses
+    #   NO LLM (any LLM is in the work it triggers, only when there's something to do); exceptions are
+    #   logged, never fatal.
+    idle_hook_seconds: int = 60           # minimum seconds between idle_hook runs
     listen_for: Iterable[str] = ("tasks",)  # add "messages" to also act on inbox messages
     wait_for_approval_seconds: int | None = 1800  # wait this long (30 min) for the token to be approved
     #   before onboarding, then exit for re-auth (None = wait indefinitely)
@@ -1285,6 +1290,7 @@ def run_crew(spec: CrewSpec) -> None:
     #    guard, so this cleanly stops the loop.)
     auth = {"fails": 0}
     pub = {"last": 0.0}
+    hook = {"last": 0.0}
 
     def _on_idle() -> None:
         alive = _auth_alive(spec.agent_name, spec.owner)
@@ -1296,6 +1302,14 @@ def run_crew(spec: CrewSpec) -> None:
             if now - pub["last"] > 600:
                 pub["last"] = now
                 _publish_selection_rollup(spec.agent_name, spec.owner)
+            # Optional DETERMINISTIC per-crew idle work (e.g. a workspace-contract poll). The poll uses NO
+            # LLM (workspace read + filter); throttled so a fast-polling daemon doesn't hammer it.
+            if spec.idle_hook is not None and now - hook["last"] > spec.idle_hook_seconds:
+                hook["last"] = now
+                try:
+                    spec.idle_hook()
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[{spec.agent_name}] idle_hook failed: {exc!r}", file=sys.stderr)
         elif alive is False:
             auth["fails"] += 1
             print(

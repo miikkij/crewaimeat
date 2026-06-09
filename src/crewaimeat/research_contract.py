@@ -75,7 +75,10 @@ def do_research(brief: str, depth: int = 5, focus: str = "") -> tuple[str | None
         "Use ONLY facts present in the sources and cite them by [n]. No fluff, no invented specifics; "
         "if the sources don't answer part of the brief, say so plainly."
     )
-    llm = get_llm(for_tool_use=False, temperature=0.3)
+    # Route the distillation through the 'coding' profile (owl-alpha -> gpt-oss-120b -> minimax) — factual
+    # reasoning over sources, not creative content, so a frontier reasoner beats grok. (web-researcher is
+    # mapped to the 'coding' profile in llm_providers.json.)
+    llm = get_llm(for_tool_use=False, temperature=0.3, agent_name=AGENT)
     summary = (llm.call([{"role": "user", "content": prompt}]) or "").strip()
     return (summary or None), [d["url"] for d in docs]
 
