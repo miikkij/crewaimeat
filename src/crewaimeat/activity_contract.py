@@ -36,6 +36,10 @@ IN_SPACE, IN_NS = "activity-tracking", "shared.activity_tracking"
 OUT_SPACE, OUT_NS = "activity-report", "shared.activity_reports"  # a DOCUMENT space
 _DEFAULT_NARRATOR = "the organism's resident chronicler — wry, vivid, but strictly factual"
 
+# Runaway guard: config ids already reported in THIS daemon run. Prevents re-generating the same report
+# every poll if a stale read keeps the config looking due (read-after-write lag). Resets on daemon restart.
+_REPORTED: set[str] = set()
+
 
 def _call(tool_name: str, payload: dict):
     return _aimeat_call(AGENT, tool_name, payload)
@@ -148,6 +152,9 @@ def process_activity_reports(targets: list[tuple[str, str]] | None = None) -> di
                     due = False
             if not due:
                 continue
+            if rid in _REPORTED:  # already generated this run — guard against a stale 'due' read
+                continue
+            _REPORTED.add(rid)
             since = rec.get("since") or last or (now - datetime.timedelta(hours=period_h)).isoformat()
             ws_spec = rec.get("ws") or "*"
             scope = "the whole organism" if ws_spec == "*" else f"workspace '{ws_spec}'"

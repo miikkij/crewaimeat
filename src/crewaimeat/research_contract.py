@@ -29,6 +29,11 @@ AGENT = "web-researcher"
 IN_SPACE, IN_NS = "research-request", "shared.research_requests"
 OUT_SPACE, OUT_NS = "research-result", "shared.research_docs"  # a DOCUMENT space (fresh namespace)
 
+# Runaway guard: request ids already handled in THIS daemon run. Prevents re-processing the same request
+# if a stale read keeps showing status=='requested' after we advanced it (read-after-write lag). Resets on
+# daemon restart, by when the read is consistent (status=='done' -> skipped normally).
+_PROCESSED: set[str] = set()
+
 
 def _call(tool_name: str, payload: dict):
     return _aimeat_call(AGENT, tool_name, payload)
@@ -109,11 +114,14 @@ def process_research_requests(max_items: int = 5, targets: list[tuple[str, str]]
             continue
         reqs = (data.get("objects", {}) or {}).get(IN_SPACE) or []
         for req in reqs:
-            if req.get("status") != "requested" or not req.get("id"):
+            rid = req.get("id")
+            if req.get("status") != "requested" or not rid:
+                continue
+            if rid in _PROCESSED:  # already handled this run — guard against a stale 'requested' read
                 continue
             if processed + failed >= max_items:
                 break
-            rid = req["id"]
+            _PROCESSED.add(rid)
             _advance(oid, wid, req, status="in-progress")  # CLAIM
             try:
                 summary, sources = do_research(req.get("brief", ""), int(req.get("depth") or 5), req.get("focus", ""))
