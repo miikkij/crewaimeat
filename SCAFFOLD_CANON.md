@@ -41,12 +41,13 @@ A task-runner agent's tasks are **auto-activated** on the node (C3, landed 2026-
 | 8 | **Deterministic progress bridge** (no LLM): milestones → `aimeat_task_event`, 5s live status → memory key | UI needs "what's happening now"; todos are the wrong tool, and auto-activated tasks have none | `crewaimeat/progress.py` |
 | 9 | **Windows: `cmd /c` + UTF-8 reconfigure** | `aimeat` is an extensionless npm shim (WinError 193); console cp1252 breaks accents/emojis | `_aimeat_call`, module top |
 | 10 | **Idle auth-guard** (probe on idle; exit `78` after N rejections) | `_poll_tasks` swallows a 401, so a stale token looks like an empty queue and the daemon would idle silently forever. The guard notices and exits so you re-approve the agent | `run_crew` `on_idle` + `_auth_alive`; watchdog stops on exit 78 |
+| 11 | **Reliable recurring/idle-hook processing** (output-dedup + per-run processed-set + bounded batch) | An idle-hook deduping on a just-read status re-processed ONE item ~347× under read-after-write lag (2026-06-09): the write advanced it but the next read still showed it pending → re-run every cycle. Dedup on the OUTPUT (survives restarts) + a per-run set + a per-pass cap keep it safe | `CrewSpec.idle_hook`/`idle_hook_seconds`; `research_contract._PROCESSED` / `activity_contract._REPORTED` |
 
 Items marked *(upstream)* are now shipped in the packages, listed so you know the scaffold relies on them; keep `aimeat-crewai>=0.3.4`.
 
 ## 4. The contract: what you write vs what the scaffold provides
 
-- **You write:** `build_domain(ctx)` (your `Agent`s and `Task`s), `AGENT_NAME`, and optional `CrewSpec` fields (`process`, `poll_seconds`, `memory_key_prefix`, `owner`, `max_idle_auth_failures`). Pass `llm=ctx.llm` to every agent. Prepend `ctx.today` to time-sensitive tasks. Give the user's request (`ctx.prompt`) to the agent(s) that need it. The last task's output is what gets published.
+- **You write:** `build_domain(ctx)` (your `Agent`s and `Task`s), `AGENT_NAME`, and optional `CrewSpec` fields (`process`, `poll_seconds`, `memory_key_prefix`, `owner`, `max_idle_auth_failures`, and `idle_hook`/`idle_hook_seconds` for a deterministic per-cycle workspace-contract poll). Pass `llm=ctx.llm` to every agent. Prepend `ctx.today` to time-sensitive tasks. Give the user's request (`ctx.prompt`) to the agent(s) that need it. The last task's output is what gets published.
 - **Provided by the scaffold (reuse as-is):** `aimeat_crew.py` (onboarding, daemon, `finalize`, date, auth-guard), `progress.py`, the `llm.py` wiring.
 
 ## 5. Rules
@@ -55,6 +56,7 @@ Items marked *(upstream)* are now shipped in the packages, listed so you know th
 2. **Interview before generating** (assistants): purpose, roster, order, tools, deliverable, output target, language, agent name. See `CREW_AUTHORING_PROMPT.md`.
 3. **If it breaks, report it and pause for guidance.** Give the exact step, the error text, and which AIMEAT tool returned it. The scaffold and the liaison persona are the source of truth, so a regression there is best fixed in the package.
 4. **Language follows the agent's judgment** unless the task asks for a specific one; the scaffold leaves output language to the agent.
+5. **For a recurring / idle-hook (contract) processor, keep it idempotent + bounded.** Dedup on the OUTPUT first — it survives restarts: act on an input only while its output is still absent. Back it with a per-run processed-set (handle each id at most once per run; let your run-memory be the truth, since a status you just wrote may take a moment to read back), work a bounded batch each pass, and prefer the activity-delta (`GET /:id/activity?since=`) over re-scanning a whole namespace. Born from a 2026-06-09 idle-hook runaway under read-after-write lag.
 
 ## 6. See also
 
