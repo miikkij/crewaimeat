@@ -121,12 +121,16 @@ def run() -> None:
     # read + filter); the LLM (owl-alpha) runs only to distil a request that actually exists. This replaces
     # an agent_task schedule (which would burn one LLM call per fire just to orchestrate the tool), so idle
     # minutes cost zero tokens.
+    from crewaimeat.market_contract import process_market_scans
     from crewaimeat.research_contract import process_research_requests
 
     def _contract_poll() -> None:
         res = process_research_requests(max_items=3)
         if res.get("processed") or res.get("failed"):
             print(f"[{AGENT_NAME}] research-contract poll: {res}")
+        scans = process_market_scans(max_items=2)  # the agent's SECOND contract: market-scan
+        if scans.get("processed") or scans.get("failed"):
+            print(f"[{AGENT_NAME}] market-scan poll: {scans}")
 
     run_crew(CrewSpec(
         agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README,
