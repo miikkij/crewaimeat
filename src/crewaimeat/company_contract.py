@@ -108,6 +108,51 @@ def _xbrl_financials(business_id: str) -> str:
     return ""
 
 
+def _finder_vision(company: str) -> str:
+    """Read the company's finder.fi page the way a human does: Playwright opens it, takes a
+    screenshot, and the vision model (qwen-vl) reads the JS-rendered revenue/profit bar charts
+    that text extraction can't see. Returns a '[url — kuvaluenta]\\n<facts>' block, or ''."""
+    import os
+    import tempfile
+
+    from crewaimeat.browser_tool import _describe_image
+    from crewaimeat.fetch_pipeline import _searxng_urls
+    urls = [u for u in _searxng_urls(f"site:finder.fi {company}", "fi", "", n=6) if "finder.fi" in u]
+    if not urls:
+        return ""
+    url = urls[0]
+    path = os.path.join(tempfile.gettempdir(), f"finder_{slugify(company)}.png")
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1400, "height": 2400})
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            for sel in ("button:has-text('Hyväksy')", "button:has-text('Salli kaikki')",
+                        "button:has-text('OK')"):
+                try:
+                    page.locator(sel).first.click(timeout=2000)
+                    break
+                except Exception:  # noqa: BLE001 — no consent dialog is fine
+                    pass
+            page.wait_for_timeout(3000)  # let the chart JS render
+            page.screenshot(path=path)
+            browser.close()
+    except Exception as exc:  # noqa: BLE001 — vision leg is best-effort; sources still work
+        print(f"[{AGENT}] finder screenshot failed for {company}: {exc!r}", file=sys.stderr)
+        return ""
+    desc = _describe_image(path, (
+        "Tämä on finder.fi-yrityssivu. Lue ja listaa TARKASTI pelkkinä riveinä:\n"
+        "- yrityksen nimi, y-tunnus, toimiala, osoite\n"
+        "- 'Liikevaihto'-pylväskaavio (tuhatta euroa): jokainen vuosi ja arvo\n"
+        "- 'Tilikauden tulos' -pylväskaavio (tuhatta euroa): jokainen vuosi ja arvo\n"
+        "- henkilöstömäärä jos näkyy\n"
+        "Jos jokin arvo ei ole luettavissa, sano se suoraan. Älä arvaa lukuja."))
+    if desc.startswith("(describe failed"):
+        return ""
+    return f"[{url} — finder-sivun kuvaluenta (vision)]\n{desc}"
+
+
 def _financial_sources(company: str) -> list[str]:
     """finder/asiakastieto-style pages for the company via SearXNG + trafilatura (up to 5)."""
     from crewaimeat.fetch_pipeline import _searxng_urls
@@ -145,6 +190,9 @@ def run_company_research(company: str, business_id: str = "") -> tuple[str | Non
         if xbrl:
             facts += ("VIRALLISET DIGITAALISET TILINPÄÄTÖSTIEDOT (PRH XBRL — ensisijainen lähde "
                       "talousluvuille):\n" + xbrl + "\n\n")
+    vision = _finder_vision(company)
+    if vision:
+        facts += "FINDER-SIVU KUVASTA LUETTUNA (vision-malli; chartit joita tekstihaku ei näe):\n" + vision + "\n\n"
     prompt = (
         f"Olet yritystutkija. Kohde: {company}.\n\n" + facts +
         ("LÄHTEET (talousluvut VAIN näistä):\n\n" + "\n\n".join(docs) + "\n\n" if docs else
