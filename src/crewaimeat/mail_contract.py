@@ -226,22 +226,99 @@ def _day_image() -> tuple[bytes, str] | None:
     return best
 
 
-def _radar_section() -> str:
+def _radar_section(radar: list[dict]) -> str:
     """The freshest SOME-radar opportunities + reply drafts from the Social Radar workspace."""
     d = _call("aimeat_workspace_read", {"organism_id": _HOME_ORG, "ws": _RADAR_WS}) or {}
     objs = d.get("objects", {}) or {}
-    opp_space = next((s for s in objs if "opportunit" in s.lower()), None)
     draft_space = next((s for s in objs if "draft" in s.lower() or "reply" in s.lower()), None)
-    lines = []
-    for o in (objs.get(opp_space) or [])[:5] if opp_space else []:
-        title = (o.get("title") or o.get("id") or "?")[:80]
-        url = o.get("url") or ""
-        lines.append(f"- {title}" + (f" — {url}" if url else ""))
     drafts = len(objs.get(draft_space) or []) if draft_space else 0
+    lines = [f"- {r['title']}" + (f" — {r['url']}" if r['url'] else "") for r in radar[:5]]
     if not lines:
         return "## SOME-radar\n\n- (ei uusia osumia radarilla)\n"
     return ("## SOME-radar\n\n" + "\n".join(lines)
             + (f"\n\n{drafts} vastausluonnosta odottaa katselmointiasi." if drafts else "") + "\n")
+
+
+# Competitor / domain watch — what commercial players in our space sell, advertise and discuss.
+# Override with AIMEAT_COMPETITOR_QUERIES (comma-separated search queries) in .env.
+_COMPETITOR_QUERIES = [
+    "AI agent platform pricing launch news",
+    "CrewAI OR LangGraph OR AutoGen agent orchestration news",
+    "autonomous AI agents product launch commercial",
+]
+
+
+def _radar_items() -> list[dict]:
+    """Fresh SOME-radar opportunities (title+url) — shared by the radar section + the analyst."""
+    d = _call("aimeat_workspace_read", {"organism_id": _HOME_ORG, "ws": _RADAR_WS}) or {}
+    objs = d.get("objects", {}) or {}
+    opp_space = next((s for s in objs if "opportunit" in s.lower()), None)
+    return [{"title": (o.get("title") or o.get("id") or "?")[:90], "url": o.get("url") or "",
+             "score": o.get("score")} for o in (objs.get(opp_space) or [])[:8]] if opp_space else []
+
+
+def _insights_section(events: list[dict], radar: list[dict]) -> str:
+    """Effort analysis + accomplishments + TODAY's action points (incl. SOME threads worth a reply)."""
+    from crewaimeat.llm import get_llm
+    ev_lines = "\n".join(
+        f"- {e.get('at','')} · {(e.get('agent') or e.get('actor') or '?')} {e.get('action')} "
+        f"{e.get('type')}/{e.get('instance')}" for e in events[:200]) or "(no events)"
+    radar_lines = "\n".join(f"- {r['title']} — {r['url']}" for r in radar) or "(radar empty)"
+    prompt = (
+        "You are a sharp, warm morning-briefing analyst for a one-person AI-agent project.\n\n"
+        f"RAW ACTIVITY (last 24h, who did what):\n{ev_lines}\n\n"
+        f"SOME RADAR (fresh threads where engaging might be worth it):\n{radar_lines}\n\n"
+        "Write THREE markdown sections, in Finnish, concise and concrete:\n"
+        "## Mihin tehot menivät\n(2-4 sentences: where the effort actually went, any imbalance worth noticing)\n\n"
+        "## Mitä saatiin aikaan\n(3-6 bullets of OUTCOMES, not activity — things that now exist/work)\n\n"
+        "## Tänään kannattaa\n(3-5 action points for TODAY. If a radar thread looks genuinely worth a reply, "
+        "say 'Käy katsomassa: <title> — <url>' with one line on WHY and what angle a reply could take. "
+        "Only real items from the data above; if the radar is empty, suggest the most leveraged next step instead.)\n\n"
+        "Use ONLY the data above. No fluff, no invented items."
+    )
+    try:
+        llm = get_llm(for_tool_use=False, temperature=0.4, agent_name=AGENT)
+        out = (llm.call([{"role": "user", "content": prompt}]) or "").strip()
+        return out + "\n" if out else "## Tänään kannattaa\n\n- (analyysi epäonnistui — tyhjä vastaus)\n"
+    except Exception as exc:  # noqa: BLE001 — the mail still goes out, loudly noting the gap
+        return f"## Tänään kannattaa\n\n- (analyysin tuotanto epäonnistui: {exc!r})\n"
+
+
+def _competitor_section() -> str:
+    """What commercial players in our domain sell, advertise and discuss — a daily sweep."""
+    from crewaimeat.article_extract import _trafilatura_text
+    from crewaimeat.fetch_pipeline import _searxng_urls
+    from crewaimeat.llm import get_llm
+    queries = [q.strip() for q in (os.getenv("AIMEAT_COMPETITOR_QUERIES") or "").split(",") if q.strip()] \
+        or _COMPETITOR_QUERIES
+    docs: list[str] = []
+    for q in queries:
+        for u in _searxng_urls(q, "en", "week", n=3):
+            if len(docs) >= 6:
+                break
+            try:
+                txt = _trafilatura_text(u)
+            except Exception:  # noqa: BLE001
+                txt = ""
+            if txt and len(txt) > 400:
+                docs.append(f"[{u}]\n{txt[:2500]}")
+    if not docs:
+        return "## Kilpailijakatsaus\n\n- (ei tuoreita osumia tällä haulla tänään)\n"
+    prompt = (
+        "You are a competitor-watch analyst for an AI-agent substrate/orchestration product.\n\n"
+        "SOURCES (this week, our domain):\n\n" + "\n\n".join(docs) +
+        "\n\nWrite ONE markdown section in Finnish:\n"
+        "## Kilpailijakatsaus\n(4-7 bullets: WHO did/said WHAT — what they sell, what they advertise, "
+        "what people discuss; each bullet names the player and cites its source URL in parentheses. "
+        "End with one line: the single most relevant signal for us and why.)\n\n"
+        "Use ONLY facts from the sources. No speculation beyond the final signal line."
+    )
+    try:
+        llm = get_llm(for_tool_use=False, temperature=0.3, agent_name=AGENT)
+        out = (llm.call([{"role": "user", "content": prompt}]) or "").strip()
+        return out + "\n" if out.startswith("##") else f"## Kilpailijakatsaus\n\n{out}\n"
+    except Exception as exc:  # noqa: BLE001
+        return f"## Kilpailijakatsaus\n\n- (katsauksen tuotanto epäonnistui: {exc!r})\n"
 
 
 def _activity_section(now: datetime.datetime) -> str:
@@ -271,11 +348,24 @@ def morning_report_due(now: datetime.datetime | None = None) -> bool:
 
 
 def build_morning_report() -> dict:
-    """Compose today's morning report as a mail-request record (the same pass then sends it)."""
+    """Compose today's morning report as a mail-request record (the same pass then sends it).
+
+    Sections: yesterday's story (activity distill) · effort analysis + outcomes + TODAY's action
+    points (incl. SOME threads worth a reply) · the SOME radar · a competitor/domain watch."""
+    from crewaimeat.activity_contract import _gather
     now = datetime.datetime.now(_TZ)
     rid = f"morning-{now.date().isoformat()}"
+    since = (now - datetime.timedelta(hours=24)).isoformat()
+    try:
+        events = _gather(_HOME_ORG, "*", since)
+    except Exception:  # noqa: BLE001
+        events = []
+    radar = _radar_items()
     body = (f"# Huomenta! ☀️ {now.strftime('%A %d.%m.%Y')}\n\n"
-            + _activity_section(now) + "\n" + _radar_section()
+            + _activity_section(now) + "\n"
+            + _insights_section(events, radar) + "\n"
+            + _radar_section(radar) + "\n"
+            + _competitor_section()
             + "\n*— postman · crewaimeat · kuva: SearXNG + qwen-vl*")
     img = _day_image()
     img_note = ""
