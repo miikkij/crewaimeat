@@ -34,6 +34,22 @@ from crewaimeat.llm import get_llm
 AGENT = "activity-reporter"
 IN_SPACE, IN_NS = "activity-tracking", "shared.activity_tracking"
 OUT_SPACE, OUT_NS = "activity-report", "shared.activity_reports"  # a DOCUMENT space
+
+# Machine-readable contract declaration (§2) — what adopt-contract provisions into a workspace.
+CONTRACT = {
+    "id": "activity-report",
+    "spaces": [
+        {"space": IN_SPACE, "namespace": IN_NS, "mode": "records",
+         "schema": {"type": "object", "required": ["id", "status"],
+                    "properties": {"id": {"type": "string"}, "ws": {"type": "string"},
+                                   "period_hours": {"type": "integer"}, "narrator": {"type": "string"},
+                                   "since": {"type": "string"}, "last_run": {"type": "string"},
+                                   "last_report": {"type": "string"}, "error": {"type": "string"},
+                                   "status": {"type": "string",
+                                              "enum": ["requested", "active", "in-progress", "done", "failed"]}}}},
+        {"space": OUT_SPACE, "namespace": OUT_NS, "mode": "document"},
+    ],
+}
 _DEFAULT_NARRATOR = "the organism's resident chronicler — wry, vivid, but strictly factual"
 
 # Runaway guard: config ids already reported in THIS daemon run. Prevents re-generating the same report

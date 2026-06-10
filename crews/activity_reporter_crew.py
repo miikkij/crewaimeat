@@ -22,7 +22,8 @@ from __future__ import annotations
 from crewai import Agent, Task
 
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
-from crewaimeat.activity_contract import make_activity_tools, process_activity_reports
+from crewaimeat.activity_contract import CONTRACT, make_activity_tools, process_activity_reports
+from crewaimeat.contract_adopt import build_adopt_domain, is_adopt_task
 
 AGENT_NAME = "activity-reporter"
 
@@ -39,6 +40,8 @@ writes the prose. **It posts nothing external.** Reusable as standup, changelog,
 
 
 def build_domain(ctx: BuildContext):
+    if is_adopt_task(ctx.task):  # UI "Adopt contract" chip -> provision our spaces there
+        return build_adopt_domain(ctx, AGENT_NAME, CONTRACT)
     reporter = Agent(
         role="Activity Chronicler",
         goal="Turn DUE activity-tracking configs into activity-report documents — digest, changelog, story.",

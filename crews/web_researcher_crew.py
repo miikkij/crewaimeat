@@ -13,7 +13,9 @@ from __future__ import annotations
 from crewai import Agent, Task
 
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
+from crewaimeat.contract_adopt import build_adopt_domain, is_adopt_task
 from crewaimeat.crew import _web_tools  # free SearXNG web search by default (USE_TAVILY=1 for Tavily)
+from crewaimeat.research_contract import CONTRACT
 
 AGENT_NAME = "web-researcher"
 
@@ -28,6 +30,8 @@ Performs live web searches to find recent articles, reports, and news on a given
 def build_domain(ctx):
     """Build a web research crew that searches for recent articles, reports, and news on a given topic,
     producing sourced summaries with proper citations."""
+    if is_adopt_task(ctx.task):  # UI "Adopt contract" chip -> provision our spaces there
+        return build_adopt_domain(ctx, AGENT_NAME, CONTRACT)
 
     # --- Agents ---
 

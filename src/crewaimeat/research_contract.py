@@ -29,6 +29,22 @@ AGENT = "web-researcher"
 IN_SPACE, IN_NS = "research-request", "shared.research_requests"
 OUT_SPACE, OUT_NS = "research-result", "shared.research_docs"  # a DOCUMENT space (fresh namespace)
 
+# Machine-readable contract declaration (§2) — what adopt-contract provisions into a workspace.
+CONTRACT = {
+    "id": "research",
+    "spaces": [
+        {"space": IN_SPACE, "namespace": IN_NS, "mode": "records",
+         "schema": {"type": "object", "required": ["id", "brief", "status"],
+                    "properties": {"id": {"type": "string"}, "brief": {"type": "string"},
+                                   "depth": {"type": "integer"}, "focus": {"type": "string"},
+                                   "requested_by": {"type": "string"}, "result_ref": {"type": "string"},
+                                   "error": {"type": "string"},
+                                   "status": {"type": "string",
+                                              "enum": ["requested", "in-progress", "done", "failed"]}}}},
+        {"space": OUT_SPACE, "namespace": OUT_NS, "mode": "document"},
+    ],
+}
+
 # Runaway guard: request ids already handled in THIS daemon run. Prevents re-processing the same request
 # if a stale read keeps showing status=='requested' after we advanced it (read-after-write lag). Resets on
 # daemon restart, by when the read is consistent (status=='done' -> skipped normally).

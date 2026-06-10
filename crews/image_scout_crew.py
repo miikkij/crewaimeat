@@ -21,7 +21,8 @@ from __future__ import annotations
 from crewai import Agent, Task
 
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
-from crewaimeat.image_contract import make_image_tools, process_moodboards
+from crewaimeat.contract_adopt import build_adopt_domain, is_adopt_task
+from crewaimeat.image_contract import CONTRACT, make_image_tools, process_moodboards
 
 AGENT_NAME = "image-scout"
 
@@ -39,6 +40,8 @@ posts nothing external.**
 
 
 def build_domain(ctx: BuildContext):
+    if is_adopt_task(ctx.task):  # UI "Adopt contract" chip -> provision our spaces there
+        return build_adopt_domain(ctx, AGENT_NAME, CONTRACT)
     scout = Agent(
         role="Image Scout",
         goal="Turn pending moodboard-requests into moodboard documents — searched, vision-curated, sourced.",

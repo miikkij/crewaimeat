@@ -43,6 +43,23 @@ AGENT = "image-scout"
 IN_SPACE, IN_NS = "moodboard-request", "shared.moodboard_requests"
 OUT_SPACE, OUT_NS = "moodboard", "shared.moodboards"  # a DOCUMENT space
 
+# Machine-readable contract declaration (§2) — what adopt-contract provisions into a workspace.
+CONTRACT = {
+    "id": "moodboard",
+    "spaces": [
+        {"space": IN_SPACE, "namespace": IN_NS, "mode": "records",
+         "schema": {"type": "object", "required": ["id", "brief", "status"],
+                    "properties": {"id": {"type": "string"}, "brief": {"type": "string"},
+                                   "n_images": {"type": "integer"},
+                                   "mode": {"type": "string", "enum": ["moodboard", "upload-only"]},
+                                   "requested_by": {"type": "string"}, "result_ref": {"type": "string"},
+                                   "error": {"type": "string"},
+                                   "status": {"type": "string",
+                                              "enum": ["requested", "in-progress", "done", "failed"]}}}},
+        {"space": OUT_SPACE, "namespace": OUT_NS, "mode": "document"},
+    ],
+}
+
 _DEFAULT_VISION_MODEL = "qwen/qwen3-vl-30b-a3b-instruct"  # same default as browser_tool
 _MAX_IMAGE_BYTES = 8 * 1024 * 1024   # sane moodboard cap (binary PUTs go straight to the node)
 _MIN_IMAGE_BYTES = 5 * 1024          # skip icons/trackers
