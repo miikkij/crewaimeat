@@ -517,10 +517,10 @@ def member_workspaces(agent_name: str) -> "list[tuple[str, str]]":
     """(organism_id, ws_id) pairs a contract agent should serve: every organism from
     organism_list PLUS the ids in AIMEAT_CONTRACT_ORGS (comma-separated env).
 
-    The env extension matters: organism_list omits same-owner/implicit memberships
-    (organism_join answers ALREADY_MEMBER yet the organism is absent from the list — node
-    inconsistency, reported), so a contract agent's autonomous discovery would silently skip
-    its own home organisms without it."""
+    Since aimeat 1.23.2 organism_list includes same-owner/implicit memberships natively
+    (the connector merges ?member={owner}; verified: image-scout discovers crewaimeat without
+    the env). The env extension remains as belt-and-suspenders — it dedups against the list,
+    and covers serving an organism the agent is not yet listed in."""
     data = _aimeat_call(agent_name, "aimeat_organism_list", {}) or {}
     orgs = data.get("organisms") or (data if isinstance(data, list) else [])
     org_ids = [o.get("id") for o in orgs if isinstance(o, dict) and o.get("id")]
