@@ -89,12 +89,32 @@ def _ytj_lookup(company: str, business_id: str = "") -> dict | None:
         return None
 
 
+def _xbrl_financials(business_id: str) -> str:
+    """PRH's official digital financial statements API (iXBRL filings).
+
+    GET /opendata-xbrl-api/v3/financials?businessId= — profit/loss + balance sheet of DIGITALLY
+    filed statements. Coverage is still thin (voluntary iXBRL filing), so this is the first,
+    authoritative source when present and silently absent otherwise; finder-style pages remain
+    the fallback. Returns a compact JSON string for the analyst, or ''."""
+    import json as _json
+    try:
+        r = requests.get("https://avoindata.prh.fi/opendata-xbrl-api/v3/financials",
+                         params={"businessId": business_id}, timeout=20)
+        d = r.json() or {}
+        if d.get("totalResults"):
+            return _json.dumps(d.get("financials") or [], ensure_ascii=False)[:4000]
+    except Exception as exc:  # noqa: BLE001
+        print(f"[{AGENT}] XBRL lookup failed for {business_id}: {exc!r}", file=sys.stderr)
+    return ""
+
+
 def _financial_sources(company: str) -> list[str]:
     """finder/asiakastieto-style pages for the company via SearXNG + trafilatura (up to 5)."""
     from crewaimeat.fetch_pipeline import _searxng_urls
     docs: list[str] = []
     seen: set[str] = set()
-    for q in (f"{company} liikevaihto finder", f"{company} taloustiedot asiakastieto",
+    for q in (f"site:finder.fi {company}", f"{company} liikevaihto finder",
+              f"{company} taloustiedot asiakastieto",
               f"{company} liikevaihto tulos henkilöstö"):
         for u in _searxng_urls(q, "fi", "", n=4):
             if u in seen or len(docs) >= 5:
@@ -121,6 +141,10 @@ def run_company_research(company: str, business_id: str = "") -> tuple[str | Non
     if ytj:
         facts = ("REKISTERIFAKTAT (PRH/YTJ avoin data — nämä ovat varmoja):\n"
                  + "\n".join(f"- {k}: {v}" for k, v in ytj.items() if v) + "\n\n")
+        xbrl = _xbrl_financials(ytj.get("business_id") or business_id or "")
+        if xbrl:
+            facts += ("VIRALLISET DIGITAALISET TILINPÄÄTÖSTIEDOT (PRH XBRL — ensisijainen lähde "
+                      "talousluvuille):\n" + xbrl + "\n\n")
     prompt = (
         f"Olet yritystutkija. Kohde: {company}.\n\n" + facts +
         ("LÄHTEET (talousluvut VAIN näistä):\n\n" + "\n\n".join(docs) + "\n\n" if docs else
