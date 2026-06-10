@@ -239,6 +239,120 @@ def _radar_section(radar: list[dict]) -> str:
             + (f"\n\n{drafts} vastausluonnosta odottaa katselmointiasi." if drafts else "") + "\n")
 
 
+# --------------------------------------------------------------------------- #
+# The Grok loop: the prompt ships in the morning mail; the owner runs it in Grok, REPLIES to the
+# same mail with the output; _check_inbox() recognizes the reply by the [AIMEAT#...] subject token,
+# parses the strict line format and feeds the finds into the Social Radar as opportunity records.
+# --------------------------------------------------------------------------- #
+GROK_PROMPT = """Etsi X:stä ja Redditistä VIIMEISEN 24 TUNNIN ajalta keskusteluketjut, joissa kannattaisi
+osallistua keskusteluun aiheista: AI-agentit, agenttien orkestrointi (CrewAI/LangGraph tms.),
+multi-agent-järjestelmät, agenttien muisti/koordinaatio/auditointi, "AI agent infrastructure".
+Kriteerit: aito kysymys tai keskustelu johon asiantunteva vastaus tuo arvoa (EI mainosketjuja,
+EI riitelyä, EI paikkoja joissa self-promo olisi spämmiä). Max 8 osumaa, paras ensin.
+
+TULOSTA TÄSMÄLLEEN tässä muodossa, yksi rivi per osuma, ei mitään muuta tekstiä:
+SCORE | PLATFORM | TITLE | URL | WHY
+jossa SCORE = 0-5 (kuinka hyvin vastaus olisi tervetullut), PLATFORM = x tai reddit,
+TITLE = ketjun otsikko lyhyesti, URL = suora linkki ketjuun, WHY = yksi lause miksi + millä kulmalla."""
+
+_SUBJECT_TOKEN = "[AIMEAT#morning-{date}]"
+_RADAR_LINE = re.compile(r"^\s*([0-5])\s*\|\s*(\w+)\s*\|\s*([^|]+?)\s*\|\s*(https?://\S+?)\s*\|\s*(.+?)\s*$")
+
+
+def _grok_section(date: str) -> str:
+    return ("## Grok-ajo (kopioi, aja, vastaa tähän mailiin)\n\n"
+            "Aja alla oleva prompti Grokissa ja **vastaa tähän viestiin** liittäen Grokin tuloste "
+            "sellaisenaan (älä muuta otsikkoa — tunniste kertoo postmanille mistä on kyse). "
+            "Luen vastauksen ja vien osumat Social Radarille → some-analyst luonnostelee vastaukset.\n\n"
+            "```\n" + GROK_PROMPT + "\n```\n")
+
+
+def _ingest_radar_lines(text: str, found_date: str) -> dict:
+    """Parse strict 'SCORE | PLATFORM | TITLE | URL | WHY' lines -> Social Radar opportunity records."""
+    import hashlib
+    d = _call("aimeat_workspace_read", {"organism_id": _HOME_ORG, "ws": _RADAR_WS}) or {}
+    existing = {o.get("id") for o in (d.get("objects", {}) or {}).get("opportunity", [])}
+    added = skipped = bad = 0
+    for line in text.splitlines():
+        m = _RADAR_LINE.match(line.strip().strip("`"))
+        if not m:
+            if "|" in line and "http" in line:
+                bad += 1  # looked like a result line but didn't parse — count loudly
+            continue
+        score, platform, title, url, why = m.groups()
+        oid = f"opp-grok-{hashlib.sha256(url.encode()).hexdigest()[:10]}"
+        if oid in existing:
+            skipped += 1
+            continue
+        rec = {"id": oid, "source": f"grok-{platform.lower()}", "url": url, "title": title[:120],
+               "summary": why[:300], "fit_score": int(score), "spam_risk": "borderline",
+               "angle": f"Grok-scouted ({platform}): {why[:200]}", "status": "new",
+               "found_date": found_date}
+        wrote = _call("aimeat_workspace_write", {"organism_id": _HOME_ORG, "ws": _RADAR_WS,
+                                                 "space": "opportunity", "id": oid, "value": rec})
+        pub = _call("aimeat_workspace_publish", {"organism_id": _HOME_ORG, "ws": _RADAR_WS,
+                                                 "namespace": "shared.opportunities", "id": oid}) if wrote else None
+        added += 1 if (wrote and pub) else 0
+        existing.add(oid)
+    return {"added": added, "skipped": skipped, "unparsed": bad}
+
+
+def _reply_text(msg) -> str:
+    """The reply's own text: the plain-text part with quoted lines (>) and reply headers stripped."""
+    body = ""
+    if msg.is_multipart():
+        for part in msg.walk():
+            if part.get_content_type() == "text/plain":
+                body = part.get_payload(decode=True).decode(part.get_content_charset() or "utf-8", "replace")
+                break
+    else:
+        body = msg.get_payload(decode=True).decode(msg.get_content_charset() or "utf-8", "replace")
+    keep = [ln for ln in body.splitlines()
+            if not ln.lstrip().startswith(">") and not re.match(r"^(On .+ wrote:|Lähettäjä:|From: )", ln.strip())]
+    return "\n".join(keep)
+
+
+def check_inbox() -> dict:
+    """Read UNSEEN replies to morning mails (IMAP, same account) and feed Grok results to the radar.
+
+    Security: only mails FROM an AIMEAT_MAIL_TO allowlisted address with the [AIMEAT# subject token
+    are processed (and marked seen); everything else is left untouched (peek, no flag changes)."""
+    import email as email_mod
+    import imaplib
+    host = os.getenv("AIMEAT_IMAP_HOST") or os.getenv("AIMEAT_SMTP_HOST")
+    port = int(os.getenv("AIMEAT_IMAP_PORT") or 993)
+    user, pwd = os.getenv("AIMEAT_SMTP_USER"), os.getenv("AIMEAT_SMTP_PASS")
+    allow = [a.strip().lower() for a in (os.getenv("AIMEAT_MAIL_TO") or "").split(",") if a.strip()]
+    if not (host and user and pwd and allow):
+        return {"processed": 0}
+    out = {"processed": 0, "added": 0, "skipped": 0, "unparsed": 0}
+    try:
+        with imaplib.IMAP4_SSL(host, port) as imap:
+            imap.login(user, pwd)
+            imap.select("INBOX")
+            _typ, data = imap.search(None, "UNSEEN")
+            for num in (data[0].split() if data and data[0] else []):
+                _t, raw = imap.fetch(num, "(BODY.PEEK[])")  # peek: no flags until we decide
+                msg = email_mod.message_from_bytes(raw[0][1])
+                subject = str(email_mod.header.make_header(email_mod.header.decode_header(msg.get("Subject") or "")))
+                sender = email_mod.utils.parseaddr(msg.get("From") or "")[1].lower()
+                if "[AIMEAT#" not in subject or sender not in allow:
+                    continue  # not ours / not the owner — leave untouched
+                res = _ingest_radar_lines(_reply_text(msg), datetime.date.today().isoformat())
+                imap.store(num, "+FLAGS", "\\Seen")
+                out["processed"] += 1
+                for k in ("added", "skipped", "unparsed"):
+                    out[k] += res[k]
+                print(f"[{AGENT}] inbox: ingested reply '{subject[:60]}' -> {res}", file=sys.stderr)
+                ack = (f"# Radar päivitetty\n\n- uusia osumia: **{res['added']}**\n"
+                       f"- jo radarilla: {res['skipped']}\n- parsimatta jääneitä rivejä: {res['unparsed']}\n\n"
+                       "some-analyst luonnostelee vastaukset uusiin osumiin seuraavalla ajollaan.")
+                send_mail(f"Re: {subject}", ack, to=sender)
+    except Exception as exc:  # noqa: BLE001 — never let inbox polling kill the idle pass
+        print(f"[{AGENT}] inbox check failed: {exc!r}", file=sys.stderr)
+    return out
+
+
 # Competitor / domain watch — what commercial players in our space sell, advertise and discuss.
 # Override with AIMEAT_COMPETITOR_QUERIES (comma-separated search queries) in .env.
 _COMPETITOR_QUERIES = [
@@ -365,17 +479,19 @@ def build_morning_report() -> dict:
             + _activity_section(now) + "\n"
             + _insights_section(events, radar) + "\n"
             + _radar_section(radar) + "\n"
+            + _grok_section(now.date().isoformat()) + "\n"
             + _competitor_section()
             + "\n*— postman · crewaimeat · kuva: SearXNG + qwen-vl*")
+    subject = f"Aamuraportti · {now.date().isoformat()} {_SUBJECT_TOKEN.format(date=now.date().isoformat())}"
     img = _day_image()
     img_note = ""
     if img:  # attach inline via the record? Records carry no bytes — send directly with the image.
-        err = send_mail(f"Aamuraportti · {now.date().isoformat()}", body, image=img[0], image_mime=img[1])
+        err = send_mail(subject, body, image=img[0], image_mime=img[1])
     else:
-        err = send_mail(f"Aamuraportti · {now.date().isoformat()}", body)
+        err = send_mail(subject, body)
         img_note = " (no day image found)"
     # The record IS the audit trail + the once-per-day dedup — written done/failed after the send.
-    rec = {"id": rid, "subject": f"Aamuraportti · {now.date().isoformat()}",
+    rec = {"id": rid, "subject": subject,
            "body_md": body[:6000], "requested_by": "postman/morning",
            "status": "failed" if err else "done", **({"error": err[:300]} if err else {})}
     _advance(_HOME_ORG, _HOME_WS, rec)
@@ -384,12 +500,16 @@ def build_morning_report() -> dict:
 
 
 def idle_pass() -> dict:
-    """One idle-hook pass: the 07:00 window check (clock + record-existence dedup, no LLM) plus
-    the pending mail-request sweep. Vision/distill run only when a morning report is actually due."""
+    """One idle-hook pass: the 07:00 window check (clock + record-existence dedup, no LLM), the
+    inbox sweep (Grok replies -> radar), and the pending mail-request sweep. Vision/distill run
+    only when a morning report is actually due."""
     res = {"sent": 0, "failed": 0}
     if morning_report_due():
         m = build_morning_report()
         res = {k: res[k] + m[k] for k in res}
+    inbox = check_inbox()
+    if inbox.get("processed"):
+        print(f"[{AGENT}] inbox pass: {inbox}")
     p = process_mail()
     return {k: res[k] + p[k] for k in res}
 
