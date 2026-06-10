@@ -68,8 +68,10 @@ def _build_queries(segment: str, area: str) -> list[str]:
     a = f" {area}" if area else ""
     return [
         f"{segment}{a}",
-        f"{segment}{a} hinnat pricing",
+        f"{segment}{a} hinnat hinnasto pricing",
         f"{segment}{a} yritykset palvelut",
+        f"{segment} yritys liikevaihto henkilöstö",   # financials (finder/asiakastieto often rank)
+        f"{segment}{a} toimisto yhteystiedot",        # offices + how to reach them = the sales motion
         f"{segment} news launch",
     ]
 
@@ -82,7 +84,7 @@ def _sweep(queries: list[str], lang: str) -> list[str]:
     for q in queries:
         for time_range in ("", "month"):
             for u in _searxng_urls(q, lang, time_range, n=4):
-                if u in seen or len(docs) >= 8:
+                if u in seen or len(docs) >= 12:
                     continue
                 seen.add(u)
                 try:
@@ -90,8 +92,8 @@ def _sweep(queries: list[str], lang: str) -> list[str]:
                 except Exception:  # noqa: BLE001
                     txt = ""
                 if txt and len(txt) > 400:
-                    docs.append(f"[{u}]\n{txt[:2800]}")
-            if len(docs) >= 8:
+                    docs.append(f"[{u}]\n{txt[:2600]}")
+            if len(docs) >= 12:
                 break
     return docs
 
@@ -110,12 +112,22 @@ def run_market_scan(segment: str, area: str = "", our_offer: str = "",
         + (f" Alue: {area}." if area else "") + offer_block +
         "\n\nLÄHTEET:\n\n" + "\n\n".join(docs) +
         f"\n\nKirjoita {out_lang} markdown-analyysi TÄSMÄLLEEN näillä osioilla:\n"
-        "## Ketkä täällä pelaavat\n(per toimija: kuka, mitä myy, hinnoittelu jos näkyvissä; lähde-URL suluissa)\n\n"
+        "## Ketkä täällä pelaavat\n(per toimija: kuka, mitä myy, MITEN MYY — inbound-yhteydenotto / "
+        "self-serve / myyntitapaamiset / kumppanit, TOIMIPISTEET/sijainti, ja TALOUSLUVUT jos lähteissä "
+        "näkyy: liikevaihto, henkilöstö, rahoitus; lähde-URL suluissa)\n\n"
+        "## Tuotteet ja hintahaitarit\n(kategorisoi mitä tällä kentällä myydään — tuoteluokat markdown-"
+        "taulukkona: | luokka | mitä se on | hintahaitari | kuka myy |. Vain lähteistä ilmenevät hinnat; "
+        "merkitse 'ei julkista hintaa' jos ei näy)\n\n"
         "## Mitä ne mainostavat ja missä\n(viestit, kanavat, some-näkyvyys — vain lähteistä ilmenevä)\n\n"
-        "## Miten me myydään tätä vasten\n(3-5 konkreettista myyntikulmaa: mihin aukkoon iskemme, "
-        "mitä sanomme eri tavalla" + (", suhteessa meidän tarjoomaan" if our_offer else "") + ")\n\n"
+        "## Miten me myydään tätä vasten\n(konkreettinen suositus: mihin aukkoon iskemme, MILLÄ HINNOILLA "
+        "kannattaa myydä suhteessa kentän haitareihin, MITÄ tuotteistettua kannattaa kaupata ensin ja "
+        "kenelle, ja millä myyntitavalla" + (" — peilaa meidän tarjoomaan ja sen hinnoitteluun" if our_offer else "") + ")\n\n"
+        "## Puuttuvat kyvykkyydet\n(lista: jos lähteistä ilmenee ostajien odotuksia tai kilpailijoiden "
+        "ominaisuuksia joita meidän tarjoomamme ei kata — | kyvykkyys | mitä se enabloisi bisneksessä | "
+        "karkea toteutusarvio: päiviä / viikkoja / kuukausia |. Arvio on sinun harkintaasi — merkitse se arvioksi)\n\n"
         "## Signaalit ja seuraavat askeleet\n(2-4 bullettia: tärkeimmät signaalit + mitä kannattaa tehdä seuraavaksi)\n\n"
-        "Käytä VAIN lähteiden faktoja; jokainen toimijaväite saa lähde-URLin. Älä keksi toimijoita tai hintoja."
+        "Käytä VAIN lähteiden faktoja toimijoista ja hinnoista; jokainen toimijaväite saa lähde-URLin. "
+        "Älä keksi toimijoita, hintoja tai talouslukuja — sano suoraan jos tieto ei ilmene lähteistä."
     )
     llm = get_llm(for_tool_use=False, temperature=0.3, agent_name="research-contract")
     md = (llm.call([{"role": "user", "content": prompt}]) or "").strip()
