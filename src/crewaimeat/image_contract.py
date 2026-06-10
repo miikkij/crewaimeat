@@ -15,10 +15,11 @@ Pipeline (plain code, per the canon — the LLM only looks at pictures):
   + relevance) -> keep the top n by relevance -> upload to agent storage (visibility=public, so the
   document renders for every viewer via GET /v1/pub/<gaii>/<key>) -> write the moodboard document.
 
-All use is INTERNAL (reference/moodboard); the agent never posts anywhere external. Uploads go
-through the loopback serve proxy's /v1/* surface (POST /v1/storage with {key, data, mime_type,
-visibility}) because the aimeat_storage_upload shell-tool mapping is broken (sends `content`,
-drops `visibility` — reported), with a direct-REST fallback when no daemon is available.
+All use is INTERNAL (reference/moodboard); the agent never posts anywhere external. Uploads use
+the PRESIGNED flow (POST /v1/storage mode='presigned' -> PUT raw bytes to the upload_url): the
+binary never travels base64 through MCP or the tunnel — that is what the API is for. (The
+aimeat_storage_upload shell-tool mapping is broken anyway: sends `content` where the route wants
+`data`, drops `visibility`, no presigned mode — reported to the AIMEAT dev.)
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ IN_SPACE, IN_NS = "moodboard-request", "shared.moodboard_requests"
 OUT_SPACE, OUT_NS = "moodboard", "shared.moodboards"  # a DOCUMENT space
 
 _DEFAULT_VISION_MODEL = "qwen/qwen3-vl-30b-a3b-instruct"  # same default as browser_tool
-_MAX_IMAGE_BYTES = 4 * 1024 * 1024   # tunnel WS frames are capped; base64 inflates ~1.37x
+_MAX_IMAGE_BYTES = 8 * 1024 * 1024   # sane moodboard cap (binary PUTs go straight to the node)
 _MIN_IMAGE_BYTES = 5 * 1024          # skip icons/trackers
 _IMAGE_MIMES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}
 
@@ -156,22 +157,32 @@ def _vision_meta(image: bytes, mime: str, brief: str) -> dict | None:
 
 
 def _upload_public(key: str, image: bytes, mime: str) -> bool:
-    """Upload to this agent's storage with visibility=public via the loopback /v1/* proxy
-    (direct REST with the agent token as the no-daemon fallback)."""
-    body = {"key": key, "data": base64.b64encode(image).decode(), "mime_type": mime, "visibility": "public"}
+    """Upload to this agent's storage with visibility=public, the PRESIGNED way (binary stays
+    binary — never base64 through MCP/the tunnel):
+
+      1. POST /v1/storage {key, mime_type, visibility, mode:'presigned'} — small JSON, fine over
+         the loopback proxy (direct REST with the agent token as the no-daemon fallback).
+      2. PUT the raw bytes to the returned upload_url — the token IS the capability, the body
+         goes straight to the node as binary."""
+    presign = {"key": key, "mime_type": mime, "visibility": "public", "mode": "presigned"}
     try:
         api = _serve_api()
         if api is not None:
             base, session = api
-            r = session.post(f"{base}/v1/storage", json=body,
-                             headers={"X-Aimeat-Agent": AGENT}, timeout=120)
+            r = session.post(f"{base}/v1/storage", json=presign,
+                             headers={"X-Aimeat-Agent": AGENT}, timeout=60)
         else:
             tok, url = _token(AGENT, _discover_owner(AGENT))
             if not tok or not url:
                 return False
-            r = requests.post(f"{url.rstrip('/')}/v1/storage", json=body,
-                              headers={"Authorization": f"Bearer {tok}"}, timeout=120)
-        return r.status_code in (200, 201)
+            r = requests.post(f"{url.rstrip('/')}/v1/storage", json=presign,
+                              headers={"Authorization": f"Bearer {tok}"}, timeout=60)
+        upload_url = ((r.json() or {}).get("data") or {}).get("upload_url") if r.status_code == 200 else None
+        if not upload_url:
+            print(f"[{AGENT}] presign {key} failed: HTTP {r.status_code} {r.text[:160]}", file=sys.stderr)
+            return False
+        put = requests.put(upload_url, data=image, headers={"Content-Type": mime}, timeout=180)
+        return put.status_code in (200, 201)
     except Exception as exc:  # noqa: BLE001
         print(f"[{AGENT}] upload {key} failed: {exc!r}", file=sys.stderr)
         return False
