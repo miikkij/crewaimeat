@@ -42,6 +42,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -57,7 +58,13 @@ for _s in (sys.stdout, sys.stderr):
 import requests  # noqa: E402 — ships with aimeat-crewai
 
 from crewai import Agent, Crew, Process, Task  # noqa: E402
-from aimeat_crewai import create_liaison_agent, run_crew_daemon, stdio_params  # noqa: E402
+from aimeat_crewai import (  # noqa: E402
+    create_liaison_agent,
+    ensure_serve,
+    run_crew_daemon,
+    serve_params,
+    stdio_params,
+)
 from aimeat_crewai.daemon import DAEMON_DEFAULT_TOOL_FILTER  # noqa: E402
 
 try:  # private helper; degrade gracefully if a future version moves it
@@ -411,8 +418,79 @@ def _wait_for_auth(agent_name: str, owner: str | None, max_wait_seconds: int | N
         waited += interval
 
 
+# Shared loopback serve daemon (aimeat connect serve --http): discovered once per process,
+# then every deterministic call is ONE keep-alive POST on this Session — the daemon multiplexes
+# everything over one persistent WebSocket per agent to the node. No subprocess, no per-call TLS.
+_SERVE_STATE: dict[str, Any] = {"base": None, "session": None, "warned": False}
+_SERVE_LOCK = threading.Lock()
+
+
+def _serve_api() -> "tuple[str, requests.Session] | None":
+    """(base_url, shared Session) for the loopback serve daemon, auto-starting it if needed.
+
+    Returns None when no daemon is available and one can't be started (e.g. CI without the
+    connector) — callers then fall back to the legacy one-shot subprocess, LOUDLY."""
+    with _SERVE_LOCK:
+        if _SERVE_STATE["base"] is not None:
+            return _SERVE_STATE["base"], _SERVE_STATE["session"]
+        try:
+            doc = ensure_serve()
+            _SERVE_STATE["base"] = f"http://127.0.0.1:{doc['port']}"
+            _SERVE_STATE["session"] = requests.Session()
+            return _SERVE_STATE["base"], _SERVE_STATE["session"]
+        except Exception as exc:  # noqa: BLE001
+            if not _SERVE_STATE["warned"]:
+                print(
+                    f"[aimeat] loopback serve daemon unavailable ({exc}) -> falling back to "
+                    "`aimeat connect call` subprocess per call (slow; per-call TLS churn)",
+                    file=sys.stderr,
+                )
+                _SERVE_STATE["warned"] = True
+            return None
+
+
+def _serve_reset() -> None:
+    """Forget the cached daemon so the next call re-discovers (and auto-restarts) it."""
+    with _SERVE_LOCK:
+        _SERVE_STATE["base"] = _SERVE_STATE["session"] = None
+
+
 def _aimeat_call(agent_name: str, tool: str, payload: dict) -> dict | None:
-    """Deterministic AIMEAT call via the connector CLI (no LLM). Windows: cmd /c."""
+    """Deterministic AIMEAT tool call (no LLM).
+
+    Primary path: POST /local/call/<tool> on the shared loopback serve daemon (same tool name +
+    JSON input as `connect call`; returns the envelope's data). Fallback when no daemon exists:
+    the legacy one-shot `aimeat connect call` subprocess."""
+    api = _serve_api()
+    if api is None:
+        return _aimeat_call_subprocess(agent_name, tool, payload)
+    base, session = api
+    try:
+        r = session.post(
+            f"{base}/local/call/{tool}",
+            json=payload, headers={"X-Aimeat-Agent": agent_name}, timeout=90,
+        )
+    except requests.RequestException as exc:
+        _serve_reset()  # daemon gone mid-flight -> next call re-discovers / auto-restarts it
+        print(f"[{agent_name}] {tool} loopback POST failed ({exc}); serve will be re-discovered",
+              file=sys.stderr)
+        return None
+    try:
+        body = r.json()
+    except ValueError:
+        print(f"[{agent_name}] {tool} returned non-JSON (HTTP {r.status_code}): {r.text[:120]}",
+              file=sys.stderr)
+        return None
+    if not isinstance(body, dict) or not body.get("ok"):
+        err = (body or {}).get("error") if isinstance(body, dict) else None
+        print(f"[{agent_name}] {tool} failed: {err or f'HTTP {r.status_code}'}", file=sys.stderr)
+        return None
+    return body.get("data")
+
+
+def _aimeat_call_subprocess(agent_name: str, tool: str, payload: dict) -> dict | None:
+    """Legacy one-shot `aimeat connect call` subprocess (Windows: cmd /c). Kept as the fallback
+    for environments without the loopback daemon."""
     if shutil.which("aimeat") is None:
         return None
     base = ["aimeat", "connect", "call", tool, "--agent", agent_name, "--stdin"]
@@ -465,8 +543,14 @@ def _run_onboarding_only(agent_name: str, services: list[dict] | None = None) ->
         )
     else:
         services_step = ""
+    try:
+        # Loopback serve daemon: the liaison's MCP calls ride the shared persistent WS tunnel.
+        liaison_params = serve_params(agent_name=agent_name)
+    except Exception as exc:  # noqa: BLE001 — no local daemon (e.g. CI) -> legacy stdio subprocess
+        print(f"[{agent_name}] serve daemon unavailable ({exc}) -> stdio fallback", file=sys.stderr)
+        liaison_params = stdio_params(agent_name=agent_name)
     with create_liaison_agent(
-        mcp_server_params=stdio_params(agent_name=agent_name),
+        mcp_server_params=liaison_params,
         agent_name=agent_name,
         llm=get_llm(),
         tool_filter=DAEMON_DEFAULT_TOOL_FILTER,  # ~24 tools, not 95 (smaller models cope)

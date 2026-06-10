@@ -31,6 +31,15 @@ Write-Host "[start_fleet] uv sync ..."
 uv sync
 if ($LASTEXITCODE -ne 0) { Write-Error "uv sync failed (exit $LASTEXITCODE)"; exit $LASTEXITCODE }
 
+# Start the SHARED loopback serve daemon once, before any crew. Every crew attaches to this one
+# daemon (serve.json discovery): all MCP + deterministic calls multiplex over one persistent
+# WebSocket per agent to the node — no per-call subprocess/TLS. ensure_serve is idempotent
+# (pid-guarded), so this simply adopts an already-running daemon. Crews can also auto-start it,
+# but doing it here once avoids a 30-crew thundering-herd on a cold boot.
+Write-Host "[start_fleet] ensuring the shared loopback serve daemon (aimeat connect serve --http) ..."
+uv run python -c 'from aimeat_crewai import ensure_serve; d = ensure_serve(); print("[start_fleet] serve daemon: port", d["port"], "pid", d["pid"], "agents", len(d.get("agents") or []))'
+if ($LASTEXITCODE -ne 0) { Write-Error "serve daemon failed to start (exit $LASTEXITCODE)"; exit $LASTEXITCODE }
+
 Write-Host "[start_fleet] starting crew-forge under the watchdog (it reconciles the fleet on startup) ..."
 Write-Host "[start_fleet] crew-forge stays in THIS window; the other crews launch detached. Ctrl+C stops only crew-forge."
 & "$root\scripts\watchdog.ps1" 'crews\crew_forge_crew.py'

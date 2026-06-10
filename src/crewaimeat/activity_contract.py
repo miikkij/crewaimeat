@@ -62,16 +62,29 @@ def _member_workspaces(org_id: str | None = None) -> list[tuple[str, str]]:
 
 
 def _activity_events(org_id: str, ws: str) -> list[dict]:
-    """Fetch the workspace activity feed (who/what/when) via REST with the agent's own token."""
-    owner = _discover_owner(AGENT)
-    tok, url = _token(AGENT, owner)
-    if not tok or not url:
-        return []
+    """Fetch the workspace activity feed (who/what/when).
+
+    Primary path: the loopback serve daemon's /v1/* REST proxy (keep-alive Session; the daemon
+    holds the token and rides its persistent WS tunnel). Fallback: direct REST with the agent's
+    own token, for environments without the daemon."""
     try:
-        r = requests.get(
-            f"{url.rstrip('/')}/v1/organisms/{org_id}/workspace/activity",
-            params={"ws": ws}, headers={"Authorization": f"Bearer {tok}"}, timeout=30,
-        )
+        from crewaimeat.aimeat_crew import _serve_api
+        api = _serve_api()
+        if api is not None:
+            base, session = api
+            r = session.get(
+                f"{base}/v1/organisms/{org_id}/workspace/activity",
+                params={"ws": ws}, headers={"X-Aimeat-Agent": AGENT}, timeout=30,
+            )
+        else:
+            owner = _discover_owner(AGENT)
+            tok, url = _token(AGENT, owner)
+            if not tok or not url:
+                return []
+            r = requests.get(
+                f"{url.rstrip('/')}/v1/organisms/{org_id}/workspace/activity",
+                params={"ws": ws}, headers={"Authorization": f"Bearer {tok}"}, timeout=30,
+            )
         evs = ((r.json() or {}).get("data") or {}).get("events") or []
         for e in evs:
             e["ws"] = ws
