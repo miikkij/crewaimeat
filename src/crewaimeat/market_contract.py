@@ -7,11 +7,16 @@ price, how WE could sell against them (positioned against `our_offer`), and wher
 (social/channels).
 
 Contract:
-  inputs : `market-scan-request` (records) — trigger: status == 'requested'
+  inputs : `market-scan-request` (records) — DUE when status == 'requested' (one-shot) OR
+           status == 'active' and now - last_run >= period_hours (recurring, e.g. weekly)
              { id, segment(required), area?, our_offer?, queries?(list overrides the generated
-               ones), lang?('fi'|'en', default fi), status, requested_by?, result_ref?, error? }
-  outputs: `market-scan` (DOCUMENT) — the analysis as a page (id = scan-<request id>)
-  lifecycle: requested -> in-progress -> done (+result_ref) | failed (+error)
+               ones), lang?('fi'|'en', default fi), period_hours?, email?(true -> the finished
+               scan is also written as a mail-request record, which postman then sends),
+               status, requested_by?, last_run?, result_ref?, error? }
+  outputs: `market-scan` (DOCUMENT) — the analysis as a page (one-shot: scan-<id>;
+           recurring: scan-<id>-<date>, which doubles as the once-per-period output-dedup)
+  lifecycle: requested -> in-progress -> done | failed; an 'active' record stays active with
+             last_run bumped (fires again next period)
 
 Deterministic pipeline: build queries from the parameters -> SearXNG (general + news) ->
 trafilatura-fetch the top pages -> ONE analyst distill (coding profile) with a parameterized
@@ -43,10 +48,12 @@ CONTRACT = {
                     "properties": {"id": {"type": "string"}, "segment": {"type": "string"},
                                    "area": {"type": "string"}, "our_offer": {"type": "string"},
                                    "queries": {"type": "array"}, "lang": {"type": "string"},
+                                   "period_hours": {"type": "integer"}, "email": {"type": "boolean"},
+                                   "last_run": {"type": "string"},
                                    "requested_by": {"type": "string"}, "result_ref": {"type": "string"},
                                    "error": {"type": "string"},
                                    "status": {"type": "string",
-                                              "enum": ["requested", "in-progress", "done", "failed"]}}}},
+                                              "enum": ["requested", "active", "in-progress", "done", "failed"]}}}},
         {"space": OUT_SPACE, "namespace": OUT_NS, "mode": "document"},
     ],
 }
@@ -121,9 +128,21 @@ def _advance(oid: str, wid: str, req: dict, **changes) -> None:
         _call("aimeat_workspace_publish", {"organism_id": oid, "ws": wid, "namespace": IN_NS, "id": rec["id"]})
 
 
+def _mail_out(oid: str, wid: str, out_id: str, title: str, md: str) -> None:
+    """Write the finished scan as a mail-request record — postman's contract then sends it."""
+    mid = f"mail-{out_id}"
+    rec = {"id": mid, "subject": title, "body_md": md[:6000],
+           "requested_by": "market-scan", "status": "requested"}
+    if _call("aimeat_workspace_write", {"organism_id": oid, "ws": wid, "space": "mail-request",
+                                        "id": mid, "value": rec}):
+        _call("aimeat_workspace_publish", {"organism_id": oid, "ws": wid,
+                                           "namespace": "shared.mail_requests", "id": mid})
+
+
 def process_market_scans(max_items: int = 2, targets: list[tuple[str, str]] | None = None) -> dict:
-    """Fulfil pending `market-scan-request` records across the agent's member workspaces."""
+    """Fulfil DUE `market-scan-request` records (one-shot 'requested' + recurring 'active')."""
     pairs = targets if targets is not None else member_workspaces(AGENT)
+    now = datetime.datetime.now(datetime.timezone.utc)
     today = datetime.date.today().isoformat()
     processed = failed = 0
     for oid, wid in pairs:
@@ -135,14 +154,28 @@ def process_market_scans(max_items: int = 2, targets: list[tuple[str, str]] | No
         reqs = (data.get("objects", {}) or {}).get(IN_SPACE) or []
         done_out = {r.get("id") for r in ((data.get("objects", {}) or {}).get(OUT_SPACE) or [])}
         for req in reqs:
-            rid = req.get("id")
-            if req.get("status") != "requested" or not rid:
+            rid, status = req.get("id"), req.get("status")
+            if not rid:
                 continue
-            if rid in _PROCESSED:
+            recurring = status == "active"
+            due = status == "requested"
+            if recurring:
+                last = req.get("last_run")
+                period_h = int(req.get("period_hours") or 168)
+                if not last:
+                    due = True  # active but never run -> first edition now
+                else:
+                    try:
+                        due = (now - datetime.datetime.fromisoformat(last)).total_seconds() >= period_h * 3600
+                    except Exception:  # noqa: BLE001
+                        due = True
+            if not due or rid in _PROCESSED:
                 continue
-            if f"scan-{rid}" in done_out:  # output-dedup -> settle without re-running
+            out_id = f"scan-{rid}-{today}" if recurring else f"scan-{rid}"
+            if out_id in done_out:  # output-dedup -> settle / skip without re-running
                 _PROCESSED.add(rid)
-                _advance(oid, wid, req, status="done", result_ref=f"scan-{rid}")
+                if not recurring:
+                    _advance(oid, wid, req, status="done", result_ref=out_id)
                 continue
             if processed + failed >= max_items:
                 break
@@ -152,23 +185,28 @@ def process_market_scans(max_items: int = 2, targets: list[tuple[str, str]] | No
                                       req.get("our_offer", ""), req.get("queries"),
                                       req.get("lang") or "fi")
             if not md:
-                _advance(oid, wid, req, status="failed", error=err[:300])
+                _advance(oid, wid, req, status="failed" if not recurring else "active",
+                         error=err[:300], **({"last_run": now.isoformat()} if recurring else {}))
                 failed += 1
                 print(f"[{AGENT}] market-scan FAILED for {rid}: {err}", file=sys.stderr)
                 continue
-            out_id = f"scan-{rid}"
             title = f"Market scan · {req.get('segment','')[:50]}" + (f" · {req.get('area','')[:30]}" if req.get("area") else "")
             footer = f"\n\n*Scan: {req.get('segment','')} · {req.get('area','') or '-'} · {today} · sources via SearXNG*"
             wrote = _call("aimeat_workspace_write",
                           {"organism_id": oid, "ws": wid, "space": OUT_SPACE, "id": out_id,
-                           "value": {"title": title, "markdown": md + footer}})
+                           "value": {"title": title + (f" · {today}" if recurring else ""), "markdown": md + footer}})
             pub = _call("aimeat_workspace_publish",
                         {"organism_id": oid, "ws": wid, "namespace": OUT_NS, "id": out_id}) if wrote else None
             if wrote and pub:
-                _advance(oid, wid, req, status="done", result_ref=out_id)
+                if req.get("email"):
+                    _mail_out(oid, wid, out_id, title + f" · {today}", md + footer)
+                _advance(oid, wid, req,
+                         status="active" if recurring else "done",
+                         result_ref=out_id, **({"last_run": now.isoformat(), "error": ""} if recurring else {}))
                 processed += 1
             else:
-                _advance(oid, wid, req, status="failed", error="scan write failed")
+                _advance(oid, wid, req, status="failed" if not recurring else "active",
+                         error="scan write failed", **({"last_run": now.isoformat()} if recurring else {}))
                 failed += 1
     return {"processed": processed, "failed": failed}
 
