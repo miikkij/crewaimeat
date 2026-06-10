@@ -127,11 +127,43 @@ def run_market_scan(segment: str, area: str = "", our_offer: str = "",
         "karkea toteutusarvio: päiviä / viikkoja / kuukausia |. Arvio on sinun harkintaasi — merkitse se arvioksi)\n\n"
         "## Signaalit ja seuraavat askeleet\n(2-4 bullettia: tärkeimmät signaalit + mitä kannattaa tehdä seuraavaksi)\n\n"
         "Käytä VAIN lähteiden faktoja toimijoista ja hinnoista; jokainen toimijaväite saa lähde-URLin. "
-        "Älä keksi toimijoita, hintoja tai talouslukuja — sano suoraan jos tieto ei ilmene lähteistä."
+        "Älä keksi toimijoita, hintoja tai talouslukuja — sano suoraan jos tieto ei ilmene lähteistä.\n\n"
+        "AIVAN LOPUKSI listaa jokainen analyysissä mainittu YRITYS (ei tuote/alusta — vain yritykset) "
+        "omalla rivillään täsmälleen muodossa:\nCOMPANY: <yrityksen nimi>"
     )
     llm = get_llm(for_tool_use=False, temperature=0.3, agent_name="research-contract")
     md = (llm.call([{"role": "user", "content": prompt}]) or "").strip()
     return (md or None), ("" if md else "analyst returned empty output")
+
+
+_COMPANY_LINE = __import__("re").compile(r"^COMPANY:\s*(.+?)\s*$", __import__("re").MULTILINE)
+
+
+def _split_companies(md: str) -> tuple[str, list[str]]:
+    """Strip the machine-readable COMPANY: lines from the analysis -> (clean_md, company names)."""
+    companies = [m.strip() for m in _COMPANY_LINE.findall(md) if m.strip()]
+    clean = _COMPANY_LINE.sub("", md).rstrip()
+    return clean, list(dict.fromkeys(companies))  # dedup, keep order
+
+
+def _spawn_company_requests(oid: str, wid: str, companies: list[str], scan_rid: str) -> int:
+    """Queue a company-research-request for every NEW company a scan named (the chain)."""
+    from crewaimeat.company_contract import IN_NS as CO_NS, IN_SPACE as CO_SPACE, slugify
+    data = _call("aimeat_workspace_read", {"organism_id": oid, "ws": wid}) or {}
+    if not any(t.get("name") == CO_SPACE for t in ((data.get("manifest") or {}).get("objectTypes") or [])):
+        return 0  # this workspace hasn't adopted the company-research contract — skip quietly
+    existing = {r.get("id") for r in (data.get("objects", {}) or {}).get(CO_SPACE, [])}
+    spawned = 0
+    for name in companies[:10]:
+        rid = f"cr-{slugify(name)}"
+        if rid in existing:
+            continue
+        rec = {"id": rid, "company": name, "requested_by": f"market-scan/{scan_rid}", "status": "requested"}
+        if _call("aimeat_workspace_write", {"organism_id": oid, "ws": wid, "space": CO_SPACE, "id": rid, "value": rec}):
+            _call("aimeat_workspace_publish", {"organism_id": oid, "ws": wid, "namespace": CO_NS, "id": rid})
+            spawned += 1
+            existing.add(rid)
+    return spawned
 
 
 def _advance(oid: str, wid: str, req: dict, **changes) -> None:
@@ -202,6 +234,7 @@ def process_market_scans(max_items: int = 2, targets: list[tuple[str, str]] | No
                 failed += 1
                 print(f"[{AGENT}] market-scan FAILED for {rid}: {err}", file=sys.stderr)
                 continue
+            md, companies = _split_companies(md)
             title = f"Market scan · {req.get('segment','')[:50]}" + (f" · {req.get('area','')[:30]}" if req.get("area") else "")
             footer = f"\n\n*Scan: {req.get('segment','')} · {req.get('area','') or '-'} · {today} · sources via SearXNG*"
             wrote = _call("aimeat_workspace_write",
@@ -210,6 +243,10 @@ def process_market_scans(max_items: int = 2, targets: list[tuple[str, str]] | No
             pub = _call("aimeat_workspace_publish",
                         {"organism_id": oid, "ws": wid, "namespace": OUT_NS, "id": out_id}) if wrote else None
             if wrote and pub:
+                if companies:  # the chain: every named company -> a company-research-request
+                    n = _spawn_company_requests(oid, wid, companies, rid)
+                    if n:
+                        print(f"[{AGENT}] scan {rid} queued {n} company-research request(s)", file=sys.stderr)
                 if req.get("email"):
                     _mail_out(oid, wid, out_id, title + f" · {today}", md + footer)
                 _advance(oid, wid, req,

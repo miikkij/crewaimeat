@@ -131,6 +131,10 @@ def run() -> None:
         scans = process_market_scans(max_items=2)  # the agent's SECOND contract: market-scan
         if scans.get("processed") or scans.get("failed"):
             print(f"[{AGENT_NAME}] market-scan poll: {scans}")
+        from crewaimeat.company_contract import process_company_research
+        cos = process_company_research(max_items=3)  # THIRD contract: company-research (YTJ + web)
+        if cos.get("processed") or cos.get("failed"):
+            print(f"[{AGENT_NAME}] company-research poll: {cos}")
 
     run_crew(CrewSpec(
         agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README,
