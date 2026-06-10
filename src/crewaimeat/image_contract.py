@@ -36,7 +36,7 @@ import urllib.parse
 import requests
 from crewai.tools import tool
 
-from crewaimeat.aimeat_crew import _aimeat_call, _serve_api
+from crewaimeat.aimeat_crew import _aimeat_call, _serve_api, member_workspaces
 from crewaimeat.generator_tool import _discover_owner, _token
 
 AGENT = "image-scout"
@@ -60,17 +60,8 @@ def _call(tool_name: str, payload: dict):
 
 
 def _member_workspaces() -> list[tuple[str, str]]:
-    """(organism_id, ws_id) for every workspace this agent can list (is a member of)."""
-    data = _call("aimeat_organism_list", {}) or {}
-    orgs = data.get("organisms") or (data if isinstance(data, list) else [])
-    pairs: list[tuple[str, str]] = []
-    for o in orgs:
-        oid = o.get("id") if isinstance(o, dict) else None
-        if not oid:
-            continue
-        wl = _call("aimeat_workspace_list", {"organism_id": oid}) or {}
-        pairs.extend((oid, w["id"]) for w in (wl.get("workspaces") or []) if w.get("id"))
-    return pairs
+    """Workspaces this agent serves (organism_list + AIMEAT_CONTRACT_ORGS home organisms)."""
+    return member_workspaces(AGENT)
 
 
 def _own_gaii() -> str | None:

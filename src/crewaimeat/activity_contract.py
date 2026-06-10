@@ -27,7 +27,7 @@ import sys
 import requests
 from crewai.tools import tool
 
-from crewaimeat.aimeat_crew import _aimeat_call
+from crewaimeat.aimeat_crew import _aimeat_call, member_workspaces
 from crewaimeat.generator_tool import _discover_owner, _token
 from crewaimeat.llm import get_llm
 
@@ -46,19 +46,9 @@ def _call(tool_name: str, payload: dict):
 
 
 def _member_workspaces(org_id: str | None = None) -> list[tuple[str, str]]:
-    """(organism_id, ws_id) for every workspace this agent can list (is a member of). Optionally one org."""
-    data = _call("aimeat_organism_list", {}) or {}
-    orgs = data.get("organisms") or (data if isinstance(data, list) else [])
-    pairs: list[tuple[str, str]] = []
-    for o in orgs:
-        oid = o.get("id") if isinstance(o, dict) else None
-        if not oid or (org_id and oid != org_id):
-            continue
-        wl = _call("aimeat_workspace_list", {"organism_id": oid}) or {}
-        for w in (wl.get("workspaces") or []):
-            if w.get("id"):
-                pairs.append((oid, w["id"]))
-    return pairs
+    """Workspaces this agent serves (organism_list + AIMEAT_CONTRACT_ORGS home organisms)."""
+    pairs = member_workspaces(AGENT)
+    return [p for p in pairs if p[0] == org_id] if org_id else pairs
 
 
 def _activity_events(org_id: str, ws: str) -> list[dict]:

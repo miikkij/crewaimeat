@@ -20,7 +20,7 @@ import sys
 
 from crewai.tools import tool
 
-from crewaimeat.aimeat_crew import _aimeat_call
+from crewaimeat.aimeat_crew import _aimeat_call, member_workspaces
 from crewaimeat.article_extract import _MIN_CHARS, _trafilatura_text
 from crewaimeat.fetch_pipeline import _searxng_urls
 from crewaimeat.llm import get_llm
@@ -40,20 +40,8 @@ def _call(tool_name: str, payload: dict):
 
 
 def _member_workspaces() -> list[tuple[str, str]]:
-    """(organism_id, ws_id) for every workspace this agent can list (i.e. is a member of)."""
-    data = _call("aimeat_organism_list", {}) or {}
-    orgs = data.get("organisms") or (data if isinstance(data, list) else [])
-    pairs: list[tuple[str, str]] = []
-    for o in orgs:
-        oid = o.get("id") if isinstance(o, dict) else None
-        if not oid:
-            continue
-        wl = _call("aimeat_workspace_list", {"organism_id": oid}) or {}
-        for w in (wl.get("workspaces") or []):
-            wid = w.get("id")
-            if wid:
-                pairs.append((oid, wid))
-    return pairs
+    """Workspaces this agent serves (organism_list + AIMEAT_CONTRACT_ORGS home organisms)."""
+    return member_workspaces(AGENT)
 
 
 def do_research(brief: str, depth: int = 5, focus: str = "") -> tuple[str | None, list[str]]:

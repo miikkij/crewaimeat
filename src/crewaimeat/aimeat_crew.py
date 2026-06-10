@@ -513,6 +513,27 @@ def _aimeat_call_subprocess(agent_name: str, tool: str, payload: dict) -> dict |
         return None
 
 
+def member_workspaces(agent_name: str) -> "list[tuple[str, str]]":
+    """(organism_id, ws_id) pairs a contract agent should serve: every organism from
+    organism_list PLUS the ids in AIMEAT_CONTRACT_ORGS (comma-separated env).
+
+    The env extension matters: organism_list omits same-owner/implicit memberships
+    (organism_join answers ALREADY_MEMBER yet the organism is absent from the list — node
+    inconsistency, reported), so a contract agent's autonomous discovery would silently skip
+    its own home organisms without it."""
+    data = _aimeat_call(agent_name, "aimeat_organism_list", {}) or {}
+    orgs = data.get("organisms") or (data if isinstance(data, list) else [])
+    org_ids = [o.get("id") for o in orgs if isinstance(o, dict) and o.get("id")]
+    for extra in (os.getenv("AIMEAT_CONTRACT_ORGS") or "").split(","):
+        if extra.strip() and extra.strip() not in org_ids:
+            org_ids.append(extra.strip())
+    pairs: list[tuple[str, str]] = []
+    for oid in org_ids:
+        wl = _aimeat_call(agent_name, "aimeat_workspace_list", {"organism_id": oid}) or {}
+        pairs.extend((oid, w["id"]) for w in (wl.get("workspaces") or []) if w.get("id"))
+    return pairs
+
+
 def _onboarding_completed(agent_name: str) -> bool:
     data = _aimeat_call(agent_name, "aimeat_onboarding_status", {})
     return bool(data) and data.get("onboarding", {}).get("status") == "completed"
