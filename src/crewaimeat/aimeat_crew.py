@@ -426,23 +426,27 @@ _SERVE_LOCK = threading.Lock()
 
 
 def _serve_api() -> "tuple[str, requests.Session] | None":
-    """(base_url, shared Session) for the loopback serve daemon, auto-starting it if needed.
+    """(base_url, shared Session) for the loopback serve daemon. DISCOVERY ONLY — never spawns.
 
-    Returns None when no daemon is available and one can't be started (e.g. CI without the
-    connector) — callers then fall back to the legacy one-shot subprocess, LOUDLY."""
+    The daemon is started in exactly ONE place: start_fleet.ps1 (ensure_serve with auto-start),
+    BEFORE any crew. Everything else only attaches. This kills the spawn-storm class for good:
+    when the daemon died mid-run, dozens of callers used to race-spawn replacements in the gap
+    before the winner wrote serve.json -> several daemons survived -> WS-tunnel ping-pong spam.
+    Now a missing daemon means a LOUD subprocess fallback, never a spawn."""
     with _SERVE_LOCK:
         if _SERVE_STATE["base"] is not None:
             return _SERVE_STATE["base"], _SERVE_STATE["session"]
         try:
-            doc = ensure_serve()
+            doc = ensure_serve(auto_start=False)
             _SERVE_STATE["base"] = f"http://127.0.0.1:{doc['port']}"
             _SERVE_STATE["session"] = requests.Session()
             return _SERVE_STATE["base"], _SERVE_STATE["session"]
         except Exception as exc:  # noqa: BLE001
             if not _SERVE_STATE["warned"]:
                 print(
-                    f"[aimeat] loopback serve daemon unavailable ({exc}) -> falling back to "
-                    "`aimeat connect call` subprocess per call (slow; per-call TLS churn)",
+                    f"[aimeat] no live serve daemon ({exc}) -> `aimeat connect call` subprocess "
+                    "per call (slow). Start the daemon via scripts/start_fleet.ps1 — crews never "
+                    "spawn it themselves.",
                     file=sys.stderr,
                 )
                 _SERVE_STATE["warned"] = True
@@ -566,7 +570,8 @@ def _run_onboarding_only(agent_name: str, services: list[dict] | None = None) ->
         services_step = ""
     try:
         # Loopback serve daemon: the liaison's MCP calls ride the shared persistent WS tunnel.
-        liaison_params = serve_params(agent_name=agent_name)
+        # auto_start=False — crews NEVER spawn the daemon (only start_fleet does); see _serve_api.
+        liaison_params = serve_params(agent_name=agent_name, auto_start=False)
     except Exception as exc:  # noqa: BLE001 — no local daemon (e.g. CI) -> legacy stdio subprocess
         print(f"[{agent_name}] serve daemon unavailable ({exc}) -> stdio fallback", file=sys.stderr)
         liaison_params = stdio_params(agent_name=agent_name)
@@ -1448,4 +1453,5 @@ def run_crew(spec: CrewSpec) -> None:
         owner=spec.owner,
         on_idle=_on_idle,
         max_concurrent_tasks=spec.max_concurrent_tasks,  # None = read owner-set value from AIMEAT
+        serve_options={"auto_start": False},  # crews never spawn the daemon — only start_fleet does
     )
