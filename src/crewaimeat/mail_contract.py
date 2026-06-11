@@ -450,6 +450,36 @@ def _activity_section(now: datetime.datetime) -> str:
         return f"## Eilen organismissa\n\n- (aktiviteettikoosteen tuotanto epäonnistui: {exc!r})\n"
 
 
+def _extra_sections(now: datetime.datetime) -> str:
+    """Generic extension point: any same-owner agent can contribute a morning-report section by
+    writing memory key `mail.morning.sections.<name>` = {title, markdown, updated_at} (owner
+    visibility). Sections older than 48 h are skipped (stale contributors drop out silently but
+    logged). Keeps domain content out of this module — postman just assembles."""
+    from crewaimeat.workflow import _items_of
+    parts: list[str] = []
+    try:
+        items = _items_of(_call("aimeat_memory_list",
+                                {"owner_scope": True, "prefix": "mail.morning.sections."}))
+        for it in sorted(items, key=lambda x: x.get("key", "")):
+            val = it.get("value") or {}
+            md = (val.get("markdown") or "").strip()
+            if not md:
+                continue
+            try:
+                age_h = (now - datetime.datetime.fromisoformat(val["updated_at"])).total_seconds() / 3600
+            except (KeyError, ValueError):
+                age_h = None
+            if age_h is not None and age_h > 48:
+                print(f"[{AGENT}] morning section {it.get('key')} stale ({age_h:.0f} h) -> skipped",
+                      file=sys.stderr)
+                continue
+            title = (val.get("title") or it.get("key", "")).strip()
+            parts.append(f"## {title}\n\n{md}\n")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[{AGENT}] extra sections failed: {exc!r}", file=sys.stderr)
+    return "\n".join(parts)
+
+
 def morning_report_due(now: datetime.datetime | None = None) -> bool:
     """True inside the 07:00-07:30 Europe/Helsinki window when today's report record is absent."""
     now = now or datetime.datetime.now(_TZ)
@@ -475,9 +505,11 @@ def build_morning_report() -> dict:
     except Exception:  # noqa: BLE001
         events = []
     radar = _radar_items()
+    extra = _extra_sections(now)
     body = (f"# Huomenta! ☀️ {now.strftime('%A %d.%m.%Y')}\n\n"
             + _activity_section(now) + "\n"
             + _insights_section(events, radar) + "\n"
+            + (extra + "\n" if extra else "")
             + _radar_section(radar) + "\n"
             + _grok_section(now.date().isoformat()) + "\n"
             + _competitor_section()
