@@ -53,7 +53,39 @@ def build_domain(ctx: BuildContext):
 
 
 def run() -> None:
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README, temperature=0.2))
+    # Self-healing guard (output-existence, no LLM in the check): the 18:00 schedule fires
+    # node-side every day, but if THIS daemon is down/restarting right then the task can be
+    # lost and the evening edition silently never gets its editorial + front-page index
+    # (bit us 2026-06-11). From 18:15 local on: today's editorial key absent AND today's
+    # articles present -> run the deterministic stage directly. The key's existence is the
+    # dedup, so retries are free and a normally-completed schedule run makes this a no-op.
+    def _ensure_today() -> None:
+        import datetime
+        from zoneinfo import ZoneInfo
+
+        from crewaimeat.aimeat_crew import _aimeat_call
+        from crewaimeat.editorial_pipeline import build_editorial_and_index
+
+        now = datetime.datetime.now(ZoneInfo("Europe/Helsinki"))
+        if (now.hour, now.minute) < (18, 15):
+            return
+        date = now.date().isoformat()
+        if _aimeat_call(AGENT_NAME, "aimeat_memory_read", {"key": f"news.{date}.evening.editorial"}):
+            return
+        arts = _aimeat_call(AGENT_NAME, "aimeat_memory_list",
+                            {"owner_scope": True, "prefix": f"news.{date}.evening.article.",
+                             "limit": 5, "response_format": "concise"}) or {}
+        n = len(arts.get("items") or [])
+        if n < 3:
+            print(f"[{AGENT_NAME}] self-heal: editorial missing but only {n} articles — "
+                  f"writers' stage incomplete, not fabricating from nothing", flush=True)
+            return
+        print(f"[{AGENT_NAME}] self-heal: news.{date}.evening.editorial missing after 18:15 "
+              f"-> running the stage", flush=True)
+        print(build_editorial_and_index(AGENT_NAME, date, "evening"), flush=True)
+
+    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README,
+                      temperature=0.2, idle_hook=_ensure_today, idle_hook_seconds=300))
 
 
 if __name__ == "__main__":
