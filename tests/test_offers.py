@@ -46,3 +46,23 @@ def test_single_contract_agents():
     for agent, expected in (("image-scout", {"moodboard"}), ("postman", {"mail"}),
                             ("activity-reporter", {"activity-report"})):
         assert {o["id"] for o in offers_doc(agent, with_samples=False)["offers"]} == expected
+
+
+def test_crew_offers_match_spec_shape():
+    from crewaimeat.offers import _CREW_OFFERS, crew_offer, offers_doc_any
+    for agent, metas in _CREW_OFFERS.items():
+        for meta in metas:
+            o = crew_offer(agent, meta, with_sample=False)
+            assert set(o) == SPEC_FIELDS
+            assert o["cost"] in COSTS and o["latency"] in LATENCIES
+            assert o["repeatability"] in {"idempotent", "accumulative", "destructive"}
+            assert any(m in o["ask"] for m in ("don't", "refuse", "not ", " only")), \
+                f"{agent}/{meta['id']}: ask must carry negative scope"
+            for cq in o["consequences"]:
+                assert cq["type"] in CONSEQUENCE_TYPES
+            assert o["deliverable"]["location"]["space"].startswith(f"crews.{agent}")
+    # crew-forge's build offer must carry the approval-blocking consequence
+    forge = offers_doc_any("crew-forge", with_samples=False)["offers"]
+    build = next(o for o in forge if o["id"] == "build-crew")
+    assert any(c.get("requiresApproval") for c in build["consequences"])
+    assert build["repeatability"] == "accumulative"

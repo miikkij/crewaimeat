@@ -191,8 +191,194 @@ def publish_offers(agent: str, with_samples: bool = True) -> bool:
     return ok
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Task-runner crew offers — authored constants for OUR OWN crews (we know exactly
+# what each does, so no LLM generation needed; owner-gated by being code-reviewed).
+# These crews take a TASK (the node's Run flow) and publish the deliverable to the
+# memory prefix crews.<agent>. — so the sample is fetched from the latest real one.
+# Most are `accumulative`: every ask produces a NEW deliverable (no output-dedup).
+# ──────────────────────────────────────────────────────────────────────────────
+
+_CREW_OFFERS: dict[str, list[dict]] = {
+    "crew-forge": [
+        {"id": "build-crew", "title": "Build a new agent from a description",
+         "ask": ("Send '/build <description>' as a task and I design the crew, write and validate its "
+                 "build_domain, register the agent and launch it under the watchdog. You approve one "
+                 "device code. I don't build AIMEAT apps or extensions — that's aimeat-crew-forge."),
+         "example": "/build a crew that summarizes RSS feeds into a weekly digest",
+         "cost": "expensive", "latency": "long-running", "repeatability": "accumulative",
+         "verification": "gated",  # build_domain is validated + registration must succeed
+         "consequences": [
+             {"type": "creates-agent", "persistent": True, "requiresApproval": True,
+              "note": "registers a NEW persistent agent; blocks on a device-code approval"},
+             {"type": "mutates-host", "note": "launches a watchdog + daemon process on the operator machine"},
+         ]},
+        {"id": "fleet-status", "title": "Show which crews are running",
+         "ask": ("Send '/list' (or '/status') and I report your crews and which are running. "
+                 "Read-only — I don't start or stop anything for this offer."),
+         "example": "/list",
+         "cost": "free", "latency": "seconds", "repeatability": "idempotent",
+         "verification": "gated", "consequences": []},
+    ],
+    "workflow-manager": [
+        {"id": "orchestrate-goal", "title": "Fan a goal out to the fleet and synthesize",
+         "ask": ("Give me a goal and I decompose it, delegate the parts to the best-rated crews, gather "
+                 "the results and synthesize one deliverable. I pick delegates at runtime by reputation — "
+                 "I don't execute domain work myself."),
+         "example": "Compare three approaches for monetizing the newspaper showcase and recommend one",
+         "cost": "expensive", "latency": "long-running", "repeatability": "accumulative",
+         "verification": "ungated",
+         "consequences": [
+             {"type": "delegates-to-agent", "dynamic": True,
+              "note": "creates tasks for other crews and RATES their work afterwards (verify-grounded)"},
+         ]},
+    ],
+    "joker": [
+        {"id": "tell-jokes", "title": "Four comedians riff on your topic",
+         "ask": ("Give me a topic and four comedian personas each riff on it; a host presents the set. "
+                 "Humor only — I don't write marketing copy or serious prose."),
+         "example": "aihe: etätyöpalaverit", "cost": "cheap", "latency": "minutes",
+         "repeatability": "accumulative", "verification": "ungated", "consequences": []},
+    ],
+    "joker-v2": [
+        {"id": "tell-jokes-v2", "title": "Comedians draft many, keep the best (evolved variant)",
+         "ask": ("Same job as joker, evolved: each comedian drafts several jokes and only the best "
+                 "survive. Part of a live A/B pair — humor only, nothing serious."),
+         "example": "aihe: tekoälyagenttien kokouskäytännöt", "cost": "cheap", "latency": "minutes",
+         "repeatability": "accumulative", "verification": "ungated", "consequences": []},
+    ],
+    "sanity-checker": [
+        {"id": "stress-test-idea", "title": "Stress-test an idea from multiple angles",
+         "ask": ("Give me an idea or plan and I attack it from several angles (feasibility, risks, "
+                 "blind spots), then advise. I challenge — I don't rubber-stamp or implement."),
+         "example": "Idea: sell organism exports as onboarding accelerators — what breaks?",
+         "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
+         "verification": "ungated", "consequences": []},
+    ],
+    "idea-feasibility-rater": [
+        {"id": "rate-feasibility", "title": "Rate an idea's feasibility",
+         "ask": ("Give me an idea and I return a structured feasibility rating with reasoning. "
+                 "A judgment, not a build plan — I don't implement anything."),
+         "example": "Idea: per-customer private AIMEAT nodes with a managed-hosting tier",
+         "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
+         "verification": "ungated", "consequences": []},
+    ],
+    "probability-creator": [
+        {"id": "estimate-spectrum", "title": "Turn one question into an estimate spectrum",
+         "ask": ("Ask one estimation question and I return a spectrum of answers with probabilities "
+                 "and assumptions made explicit. Estimates, not guarantees — no financial advice."),
+         "example": "How many Finnish SMEs adopt an AI 'digital employee' service by 2028?",
+         "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
+         "verification": "ungated", "consequences": []},
+    ],
+    "jingle-writer": [
+        {"id": "write-jingle", "title": "Write a jingle or short creative copy",
+         "ask": ("Give me a product or theme and I write a jingle / short creative copy. "
+                 "Short-form creative only — I don't write long articles or technical docs."),
+         "example": "Jingle for a morning report that arrives before you wake up",
+         "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
+         "verification": "ungated", "consequences": []},
+    ],
+    "web-tester": [
+        {"id": "test-web-flow", "title": "Drive a real browser through a web flow",
+         "ask": ("Give me a URL and a flow (login, form, navigation) and I drive a real browser "
+                 "through it and report what happened with evidence. I interact with the page — "
+                 "point me at test data, not production-critical state."),
+         "example": "Test that the public newspaper page renders and the quiz accepts answers",
+         "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
+         "verification": "gated",
+         "consequences": [
+             {"type": "mutates-live-app",
+              "note": "clicks and types against the target; interactions can change app state"},
+         ]},
+    ],
+    "librarian": [
+        {"id": "map-knowledge", "title": "Map the fleet's deliverables and reuse",
+         "ask": ("Ask me what the fleet knows about a theme and I scan every same-owner deliverable "
+                 "and return an index with reuse pointers and freshness. I read and map — "
+                 "I don't produce new domain content."),
+         "example": "What do we already have about onboarding flows?",
+         "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
+         "verification": "ungated", "consequences": []},
+    ],
+}
+
+
+def fetch_crew_sample(agent: str) -> str:
+    """Latest real deliverable excerpt from the crew's memory prefix crews.<agent>. —
+    or 'untested'. Same hard rule as contracts: never invented."""
+    try:
+        r = _aimeat_call(agent, "aimeat_memory_list",
+                         {"owner_scope": True, "prefix": f"crews.{agent}.", "limit": 50}) or {}
+        items = r.get("items") or []
+        if not items:
+            return "untested"
+        last = items[-1]
+        v = last.get("value")
+        if not v:
+            v = (_aimeat_call(agent, "aimeat_memory_read", {"key": last.get("key")}) or {}).get("value")
+        if not v:
+            return "untested"
+        text = v if isinstance(v, str) else str(v)
+        excerpt = " ".join(text.split())[:_SAMPLE_CHARS]
+        return excerpt + ("…" if len(text) > _SAMPLE_CHARS else "")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[offers] crew sample fetch failed for {agent}: {exc!r}", file=sys.stderr)
+        return "untested"
+
+
+def crew_offer(agent: str, meta: dict, with_sample: bool = False) -> dict:
+    """One §4-shaped offer for a task-runner crew (deliverable = memory prefix, Run flow)."""
+    return {
+        "id": meta["id"],
+        "title": meta["title"],
+        "ask": meta["ask"],
+        "example": meta["example"],
+        "tags": ["role.task-runner"],
+        "cost": meta["cost"],
+        "latency": meta["latency"],
+        "repeatability": meta["repeatability"],
+        "verification": meta["verification"],
+        "availability": {"boundToLastSeen": True, "scheduleBorn": None},
+        "requirements": [],  # a registered+approved task-runner needs nothing else
+        "consequences": list(meta["consequences"]),
+        "deliverable": {
+            "format": "document",
+            "location": {"space": f"crews.{agent}.", "visibility": "owner"},
+            "sample": fetch_crew_sample(agent) if with_sample else "untested",
+        },
+    }
+
+
 PILOT_AGENTS = ("web-researcher", "activity-reporter", "image-scout", "postman")
+CREW_AGENTS = tuple(_CREW_OFFERS)
+
+
+def offers_doc_any(agent: str, with_samples: bool = False) -> dict:
+    """Offers doc for ANY agent: contract-derived + authored crew offers, merged."""
+    doc = offers_doc(agent, with_samples=with_samples)
+    sample = None  # fetch the crew sample once per agent, all its offers share the prefix
+    for meta in _CREW_OFFERS.get(agent, ()):
+        o = crew_offer(agent, meta, with_sample=False)
+        if with_samples:
+            if sample is None:
+                sample = fetch_crew_sample(agent)
+            o["deliverable"]["sample"] = sample
+        doc["offers"].append(o)
+    return doc
+
+
+def publish_offers_any(agent: str, with_samples: bool = True) -> bool:
+    doc = offers_doc_any(agent, with_samples=with_samples)
+    if not doc["offers"]:
+        print(f"[offers] {agent}: nothing to publish", file=sys.stderr)
+        return False
+    ok = bool(_aimeat_call(agent, "aimeat_memory_write",
+                           {"key": f"agents.{agent}.offers", "visibility": "owner", "value": doc}))
+    print(f"[offers] {agent}: {len(doc['offers'])} offer(s) {'published' if ok else 'PUBLISH FAILED'}")
+    return ok
 
 
 def publish_all(with_samples: bool = True) -> dict:
-    return {agent: publish_offers(agent, with_samples=with_samples) for agent in PILOT_AGENTS}
+    agents = dict.fromkeys(PILOT_AGENTS + CREW_AGENTS)
+    return {agent: publish_offers_any(agent, with_samples=with_samples) for agent in agents}
