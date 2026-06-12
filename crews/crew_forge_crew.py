@@ -94,6 +94,13 @@ COMMAND_SERVICES = [
 
 def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     text = (ctx.prompt or "").strip()
+    # Offers surface: an order routes by the RESOLVED offer (scope.offer_id), never by
+    # boilerplate in the description. fleet-status -> /list; build-crew -> the raw request.
+    offer = getattr(ctx, "offer", None)  # getattr: tolerate stub contexts / older scaffolds
+    if offer and not text.startswith("/"):
+        if offer.get("id") == "fleet-status":
+            return _command_domain(ctx, "list", "")
+        return _build_domain(ctx, request=text)
     if not text.startswith("/"):
         return _build_domain(ctx, request=text)  # plain text = a build request
     parts = text[1:].split(None, 1)

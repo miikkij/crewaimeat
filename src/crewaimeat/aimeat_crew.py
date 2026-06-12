@@ -134,6 +134,10 @@ class BuildContext:
     directives: str = ""  # owner-set behavioral directives (GET /v1/agents/me/directives),
     #   already formatted. The scaffold also prepends these to every domain task, so they bind
     #   behavior automatically; reference ctx.directives only if you want finer placement.
+    offer: dict | None = None  # when the task was ordered from this agent's Offers surface
+    #   (scope.kind == 'offer'), the RESOLVED offer descriptor. ctx.prompt stays the user's RAW
+    #   request — never the offer's own ask/example text (re-feeding it made agents treat their
+    #   boilerplate as the request). Use ctx.offer only to pick a mode/command for the work.
 
 
 # build_domain returns (agents, tasks). Tasks run in `process` order; the LAST
@@ -831,6 +835,31 @@ def _make_publish_cb(agent_name: str, primary_key: str, shared_key: str | None =
     return _cb
 
 
+def _resolve_offer(agent_name: str, task: dict) -> "dict | None":
+    """OFFER TASK SHAPE (Offers handover v3): a task ordered from the Offers surface carries
+    ONLY the user's request in title/description; the offer travels structurally in scope
+    (kind='offer', offer_id, offer_title). Resolve the agent's OWN offer descriptor from its
+    published offers doc so build_domain can pick the right mode — the offer's ask/example is
+    NEVER re-fed as the request (that made agents treat their boilerplate as the ask)."""
+    raw_scope = task.get("scope") or []
+    if isinstance(raw_scope, dict):
+        scope = raw_scope
+    else:
+        scope = {s.get("name"): s.get("value") for s in raw_scope if isinstance(s, dict)}
+    if scope.get("kind") != "offer":
+        return None
+    oid = str(scope.get("offer_id") or "")
+    doc = _aimeat_call(agent_name, "aimeat_memory_read", {"key": f"agents.{agent_name}.offers"}) or {}
+    val = doc.get("value") if isinstance(doc, dict) else None
+    for o in (val or {}).get("offers") or []:
+        if o.get("id") == oid:
+            print(f"[{agent_name}] offer task: fulfilling offer '{oid}'", file=sys.stderr)
+            return o
+    print(f"[{agent_name}] offer task: offer_id {oid!r} not found in published offers — "
+          "running on the raw request", file=sys.stderr)
+    return {"id": oid, "title": str(scope.get("offer_title") or oid)}
+
+
 def _make_complete_cb(agent_name: str, tid: str, mem_key: str | None = None,
                       require_verify: bool = False, owner: str | None = None,
                       auto_revert: bool = False):
@@ -1203,7 +1232,8 @@ def run_crew(spec: CrewSpec) -> None:
         if gate and gate["ground"]:
             directives = _GROUNDING_RULE + ("\n\n" + directives if directives else "")
 
-        ctx = BuildContext(task=task, prompt=prompt, llm=llm, today=_now_context(), directives=directives)
+        ctx = BuildContext(task=task, prompt=prompt, llm=llm, today=_now_context(), directives=directives,
+                           offer=_resolve_offer(spec.agent_name, task))
         agents, tasks = spec.build_domain(ctx)
 
         # Optional verification pass (MAST FM-3.2): a Reviewer checks the deliverable against the goal
