@@ -52,7 +52,28 @@ def build_domain(ctx: BuildContext):
 
 
 def run() -> None:
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README, temperature=0.2))
+    # Self-healing guard (output-existence, no LLM in the check): the 17:45 schedule can race
+    # the 17:25 writers (or the daemon can be down at fire time) — and build_quiz now SKIPS
+    # instead of fabricating when articles aren't readable, so "quiz key missing" + retry here
+    # converges to a real quiz once the articles land (bit us 2026-06-11: placeholder quiz).
+    def _ensure_quiz() -> None:
+        import datetime
+        from zoneinfo import ZoneInfo
+
+        from crewaimeat.aimeat_crew import _aimeat_call
+        from crewaimeat.features_pipeline import build_quiz
+
+        now = datetime.datetime.now(ZoneInfo("Europe/Helsinki"))
+        if now.hour < 18:
+            return
+        date = now.date().isoformat()
+        if _aimeat_call(AGENT_NAME, "aimeat_memory_read", {"key": f"news.{date}.evening.quiz"}):
+            return
+        print(f"[{AGENT_NAME}] self-heal: news.{date}.evening.quiz missing after 18:00 -> rebuilding", flush=True)
+        print(build_quiz(AGENT_NAME, date, "evening"), flush=True)
+
+    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README,
+                      temperature=0.2, idle_hook=_ensure_quiz, idle_hook_seconds=300))
 
 
 if __name__ == "__main__":
