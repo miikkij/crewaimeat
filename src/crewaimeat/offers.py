@@ -90,6 +90,7 @@ _OFFER_META: dict[str, dict] = {
                 "Recipients are restricted to the owner-configured allowlist — I refuse any "
                 "address outside it, and I don't fetch content or compose on my own."),
         "example": "subject: 'Weekly status', body_md: '## Done this week …'",
+        "dataHandling": "third-party",  # the record content leaves the platform as email
         "cost": "free", "latency": "seconds",
         "consequences": [
             {"type": "external-send",
@@ -158,6 +159,7 @@ def offer_from_contract(contract: dict, with_sample: bool = False) -> dict:
         "latency": meta["latency"],
         "repeatability": "idempotent",   # output-existence dedup is the contract convention
         "verification": "gated",          # records are schema-validated at the boundary
+        "dataHandling": meta.get("dataHandling", "llm-provider"),
         "availability": {"boundToLastSeen": True, "scheduleBorn": None},
         "requirements": list(_BASE_REQUIREMENTS),
         "consequences": list(meta["consequences"]),
@@ -301,6 +303,105 @@ _CREW_OFFERS: dict[str, list[dict]] = {
          "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
          "verification": "ungated", "consequences": []},
     ],
+    "aimeat-app-conductor": [
+        {"id": "build-or-fix-app", "title": "Route an app idea to the right SDLC specialist",
+         "ask": ("Describe what you want built, edited or fixed on AIMEAT and I route it to the right "
+                 "specialist (builder / editor / cortex-fixer / realtime) and report the outcome. "
+                 "I coordinate — I don't write the app code myself."),
+         "example": "Build a simple notes app with login for my profile",
+         "cost": "expensive", "latency": "long-running", "repeatability": "accumulative",
+         "verification": "gated",  # builds complete only through the verify gates
+         "consequences": [
+             {"type": "delegates-to-agent", "dynamic": True, "note": "routes to the SDLC specialist crews"},
+             {"type": "mutates-live-app", "note": "the routed specialist publishes/edits a live app"},
+         ]},
+    ],
+    "aimeat-app-builder": [
+        {"id": "build-app", "title": "Build a working AIMEAT app from a description",
+         "ask": ("Describe the app and I author it directly into a live, working AIMEAT app on the "
+                 "starter template, verified with the render gate. I don't design visual themes "
+                 "(aimeat-app-designer) or build realtime channels (aimeat-realtime-builder)."),
+         "example": "A checklist app that saves items per user and works for anonymous viewers read-only",
+         "cost": "expensive", "latency": "long-running", "repeatability": "accumulative",
+         "verification": "gated",
+         "consequences": [{"type": "mutates-live-app", "note": "publishes a new app/version under your profile"}]},
+    ],
+    "aimeat-app-editor": [
+        {"id": "edit-app", "title": "Make a surgical edit to an existing app",
+         "ask": ("Name the app and the change and I read its live stack, apply an in-place edit and "
+                 "verify the render. Small targeted changes only — full rebuilds go to aimeat-app-builder."),
+         "example": "Add a 'Reset scores' button to tictactoe.html",
+         "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
+         "verification": "gated",
+         "consequences": [{"type": "mutates-live-app", "note": "publishes a new version of the existing app"}]},
+    ],
+    "daily-briefing-crew": [
+        {"id": "daily-briefing", "title": "Compose a briefing on demand",
+         "ask": ("Ask for a briefing (topic or general) and I compose one from available sources. "
+                 "A summary for humans — I don't make decisions or take actions."),
+         "example": "Brief me on this week's fleet activity and open questions",
+         "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
+         "verification": "ungated", "consequences": []},
+    ],
+    "finnish-corporate-researcher": [
+        {"id": "research-fi-company", "title": "Profile a Finnish company (registry-grounded)",
+         "ask": ("Give me a Finnish company name or business id and I build a profile from official "
+                 "registries and public web. Public sources only — no credit ratings, no personal data."),
+         "example": "Profile: Supercell Oy — ownership, financials trend, public footprint",
+         "cost": "expensive", "latency": "long-running", "repeatability": "accumulative",
+         "verification": "ungated", "consequences": []},
+    ],
+    "space-weather-writer": [
+        {"id": "space-weather", "title": "Space-weather article from NOAA/NASA data",
+         "ask": ("I write the day's space-weather article from official NOAA/NASA feeds. Runs on the "
+                 "evening schedule by itself — ask only for an extra/edition re-run. I don't forecast "
+                 "beyond what the source data says."),
+         "example": "Re-run today's space weather article (evening edition)",
+         "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
+         "verification": "ungated", "scheduleBorn": "daily 17:00 Europe/Helsinki — runs automatically",
+         "consequences": [{"type": "publishes-public", "note": "the article is public newspaper content"}]},
+    ],
+    "tagline-translator": [
+        {"id": "tagline-or-translation", "title": "Write a tagline or translate a short text",
+         "ask": ("Give me a product/theme for a tagline, or a short text + target language. "
+                 "Short-form only — no long documents, no legal translation."),
+         "example": "Translate to English, keep the tone: 'Muisti joka ei vanhene'",
+         "cost": "free", "latency": "seconds", "repeatability": "accumulative",
+         "verification": "ungated", "consequences": []},
+    ],
+    "editorial-writer": [
+        {"id": "evening-editorial", "title": "The gonzo S.J. editorial + front-page index",
+         "ask": ("I write the savage daily editorial from the day's articles and rebuild the public "
+                 "front-page index. Runs on the 18:00 schedule with a self-heal guard — ask only to "
+                 "re-run a date/edition. I don't write polite corporate prose."),
+         "example": "Re-run the editorial + index for 2026-06-11 evening",
+         "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
+         "verification": "deterministic",  # index build + verbatim store are code; self-heal checks output existence
+         "scheduleBorn": "daily 18:00 Europe/Helsinki — runs automatically (self-healing at 18:15)",
+         "consequences": [{"type": "publishes-public", "note": "editorial + front-page index are public newspaper content"}]},
+    ],
+    "news-fetcher": [
+        {"id": "fetch-edition-raw", "title": "Fetch the day's raw news per category",
+         "ask": ("I pull curated feeds + search and ALWAYS run full-text extraction per category into "
+                 "the edition raw. Runs on the 17:00 schedule — ask only for a re-fetch. "
+                 "I fetch and extract; I don't write articles."),
+         "example": "Re-fetch the evening raw for today",
+         "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
+         "verification": "deterministic",  # the loop and extraction are code; no LLM in the fetch
+         "scheduleBorn": "daily 17:00 Europe/Helsinki — runs automatically",
+         "consequences": []},
+    ],
+    "daily-features-writer": [
+        {"id": "evening-features", "title": "Evening features + the validated news quiz",
+         "ask": ("I write the koodaus/prompt/matikka features and build the news quiz from the day's "
+                 "articles (validated; skipped rather than fabricated when articles are missing). "
+                 "Runs on the 17:45 schedule — ask only for a re-run."),
+         "example": "Rebuild today's quiz (evening edition)",
+         "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
+         "verification": "gated",  # quiz JSON is structurally validated; placeholder output rejects
+         "scheduleBorn": "daily 17:45 Europe/Helsinki — runs automatically (quiz self-heal at 18:00)",
+         "consequences": [{"type": "publishes-public", "note": "features + quiz are public newspaper content"}]},
+    ],
 }
 
 
@@ -328,7 +429,7 @@ def fetch_crew_sample(agent: str) -> str:
 
 
 def crew_offer(agent: str, meta: dict, with_sample: bool = False) -> dict:
-    """One §4-shaped offer for a task-runner crew (deliverable = memory prefix, Run flow)."""
+    """One spec-shaped offer for a task-runner crew (deliverable = memory prefix, Run flow)."""
     return {
         "id": meta["id"],
         "title": meta["title"],
@@ -339,7 +440,8 @@ def crew_offer(agent: str, meta: dict, with_sample: bool = False) -> dict:
         "latency": meta["latency"],
         "repeatability": meta["repeatability"],
         "verification": meta["verification"],
-        "availability": {"boundToLastSeen": True, "scheduleBorn": None},
+        "dataHandling": meta.get("dataHandling", "llm-provider"),
+        "availability": {"boundToLastSeen": True, "scheduleBorn": meta.get("scheduleBorn")},
         "requirements": [],  # a registered+approved task-runner needs nothing else
         "consequences": list(meta["consequences"]),
         "deliverable": {
@@ -369,13 +471,32 @@ def offers_doc_any(agent: str, with_samples: bool = False) -> dict:
 
 
 def publish_offers_any(agent: str, with_samples: bool = True) -> bool:
+    """Publish through PUT /v1/agents/:name/offers — the node-validated route (live on
+    aimeat.io since 2026-06-12). Falls back LOUDLY to the direct memory write only when
+    the route is absent (older/self-hosted node)."""
     doc = offers_doc_any(agent, with_samples=with_samples)
     if not doc["offers"]:
         print(f"[offers] {agent}: nothing to publish", file=sys.stderr)
         return False
+    try:
+        import requests
+        from crewaimeat.generator_tool import _discover_owner, _token
+        tok, url = _token(agent, _discover_owner(agent))
+        r = requests.put(f"{url.rstrip('/')}/v1/agents/{agent}/offers",
+                         json={"offers": doc["offers"]},
+                         headers={"Authorization": f"Bearer {tok}"}, timeout=60)
+        if r.status_code == 200:
+            print(f"[offers] {agent}: {len(doc['offers'])} offer(s) published via route")
+            return True
+        if r.status_code != 404:  # validation/auth errors are REAL failures — surface, don't mask
+            print(f"[offers] {agent}: route FAILED HTTP {r.status_code}: {r.text[:200]}", file=sys.stderr)
+            return False
+        print(f"[offers] {agent}: route 404 (node without offers) -> direct memory write", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[offers] {agent}: route unreachable ({exc!r}) -> direct memory write", file=sys.stderr)
     ok = bool(_aimeat_call(agent, "aimeat_memory_write",
                            {"key": f"agents.{agent}.offers", "visibility": "owner", "value": doc}))
-    print(f"[offers] {agent}: {len(doc['offers'])} offer(s) {'published' if ok else 'PUBLISH FAILED'}")
+    print(f"[offers] {agent}: {len(doc['offers'])} offer(s) {'published (direct)' if ok else 'PUBLISH FAILED'}")
     return ok
 
 

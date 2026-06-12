@@ -831,7 +831,8 @@ def _make_publish_cb(agent_name: str, primary_key: str, shared_key: str | None =
     return _cb
 
 
-def _make_complete_cb(agent_name: str, tid: str, require_verify: bool = False, owner: str | None = None,
+def _make_complete_cb(agent_name: str, tid: str, mem_key: str | None = None,
+                      require_verify: bool = False, owner: str | None = None,
                       auto_revert: bool = False):
     """Task callback: close the AIMEAT task deterministically (no LLM). Attached to the finalize
     task so the task is completed even if the liaison never calls aimeat_task_complete.
@@ -880,12 +881,15 @@ def _make_complete_cb(agent_name: str, tid: str, require_verify: bool = False, o
                     fr = _aimeat_call(agent_name, "aimeat_task_fail", {"task_id": tid, "message": reason})
                     print(f"[{agent_name}] require_verify_pass GATE -> task_fail {tid}: {reason[:90]} ({bool(fr)})", file=sys.stderr)
                     return
-        res = _aimeat_call(
-            agent_name,
-            "aimeat_task_complete",
-            {"task_id": tid, "message": "Crew finished; deliverable published to memory."},
-        )
-        print(f"[{agent_name}] task completed deterministically {tid}: {bool(res)}", file=sys.stderr)
+        payload = {"task_id": tid, "message": "Crew finished; deliverable published to memory."}
+        if mem_key:
+            # The Offers/Inbox contract: the task record's deliverableKey points at the memory key
+            # holding the deliverable — without it the Inbox shows the task but no content/sample.
+            payload["deliverableKey"] = mem_key
+            payload["message"] = f"Crew finished; deliverable published to memory at {mem_key}."
+        res = _aimeat_call(agent_name, "aimeat_task_complete", payload)
+        print(f"[{agent_name}] task completed deterministically {tid} "
+              f"(deliverableKey={mem_key or '-'}): {bool(res)}", file=sys.stderr)
 
     return _cb
 
@@ -1344,7 +1348,8 @@ def run_crew(spec: CrewSpec) -> None:
             finalize = _finalize_task(spec.agent_name, tid, mem_key, liaison)
             # Guarantee the task is closed even if the liaison never calls aimeat_task_complete; when
             # require_verify_pass is set, the close is GATED on the app verify gates' outcome (SYS-1).
-            finalize.callback = _make_complete_cb(spec.agent_name, tid, require_verify=spec.require_verify_pass,
+            finalize.callback = _make_complete_cb(spec.agent_name, tid, mem_key=mem_key,
+                                                  require_verify=spec.require_verify_pass,
                                                   owner=spec.owner, auto_revert=spec.auto_revert_on_fail)
 
         # Self-evolution monitor (doc 20 P1): after the task, read own reputation and, if a gated

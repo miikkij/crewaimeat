@@ -5,9 +5,12 @@ import pytest
 from crewaimeat.offers import _OFFER_META, _contracts, offer_from_contract, offers_doc
 
 SPEC_FIELDS = {"id", "title", "ask", "example", "tags", "cost", "latency", "repeatability",
-               "verification", "availability", "requirements", "consequences", "deliverable"}
+               "verification", "dataHandling", "availability", "requirements", "consequences",
+               "deliverable"}
 COSTS = {"free", "cheap", "expensive"}
 LATENCIES = {"seconds", "minutes", "long-running"}
+VERIFICATIONS = {"deterministic", "gated", "ungated"}
+DATA_HANDLING = {"local-only", "llm-provider", "third-party"}
 FORMATS = {"document", "record", "board-post", "file", "app"}
 CONSEQUENCE_TYPES = {"creates-agent", "creates-schedule", "publishes-public", "external-send",
                      "mutates-live-app", "delegates-to-agent", "mutates-host"}
@@ -23,7 +26,8 @@ def test_offer_shape_matches_spec(contract):
     o = offer_from_contract(contract, with_sample=False)
     assert set(o) == SPEC_FIELDS
     assert o["cost"] in COSTS and o["latency"] in LATENCIES
-    assert o["repeatability"] == "idempotent" and o["verification"] in {"gated", "ungated"}
+    assert o["repeatability"] == "idempotent" and o["verification"] in VERIFICATIONS
+    assert o["dataHandling"] in DATA_HANDLING
     assert len(o["ask"]) <= 500
     assert any(m in o["ask"] for m in ("don't", "refuse", "no ", " only")), \
         "ask must carry negative scope (hard rule 3)"
@@ -56,6 +60,7 @@ def test_crew_offers_match_spec_shape():
             assert set(o) == SPEC_FIELDS
             assert o["cost"] in COSTS and o["latency"] in LATENCIES
             assert o["repeatability"] in {"idempotent", "accumulative", "destructive"}
+            assert o["verification"] in VERIFICATIONS and o["dataHandling"] in DATA_HANDLING
             assert any(m in o["ask"] for m in ("don't", "refuse", "not ", " only")), \
                 f"{agent}/{meta['id']}: ask must carry negative scope"
             for cq in o["consequences"]:
