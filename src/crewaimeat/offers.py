@@ -16,6 +16,7 @@ node's PUT /v1/agents/:name/offers route will own once it ships).
 from __future__ import annotations
 
 import datetime
+import re
 import sys
 from zoneinfo import ZoneInfo
 
@@ -24,7 +25,23 @@ from crewaimeat.aimeat_crew import _aimeat_call
 # Where these contracts are adopted today — used only to fetch a REAL deliverable sample.
 _SAMPLE_ORG = "b784641b-a4dd-4d69-adb6-9954dc813e1e"
 _SAMPLE_WS = "ws-mq5vvdgsjwp"
-_SAMPLE_CHARS = 300
+_SAMPLE_CHARS = 700
+
+
+def _md_excerpt(text: str, max_chars: int = _SAMPLE_CHARS) -> str:
+    """A sample excerpt that PRESERVES Markdown line structure. Flattening newlines made the
+    leading '#' swallow the whole sample as one giant heading and broke every table — headings,
+    table rows and list items all need their own lines. Cut at a line boundary (never mid-row),
+    normalize newlines, and mark the cut with an ellipsis line."""
+    norm = str(text).replace("\r\n", "\n").replace("\r", "\n").strip()
+    norm = re.sub(r"\n{3,}", "\n\n", norm)
+    if len(norm) <= max_chars:
+        return norm
+    cut = norm[:max_chars]
+    nl = cut.rfind("\n")
+    if nl > max_chars // 2:
+        cut = cut[:nl]
+    return cut.rstrip() + "\n\n…"
 
 _BASE_REQUIREMENTS = [
     {"need": "organism membership", "fix": "join"},
@@ -134,8 +151,7 @@ def fetch_sample(agent: str, out_space: dict | None) -> str:
         last = items[-1]
         text = (last.get("markdown") or last.get("body_md")
                 or str({k: v for k, v in last.items() if k != "markdown"}))
-        excerpt = " ".join(str(text).split())[:_SAMPLE_CHARS]
-        return excerpt + ("…" if len(str(text)) > _SAMPLE_CHARS else "")
+        return _md_excerpt(text)
     except Exception as exc:  # noqa: BLE001
         print(f"[offers] sample fetch failed for {agent}: {exc!r}", file=sys.stderr)
         return "untested"
@@ -421,8 +437,7 @@ def fetch_crew_sample(agent: str) -> str:
         if not v:
             return "untested"
         text = v if isinstance(v, str) else str(v)
-        excerpt = " ".join(text.split())[:_SAMPLE_CHARS]
-        return excerpt + ("…" if len(text) > _SAMPLE_CHARS else "")
+        return _md_excerpt(text)
     except Exception as exc:  # noqa: BLE001
         print(f"[offers] crew sample fetch failed for {agent}: {exc!r}", file=sys.stderr)
         return "untested"

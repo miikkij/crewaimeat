@@ -52,6 +52,19 @@ def test_single_contract_agents():
         assert {o["id"] for o in offers_doc(agent, with_samples=False)["offers"]} == expected
 
 
+def test_md_excerpt_preserves_markdown_line_structure():
+    from crewaimeat.offers import _md_excerpt
+    md = "# Otsikko\n\nTeksti kappale.\n\n| a | b |\n|---|---|\n" + "\n".join(
+        f"| rivi{i} | arvo{i} |" for i in range(40))
+    out = _md_excerpt(md, max_chars=200)
+    assert out.startswith("# Otsikko\n\nTeksti"), "heading must stay on its own line"
+    assert "|---|---|" in out, "table separator row must survive"
+    assert out.endswith("…") and "\n| rivi" in out, "cut at a line boundary, never mid-row"
+    assert " | rivi0 | arvo0 | | rivi1" not in out, "rows must not be flattened to one line"
+    short = "# A\n\nlyhyt."
+    assert _md_excerpt(short, max_chars=200) == short
+
+
 def test_crew_offers_match_spec_shape():
     from crewaimeat.offers import _CREW_OFFERS, crew_offer, offers_doc_any
     for agent, metas in _CREW_OFFERS.items():
