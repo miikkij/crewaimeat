@@ -183,6 +183,12 @@ def process_activity_reports(targets: list[tuple[str, str]] | None = None) -> di
                 continue
             if rid in _REPORTED:  # already generated this run — guard against a stale 'due' read
                 continue
+            # Durable per-machine guard (the 5-publishes-in-7-minutes storm + restart re-runs):
+            # a stale workspace read must never re-trigger a report this machine just made.
+            from crewaimeat.local_marks import ran_within
+            if ran_within("activity_report", rid, max(1.0, period_h * 0.9)):
+                _REPORTED.add(rid)
+                continue
             if f"report-{rid}-{nowiso[:10]}" in existing_reports:  # already reported today -> output-dedup
                 _REPORTED.add(rid)
                 continue
@@ -214,6 +220,8 @@ def process_activity_reports(targets: list[tuple[str, str]] | None = None) -> di
                 _advance(org_id, ws_id, rec,
                          status=("done" if status == "requested" else "active"),
                          last_run=nowiso, last_report=out_id)
+                from crewaimeat.local_marks import mark_local_run
+                mark_local_run("activity_report", rid)
                 made += 1
             else:
                 _advance(org_id, ws_id, rec, status="failed", error="report write failed")

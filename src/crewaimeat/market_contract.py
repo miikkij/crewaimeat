@@ -213,6 +213,16 @@ def process_market_scans(max_items: int = 2, targets: list[tuple[str, str]] | No
                         due = (now - datetime.datetime.fromisoformat(last)).total_seconds() >= period_h * 3600
                     except Exception:  # noqa: BLE001
                         due = True
+            if due:
+                # Durable per-machine guard: a stale/frozen workspace read after a daemon
+                # restart made every scan look due again (6 mails in a day). The marker is
+                # this machine's own truth about what it already ran.
+                from crewaimeat.local_marks import last_local_run, ran_within
+                if recurring and ran_within("market_scan", rid, max(1.0, period_h * 0.9)):
+                    due = False
+                elif not recurring and last_local_run("market_scan", rid) is not None:
+                    _PROCESSED.add(rid)
+                    continue
             if not due or rid in _PROCESSED:
                 continue
             out_id = f"scan-{rid}-{today}" if recurring else f"scan-{rid}"
@@ -252,6 +262,8 @@ def process_market_scans(max_items: int = 2, targets: list[tuple[str, str]] | No
                 _advance(oid, wid, req,
                          status="active" if recurring else "done",
                          result_ref=out_id, **({"last_run": now.isoformat(), "error": ""} if recurring else {}))
+                from crewaimeat.local_marks import mark_local_run
+                mark_local_run("market_scan", rid)
                 processed += 1
             else:
                 _advance(oid, wid, req, status="failed" if not recurring else "active",
