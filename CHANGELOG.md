@@ -4,9 +4,53 @@ Notable changes to crewaimeat. Format loosely follows [Keep a Changelog](https:/
 Dates are the working dates; entries are **uncommitted and take effect on the next fleet restart**
 (the daemons import the modules at start).
 
-## [Unreleased] — 2026-06-04 → 2026-06-05
+## [0.2.0] — 2026-06-04 → 2026-06-13
 
 ### Added
+- **Agent Workflows — chained scheduled pipelines with per-step health (crew-side reference + the live
+  Sanomat migration).** A *workflow* is a declared, ordered set of steps with ONE schedule trigger and
+  per-step two-sided **signals** — `required_to_function` (the consumer's input gate, checked before a step
+  dispatches) and `success_signal` (the producer's output contract, checked after) — so the owner sees "did
+  the step PRODUCE", not just "did it fire". `src/crewaimeat/workflow_spec.py` (the descriptor + a recursive
+  signal evaluator: `exists`/`nonempty`/`count_nonempty`/`json_valid`/`json_field`, composites
+  `all`/`any`/`when-then`, owner-scope memory reads, `check_workflow` test-run, `node_definition()` that emits
+  the node `aimeat_workflow_save` payload), `workflow_inspector.py` + `crews/workflow_inspector_crew.py` (the
+  three-tier diagnose/auto-repair/escalate handler), and `tests/test_workflow_spec.py`. The **(L)AIMEAT
+  Sanomat 6→1 migration is live**: the six per-agent evening crons are replaced by one
+  `laimeat-sanomat-evening` workflow (fetch → write-a/write-b → features/editorial, + space-weather), signals
+  inherited from each stage agent's offer; reversible cutover (old schedules disabled, not deleted). First
+  full run all-green 2026-06-13. The node owns the deterministic engine + signal evaluation; crewaimeat ships
+  the descriptor/reference + the inspector. Node-engine spec + fix specs published to the AIMEAT Development
+  workspace.
+- **Agent Offers surface** (`src/crewaimeat/offers.py`) — each agent advertises what it does as machine-
+  readable **offers**: derived deterministically from the workspace CONTRACTs (requirements / consequences /
+  `deliverable.location` / repeatability / verification) plus authored constants for the task-runner crews,
+  published via `PUT /v1/agents/:name/offers`. Offers also carry the workflow **signals** + `deliverableKey`
+  (what makes an agent "workflow-compatible"), and the crews resolve **offer tasks** structurally (OFFER TASK
+  SHAPE / `scope.offer_id`). Samples are a real excerpt of the agent's latest deliverable, never invented.
+- **Connector forward tunnel** (aimeat 1.23.0 / aimeat-crewai 0.4.0) — `_aimeat_call` rides ONE shared
+  loopback `aimeat connect serve --http` daemon (push task delivery, ~150 ms warm vs subprocess-seconds);
+  64 connector processes → 2. `start_fleet.ps1` pre-starts the daemon once (`scripts/ensure_serve.py`).
+- **Serve-daemon supervisor** (`src/crewaimeat/serve_watchdog.py` + `scripts/serve_watchdog.ps1`) — the shared
+  tunnel daemon was an **unwatched single point of failure**; the supervisor calls the idempotent
+  `ensure_serve` on a timer so a crashed daemon comes back in seconds and is never double-spawned. start_fleet
+  launches it detached; terminate_fleet stops it first.
+- **Native-crash isolation for web extraction** (`src/crewaimeat/_extract_worker.py`) — trafilatura → lxml →
+  libxml2 can hard-kill the process with a Windows native fast-fail (exit `0xC0000409`,
+  STATUS_STACK_BUFFER_OVERRUN, incl. at interpreter shutdown) on a malformed page — uncatchable from Python,
+  and it took down the long-lived news-fetcher daemon. Extraction now runs in a **throwaway subprocess**
+  (`article_extract._isolated_extract` → `python -m crewaimeat._extract_worker --url|--html`): a crash kills
+  only the worker, the daemon survives and skips that one URL. stdout-first so a crash *after* the text was
+  written still keeps it; UTF-8 in / ASCII-safe out.
+- **`web-researcher` market + company research contracts** — `market-scan` (parameterized competitor/market
+  analysis: who plays, where they advertise, how to sell against them; recurring, mailed) and
+  `company-research` (Finnish company profiles: PRH/YTJ official XBRL financials first, then finder.fi charts
+  via Playwright + vision), chained off the market scan.
+- **`postman` + the 07:00 morning report** — an email-out workspace contract (SMTP, owner allowlist) that
+  delivers a daily report (insights + action points + competitor watch), with a generic `extra-sections` hook
+  other contracts append to, and the "Grok loop" (prompt in the mail, reply ingested back to the radar).
+- **`image-scout`** — a moodboard contract: SearXNG image search → vision-curated gallery documents (subject/
+  style/colors/relevance), uploaded via the presigned storage flow (binary never base64s through MCP).
 - **Per-crew LLM routing (`llm_providers.json` profiles)** — `get_llm(agent_name=...)` now picks a named
   provider **profile** per crew: `{"profiles": {"content": {...}, "coding": {...}}, "default": "content",
   "crews": {"aimeat-app-builder": "coding", ...}}`. So content crews (news/editorial/features) route to
@@ -107,6 +151,21 @@ Dates are the working dates; entries are **uncommitted and take effect on the ne
   (the canonical realtime recipe: token → find-or-create room → presence from the `joined` event).
 
 ### Fixed
+- **Durable per-machine run markers** (`src/crewaimeat/local_marks.py`) — a fleet restart could re-fire a
+  contract scan that had already run (the market-scan "6 mails in one day" bug); markers now persist per
+  machine so a restart can't re-trigger a completed scan.
+- **Contract-agent runaway guard** — an idle-hook contract agent that deduped on a just-written status could
+  re-process a request hundreds of times under read-after-write lag; added a per-run processed-set + per-run
+  cap + output-existence dedup (never trust a status you just wrote back).
+- **Offers**: deliverable samples are real multi-line Markdown (flattening made the leading `#` swallow the
+  whole sample); offer tasks resolve structurally instead of drifting to a guessed target.
+- **`daily-features-writer`** never fabricates the news quiz — it validates the quiz JSON and **skips** (loud)
+  rather than writing a placeholder when too few articles are readable; **`editorial-writer`** has a
+  self-healing guard for the evening edition. Both generalised by the workflow inspector.
+- **Single-spawner discipline** — only `start_fleet` starts the shared serve daemon (crews attach, never
+  spawn), preventing the multi-daemon "tunnel-stealing" storms; `start_fleet.ps1`'s fragile inline
+  `python -c` step moved to `scripts/ensure_serve.py` (a quoting edge case raised a SyntaxError and aborted
+  the start).
 - **`news_writer`** — the three category-writer agents had **no `tools=`** yet their tasks instruct
   `write_memory(...)`, so articles never reached memory. Added `make_memory_tools` to all three.
 - **`finnish_corporate_researcher`** — the synthesis report header was a non-f-string, so it printed the
