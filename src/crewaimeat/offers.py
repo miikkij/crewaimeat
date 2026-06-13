@@ -20,6 +20,8 @@ import re
 import sys
 from zoneinfo import ZoneInfo
 
+from aimeat_crewai.workflow_spec import NONE, Sig, is_workflow_compatible  # published grammar + compat check
+
 from crewaimeat.aimeat_crew import _aimeat_call
 
 # Where these contracts are adopted today — used only to fetch a REAL deliverable sample.
@@ -194,10 +196,8 @@ def offer_from_contract(contract: dict, with_sample: bool = False) -> dict:
     out_ns = (out or {}).get("namespace")
     if in_ns and out_ns and (out or {}).get("mode") == "document" and in_ns != out_ns:
         wsk = "organism.{org}.w.{ws}."
-        offer["required_to_function"] = {"kind": "deterministic",
-                                         "key_glob": wsk + in_ns + ".{request}.*", "op": "exists"}
-        offer["success_signal"] = {"kind": "deterministic",
-                                   "key_glob": wsk + out_ns + ".{request}.*", "op": "exists"}
+        offer["required_to_function"] = Sig.exists(key_glob=wsk + in_ns + ".{request}.*")
+        offer["success_signal"] = Sig.exists(key_glob=wsk + out_ns + ".{request}.*")
         offer["deliverable"]["location"]["key"] = wsk + out_ns + ".{request}.latest"
     return offer
 
@@ -522,29 +522,19 @@ def crew_offer(agent: str, meta: dict, with_sample: bool = False) -> dict:
     from crewaimeat.workflow_spec import AGENT_SIGNALS
     sig = AGENT_SIGNALS.get(meta["id"])
     if sig:
-        # required_to_function in the OFFER must be a valid signal OBJECT and PRESENT — the node's
-        # workflow-compat check rejects an offer that omits it, and rejects the bare string "none"
-        # AND an empty {all:[]} at offer level. A pure source step genuinely has no memory input, so
-        # we publish an always-true placeholder (its own registration exists) purely to satisfy
-        # compat; the real "no input gate" is set as required_to_function:"none" on the workflow STEP
-        # (the only place the node accepts the string), so the placeholder is never the live gate.
-        req = sig["required_to_function"]
-        if req == "none":
-            req = {"kind": "deterministic", "key": f"agents.{agent}.offers", "op": "exists"}
-        offer["required_to_function"] = req
+        # The node now accepts required_to_function:"none" at the OFFER level (not just the step), so
+        # a source offer publishes it directly — no placeholder workaround needed.
+        offer["required_to_function"] = sig["required_to_function"]
         offer["success_signal"] = sig["success_signal"]
         loc = sig.get("deliverable_location")
         if loc and loc.get("key"):
             offer["deliverable"]["location"]["key"] = loc["key"]  # the memory key it writes (node blueprint)
     elif meta["id"] in _GENERIC_WORKFLOW_OFFERS:
         # Generic workflow-compatibility for prose task-runners: their deliverable is free prose under
-        # crews.<agent>. — there's no run-keyed output, so the signal is a weak "produces output here"
-        # (count_nonempty over the prefix). Enough to make the agent SELECTABLE as a workflow step; a
-        # real workflow overrides with a run-specific check. No memory input gate → "none" (the node
-        # now accepts "none" at offer level).
-        offer["required_to_function"] = "none"
-        offer["success_signal"] = {"kind": "deterministic", "key_glob": f"crews.{agent}.*",
-                                   "op": "count_nonempty", "min": 1}
+        # crews.<agent>. — no run-keyed output, so the signal is a weak "produces output here" — enough
+        # to make the agent SELECTABLE as a workflow step; a real workflow overrides per step.
+        offer["required_to_function"] = NONE
+        offer["success_signal"] = Sig.count_nonempty(key_glob=f"crews.{agent}.*", min=1)
         offer["deliverable"]["location"]["key"] = f"crews.{agent}."
     return offer
 
@@ -575,6 +565,9 @@ def publish_offers_any(agent: str, with_samples: bool = True) -> bool:
     if not doc["offers"]:
         print(f"[offers] {agent}: nothing to publish", file=sys.stderr)
         return False
+    n_wf = sum(1 for o in doc["offers"] if is_workflow_compatible(o))  # package's node-mirrored check
+    if n_wf:
+        print(f"[offers] {agent}: {n_wf}/{len(doc['offers'])} offer(s) workflow-compatible")
     try:
         import requests
         from crewaimeat.generator_tool import _discover_owner, _token

@@ -24,6 +24,8 @@ import json
 import re
 from typing import Any, Callable
 
+from aimeat_crewai.workflow_spec import NONE, Sig  # the published grammar (single source of truth)
+
 from crewaimeat.aimeat_crew import _aimeat_call
 
 
@@ -163,14 +165,17 @@ def check_signal(node: Any, vars: dict, lister, llm_judge=None) -> tuple[bool, s
 
 
 # ── the agents' offered signals (the source offers.py publishes; workflow inherits) ──
-# Node grammar (handbook "Agent Workflows"): a deterministic leaf is
-#   {kind:"deterministic", key|key_glob, op: exists|nonempty|count_nonempty(min)|json_valid|
-#    json_schema(schema)|json_field(path, min|equals|nonempty)}.  `op` (not `check`); no
-#   json_array_match — so the editorial output check is just its own key being nonempty.
-# Each entry ALSO carries deliverable_location.key — where the agent WRITES — which the node
-# assembles into the workflow blueprint. offers.py emits all three onto the published offer.
+# The signal GRAMMAR lives in the published package `aimeat_crewai.workflow_spec` (Sig + NONE +
+# validate_signal + assess_offer/is_workflow_compatible) — the generalised, node-mirrored version of
+# what this crew prototyped. We build the dicts with `Sig` (validated at build, one source of truth)
+# instead of hand-rolling them; this module keeps only the crew-specific EVALUATOR (check_signal /
+# check_workflow — the package builds+validates but does not evaluate), the WORKFLOWS definition, and
+# node_definition(). Each entry also carries deliverable_location.key — where the agent WRITES.
 _RAW = "news.{date}.{edition}.raw.*"
 _ART = "news.{date}.{edition}.article.*"
+_QUIZ = "news.{date}.{edition}.quiz"
+_EDITORIAL = "news.{date}.{edition}.editorial"
+_AVARUUSSAA = "news.{date}.{edition}.article.avaruussaa"
 _RAW_MIN = 12     # ~20 categories fetched; loud floor
 _ART_MIN = 12     # the day's article set across both desks
 _DOWN_MIN = 3     # features/editorial just need a handful to work on
@@ -178,40 +183,39 @@ _DOWN_MIN = 3     # features/editorial just need a handful to work on
 AGENT_SIGNALS: dict[str, dict] = {
     # offer id -> {required_to_function, success_signal, deliverable_location}
     "fetch-edition-raw": {
-        "required_to_function": "none",   # reads live feeds, not memory — no input gate
-        "success_signal": {"kind": "deterministic", "key_glob": _RAW, "op": "count_nonempty", "min": _RAW_MIN},
+        "required_to_function": NONE,   # reads live feeds, not memory — no input gate
+        "success_signal": Sig.count_nonempty(key_glob=_RAW, min=_RAW_MIN),
         "deliverable_location": {"key": _RAW},
     },
     # Desk A + Desk B both write into the shared news.<date>.<edition>.article.* namespace
-    # (write_pipeline.DESK_A / DESK_B). Two separate steps (one agent each); each step's output
-    # check is the article set filling up. NB the shared namespace means one desk's count can
-    # include the other's — the gate reliably catches the whole-pipeline-dry failure (the 06-12
-    # class) even if it can't perfectly attribute a single silent desk.
+    # (write_pipeline.DESK_A / DESK_B). Two separate steps (one agent each); each step's output check
+    # is the article set filling up. NB the shared namespace means one desk's count can include the
+    # other's — the gate reliably catches the whole-pipeline-dry failure (the 06-12 class) even if it
+    # can't perfectly attribute a single silent desk.
     "evening-write-a": {
-        "required_to_function": {"kind": "deterministic", "key_glob": _RAW, "op": "count_nonempty", "min": _RAW_MIN},
-        "success_signal": {"kind": "deterministic", "key_glob": _ART, "op": "count_nonempty", "min": _ART_MIN},
+        "required_to_function": Sig.count_nonempty(key_glob=_RAW, min=_RAW_MIN),
+        "success_signal": Sig.count_nonempty(key_glob=_ART, min=_ART_MIN),
         "deliverable_location": {"key": _ART},
     },
     "evening-write-b": {
-        "required_to_function": {"kind": "deterministic", "key_glob": _RAW, "op": "count_nonempty", "min": _RAW_MIN},
-        "success_signal": {"kind": "deterministic", "key_glob": _ART, "op": "count_nonempty", "min": _ART_MIN},
+        "required_to_function": Sig.count_nonempty(key_glob=_RAW, min=_RAW_MIN),
+        "success_signal": Sig.count_nonempty(key_glob=_ART, min=_ART_MIN),
         "deliverable_location": {"key": _ART},
     },
     "evening-features": {
-        "required_to_function": {"kind": "deterministic", "key_glob": _ART, "op": "count_nonempty", "min": _DOWN_MIN},
-        "success_signal": {"kind": "deterministic", "key": "news.{date}.{edition}.quiz",
-                           "op": "json_field", "path": "questions", "min": 3},
-        "deliverable_location": {"key": "news.{date}.{edition}.quiz"},
+        "required_to_function": Sig.count_nonempty(key_glob=_ART, min=_DOWN_MIN),
+        "success_signal": Sig.json_field(key=_QUIZ, path="questions", min=3),
+        "deliverable_location": {"key": _QUIZ},
     },
     "evening-editorial": {
-        "required_to_function": {"kind": "deterministic", "key_glob": _ART, "op": "count_nonempty", "min": _DOWN_MIN},
-        "success_signal": {"kind": "deterministic", "key": "news.{date}.{edition}.editorial", "op": "nonempty"},
-        "deliverable_location": {"key": "news.{date}.{edition}.editorial"},
+        "required_to_function": Sig.count_nonempty(key_glob=_ART, min=_DOWN_MIN),
+        "success_signal": Sig.nonempty(key=_EDITORIAL),
+        "deliverable_location": {"key": _EDITORIAL},
     },
     "space-weather": {
-        "required_to_function": "none",   # fetches NOAA/NASA itself; independent of the fetch step
-        "success_signal": {"kind": "deterministic", "key": "news.{date}.{edition}.article.avaruussaa", "op": "nonempty"},
-        "deliverable_location": {"key": "news.{date}.{edition}.article.avaruussaa"},
+        "required_to_function": NONE,   # fetches NOAA/NASA itself; independent of the fetch step
+        "success_signal": Sig.nonempty(key=_AVARUUSSAA),
+        "deliverable_location": {"key": _AVARUUSSAA},
     },
 }
 

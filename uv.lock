@@ -10,7 +10,7 @@ resolution-markers = [
 
 [[package]]
 name = "aimeat-crewai"
-version = "0.4.0"
+version = "0.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "crewai" },
@@ -18,9 +18,9 @@ dependencies = [
     { name = "mcp" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8c/dc/c7b7254e706e73e07f48965baefe1f9e33f63baff491358954d3cd16d02e/aimeat_crewai-0.4.0.tar.gz", hash = "sha256:cb88087edb992a2775a22eb9cc54e8d9445acf6ce6bca5f575b85c4c008ab1a3", size = 48437, upload-time = "2026-06-10T10:02:04.116Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/24/8d/f46edfec97ff789ac0f610bbb056823a5b9c65ad36f5b4f92c7c43642088/aimeat_crewai-0.5.0.tar.gz", hash = "sha256:f366f0877301e0cfffdfcb2c22cfe88ee7aa26093de3d5bbf9dcf68f8eed416a", size = 58850, upload-time = "2026-06-13T14:53:40.893Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/13/c8/a2bb3eeaf5650ca343719bc8c307354bdfef71c8623fd72f53412e9835d0/aimeat_crewai-0.4.0-py3-none-any.whl", hash = "sha256:34327e1b36b597f5b913900e8363e29a17d95a3443afa55b10e49855326ce0bc", size = 39071, upload-time = "2026-06-10T10:02:02.925Z" },
+    { url = "https://files.pythonhosted.org/packages/14/c7/62b566798065b2a07a05820c1d1ff3240f8aca1b8c5a710592080f6125c4/aimeat_crewai-0.5.0-py3-none-any.whl", hash = "sha256:3c79b03f200b803b658acda884805e5b3dcf2e7c6a6713743c52cd3c645148ef", size = 49958, upload-time = "2026-06-13T14:53:39.523Z" },
 ]
 
 [[package]]
@@ -660,7 +660,7 @@ mcp = [
 
 [[package]]
 name = "crewaimeat"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "aimeat-crewai" },
@@ -683,7 +683,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aimeat-crewai", specifier = ">=0.4.0" },
+    { name = "aimeat-crewai", specifier = ">=0.5.0" },
     { name = "crewai", extras = ["tools"], specifier = ">=1.14.6" },
     { name = "feedparser", specifier = ">=6.0.12" },
     { name = "litellm", specifier = ">=1.87.1" },
