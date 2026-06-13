@@ -11,7 +11,9 @@ Run: uv run python crews/image_maker_crew.py
 
 from __future__ import annotations
 
-from crewaimeat.aimeat_crew import CrewSpec, run_crew
+from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
+from crewaimeat.contract_adopt import build_adopt_domain, is_adopt_task
+from crewaimeat.image_request_contract import CONTRACT, process_image_requests
 from crewaimeat.seedream_gen import make_image_tools
 
 AGENT_NAME = "image-maker"
@@ -23,10 +25,16 @@ Generates an image from your description (ByteDance Seedream 4.5) and gives you 
 **How to task me:** Describe the image you want — subject, style, mood, composition (and a size/aspect
 ratio if you care). I turn it into a vivid prompt, generate one image, store it publicly, and return
 the link. ~$0.04 per image. I make images; I don't edit your existing files or post anywhere.
+
+**Or adopt my contract:** add the `image-request` + `image-gallery` spaces to a workspace and write an
+`image-request` record (`{prompt, size?, aspect_ratio?, status: "requested"}`) — I generate it on my
+idle poll and write the image into an `image-gallery` document. No task or chat needed.
 '''
 
 
-def build_domain(ctx):
+def build_domain(ctx: BuildContext):
+    if is_adopt_task(ctx.task):  # UI "Adopt contract" chip -> provision the image-request/-gallery spaces
+        return build_adopt_domain(ctx, AGENT_NAME, CONTRACT)
     from crewai import Agent, Task
 
     director = Agent(
@@ -61,8 +69,16 @@ def build_domain(ctx):
 
 
 def run() -> None:
+    # idle_hook: a DETERMINISTIC poll that fulfils any pending image-request records (the contract
+    # surface). The CHECK is workspace reads (no LLM); generation runs only on a real pending request.
+    def _poll() -> None:
+        res = process_image_requests()
+        if res.get("processed") or res.get("failed"):
+            print(f"[{AGENT_NAME}] image-request poll: {res}")
+
     # A creative service — a mild temperature for prompt-crafting; the image call itself is deterministic.
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README, temperature=0.6))
+    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README,
+                      temperature=0.6, idle_hook=_poll, idle_hook_seconds=300))
 
 
 if __name__ == "__main__":

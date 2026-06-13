@@ -116,15 +116,29 @@ _OFFER_META: dict[str, dict] = {
              "note": "sends real email over SMTP; the AIMEAT_MAIL_TO allowlist is enforced on every send"},
         ],
     },
+    "image-request": {
+        "agent": "image-maker",
+        "title": "Generate an image from a request record",
+        "ask": ("Write an image-request record (prompt + optional size 0.5K-4K / aspect_ratio) and I "
+                "generate the image with Seedream 4.5 and write it into an image-gallery document. "
+                "Adopt the contract + write a record — no task or chat. I make NEW images; I don't edit "
+                "existing files or post anywhere."),
+        "example": "prompt: 'A retro-futuristic Finnish newsroom, neon, CRT monitors', size: '2K', aspect_ratio: '16:9'",
+        "cost": "cheap", "latency": "minutes",
+        "consequences": [
+            {"type": "publishes-public",
+             "note": "the generated image is stored at a public storage URL (~$0.04/image)"},
+        ],
+    },
 }
 
 
 def _contracts():
     """All CONTRACT dicts on the OSS side, imported lazily (keeps import cost off the crews)."""
     from crewaimeat import (activity_contract, company_contract, image_contract,
-                            mail_contract, market_contract, research_contract)
+                            image_request_contract, mail_contract, market_contract, research_contract)
     return [m.CONTRACT for m in (research_contract, market_contract, company_contract,
-                                 activity_contract, image_contract, mail_contract)]
+                                 activity_contract, image_contract, image_request_contract, mail_contract)]
 
 
 def _spaces(contract: dict) -> tuple[dict | None, dict | None]:
