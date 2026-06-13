@@ -399,6 +399,17 @@ _CREW_OFFERS: dict[str, list[dict]] = {
          "cost": "free", "latency": "seconds", "repeatability": "accumulative",
          "verification": "ungated", "consequences": []},
     ],
+    "image-maker": [
+        {"id": "generate-image", "title": "Generate an image from a description",
+         "ask": ("Describe an image (subject, style, mood, composition) and I generate one with "
+                 "ByteDance Seedream 4.5 and return a public URL. I make NEW images — I don't edit "
+                 "your existing files, lay out multi-page designs, or post anywhere."),
+         "example": "A serene Finnish lakeside summer cottage at golden hour, soft watercolor style",
+         "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
+         "verification": "deterministic",  # generation + presigned upload are code; output is a real stored image
+         "consequences": [{"type": "publishes-public",
+                           "note": "the generated image is stored at a public storage URL (~$0.04/image)"}]},
+    ],
     "editorial-writer": [
         {"id": "evening-editorial", "title": "The gonzo S.J. editorial + front-page index",
          "ask": ("I write the savage daily editorial from the day's articles and rebuild the public "
@@ -488,7 +499,7 @@ def fetch_crew_sample(agent: str) -> str:
 _GENERIC_WORKFLOW_OFFERS = {
     "tell-jokes", "tell-jokes-v2", "write-jingle", "stress-test-idea", "rate-feasibility",
     "estimate-spectrum", "tagline-or-translation", "daily-briefing", "map-knowledge",
-    "research-fi-company",
+    "research-fi-company", "generate-image",
 }
 
 
