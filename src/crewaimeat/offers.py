@@ -185,6 +185,20 @@ def offer_from_contract(contract: dict, with_sample: bool = False) -> dict:
             "sample": fetch_sample(meta["agent"], out) if with_sample else "untested",
         },
     }
+    # Workflow-compatibility: derive the three signals from the contract's request→result spaces,
+    # so a workflow step can name this offer. These contracts are request/event-driven (the output
+    # is a workspace doc keyed by the request id), so the keys template {org}/{ws}/{request} per run
+    # rather than {date}. v1 defaults — a workflow may override/strengthen per step. Only contracts
+    # with a real DOCUMENT output get them (mail = external send, no deliverable key → stays a sink).
+    in_ns = (inp or {}).get("namespace")
+    out_ns = (out or {}).get("namespace")
+    if in_ns and out_ns and (out or {}).get("mode") == "document" and in_ns != out_ns:
+        wsk = "organism.{org}.w.{ws}."
+        offer["required_to_function"] = {"kind": "deterministic",
+                                         "key_glob": wsk + in_ns + ".{request}.*", "op": "exists"}
+        offer["success_signal"] = {"kind": "deterministic",
+                                   "key_glob": wsk + out_ns + ".{request}.*", "op": "exists"}
+        offer["deliverable"]["location"]["key"] = wsk + out_ns + ".{request}.latest"
     return offer
 
 
@@ -467,6 +481,17 @@ def fetch_crew_sample(agent: str) -> str:
         return "untested"
 
 
+# Prose task-runner offers to make workflow-compatible with a GENERIC signal (output exists under
+# crews.<agent>.). They produce free prose, not a run-keyed deliverable, so the signal is weak — it
+# only makes the agent selectable as a workflow step; a real workflow overrides it. Orchestrators
+# (crew-forge, workflow-manager), read-only offers (fleet-status), and app-SDLC crews are excluded.
+_GENERIC_WORKFLOW_OFFERS = {
+    "tell-jokes", "tell-jokes-v2", "write-jingle", "stress-test-idea", "rate-feasibility",
+    "estimate-spectrum", "tagline-or-translation", "daily-briefing", "map-knowledge",
+    "research-fi-company",
+}
+
+
 def crew_offer(agent: str, meta: dict, with_sample: bool = False) -> dict:
     """One spec-shaped offer for a task-runner crew (deliverable = memory prefix, Run flow)."""
     offer = {
@@ -511,6 +536,16 @@ def crew_offer(agent: str, meta: dict, with_sample: bool = False) -> dict:
         loc = sig.get("deliverable_location")
         if loc and loc.get("key"):
             offer["deliverable"]["location"]["key"] = loc["key"]  # the memory key it writes (node blueprint)
+    elif meta["id"] in _GENERIC_WORKFLOW_OFFERS:
+        # Generic workflow-compatibility for prose task-runners: their deliverable is free prose under
+        # crews.<agent>. — there's no run-keyed output, so the signal is a weak "produces output here"
+        # (count_nonempty over the prefix). Enough to make the agent SELECTABLE as a workflow step; a
+        # real workflow overrides with a run-specific check. No memory input gate → "none" (the node
+        # now accepts "none" at offer level).
+        offer["required_to_function"] = "none"
+        offer["success_signal"] = {"kind": "deterministic", "key_glob": f"crews.{agent}.*",
+                                   "op": "count_nonempty", "min": 1}
+        offer["deliverable"]["location"]["key"] = f"crews.{agent}."
     return offer
 
 

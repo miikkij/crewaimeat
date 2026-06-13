@@ -24,7 +24,10 @@ def test_every_contract_has_authored_metadata():
 @pytest.mark.parametrize("contract", _contracts(), ids=lambda c: c["id"])
 def test_offer_shape_matches_spec(contract):
     o = offer_from_contract(contract, with_sample=False)
-    assert set(o) == SPEC_FIELDS
+    # base spec fields always; workflow-compat fields are OPTIONAL (a document-output contract derives
+    # its signals from the request→result spaces and so becomes workflow-compatible).
+    assert SPEC_FIELDS <= set(o)
+    assert set(o) - SPEC_FIELDS <= {"required_to_function", "success_signal"}
     assert o["cost"] in COSTS and o["latency"] in LATENCIES
     assert o["repeatability"] == "idempotent" and o["verification"] in VERIFICATIONS
     assert o["dataHandling"] in DATA_HANDLING
