@@ -445,7 +445,7 @@ def fetch_crew_sample(agent: str) -> str:
 
 def crew_offer(agent: str, meta: dict, with_sample: bool = False) -> dict:
     """One spec-shaped offer for a task-runner crew (deliverable = memory prefix, Run flow)."""
-    return {
+    offer = {
         "id": meta["id"],
         "title": meta["title"],
         "ask": meta["ask"],
@@ -465,6 +465,15 @@ def crew_offer(agent: str, meta: dict, with_sample: bool = False) -> dict:
             "sample": fetch_crew_sample(agent) if with_sample else "untested",
         },
     }
+    # Workflow-compatibility: an offer that declares its signals can be wired into a workflow step.
+    # The signals carry {date}/{edition} placeholders the workflow templates per run. Single source:
+    # crewaimeat.workflow_spec.AGENT_SIGNALS (also consumed by the workflow definition itself).
+    from crewaimeat.workflow_spec import AGENT_SIGNALS
+    sig = AGENT_SIGNALS.get(meta["id"])
+    if sig:
+        offer["required_to_function"] = sig["required_to_function"]
+        offer["success_signal"] = sig["success_signal"]
+    return offer
 
 
 PILOT_AGENTS = ("web-researcher", "activity-reporter", "image-scout", "postman")

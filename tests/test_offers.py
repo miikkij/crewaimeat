@@ -70,7 +70,10 @@ def test_crew_offers_match_spec_shape():
     for agent, metas in _CREW_OFFERS.items():
         for meta in metas:
             o = crew_offer(agent, meta, with_sample=False)
-            assert set(o) == SPEC_FIELDS
+            # base spec fields always; workflow-compat fields are OPTIONAL (only agents whose offer
+            # declares its signals get them — that's what makes them workflow-compatible).
+            assert SPEC_FIELDS <= set(o)
+            assert set(o) - SPEC_FIELDS <= {"required_to_function", "success_signal"}
             assert o["cost"] in COSTS and o["latency"] in LATENCIES
             assert o["repeatability"] in {"idempotent", "accumulative", "destructive"}
             assert o["verification"] in VERIFICATIONS and o["dataHandling"] in DATA_HANDLING
