@@ -407,6 +407,30 @@ _CREW_OFFERS: dict[str, list[dict]] = {
          "scheduleBorn": "daily 17:00 Europe/Helsinki — runs automatically",
          "consequences": []},
     ],
+    "news-writer": [
+        {"id": "evening-write-a", "title": "Write the Desk A news articles",
+         "ask": ("I write a full Finnish article for every Desk A category that has raw (talous, "
+                 "politiikka, urheilu, kulttuuri, tiede, terveys, …) from the day's scraped material. "
+                 "Runs on the evening schedule — ask only for a re-run. I write from the raw; "
+                 "I don't fetch sources or build the front page."),
+         "example": "Re-write today's Desk A articles (evening edition)",
+         "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
+         "verification": "deterministic",  # the category loop is code; grok writes each article
+         "scheduleBorn": "daily ~17:25 Europe/Helsinki — runs automatically",
+         "consequences": [{"type": "publishes-public", "note": "the articles are public newspaper content"}]},
+    ],
+    "news-writer-b": [
+        {"id": "evening-write-b", "title": "Write the Desk B news articles",
+         "ask": ("I write a full Finnish article for every Desk B category that has raw (tekoäly, "
+                 "pelit, pelidevaus, startup, ruoka, luonto, mieli, filosofia, …) from the day's "
+                 "scraped material. Runs on the evening schedule — ask only for a re-run. I write "
+                 "from the raw; I don't fetch sources or build the front page."),
+         "example": "Re-write today's Desk B articles (evening edition)",
+         "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
+         "verification": "deterministic",
+         "scheduleBorn": "daily ~17:25 Europe/Helsinki — runs automatically",
+         "consequences": [{"type": "publishes-public", "note": "the articles are public newspaper content"}]},
+    ],
     "daily-features-writer": [
         {"id": "evening-features", "title": "Evening features + the validated news quiz",
          "ask": ("I write the koodaus/prompt/matikka features and build the news quiz from the day's "
@@ -467,12 +491,26 @@ def crew_offer(agent: str, meta: dict, with_sample: bool = False) -> dict:
     }
     # Workflow-compatibility: an offer that declares its signals can be wired into a workflow step.
     # The signals carry {date}/{edition} placeholders the workflow templates per run. Single source:
-    # crewaimeat.workflow_spec.AGENT_SIGNALS (also consumed by the workflow definition itself).
+    # crewaimeat.workflow_spec.AGENT_SIGNALS (also consumed by the workflow definition itself). The
+    # node treats an agent as workflow-compatible exactly when its offer publishes all three:
+    # success_signal + required_to_function + deliverable.location.key.
     from crewaimeat.workflow_spec import AGENT_SIGNALS
     sig = AGENT_SIGNALS.get(meta["id"])
     if sig:
-        offer["required_to_function"] = sig["required_to_function"]
+        # required_to_function in the OFFER must be a valid signal OBJECT and PRESENT — the node's
+        # workflow-compat check rejects an offer that omits it, and rejects the bare string "none"
+        # AND an empty {all:[]} at offer level. A pure source step genuinely has no memory input, so
+        # we publish an always-true placeholder (its own registration exists) purely to satisfy
+        # compat; the real "no input gate" is set as required_to_function:"none" on the workflow STEP
+        # (the only place the node accepts the string), so the placeholder is never the live gate.
+        req = sig["required_to_function"]
+        if req == "none":
+            req = {"kind": "deterministic", "key": f"agents.{agent}.offers", "op": "exists"}
+        offer["required_to_function"] = req
         offer["success_signal"] = sig["success_signal"]
+        loc = sig.get("deliverable_location")
+        if loc and loc.get("key"):
+            offer["deliverable"]["location"]["key"] = loc["key"]  # the memory key it writes (node blueprint)
     return offer
 
 

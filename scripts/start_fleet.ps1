@@ -37,7 +37,7 @@ if ($LASTEXITCODE -ne 0) { Write-Error "uv sync failed (exit $LASTEXITCODE)"; ex
 # (pid-guarded), so this simply adopts an already-running daemon. Crews can also auto-start it,
 # but doing it here once avoids a 30-crew thundering-herd on a cold boot.
 Write-Host "[start_fleet] ensuring the shared loopback serve daemon (aimeat connect serve --http) ..."
-uv run python -c 'from aimeat_crewai import ensure_serve; d = ensure_serve(); print("[start_fleet] serve daemon: port", d["port"], "pid", d["pid"], "agents", len(d.get("agents") or []))'
+uv run python "$root\scripts\ensure_serve.py"
 if ($LASTEXITCODE -ne 0) { Write-Error "serve daemon failed to start (exit $LASTEXITCODE)"; exit $LASTEXITCODE }
 
 # Supervise that daemon. It is the fleet's single point of failure — if it ever dies (a rare

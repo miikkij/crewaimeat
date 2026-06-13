@@ -21,19 +21,22 @@ def lister_from(mem: dict):
 VARS = {"date": "2026-06-11", "edition": "evening"}
 
 
-def _full_edition(n_raw=12, n_art=12, quiz=True, editorial=True, frontpage_date="2026-06-11") -> dict:
+def _full_edition(n_raw=12, n_art=12, quiz=True, editorial=True, space_weather=True,
+                  frontpage_date="2026-06-11") -> dict:
     mem = {}
     for i in range(n_raw):
         mem[f"news.2026-06-11.evening.raw.cat{i}"] = f"raw text {i}"
     for i in range(n_art):
         mem[f"news.2026-06-11.evening.article.cat{i}"] = f"article body {i}"
     mem["news.2026-06-11.evening.article.talous"] = "Talousartikkeli sisältö."
+    if space_weather:
+        mem["news.2026-06-11.evening.article.avaruussaa"] = "Avaruussää tänään …"
     if quiz:
         mem["news.2026-06-11.evening.quiz"] = {"questions": [1, 2, 3, 4, 5]}
     if editorial:
         mem["news.2026-06-11.evening.editorial"] = "S.J. column …"
     if frontpage_date:
-        # frontpage is a LIST of index items (matches the real structure + json_array_match)
+        # frontpage is a LIST of index items (matches the real structure)
         mem["newspaper.frontpage"] = [{"date": frontpage_date, "category": "talous", "title": "x"},
                                       {"date": "2026-06-10", "category": "old", "title": "y"}]
     return mem
@@ -124,15 +127,18 @@ def test_none_signal_always_passes():
     assert check_signal("none", VARS, lister_from({}))[0]
 
 
-# ── offer inheritance + override ──────────────────────────────────────────────
-def test_resolve_inherits_offer_then_overrides():
+# ── offer inheritance ──────────────────────────────────────────────────────────
+def test_resolve_inherits_offer_signals():
     fetch = next(s for s in WORKFLOWS["laimeat-sanomat-evening"]["steps"] if s["id"] == "fetch")
     req, succ = resolve_step_signals(fetch)
     assert req == "none"  # fetch has no input gate
     assert succ == AGENT_SIGNALS["fetch-edition-raw"]["success_signal"]  # inherited from offer
-    write = next(s for s in WORKFLOWS["laimeat-sanomat-evening"]["steps"] if s["id"] == "write")
-    _, w_succ = resolve_step_signals(write)
-    assert "all" in w_succ and any("when" in c for c in w_succ["all"])  # step-declared incl. llm leaf
+    # write-a / write-b each inherit their own offer's two-sided signals (no inline override now).
+    write_a = next(s for s in WORKFLOWS["laimeat-sanomat-evening"]["steps"] if s["id"] == "write-a")
+    w_req, w_succ = resolve_step_signals(write_a)
+    assert w_req == AGENT_SIGNALS["evening-write-a"]["required_to_function"]
+    assert w_succ == AGENT_SIGNALS["evening-write-a"]["success_signal"]
+    assert w_succ["op"] == "count_nonempty"  # node grammar, not the old `check`
 
 
 # ── full workflow test-run ────────────────────────────────────────────────────
@@ -140,7 +146,8 @@ def test_check_workflow_all_green():
     L = lister_from(_full_edition())
     res = check_workflow("laimeat-sanomat-evening", {"date": "2026-06-11", "edition": "evening"}, lister=L)
     assert {s["id"]: s["state"] for s in res["steps"]} == {
-        "fetch": "GREEN", "write": "GREEN", "features": "GREEN", "editorial": "GREEN"}
+        "fetch": "GREEN", "write-a": "GREEN", "write-b": "GREEN",
+        "space-weather": "GREEN", "features": "GREEN", "editorial": "GREEN"}
 
 
 def test_check_workflow_red_at_editorial_output():
@@ -148,7 +155,7 @@ def test_check_workflow_red_at_editorial_output():
     res = check_workflow("laimeat-sanomat-evening", {"date": "2026-06-11", "edition": "evening"},
                          lister=lister_from(mem))
     by = {s["id"]: s["state"] for s in res["steps"]}
-    assert by["write"] == "GREEN" and by["editorial"] == "output-RED"
+    assert by["write-a"] == "GREEN" and by["write-b"] == "GREEN" and by["editorial"] == "output-RED"
 
 
 def test_check_workflow_empty_is_input_red_downstream():
@@ -156,5 +163,5 @@ def test_check_workflow_empty_is_input_red_downstream():
                          lister=lister_from({}))
     by = {s["id"]: s["state"] for s in res["steps"]}
     assert by["fetch"] == "output-RED"          # fetch has no input gate, its raw output is missing
-    assert by["write"] == "input-RED"           # write's input (raw) is missing → blamed upstream
+    assert by["write-a"] == "input-RED"         # write's input (raw) is missing → blamed upstream
     assert by["editorial"] == "input-RED"

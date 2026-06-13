@@ -7,11 +7,39 @@ Playwright render is the fallback for JS-heavy pages. URLs are deduped by domain
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from urllib.parse import urlparse
 
 from crewai.tools import tool
 
 _MIN_CHARS = 300  # below this, the trafilatura pass is too thin — try the Playwright fallback
+_EXTRACT_TIMEOUT = 45  # seconds — also caps a hung trafilatura.fetch_url (trafilatura #128)
+
+
+def _isolated_extract(args: list[str], stdin_text: str | None = None, timeout: int = _EXTRACT_TIMEOUT) -> str:
+    """Run trafilatura extraction in a THROWAWAY subprocess (crewaimeat._extract_worker).
+
+    A bad page can crash libxml2 with a Windows native fast-fail (exit 0xC0000409) that Python
+    cannot catch — in-process that kills the whole crew daemon. Isolated here, a crash (any
+    non-zero exit) or a hang (timeout) just returns "" and the daemon survives to fetch the next
+    URL. This is why the daemon itself never imports trafilatura/lxml for parsing."""
+    try:
+        r = subprocess.run([sys.executable, "-m", "crewaimeat._extract_worker", *args],
+                           input=stdin_text, capture_output=True, text=True,
+                           encoding="utf-8", timeout=timeout)
+    except (subprocess.TimeoutExpired, OSError):
+        return ""
+    # Prefer the worker's OUTPUT over its exit code: lxml/libxml2 can fast-fail (0xC0000409) or
+    # error during interpreter SHUTDOWN — AFTER the text was already written to stdout. A crash
+    # BEFORE any output leaves stdout empty (or partial JSON that won't parse) → "" → daemon safe.
+    out = (r.stdout or "").strip()
+    if not out:
+        return ""
+    try:
+        return json.loads(out).get("text") or ""
+    except (ValueError, AttributeError):
+        return ""
 
 
 def _domain(u: str) -> str:
@@ -39,20 +67,15 @@ def _top_domain_diverse(urls: list, n: int) -> list:
 
 
 def _trafilatura_text(url: str) -> str:
-    try:
-        import trafilatura
-        dl = trafilatura.fetch_url(url)
-        if not dl:
-            return ""
-        return trafilatura.extract(dl, include_comments=False, favor_recall=True) or ""
-    except Exception:  # noqa: BLE001
-        return ""
+    """Fetch + extract the URL's main text — in an isolated subprocess (see _isolated_extract),
+    so a libxml2 native crash on a bad page never takes down the crew daemon."""
+    return _isolated_extract(["--url", url])
 
 
 def _playwright_text(url: str) -> str:
-    """Fallback for JS-heavy pages: render with Playwright, then extract main text from the rendered HTML."""
+    """Fallback for JS-heavy pages: render with Playwright (its own browser subprocess), then run
+    the trafilatura.extract of the rendered HTML in the isolated worker (the lxml crash point)."""
     try:
-        import trafilatura
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
@@ -64,9 +87,9 @@ def _playwright_text(url: str) -> str:
             page.wait_for_timeout(2500)  # let late JS content settle
             html = page.content()
             browser.close()
-        return trafilatura.extract(html, include_comments=False, favor_recall=True) or ""
     except Exception:  # noqa: BLE001
         return ""
+    return _isolated_extract(["--html"], stdin_text=html, timeout=30)
 
 
 @tool("fetch_article_text")

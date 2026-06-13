@@ -129,7 +129,7 @@ def check_signal(node: Any, vars: dict, lister, llm_judge=None) -> tuple[bool, s
 
     # deterministic leaf
     key_glob = _templ(node.get("key") or node.get("key_glob") or "", vars)
-    check = node.get("check", "exists")
+    check = node.get("op") or node.get("check") or "exists"  # node grammar uses `op`; `check` kept as alias
     ents = _entries(lister, key_glob)
     if check == "count_nonempty":
         n = sum(1 for e in ents if _nonempty(e.get("value")))
@@ -163,28 +163,55 @@ def check_signal(node: Any, vars: dict, lister, llm_judge=None) -> tuple[bool, s
 
 
 # ── the agents' offered signals (the source offers.py publishes; workflow inherits) ──
+# Node grammar (handbook "Agent Workflows"): a deterministic leaf is
+#   {kind:"deterministic", key|key_glob, op: exists|nonempty|count_nonempty(min)|json_valid|
+#    json_schema(schema)|json_field(path, min|equals|nonempty)}.  `op` (not `check`); no
+#   json_array_match — so the editorial output check is just its own key being nonempty.
+# Each entry ALSO carries deliverable_location.key — where the agent WRITES — which the node
+# assembles into the workflow blueprint. offers.py emits all three onto the published offer.
 _RAW = "news.{date}.{edition}.raw.*"
 _ART = "news.{date}.{edition}.article.*"
+_RAW_MIN = 12     # ~20 categories fetched; loud floor
+_ART_MIN = 12     # the day's article set across both desks
+_DOWN_MIN = 3     # features/editorial just need a handful to work on
 
 AGENT_SIGNALS: dict[str, dict] = {
-    # offer id -> {required_to_function, success_signal}
+    # offer id -> {required_to_function, success_signal, deliverable_location}
     "fetch-edition-raw": {
-        "required_to_function": "none",
-        "success_signal": {"kind": "deterministic", "key_glob": _RAW, "check": "count_nonempty", "min": 12},
+        "required_to_function": "none",   # reads live feeds, not memory — no input gate
+        "success_signal": {"kind": "deterministic", "key_glob": _RAW, "op": "count_nonempty", "min": _RAW_MIN},
+        "deliverable_location": {"key": _RAW},
+    },
+    # Desk A + Desk B both write into the shared news.<date>.<edition>.article.* namespace
+    # (write_pipeline.DESK_A / DESK_B). Two separate steps (one agent each); each step's output
+    # check is the article set filling up. NB the shared namespace means one desk's count can
+    # include the other's — the gate reliably catches the whole-pipeline-dry failure (the 06-12
+    # class) even if it can't perfectly attribute a single silent desk.
+    "evening-write-a": {
+        "required_to_function": {"kind": "deterministic", "key_glob": _RAW, "op": "count_nonempty", "min": _RAW_MIN},
+        "success_signal": {"kind": "deterministic", "key_glob": _ART, "op": "count_nonempty", "min": _ART_MIN},
+        "deliverable_location": {"key": _ART},
+    },
+    "evening-write-b": {
+        "required_to_function": {"kind": "deterministic", "key_glob": _RAW, "op": "count_nonempty", "min": _RAW_MIN},
+        "success_signal": {"kind": "deterministic", "key_glob": _ART, "op": "count_nonempty", "min": _ART_MIN},
+        "deliverable_location": {"key": _ART},
     },
     "evening-features": {
-        "required_to_function": {"kind": "deterministic", "key_glob": _ART, "check": "count_nonempty", "min": 3},
+        "required_to_function": {"kind": "deterministic", "key_glob": _ART, "op": "count_nonempty", "min": _DOWN_MIN},
         "success_signal": {"kind": "deterministic", "key": "news.{date}.{edition}.quiz",
-                           "check": "json_field", "path": "questions", "min": 3},
+                           "op": "json_field", "path": "questions", "min": 3},
+        "deliverable_location": {"key": "news.{date}.{edition}.quiz"},
     },
     "evening-editorial": {
-        "required_to_function": {"kind": "deterministic", "key_glob": _ART, "check": "count_nonempty", "min": 3},
-        "success_signal": {"all": [
-            {"kind": "deterministic", "key": "news.{date}.{edition}.editorial", "check": "nonempty"},
-            # frontpage is a LIST of index items; require this edition's items to be present in it.
-            {"kind": "deterministic", "key": "newspaper.frontpage", "check": "json_array_match",
-             "where_field": "date", "where_equals": "{date}", "min": 1},
-        ]},
+        "required_to_function": {"kind": "deterministic", "key_glob": _ART, "op": "count_nonempty", "min": _DOWN_MIN},
+        "success_signal": {"kind": "deterministic", "key": "news.{date}.{edition}.editorial", "op": "nonempty"},
+        "deliverable_location": {"key": "news.{date}.{edition}.editorial"},
+    },
+    "space-weather": {
+        "required_to_function": "none",   # fetches NOAA/NASA itself; independent of the fetch step
+        "success_signal": {"kind": "deterministic", "key": "news.{date}.{edition}.article.avaruussaa", "op": "nonempty"},
+        "deliverable_location": {"key": "news.{date}.{edition}.article.avaruussaa"},
     },
 }
 
@@ -200,31 +227,35 @@ WORKFLOWS: dict[str, dict] = {
         "vars": [
             {"name": "date", "type": "date", "default": "<run-date>", "example": "2026-06-11",
              "description": {"fi_FI": "Painoksen päivä (YYYY-MM-DD)", "en_US": "Edition date (YYYY-MM-DD)"}},
-            {"name": "edition", "type": "enum[morning,evening]", "default": "evening",
-             "description": {"fi_FI": "Painos", "en_US": "Edition"}},
+            {"name": "edition", "type": "string", "default": "evening",
+             "description": {"fi_FI": "Painos (evening/morning)", "en_US": "Edition (evening/morning)"}},
         ],
         "steps": [
             {"id": "fetch", "agent": "news-fetcher", "offer": "fetch-edition-raw",
              "description": {"fi_FI": "Hae päivän raakauutismateriaali per kategoria.",
                              "en_US": "Fetch the day's raw news per category."},
              "stage": ("crewaimeat.fetch_pipeline", "build_edition_raw")},
-            {"id": "write", "agent": ["news-writer", "news-writer-b"], "after": ["fetch"],
-             "description": {"fi_FI": "Kirjoita artikkeli jokaisesta kategoriasta (Desk A + B).",
-                             "en_US": "Write an article per category (Desk A + B)."},
-             # no single offer (two agents) -> signals declared inline on the step
-             "required_to_function": {"kind": "deterministic", "key_glob": _RAW, "check": "count_nonempty", "min": 12},
-             "success_signal": {"all": [
-                 {"kind": "deterministic", "key_glob": _ART, "check": "count_nonempty", "min": 12},
-                 {"when": {"kind": "deterministic", "key": "news.{date}.{edition}.article.talous", "check": "nonempty"},
-                  "then": {"kind": "llm", "key": "news.{date}.{edition}.article.talous",
-                           "ask": "Onko tämä oikea suomenkielinen talousartikkeli, ei virhe/placeholder? OK tai FAILED + syy."}},
-             ]},
-             "stage": ("crewaimeat.write_pipeline", "write_edition_articles")},
-            {"id": "features", "agent": "daily-features-writer", "offer": "evening-features", "after": ["write"],
+            # Desk A + Desk B run in parallel after fetch; one agent each, signals inherited from offers.
+            {"id": "write-a", "agent": "news-writer", "offer": "evening-write-a", "after": ["fetch"],
+             "description": {"fi_FI": "Kirjoita Desk A:n kategorioiden artikkelit.",
+                             "en_US": "Write the Desk A category articles."},
+             "stage": ("crewaimeat.write_pipeline", "write_edition_articles"), "desk": "A"},
+            {"id": "write-b", "agent": "news-writer-b", "offer": "evening-write-b", "after": ["fetch"],
+             "description": {"fi_FI": "Kirjoita Desk B:n kategorioiden artikkelit.",
+                             "en_US": "Write the Desk B category articles."},
+             "stage": ("crewaimeat.write_pipeline", "write_edition_articles"), "desk": "B"},
+            # Independent: pulls NOAA/NASA itself, writes the avaruussaa article into the set.
+            {"id": "space-weather", "agent": "space-weather-writer", "offer": "space-weather",
+             "description": {"fi_FI": "Avaruussää-artikkeli (NOAA/NASA).",
+                             "en_US": "Space-weather article (NOAA/NASA)."}},
+            {"id": "features", "agent": "daily-features-writer", "offer": "evening-features",
+             "after": ["write-a", "write-b"],
              "description": {"fi_FI": "Erikoisosiot + uutisvisa päivän artikkeleista.",
                              "en_US": "Features + news quiz from the day's articles."},
              "stage": ("crewaimeat.features_pipeline", "build_quiz")},
-            {"id": "editorial", "agent": "editorial-writer", "offer": "evening-editorial", "after": ["write"],
+            {"id": "editorial", "agent": "editorial-writer", "offer": "evening-editorial",
+             "after": ["write-a", "write-b", "space-weather"],
+             "retry": {"max": 2, "backoff_min": 5},
              "description": {"fi_FI": "Gonzo-pääkirjoitus + julkinen etusivuindeksi.",
                              "en_US": "Gonzo editorial + public front-page index."},
              "stage": ("crewaimeat.editorial_pipeline", "build_editorial_and_index")},
@@ -232,6 +263,41 @@ WORKFLOWS: dict[str, dict] = {
         "on_step_fail": "inspect",
     },
 }
+
+
+def node_definition(wf_id: str = "laimeat-sanomat-evening") -> dict:
+    """Emit the exact `definition` payload for aimeat_workflow_save: localized title/description,
+    one schedule trigger, typed vars, and steps as {id, agent, offer, after, description, retry}.
+    Signals are INHERITED from each agent's offer (the node resolves+pins them), so they are NOT
+    repeated here. Crew-side-only keys (`stage`, `desk`) are stripped — the node never sees them.
+    `required_to_function:"none"` is left to the offer (fetch/space-weather offers declare it)."""
+    wf = WORKFLOWS[wf_id]
+    steps = []
+    for s in wf["steps"]:
+        step = {"id": s["id"], "agent": s["agent"], "offer": s["offer"],
+                "description": s["description"]}
+        if s.get("after"):
+            step["after"] = s["after"]
+        if s.get("retry"):
+            step["retry"] = s["retry"]
+        # A pure source step (offer omits required_to_function) declares "none" at the STEP level —
+        # the only place the node accepts the bare string (it means "no input gate, don't block").
+        if AGENT_SIGNALS.get(s["offer"], {}).get("required_to_function") == "none":
+            step["required_to_function"] = "none"
+        steps.append(step)
+    vars_out = [{"name": v["name"], "type": v["type"], "description": v["description"],
+                 **({"default": v["default"]} if "default" in v else {}),
+                 **({"example": v["example"]} if "example" in v else {})}
+                for v in wf["vars"]]
+    return {
+        "title": wf["title"],
+        "description": wf["description"],
+        "trigger": {"kind": "schedule", "cron": wf["schedule"]["cron"],
+                    "timezone": wf["schedule"]["timezone"]},
+        "vars": vars_out,
+        "steps": steps,
+        "on_step_fail": wf.get("on_step_fail", "inspect"),
+    }
 
 
 def resolve_step_signals(step: dict) -> tuple[Any, Any]:
