@@ -21,6 +21,9 @@ param([switch]$DryRun)
 # singular ("watchdog.ps1"), so this script ("terminate_fleet.ps1") never matches itself;
 # we also exclude our own PID for safety.
 $groups = [ordered]@{
+    # serve-watchdog FIRST: it auto-restarts the serve daemon, so it must die before the
+    # connector or it would immediately revive the very daemon we're trying to stop.
+    'serve-watchdog' = 'serve_watchdog'
     'watchdog'  = 'scripts[\\/]watchdog\.ps1'
     'daemon'    = 'crews[\\/][A-Za-z0-9_]+_crew\.py'
     'connector' = 'connect\s+serve'

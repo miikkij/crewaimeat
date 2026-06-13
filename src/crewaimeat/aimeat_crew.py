@@ -1126,6 +1126,15 @@ def run_crew(spec: CrewSpec) -> None:
     [liaison, *your domain agents] with tasks [*your domain tasks, finalize] and
     runs it. Stop with Ctrl+C.
     """
+    # A rare native crash (observed: Windows exit 0xC0000409) leaves no Python traceback by
+    # default. faulthandler dumps the C/Python stack on a fatal signal so the NEXT one is
+    # diagnosable instead of a silent exit code; harmless when nothing crashes.
+    try:
+        import faulthandler
+        faulthandler.enable()
+    except Exception:  # noqa: BLE001 — never let diagnostics break startup
+        pass
+
     progress = install_progress(spec.agent_name)
 
     # 0a) Single-instance guard: if another daemon for THIS agent is already running, exit

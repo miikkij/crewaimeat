@@ -40,6 +40,14 @@ Write-Host "[start_fleet] ensuring the shared loopback serve daemon (aimeat conn
 uv run python -c 'from aimeat_crewai import ensure_serve; d = ensure_serve(); print("[start_fleet] serve daemon: port", d["port"], "pid", d["pid"], "agents", len(d.get("agents") or []))'
 if ($LASTEXITCODE -ne 0) { Write-Error "serve daemon failed to start (exit $LASTEXITCODE)"; exit $LASTEXITCODE }
 
+# Supervise that daemon. It is the fleet's single point of failure — if it ever dies (a rare
+# native crash, exit 0xC0000409, has been seen) nothing else restarts it and the WHOLE fleet's
+# tunnel goes down silently. The supervisor calls the idempotent ensure_serve on a timer, so a
+# crashed daemon comes back in seconds and never double-spawns. Detached + single-instance.
+Write-Host "[start_fleet] starting the serve-daemon supervisor (auto-restarts the shared tunnel) ..."
+Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',"$root\scripts\serve_watchdog.ps1" `
+    -WorkingDirectory $root -WindowStyle Hidden -RedirectStandardOutput "$root\logs\serve_watchdog.log" -RedirectStandardError "$root\logs\serve_watchdog.err.log"
+
 Write-Host "[start_fleet] starting crew-forge under the watchdog (it reconciles the fleet on startup) ..."
 Write-Host "[start_fleet] crew-forge stays in THIS window; the other crews launch detached. Ctrl+C stops only crew-forge."
 & "$root\scripts\watchdog.ps1" 'crews\crew_forge_crew.py'
