@@ -5,7 +5,8 @@ description = "AIMEAT × CrewAI integration: a validated crew template (liaison 
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
 dependencies = [
-    "crewai[tools]>=1.14.6",
+    "crewai[tools]>=1.14.7",  # 1.14.7: per-run state isolation (concurrent daemons), custom-BaseLLM
+    #                           restore fix, aiohttp/docling CVE fixes, faster import
     "aimeat-crewai>=0.5.0",  # 0.5.0: native offers + workflow-compat (Sig, build_offer/publish_offers,
     #                          aimeat-offers CLI, CrewAI tools, liaison); 0.4.0 connector forward tunnel
     "tavily-python>=0.5.0",  # optional Tavily fallback (USE_TAVILY=1); default web search is SearXNG
