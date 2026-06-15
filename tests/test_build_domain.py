@@ -90,20 +90,27 @@ def test_max_iter_is_a_sane_backstop(module_name):
 
 
 # ---- Regression tests for the two live bugs fixed in this change ----
-def test_news_writer_writer_agents_have_memory_tools():
-    """Regression: every news-writer agent instructed to call write_memory must actually have a
-    write_memory tool (the three category writers previously had no tools=, so articles never
-    reached memory)."""
+def test_news_writer_agent_has_the_tool_it_is_told_to_call():
+    """Regression (told-to-call ⇒ has-tool): a news-writer task that instructs a write-tool call must
+    run on an agent that actually has that tool, or the articles never reach memory.
+
+    Originally this guarded three category-writer agents told to call write_memory (they had no
+    tools=). The crew is now a thin DETERMINISTIC wrapper — one 'Write Runner' agent told to call
+    write_edition_articles ONCE (the category loop runs in code). The invariant is the same; the
+    vocabulary changed. We check every write-tool the description might name, so a future return of
+    write_memory is covered too."""
     _mod, _agents, tasks = _build("news_writer_crew", prompt="2026-06-05 morning edition")
     checked = 0
     for t in tasks:
-        if "write_memory(" in (t.description or ""):
-            checked += 1
-            tool_names = {getattr(tool, "name", "") for tool in (t.agent.tools or [])}
-            assert "write_memory" in tool_names, (
-                f"news_writer: agent '{t.agent.role}' is told to call write_memory but has no such tool"
-            )
-    assert checked >= 3, "expected the 3 category-writer tasks to instruct write_memory"
+        desc = t.description or ""
+        tool_names = {getattr(tool, "name", "") for tool in (t.agent.tools or [])}
+        for fn in ("write_edition_articles", "write_memory"):
+            if f"{fn}(" in desc:
+                checked += 1
+                assert fn in tool_names, (
+                    f"news_writer: agent '{t.agent.role}' is told to call {fn} but has no such tool"
+                )
+    assert checked >= 1, "expected the write-runner task to instruct a write-tool call"
 
 
 def test_finnish_researcher_has_no_unsubstituted_placeholders():

@@ -676,9 +676,15 @@ dependencies = [
     { name = "tzdata" },
 ]
 
+[package.optional-dependencies]
+tui = [
+    { name = "textual" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
+    { name = "textual" },
 ]
 
 [package.metadata]
@@ -692,12 +698,17 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0.1" },
     { name = "requests", specifier = ">=2.31" },
     { name = "tavily-python", specifier = ">=0.5.0" },
+    { name = "textual", marker = "extra == 'tui'", specifier = ">=0.60" },
     { name = "trafilatura", specifier = ">=2.0.0" },
     { name = "tzdata" },
 ]
+provides-extras = ["tui"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8.0" }]
+dev = [
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "textual", specifier = ">=0.60" },
+]
 
 [[package]]
 name = "cryptography"

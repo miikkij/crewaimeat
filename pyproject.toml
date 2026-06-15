@@ -20,8 +20,12 @@ dependencies = [
     "feedparser>=6.0.12",
 ]
 
+[project.optional-dependencies]
+tui = ["textual>=0.60"]  # the fleet TUI (crewaimeat-tui); optional so the core install stays lean
+
 [project.scripts]
 crewaimeat = "crewaimeat.scaffold:main"
+crewaimeat-tui = "crewaimeat.tui.app:main"
 research-crew = "crewaimeat.research_crew:run"
 
 [build-system]
@@ -32,7 +36,7 @@ build-backend = "hatchling.build"
 packages = ["src/crewaimeat"]
 
 [dependency-groups]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "textual>=0.60"]  # textual: so the TUI render/app tests can run
 
 [tool.pytest.ini_options]
 # The L1/L2 test floor: deterministic, no LLM, no network. See docs/aimeat-guides/nextgeneration/

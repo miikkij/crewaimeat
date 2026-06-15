@@ -481,8 +481,9 @@ _CREW_OFFERS: dict[str, list[dict]] = {
          "cost": "cheap", "latency": "minutes", "repeatability": "idempotent",
          "verification": "deterministic",  # rules + outbox writes are code; stable ids make re-runs idempotent
          "consequences": [
-             {"type": "delivers-guidance",
-              "note": "writes advisories to the AIMEAT outbox; AIMEAT gates + delivers them into the app's Guidance tab"},
+             {"type": "mutates-live-app",
+              "note": "advisories are written to the AIMEAT outbox; after OWNER-GATED AIMEAT delivery "
+                      "(deliver-advisory) they appear in the app's Guidance tab — indirect, never a direct write"},
          ]},
     ],
     "daily-features-writer": [
