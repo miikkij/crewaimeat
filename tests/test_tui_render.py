@@ -52,3 +52,10 @@ def test_detail_lines_none_and_row():
     lines = render.detail_lines(_row(agent="news-fetcher"))
     joined = "\n".join(lines)
     assert "news-fetcher" in joined and "last_seen:" in joined
+
+
+def test_overview_lines_includes_basics_and_readme():
+    j = "\n".join(render.overview_lines(_row(agent="news-fetcher"), "Hello from README"))
+    assert "news-fetcher" in j and "── README ──" in j and "Hello from README" in j
+    assert "(no README)" in "\n".join(render.overview_lines(_row(), None))
+    assert render.overview_lines(None, None) == ["(no agent selected)"]

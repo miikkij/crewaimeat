@@ -6,7 +6,7 @@ import asyncio
 
 from crewaimeat.tui.app import FleetApp
 from crewaimeat.tui.fleet_state import AgentRow, FleetSnapshot
-from textual.widgets import DataTable, Static
+from textual.widgets import DataTable, Static, TabPane
 
 
 def _snap():
@@ -29,11 +29,32 @@ def test_app_renders_injected_snapshot():
             table = app.query_one("#agents", DataTable)
             assert table.row_count == 2
             assert tuple(c.label.plain for c in table.columns.values())[0] == "agent"
-            detail = app.query_one("#detail", Static)
-            # the highlighted (first) row drives the detail pane
-            assert "news-fetcher" in str(detail.render())
+            # three detail tabs exist
+            assert {p.id for p in app.query(TabPane)} >= {"tab-overview", "tab-config", "tab-logs"}
+            # the highlighted (first) row drives the Overview pane
+            assert "news-fetcher" in str(app.query_one("#ov", Static).render())
+            # Config pane shows the llm chain
+            assert "llm profile" in str(app.query_one("#cfg", Static).render())
             # statusbar reflects the snapshot
             status = app.query_one("#statusbar", Static)
             assert "running" in str(status.render())
+
+    asyncio.run(go())
+
+
+def test_restart_key_opens_confirm_modal_and_cancels():
+    """Pressing 'r' on a real crew opens the confirm modal; 'n' cancels without acting."""
+    from crewaimeat.tui.app import ConfirmScreen
+
+    async def go():
+        app = FleetApp(auto_node=False, snapshot_fn=lambda ni: _snap(), node_index_fn=lambda c: {})
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("r")          # selected row 0 = news-fetcher (has a crew file)
+            await pilot.pause()
+            assert isinstance(app.screen, ConfirmScreen)
+            await pilot.press("n")          # cancel
+            await pilot.pause()
+            assert not isinstance(app.screen, ConfirmScreen)
 
     asyncio.run(go())

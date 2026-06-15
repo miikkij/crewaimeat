@@ -430,16 +430,13 @@ def register_and_launch_crew(agent_name: str) -> str:
     )
 
 
-@tool("restart_crew")
-def restart_crew(agent_name: str) -> str:
-    """Bring an already-built crew back online: if its process is down, launch it under
-    the watchdog; if it is already running, leave it. Use this for 'restart' / 'relaunch'
-    / 'bring back' requests. The crew file crews/<agent_name>_crew.py must already exist
-    (build it first with the forge tools if it does not).
-    """
+def start_crew(agent_name: str) -> str:
+    """Launch a built crew under the watchdog if it is down; if already running, leave it. PLAIN
+    function so code/the TUI can call it directly — the @tool wrapper below is for agents (a @tool
+    object is not callable, which is why programmatic callers must use this)."""
     rel = f"crews/{_fname(agent_name)}"
     if not (_project_root() / rel).exists():
-        return f"ERROR: {rel} does not exist. Build the crew first, then restart it."
+        return f"ERROR: {rel} does not exist. Build the crew first, then start it."
     if is_crew_running(agent_name):
         return f"'{agent_name}' is already running ({rel}); left it as is."
     pid, log = launch_crew(rel)
@@ -450,6 +447,88 @@ def restart_crew(agent_name: str) -> str:
         "If its token still needs approval it will wait until you approve it on AIMEAT, "
         "then come online by itself."
     )
+
+
+@tool("restart_crew")
+def restart_crew(agent_name: str) -> str:
+    """Bring an already-built crew back online: if its process is down, launch it under the
+    watchdog; if it is already running, leave it. Use this for 'restart' / 'relaunch' / 'bring back'
+    requests. The crew file crews/<agent_name>_crew.py must already exist."""
+    return start_crew(agent_name)
+
+
+def _crew_proc_entries(fname: str) -> list[tuple[int, str]]:
+    """[(pid, command_line)] of processes whose command line references this crew filename (excluding
+    THIS process). Cross-platform. Only crew processes match — the serve daemon's line is
+    'connect serve' (no crew fname), so it is never included here."""
+    out: list[tuple[int, str]] = []
+    try:
+        if os.name == "nt":
+            ps = ("Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and "
+                  "$_.CommandLine -like '*FNAME*' } | "
+                  "ForEach-Object { \"$($_.ProcessId)|$($_.CommandLine)\" }").replace("FNAME", fname)
+            r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                               capture_output=True, text=True, timeout=30)
+            for ln in (r.stdout or "").splitlines():
+                if "|" in ln:
+                    pid_s, cl = ln.split("|", 1)
+                    if pid_s.strip().isdigit():
+                        out.append((int(pid_s.strip()), cl))
+        else:
+            r = subprocess.run(["pgrep", "-af", fname], capture_output=True, text=True, timeout=30)
+            for ln in (r.stdout or "").splitlines():
+                parts = ln.split(" ", 1)
+                if parts and parts[0].isdigit():
+                    out.append((int(parts[0]), parts[1] if len(parts) > 1 else ""))
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def _classify_crew_pids(entries: list[tuple[int, str]]) -> tuple[list[int], list[int]]:
+    """Split (pid, cmdline) entries into (watchdog_pids, daemon_pids). Pure — unit-tested."""
+    wd, dae = [], []
+    for pid, cl in entries:
+        (wd if re.search(r"watchdog\.(ps1|sh)", cl or "") else dae).append(pid)
+    return wd, dae
+
+
+def _kill_pid_tree(pid: int) -> None:
+    """Kill a process (and its child tree on Windows — taskkill /T catches the venv-shim child)."""
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=15)
+        else:
+            os.kill(pid, 9)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def stop_crew(agent_name: str) -> str:
+    """Stop a crew: kill its WATCHDOG first (so it cannot respawn the daemon), then its daemon
+    process(es). Touches only this crew's processes (matched by filename) — never the serve daemon."""
+    fname = _fname(agent_name)
+    entries = _crew_proc_entries(fname)
+    if not entries:
+        return f"'{agent_name}' is not running (nothing to stop)."
+    watchdogs, daemons = _classify_crew_pids(entries)
+    for pid in watchdogs:  # watchdog FIRST — otherwise it relaunches the daemon we are about to kill
+        _kill_pid_tree(pid)
+    for pid in daemons:
+        _kill_pid_tree(pid)
+    return f"Stopped '{agent_name}': killed {len(watchdogs)} watchdog + {len(daemons)} daemon process(es)."
+
+
+def recycle_crew(agent_name: str) -> str:
+    """A true restart: stop the crew (kill watchdog+daemon) then relaunch it under a fresh watchdog."""
+    rel = f"crews/{_fname(agent_name)}"
+    if not (_project_root() / rel).exists():
+        return f"ERROR: {rel} does not exist. Build the crew first."
+    stopped = stop_crew(agent_name)
+    pid, log = launch_crew(rel)
+    if pid is None:
+        return f"{stopped}  Relaunch FAILED: {log}"
+    return f"{stopped}  Relaunched (pid {pid}). Log: {log}."
 
 
 @tool("list_crews")
@@ -465,13 +544,9 @@ def list_crews() -> str:
     return "Crews in crews/:\n" + "\n".join(lines)
 
 
-@tool("reauth_crew")
-def reauth_crew(agent_name: str) -> str:
-    """Re-run AIMEAT authorization for an existing agent so the owner can approve it again.
-    Use after an accidental deny, or when a token expired/was revoked. Re-registers via
-    `npx aimeat@latest connect add`; the owner then re-approves it in the dashboard.
-    Owner is read from the AIMEAT_OWNER environment variable.
-    """
+def reauth(agent_name: str) -> str:
+    """Re-run AIMEAT authorization for an agent so the owner can approve it again. PLAIN function
+    (callable from code/the TUI); the @tool wrapper below is for agents."""
     owner = os.getenv("AIMEAT_OWNER", "").strip()
     if not owner:
         return (
@@ -484,6 +559,13 @@ def reauth_crew(agent_name: str) -> str:
         f"Re-auth started for '{agent_name}'. Approve it on AIMEAT (Profile -> Agents) and it "
         f"comes back online by itself. Connector output:\n{out or '(none)'}"
     )
+
+
+@tool("reauth_crew")
+def reauth_crew(agent_name: str) -> str:
+    """Re-run AIMEAT authorization for an existing agent so the owner can approve it again.
+    Use after an accidental deny, or when a token expired/was revoked."""
+    return reauth(agent_name)
 
 
 @tool("start_all_crews")

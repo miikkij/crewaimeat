@@ -4,6 +4,45 @@ Notable changes to crewaimeat. Format loosely follows [Keep a Changelog](https:/
 Dates are the working dates; entries are **uncommitted and take effect on the next fleet restart**
 (the daemons import the modules at start).
 
+## [0.3.0] — 2026-06-13 → 2026-06-15
+
+### Added
+- **Fleet TUI — a lazydocker-style terminal monitor + manager (`crewaimeat-tui`).** A cross-platform
+  (Windows/Linux) Textual app — the interactive successor to `scripts/view_fleet.ps1` — to watch and drive
+  the whole fleet from one screen. `src/crewaimeat/tui/`:
+  - **`fleet_state.py`** — the pure, testable data layer: merges the on-disk crew roster, the live process
+    table (watchdog/daemon counts), the lock files, `serve.json`, and one read-only `aimeat_agents_list`
+    into a `FleetSnapshot`. Status taxonomy extends view_fleet's (`running` / `down` / `orphan` /
+    `DUPLICATE` / `zombie`) with **`stale-heartbeat`** — locally up but the node's `last_seen` is old (the
+    "connector up, daemon not polling" case).
+  - **`app.py` + `render.py`** — the Textual UI: a status bar, an agent table (color-coded status), and a
+    detail pane with **Overview / Config / Logs tabs** (`o`/`c`/`l`). Overview shows the basics + the agent's
+    README; Config shows the LLM profile + ordered provider→model chain + offer/workflow-compat counts; Logs
+    tails the watchdog log. Two refresh tiers run off the UI thread: LOCAL (~2 s, no network) and NODE
+    (~13 s, one cached `agents_list` call) — never a tight-loop AIMEAT call.
+  - **`versions.py`** — installed vs latest for `aimeat-crewai` (PyPI) and the `aimeat` CLI (npm), with an
+    update flag; fetched off-thread + cached.
+  - **`agent_meta.py`** — per-agent enrichment, all LOCAL: the LLM routing chain (`llm_providers.json`), the
+    offer/workflow-compatibility counts, and the crew's README (FIGLET banner reduced to plain text).
+  - **`actions.py`** — fleet control behind confirm modals, off the UI thread: start/stop/restart a selected
+    crew (`s`/`x`/`r`), start/stop/restart the whole fleet (`S`/`X`/`R`), re-auth (`a`), reap stray serve
+    daemons (`d`). Every mutating action is safety-routed (stop kills watchdog-then-daemon by crew filename
+    only — never the serve daemon; fleet stop uses `terminate_fleet.ps1`; reap uses `ensure_single_serve`).
+  - Optional `[tui]` extra (`textual>=0.60`); the `crewaimeat-tui` entry point. Plan: `docs/internal/tui-plan.md`.
+- **`forge.stop_crew` / `forge.recycle_crew`** — a real stop (kill the watchdog FIRST so it cannot respawn,
+  then the daemon; matched by crew filename, so the serve daemon is never touched) and a true restart
+  (stop → relaunch). Plain `start_crew` / `reauth` twins of the `@tool`-wrapped versions so code/the TUI can
+  call them (a `@tool` object is not callable).
+- **Single-serve invariant** (`src/crewaimeat/serve_guard.py`) — `ensure_single_serve()`: a cross-process
+  lock around the check→spawn plus a dedup pass that reaps any serve daemon `serve.json` does not point at.
+  Two daemons stole each other's tunnels (a reconnect storm) and dispatched tasks timed out silently — the
+  "(L)AIMEAT Sanomat just didn't update, no error" failure. `scripts/ensure_serve.py` + the serve-watchdog
+  now go through it.
+- **postman durable mail dedup** (`mail_contract.process_mail`) — a per-machine sent-marker
+  (`logs/.postman_mail_sent_runs.json`): a mail this machine already delivered is never re-sent, even when
+  the workspace record's `done` write does not stick (a cross-agent settle / stale read). Fixes the
+  "Market scan re-sent on every fleet start" bug.
+
 ## [0.2.0] — 2026-06-04 → 2026-06-13
 
 ### Added

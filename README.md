@@ -23,6 +23,7 @@ Prefer to do it by hand? Follow the [Quickstart](#quickstart) below — `startup
 - [The agent's README, commands, and services](#the-agents-readme-commands-and-services)
 - [crew-forge: an agent that makes agents](#crew-forge-an-agent-that-makes-agents)
 - [Running the fleet (scripts)](#running-the-fleet-scripts)
+- [Fleet TUI (crewaimeat-tui)](#fleet-tui-crewaimeat-tui)
 
 ## Overview
 
@@ -266,3 +267,31 @@ Run one crew at a time, or manage the whole fleet with the scripts in `scripts/`
 **Which and when, in short:** for day-to-day dev, run one crew with `uv run python crews/<x>_crew.py`. To bring everything up in one go (or after `terminate_fleet`), use `start_fleet`. To have the fleet survive reboots unattended, run `install-autostart` once. Use `view_fleet` to check state, `terminate_fleet` to stop, and crew-forge's `/startall` to re-reconcile while it's running.
 
 **Why there's no "launch every crew" loop:** starting the fleet is crew-forge's *idempotent reconcile* (in code) — it skips crews already running and never double-launches. `start_fleet` and `install-autostart` only bootstrap crew-forge; it brings up the rest (see [Surviving a reboot](#surviving-a-reboot-the-fleet-supervisor)). `terminate_fleet` is the blunt inverse (kill all).
+
+## Fleet TUI (crewaimeat-tui)
+
+A lazydocker-style terminal UI to watch and drive the whole fleet from one screen — the cross-platform (Windows/Linux), interactive successor to `view_fleet.ps1`. It runs as a full-screen app, so it works the same in PowerShell and bash.
+
+```powershell
+uv sync --extra tui      # one-time: installs textual
+uv run crewaimeat-tui
+```
+
+What you see:
+- **Status bar** — the serve daemon (pid:port), watchdog/lock counts, running vs stale, and any DUPLICATE/zombie warnings. Plus a **versions line**: the installed `aimeat-crewai` (PyPI) and `aimeat` CLI (npm) versions, flagged when a newer one is available.
+- **Agent table** — every crew with a color-coded status: `running` · `down` · `orphan` (no watchdog) · `DUPLICATE` · `zombie` (running, no crew file) · **`stale-heartbeat`** (locally up but the node hasn't heard from it — the "connector up, daemon not polling" case).
+- **Detail tabs** for the selected agent — **Overview** (status + the crew's README), **Config** (LLM profile + the ordered provider→model fallback chain + offer/workflow-compat counts), **Logs** (watchdog log tail). Switch with `o` / `c` / `l`.
+
+Refresh is two-tier and off the UI thread: local state (~2 s, no network) and a cached node poll (~13 s, one read-only `agents_list`) — never a tight-loop AIMEAT call. `g` forces a node refresh.
+
+Actions (each behind a y/n confirm, run off the UI thread):
+
+| Key | Action |
+|---|---|
+| `s` / `x` / `r` | Start / stop / restart the **selected crew** |
+| `a` | Re-auth the selected crew |
+| `S` / `X` / `R` | Start / stop / restart the **whole fleet** |
+| `d` | Reap stray serve daemons (enforce exactly one) |
+| `j` / `k`, ↑/↓ | Navigate · `q` quit |
+
+Actions are safety-routed: stop kills the watchdog first (so it can't respawn) then the daemon, matched by crew filename only — the serve daemon is never touched; fleet stop uses `terminate_fleet.ps1`; reap uses the single-instance `ensure_single_serve`.

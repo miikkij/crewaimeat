@@ -78,3 +78,39 @@ def detail_lines(r: AgentRow | None) -> list[str]:
         f"lock:       {'yes' if r.lock else 'no'}    tunnel: {'yes' if r.in_tunnel else 'no'}",
         f"last_seen:  {r.last_seen or '—'}  ({format_age(r.last_seen_age_s)} ago)",
     ]
+
+
+def overview_lines(r: AgentRow | None, readme: str | None) -> list[str]:
+    """The Overview tab: basic status info + the agent's README (or a placeholder)."""
+    lines = detail_lines(r)
+    if r is None:
+        return lines
+    lines += ["", "── README ──", ""]
+    lines += readme.splitlines() if readme else ["(no README)"]
+    return lines
+
+
+def meta_lines(profile: str, model_labels: list[str], n_offers: int, n_wf: int) -> list[str]:
+    """Config section for the detail pane: llm profile + ordered model chain + offer/workflow counts."""
+    chain = "\n             ".join(model_labels) if model_labels else "—"
+    return [
+        "",
+        "── config ──",
+        f"llm profile: {profile}",
+        f"model chain: {chain}",
+        f"offers:      {n_offers}  ([green]{n_wf}[/] workflow-compatible)",
+    ]
+
+
+def versions_line(vr: dict) -> str:
+    """One-line version summary with an update flag per component."""
+    if not vr:
+        return "versions: …"
+
+    def _fmt(part: dict) -> str:
+        inst = part.get("installed") or "?"
+        if part.get("update"):
+            return f"{inst} [yellow](→ {part.get('latest')})[/]"
+        return inst
+
+    return f"aimeat-crewai {_fmt(vr.get('pypi', {}))}  ·  aimeat-cli {_fmt(vr.get('cli', {}))}"
