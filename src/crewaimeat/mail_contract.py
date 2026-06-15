@@ -30,6 +30,7 @@ from zoneinfo import ZoneInfo
 from crewai.tools import tool
 
 from crewaimeat.aimeat_crew import _aimeat_call, member_workspaces
+from crewaimeat.local_marks import last_local_run, mark_local_run
 
 AGENT = "postman"
 IN_SPACE, IN_NS = "mail-request", "shared.mail_requests"
@@ -176,6 +177,17 @@ def process_mail(max_items: int = 5, targets: list[tuple[str, str]] | None = Non
                 continue
             if rid in _PROCESSED:  # per-run guard against a stale 'requested' read
                 continue
+            # Durable per-machine guard: if THIS machine already sent this mail, never send it
+            # again — even when the workspace 'done' does not stick. That is the "Market scan
+            # re-sent on every fleet start" bug: a mail-request created by ANOTHER agent (e.g.
+            # web-researcher) is sent by postman, but postman's 'done' write does not supersede the
+            # creator's record (or a stale read returns 'requested' forever), so each pass re-sends.
+            # The local marker is this machine's own truth about what it already delivered. We still
+            # best-effort re-settle the workspace record to 'done', then skip the send.
+            if last_local_run("postman_mail_sent", rid) is not None:
+                _PROCESSED.add(rid)
+                _advance(oid, wid, rec, status="done")
+                continue
             if sent + failed >= max_items:
                 break
             _PROCESSED.add(rid)
@@ -189,6 +201,9 @@ def process_mail(max_items: int = 5, targets: list[tuple[str, str]] | None = Non
                 failed += 1
                 print(f"[{AGENT}] mail FAILED for {rid}: {err}", file=sys.stderr)
             else:
+                # Mark delivered BEFORE settling: if the 'done' write is what is failing to stick,
+                # the marker still prevents a re-send on the next pass.
+                mark_local_run("postman_mail_sent", rid)
                 _advance(oid, wid, rec, status="done")
                 sent += 1
     return {"sent": sent, "failed": failed}
