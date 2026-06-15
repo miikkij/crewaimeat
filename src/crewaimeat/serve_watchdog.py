@@ -31,7 +31,7 @@ def _another_instance_live() -> bool:
 
 
 def run() -> None:
-    from aimeat_crewai import ensure_serve
+    from crewaimeat.serve_guard import ensure_single_serve
 
     if _another_instance_live():
         print("[serve-watchdog] another supervisor instance is live — exiting", file=sys.stderr)
@@ -42,8 +42,11 @@ def run() -> None:
     while True:
         _LOCK.write_text(str(time.time()), encoding="utf-8")  # heartbeat for the single-instance lock
         try:
-            doc = ensure_serve(auto_start=True)  # idempotent: returns live, spawns only if dead
+            doc = ensure_single_serve()  # idempotent: returns live, spawns only if dead, reaps duplicates
             pid = doc.get("pid")
+            if doc.get("_reaped_duplicates"):
+                print(f"[serve-watchdog] reaped {doc['_reaped_duplicates']} duplicate serve daemon(s) "
+                      f"— enforcing single instance (kept pid {pid})", flush=True)
             if pid != last_pid:
                 n = len(doc.get("agents") or [])
                 if last_pid is not None:
