@@ -470,6 +470,21 @@ _CREW_OFFERS: dict[str, list[dict]] = {
          "scheduleBorn": "daily ~17:25 Europe/Helsinki — runs automatically",
          "consequences": [{"type": "publishes-public", "note": "the articles are public newspaper content"}]},
     ],
+    "feedback-wisdom": [
+        {"id": "feedback-wisdom", "title": "Turn feedback stats into support guidance",
+         "ask": ("I read the Feedback Desk's published statistics (`feedback-stats@1`) and write "
+                 "operational advisories (`support-advisory@1`) — rising tag, slow resolution, poor "
+                 "tagging, slow per-tag, VIP pressure — each citing the exact stat movement, to the "
+                 "AIMEAT advisory outbox for owner-gated delivery. I reason over aggregates; I don't "
+                 "read raw feedback or deliver to the app directly."),
+         "example": "Produce today's support advisories from the latest published feedback stats",
+         "cost": "cheap", "latency": "minutes", "repeatability": "idempotent",
+         "verification": "deterministic",  # rules + outbox writes are code; stable ids make re-runs idempotent
+         "consequences": [
+             {"type": "delivers-guidance",
+              "note": "writes advisories to the AIMEAT outbox; AIMEAT gates + delivers them into the app's Guidance tab"},
+         ]},
+    ],
     "daily-features-writer": [
         {"id": "evening-features", "title": "Evening features + the validated news quiz",
          "ask": ("I write the koodaus/prompt/matikka features and build the news quiz from the day's "

@@ -217,6 +217,13 @@ AGENT_SIGNALS: dict[str, dict] = {
         "success_signal": Sig.nonempty(key=_AVARUUSSAA),
         "deliverable_location": {"key": _AVARUUSSAA},
     },
+    # feedback-wisdom: consumes the desk's produced stats, produces advisories into the outbox.
+    # INPUT = at least one feedback-stats snapshot exists; OUTPUT = at least one advisory in the outbox.
+    "feedback-wisdom": {
+        "required_to_function": Sig.exists(key_glob="feedback.stats.*.latest"),
+        "success_signal": Sig.count_nonempty(key_glob="eco.feedback-desk.advisory.outbox.*", min=1),
+        "deliverable_location": {"key": "eco.feedback-desk.advisory.outbox."},
+    },
 }
 
 
