@@ -24,10 +24,27 @@ from __future__ import annotations
 import json
 
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
-from crewaimeat.contract_adopt import build_adopt_domain, is_adopt_task
+from crewaimeat.contract_adopt import (
+    build_adopt_domain, ensure_routed_workspaces, is_adopt_task, merge_targets)
 from crewaimeat import feedback_wisdom_contract as fw
 
 AGENT_NAME = "feedback-wisdom"
+
+# Capability TAGS + services so AIMEAT's ecosystem-app agent picker recommends this agent for the
+# feedback-desk recipe by TAG (not only by exact name). The feedback-desk manifest matches on
+# `feedback-analysis` (a tag) and `consumes:feedback-stats@1` / `produces:support-advisory@1` — the
+# versioned ids carry ':'/'@' which tags reject, so they ride the SERVICES (capabilities) the scaffold
+# declares on onboarding, while the charset-safe tags give the picker the domain + I/O hints.
+CAPABILITY_TAGS = ["feedback-analysis", "role.workspace-contract",
+                   "consumes.feedback-stats", "produces.support-advisory"]
+SERVICES = [
+    {"name": "feedback-analysis",
+     "description": "Turn the Feedback Desk's feedback-stats@1 into support-advisory@1 operational guidance."},
+    {"name": "consumes:feedback-stats@1",
+     "description": "Reads the desk's refined statistics (feedback-stats@1 envelope) from AIMEAT memory."},
+    {"name": "produces:support-advisory@1",
+     "description": "Writes support-advisory@1 advisories to the AIMEAT advisory outbox + the workspace chain."},
+]
 
 README = '''[[FIGLET:slant]["Feedback Wisdom"]]
 
@@ -47,9 +64,13 @@ I derived — so you can see input→output at a glance.
 '''
 
 
-def _make_tools():
+def _make_tools(routed_targets: "list[tuple[str, str]] | None" = None):
     """LLM-facing tools: read the produced stats + the deterministic CANDIDATE advisories (so the
-    agent only PHRASES, never invents structure/ids), then publish the final set idempotently."""
+    agent only PHRASES, never invents structure/ids), then publish the final set idempotently.
+
+    `routed_targets` are the (organism, ws) workspaces an AIMEAT Automation recipe routed this task to
+    (resolved + auto-adopted by contract_adopt.ensure_routed_workspaces): the chain is ALSO mirrored
+    there, not just the outbox + already-adopted member workspaces."""
     from crewai.tools import tool
 
     cache: dict[str, dict] = {}  # id -> authoritative candidate for this run (set by analyze, used by publish)
@@ -102,7 +123,8 @@ def _make_tools():
         def _org_of(adv: dict) -> str:
             return next((t.split(":", 1)[1] for t in (adv.get("tags") or []) if t.startswith("org:")), "?")
 
-        targets = fw.mirror_targets()
+        # member/adopted workspaces + any organism the recipe routed this task to (auto-adopted)
+        targets = merge_targets(fw.mirror_targets(), routed_targets or [])
         results, by_org = [], {}
         for it in items:
             if not isinstance(it, dict):
@@ -141,6 +163,9 @@ def build_domain(ctx: BuildContext):
         return build_adopt_domain(ctx, AGENT_NAME, fw.CONTRACT)
     from crewai import Agent, Task
 
+    # The organism(s) a recipe routed this task to (auto-adopting the contract spaces there if needed).
+    routed_targets = ensure_routed_workspaces(AGENT_NAME, fw.CONTRACT, ctx.task)
+
     analyst = Agent(
         role="Support Wisdom Analyst",
         goal=("Turn the Feedback Desk's refined statistics into clear, grounded operational guidance "
@@ -149,7 +174,7 @@ def build_domain(ctx: BuildContext):
                    "(never raw tickets), trust explainable rules over hunches, and write briefings a "
                    "support agent can act on today. You never invent a trend the numbers don't show."),
         llm=ctx.llm,
-        tools=_make_tools(),
+        tools=_make_tools(routed_targets),
     )
 
     task = Task(
@@ -186,7 +211,8 @@ def run() -> None:
             print(f"[{AGENT_NAME}] feedback-stats poll: {res}")
 
     run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README,
-                      temperature=0.3, idle_hook=_poll, idle_hook_seconds=300))
+                      temperature=0.3, idle_hook=_poll, idle_hook_seconds=300,
+                      tags=CAPABILITY_TAGS, services=SERVICES))
 
 
 if __name__ == "__main__":

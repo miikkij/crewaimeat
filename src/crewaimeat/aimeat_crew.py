@@ -174,6 +174,11 @@ class CrewSpec:
     #   onboarding via aimeat_onboarding_declare_services
     commands: list[dict] | None = None    # slash-command palette [{name, description, category}, ...]
     #   published to memory key agents.<agent>.commands (owner) so the Messages UI surfaces it
+    tags: list[str] | None = None         # capability TAGS set on the agent via aimeat_agent_tags_set
+    #   on every start (idempotent, so they survive re-onboarding). The ecosystem-app agent picker
+    #   matches on these (+ capabilities/domain), so e.g. tags=["feedback-analysis"] makes the agent the
+    #   RECOMMENDED pick for a recipe by TAG, not only by exact name. Charset: lowercase alnum + . _ -
+    #   (no ':' or '@' — versioned ids like consumes:feedback-stats@1 belong in `services`/capabilities).
     temperature: float | None = None      # ENFORCE a fixed LLM temperature for this crew, regardless of
     #   the .env LLM_TEMPERATURE default and without per-task classification. Use it for single-purpose
     #   crews whose nature is fixed: a creative service (jokes, jingles, taglines) should declare
@@ -1171,6 +1176,16 @@ def run_crew(spec: CrewSpec) -> None:
             f"agents.{spec.agent_name}.commands: {bool(res)}",
             file=sys.stderr,
         )
+
+    # 1b2) Set the agent's capability TAGS (idempotent, every start — so they survive re-onboarding)
+    #      so the ecosystem-app agent picker recommends it by TAG, not only by exact name.
+    if spec.tags:
+        res = _aimeat_call(
+            spec.agent_name,
+            "aimeat_agent_tags_set",
+            {"target_agent_name": spec.agent_name, "tags": list(spec.tags)},
+        )
+        print(f"[{spec.agent_name}] set capability tags {list(spec.tags)}: {bool(res)}", file=sys.stderr)
 
     # 1c) Publish the README (FIGLET / AVAILABLE_COMMANDS / LLM directives expanded). Every crew
     #     gets a README tab: the author's text if provided, otherwise a generated default so a
