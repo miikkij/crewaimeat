@@ -1181,15 +1181,22 @@ def run_crew(spec: CrewSpec) -> None:
             file=sys.stderr,
         )
 
+    # Resolve the agent's tags + capabilities: the crew's own CrewSpec wins; otherwise fall back to
+    # the curated fleet registry (so SPECIFIC identity is set fleet-wide without editing every crew).
+    from crewaimeat.fleet_identity import identity_for
+    _ident = identity_for(spec.agent_name)
+    _tags = spec.tags if spec.tags is not None else _ident.get("tags")
+    _caps = spec.capabilities if spec.capabilities is not None else _ident.get("capabilities")
+
     # 1b2) Set the agent's capability TAGS (idempotent, every start — so they survive re-onboarding)
     #      so the ecosystem-app agent picker recommends it by TAG, not only by exact name.
-    if spec.tags:
+    if _tags:
         res = _aimeat_call(
             spec.agent_name,
             "aimeat_agent_tags_set",
-            {"target_agent_name": spec.agent_name, "tags": list(spec.tags)},
+            {"target_agent_name": spec.agent_name, "tags": list(_tags)},
         )
-        print(f"[{spec.agent_name}] set capability tags {list(spec.tags)}: {bool(res)}", file=sys.stderr)
+        print(f"[{spec.agent_name}] set capability tags {list(_tags)}: {bool(res)}", file=sys.stderr)
 
     # 1b3) Re-declare this agent's services (capabilities) on EVERY start — idempotent — so a plain
     #      restart refreshes them with no full re-onboard. The onboarding-only path declares them the
@@ -1207,9 +1214,8 @@ def run_crew(spec: CrewSpec) -> None:
     #      advertises what it actually does — the picker's matcher reads technical + domain — instead of
     #      the liaison's generic onboarding defaults (AIMEAT integration / coordination, which are
     #      implied by completing Hello Integration anyway). Idempotent.
-    if spec.capabilities:
-        payload = {k: spec.capabilities[k] for k in ("technical", "domain", "languages")
-                   if spec.capabilities.get(k)}
+    if _caps:
+        payload = {k: _caps[k] for k in ("technical", "domain", "languages") if _caps.get(k)}
         res = _aimeat_call(spec.agent_name, "aimeat_agent_capabilities_report", payload)
         print(f"[{spec.agent_name}] reported capabilities {list(payload)}: {bool(res)}", file=sys.stderr)
 
