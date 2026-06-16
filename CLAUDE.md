@@ -48,6 +48,14 @@ You need an AIMEAT account + membership to read/write the workspace. To join the
 - Package management: use **uv** (`uv run`, `uv sync`).
 - One crew = `crews/<name>_crew.py`; `build_domain(ctx) -> ([agents], [tasks])`; `AGENT_NAME` matches
   the name used in `aimeat connect add --agent`.
+- **New agent? Give it a real identity** — don't ship the generic Hello-Integration defaults. Add an
+  entry to the central registry `src/crewaimeat/fleet_identity.py` (charset-safe `tags` `[a-z0-9._-]`
+  + specific `capabilities` {technical, domain, languages}, derived from the agent's purpose); the
+  scaffold sets tags (`aimeat_agent_tags_set`) + reports capabilities (`aimeat_agent_capabilities_report`)
+  on every start. A crew may instead set `CrewSpec.tags`/`.capabilities` inline (overrides the registry).
+  Discovery/matching reads tags + capabilities + README + offers — so ALSO keep the crew's `README`
+  constant accurate and add an `offers.py` entry. Versioned ids (`consumes:x@1`) go in `capabilities`
+  /`offers`, never tags (tags reject `:`/`@`).
 - LLM routing (`llm_providers.json`): route content crews → grok; route code/app crews →
   owl-alpha → gpt-oss-120b → minimax (grok is for content only — strong at prose, weak at code).
 - **Fail loud** — surface the real cause: reject at the boundary, or raise from one shared dispatcher.
