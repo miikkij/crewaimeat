@@ -258,7 +258,8 @@ WORKFLOWS: dict[str, dict] = {
             # Independent: pulls NOAA/NASA itself, writes the avaruussaa article into the set.
             {"id": "space-weather", "agent": "space-weather-writer", "offer": "space-weather",
              "description": {"fi_FI": "Avaruussää-artikkeli (NOAA/NASA).",
-                             "en_US": "Space-weather article (NOAA/NASA)."}},
+                             "en_US": "Space-weather article (NOAA/NASA)."},
+             "stage": ("crewaimeat.space_weather_pipeline", "write_space_weather")},
             {"id": "features", "agent": "daily-features-writer", "offer": "evening-features",
              "after": ["write-a", "write-b"],
              "description": {"fi_FI": "Erikoisosiot + uutisvisa päivän artikkeleista.",

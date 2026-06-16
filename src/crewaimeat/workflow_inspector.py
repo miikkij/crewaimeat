@@ -34,11 +34,19 @@ def _rerun_step(step_id: str, date: str, edition: str) -> str:
     if step_id == "fetch":
         from crewaimeat.fetch_pipeline import build_edition_raw
         return build_edition_raw("news-fetcher", date, edition)
-    if step_id == "write":
+    if step_id in ("write-a", "write"):  # "write" kept for older single-desk definitions
         from crewaimeat.write_pipeline import DESK_A, DESK_B, write_edition_articles
         a = write_edition_articles("news-writer", date, edition, DESK_A)
-        b = write_edition_articles("news-writer-b", date, edition, DESK_B)
-        return f"A: {a} | B: {b}"
+        if step_id == "write":
+            b = write_edition_articles("news-writer-b", date, edition, DESK_B)
+            return f"A: {a} | B: {b}"
+        return a
+    if step_id == "write-b":
+        from crewaimeat.write_pipeline import DESK_B, write_edition_articles
+        return write_edition_articles("news-writer-b", date, edition, DESK_B)
+    if step_id == "space-weather":
+        from crewaimeat.space_weather_pipeline import write_space_weather
+        return write_space_weather("space-weather-writer", date, edition)
     if step_id == "features":
         from crewaimeat.features_pipeline import build_quiz
         return build_quiz("daily-features-writer", date, edition)
