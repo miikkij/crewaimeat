@@ -69,18 +69,19 @@ def test_merge_targets_dedups_preserving_order():
     assert ca.merge_targets(a, b) == [("o", "w1"), ("o", "w2"), ("o2", "w3")]
 
 
-# ── capability tags / services so the ecosystem picker recommends this agent ─────
-def test_crew_advertises_feedback_analysis_tag_and_versioned_services():
+# ── capability tags + the SPECIFIC capability report (what the picker's matcher reads) ───────
+def test_crew_advertises_feedback_analysis_tag_and_versioned_domain_capabilities():
     import re
     from crews import feedback_wisdom_crew as crew
-    assert "feedback-analysis" in crew.CAPABILITY_TAGS          # the manifest's primary match
+    assert "feedback-analysis" in crew.CAPABILITY_TAGS          # the manifest's primary match (a tag)
     for t in crew.CAPABILITY_TAGS:                              # tags must be charset-safe
         assert re.fullmatch(r"[a-z0-9._-]+", t), f"tag {t!r} carries chars AIMEAT rejects (: or @)"
-    names = {s["name"] for s in crew.SERVICES}                  # the @1 ids ride services (capabilities)
-    assert "consumes:feedback-stats@1" in names and "produces:support-advisory@1" in names
+    domain = crew.CAPABILITIES["domain"]                        # the @1 ids ride DOMAIN capabilities
+    assert "consumes:feedback-stats@1" in domain and "produces:support-advisory@1" in domain
 
 
-def test_crewspec_accepts_tags():
+def test_crewspec_accepts_tags_and_capabilities():
     from crewaimeat.aimeat_crew import CrewSpec
-    spec = CrewSpec(agent_name="x", build_domain=lambda ctx: ([], []), tags=["feedback-analysis"])
-    assert spec.tags == ["feedback-analysis"]
+    spec = CrewSpec(agent_name="x", build_domain=lambda ctx: ([], []),
+                    tags=["feedback-analysis"], capabilities={"domain": ["feedback analysis"]})
+    assert spec.tags == ["feedback-analysis"] and spec.capabilities["domain"] == ["feedback analysis"]

@@ -30,21 +30,26 @@ from crewaimeat import feedback_wisdom_contract as fw
 
 AGENT_NAME = "feedback-wisdom"
 
-# Capability TAGS + services so AIMEAT's ecosystem-app agent picker recommends this agent for the
-# feedback-desk recipe by TAG (not only by exact name). The feedback-desk manifest matches on
-# `feedback-analysis` (a tag) and `consumes:feedback-stats@1` / `produces:support-advisory@1` — the
-# versioned ids carry ':'/'@' which tags reject, so they ride the SERVICES (capabilities) the scaffold
-# declares on onboarding, while the charset-safe tags give the picker the domain + I/O hints.
+# Capability TAGS + a SPECIFIC capability report so AIMEAT's ecosystem-app agent picker recommends this
+# agent for the feedback-desk recipe by TAG (not only by exact name). The feedback-desk manifest matches
+# on `feedback-analysis` (a charset-safe tag) and `consumes:feedback-stats@1` / `produces:support-advisory@1`
+# — the versioned ids carry ':'/'@' which tags reject, so they ride the DOMAIN capabilities (the matcher
+# reads technical + domain). We report specific capabilities over the liaison's generic defaults.
 CAPABILITY_TAGS = ["feedback-analysis", "role.workspace-contract",
                    "consumes.feedback-stats", "produces.support-advisory"]
-SERVICES = [
-    {"name": "feedback-analysis",
-     "description": "Turn the Feedback Desk's feedback-stats@1 into support-advisory@1 operational guidance."},
-    {"name": "consumes:feedback-stats@1",
-     "description": "Reads the desk's refined statistics (feedback-stats@1 envelope) from AIMEAT memory."},
-    {"name": "produces:support-advisory@1",
-     "description": "Writes support-advisory@1 advisories to the AIMEAT advisory outbox + the workspace chain."},
-]
+CAPABILITIES = {
+    "technical": [
+        {"name": "workspace-contract", "type": "skill"},
+        {"name": "contract: feedback-stats@1 -> support-advisory@1", "type": "skill"},
+    ],
+    "domain": [
+        "feedback analysis",
+        "customer support operations",
+        "consumes:feedback-stats@1",
+        "produces:support-advisory@1",
+    ],
+    "languages": ["en"],
+}
 
 README = '''[[FIGLET:slant]["Feedback Wisdom"]]
 
@@ -212,7 +217,7 @@ def run() -> None:
 
     run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README,
                       temperature=0.3, idle_hook=_poll, idle_hook_seconds=300,
-                      tags=CAPABILITY_TAGS, services=SERVICES))
+                      tags=CAPABILITY_TAGS, capabilities=CAPABILITIES))
 
 
 if __name__ == "__main__":

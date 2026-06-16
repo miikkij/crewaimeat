@@ -178,7 +178,11 @@ class CrewSpec:
     #   on every start (idempotent, so they survive re-onboarding). The ecosystem-app agent picker
     #   matches on these (+ capabilities/domain), so e.g. tags=["feedback-analysis"] makes the agent the
     #   RECOMMENDED pick for a recipe by TAG, not only by exact name. Charset: lowercase alnum + . _ -
-    #   (no ':' or '@' — versioned ids like consumes:feedback-stats@1 belong in `services`/capabilities).
+    #   (no ':' or '@' — versioned ids like consumes:feedback-stats@1 belong in `capabilities`).
+    capabilities: dict | None = None      # {technical:[{name,type}], domain:[...], languages:[...]}
+    #   self-reported via aimeat_agent_capabilities_report on every start (OVERWRITES the set). Advertise
+    #   SPECIFIC capabilities (what this agent actually does — e.g. domain "consumes:feedback-stats@1")
+    #   over the liaison's generic onboarding defaults; the picker's matcher reads technical + domain.
     temperature: float | None = None      # ENFORCE a fixed LLM temperature for this crew, regardless of
     #   the .env LLM_TEMPERATURE default and without per-task classification. Use it for single-purpose
     #   crews whose nature is fixed: a creative service (jokes, jingles, taglines) should declare
@@ -1198,6 +1202,16 @@ def run_crew(spec: CrewSpec) -> None:
             {"services": spec.services},
         )
         print(f"[{spec.agent_name}] re-declared {len(spec.services)} services: {bool(res)}", file=sys.stderr)
+
+    # 1b4) Report this agent's SPECIFIC capabilities on every start (OVERWRITES the set) so the record
+    #      advertises what it actually does — the picker's matcher reads technical + domain — instead of
+    #      the liaison's generic onboarding defaults (AIMEAT integration / coordination, which are
+    #      implied by completing Hello Integration anyway). Idempotent.
+    if spec.capabilities:
+        payload = {k: spec.capabilities[k] for k in ("technical", "domain", "languages")
+                   if spec.capabilities.get(k)}
+        res = _aimeat_call(spec.agent_name, "aimeat_agent_capabilities_report", payload)
+        print(f"[{spec.agent_name}] reported capabilities {list(payload)}: {bool(res)}", file=sys.stderr)
 
     # 1c) Publish the README (FIGLET / AVAILABLE_COMMANDS / LLM directives expanded). Every crew
     #     gets a README tab: the author's text if provided, otherwise a generated default so a
