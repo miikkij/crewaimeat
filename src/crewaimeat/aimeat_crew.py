@@ -787,7 +787,7 @@ def _eval_ctx(eval_info: dict | None) -> dict:
 
 def _make_publish_cb(agent_name: str, primary_key: str, shared_key: str | None = None, tag: str | None = None,
                      eval_info: dict | None = None, task_id: str | None = None,
-                     clean: "Callable[[str], str] | None" = None):
+                     clean: "Callable[[str], str] | None" = None, offer_id: str | None = None):
     """Task callback: write the task output to AIMEAT memory deterministically (no LLM).
 
     Attached to the last DOMAIN task so the deliverable always lands, even if the liaison's
@@ -801,8 +801,11 @@ def _make_publish_cb(agent_name: str, primary_key: str, shared_key: str | None =
     task_id (the full AIMEAT task id) is added as a `task:<id>` tag on every per-task write so AIMEAT
     can list a task's memory entries by tag (GET /v1/memory?...&tags=task:<id>). The tag is additive —
     key formats are unchanged — and since the callback is deterministic it lands as surely as the
-    deliverable itself."""
+    deliverable itself. When the task was ordered from the Offers surface (scope carries offer_id), an
+    `offer:<offer_id>` tag is added too, so the Offerings card can list the last N runs for THAT offer."""
     task_tag = f"task:{task_id}" if task_id else None
+    offer_tag = f"offer:{offer_id}" if offer_id else None
+    _per_task_tags = [t for t in (task_tag, offer_tag) if t]  # additive; key formats unchanged
 
     def _cb(task_output) -> None:
         text = getattr(task_output, "raw", None)
@@ -818,9 +821,9 @@ def _make_publish_cb(agent_name: str, primary_key: str, shared_key: str | None =
         r1 = _aimeat_call(
             agent_name, "aimeat_memory_write",
             {"key": primary_key, "value": text, "visibility": "owner",
-             "tags": [task_tag] if task_tag else []},
+             "tags": list(_per_task_tags)},
         )
-        print(f"[{agent_name}] deliverable published -> {primary_key} (tag {task_tag}): {bool(r1)}", file=sys.stderr)
+        print(f"[{agent_name}] deliverable published -> {primary_key} (tags {_per_task_tags}): {bool(r1)}", file=sys.stderr)
         ectx = _eval_ctx(eval_info)
         if ectx and eval_info and eval_info.get("custom_key"):
             _aimeat_call(  # own performance introspection; public so the Quality Custom Metrics tab renders it
@@ -828,7 +831,7 @@ def _make_publish_cb(agent_name: str, primary_key: str, shared_key: str | None =
                 {"key": eval_info["custom_key"], "value": ectx, "visibility": "public"},
             )
         if shared_key:
-            shared_tags = [t for t in (tag, task_tag) if t]  # delegation tag + per-task tag (additive)
+            shared_tags = [t for t in (tag, task_tag, offer_tag) if t]  # delegation + per-task + per-offer (additive)
             if ectx:  # write evalctx FIRST so it is present when the coordinator sees the deliverable
                 _aimeat_call(
                     agent_name, "aimeat_memory_write",
@@ -1372,7 +1375,8 @@ def run_crew(spec: CrewSpec) -> None:
         if tasks:
             _author_cb = getattr(tasks[-1], "callback", None)
             _publish = _make_publish_cb(spec.agent_name, mem_key, shared_key, shared_tag, eval_info,
-                                        task_id=tid, clean=spec.clean_deliverable)
+                                        task_id=tid, clean=spec.clean_deliverable,
+                                        offer_id=(ctx.offer or {}).get("id"))
 
             def _last_cb(out, _pub=_publish, _prev=_author_cb):
                 _pub(out)
