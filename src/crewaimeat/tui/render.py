@@ -1,11 +1,11 @@
 """Pure presentation helpers for the fleet TUI — formatting + styling only, NO Textual import, so
-they unit-test without a terminal. app.py composes these into widgets."""
+they unit-test without a terminal. app.py composes these into widgets. UI chrome is translated via
+i18n (`lang` arg, default 'en'); agent names / statuses / log text are data and stay as-is."""
 
 from __future__ import annotations
 
 from crewaimeat.tui.fleet_state import AgentRow, FleetSnapshot
-
-COLUMNS = ("agent", "status", "wd/dae", "lock", "tun", "last_seen")
+from crewaimeat.tui.i18n import t
 
 _STATUS_STYLE = {
     "running": "green",
@@ -16,6 +16,13 @@ _STATUS_STYLE = {
     "down": "dim",
     "down (stale lock)": "dim",
 }
+
+_COL_KEYS = ("col.agent", "col.status", "col.wd_dae", "col.lock", "col.tun", "col.last_seen")
+COLUMNS = ("agent", "status", "wd/dae", "lock", "tun", "last_seen")  # english default (tests/back-compat)
+
+
+def columns(lang: str = "en") -> tuple[str, ...]:
+    return tuple(t(k, lang) for k in _COL_KEYS)
 
 
 def status_style(status: str) -> str:
@@ -40,8 +47,7 @@ def format_age(age_s: float | None) -> str:
 
 
 def row_cells(r: AgentRow) -> tuple[str, ...]:
-    """One table row, all PLAIN strings (status colored separately by the app via status_markup —
-    keeping these markup-free makes them trivially testable)."""
+    """One table row, all PLAIN strings (status colored separately by the app via status_markup)."""
     return (
         r.agent,
         r.status,
@@ -52,8 +58,8 @@ def row_cells(r: AgentRow) -> tuple[str, ...]:
     )
 
 
-def statusbar_text(snap: FleetSnapshot) -> str:
-    serve = f"pid {snap.serve_pid}:{snap.serve_port}" if snap.serve_pid else "[bold red]DOWN[/]"
+def statusbar_text(snap: FleetSnapshot, lang: str = "en") -> str:
+    serve = f"pid {snap.serve_pid}:{snap.serve_port}" if snap.serve_pid else f"[bold red]{t('sb.down', lang)}[/]"
     n_run = sum(1 for r in snap.rows if r.status == "running")
     n_stale = sum(1 for r in snap.rows if r.status == "stale-heartbeat")
     warn = ""
@@ -62,50 +68,50 @@ def statusbar_text(snap: FleetSnapshot) -> str:
         warn += f"  [bold red]DUPLICATE: {', '.join(dups)}[/]"
     if snap.zombies:
         warn += f"  [magenta]zombie: {', '.join(snap.zombies)}[/]"
-    return (f"serve {serve} · {snap.n_watchdogs} watchdogs · {snap.n_locks} locks · "
-            f"[green]{n_run} running[/] · [yellow]{n_stale} stale[/]{warn}")
+    return (f"serve {serve} · {snap.n_watchdogs} {t('sb.watchdogs', lang)} · {snap.n_locks} {t('sb.locks', lang)} · "
+            f"[green]{n_run} {t('sb.running', lang)}[/] · [yellow]{n_stale} {t('sb.stale', lang)}[/]{warn}")
 
 
-def detail_lines(r: AgentRow | None) -> list[str]:
+def detail_lines(r: AgentRow | None, lang: str = "en") -> list[str]:
     if r is None:
-        return ["(no agent selected)"]
+        return [t("d.none_sel", lang)]
     return [
-        f"agent:      {r.agent}",
-        f"status:     {status_markup(r.status)}",
-        f"crew file:  {r.crew_file or '(none — zombie)'}",
-        f"mode:       {r.mode or '—'}",
-        f"watchdog:   {r.watchdog_procs}    daemon: {r.daemon_procs}",
-        f"lock:       {'yes' if r.lock else 'no'}    tunnel: {'yes' if r.in_tunnel else 'no'}",
-        f"last_seen:  {r.last_seen or '—'}  ({format_age(r.last_seen_age_s)} ago)",
+        f"{t('d.agent', lang)}:      {r.agent}",
+        f"{t('d.status', lang)}:     {status_markup(r.status)}",
+        f"{t('d.crew_file', lang)}:  {r.crew_file or t('sec.no_readme', lang)}",
+        f"{t('d.mode', lang)}:       {r.mode or '—'}",
+        f"{t('d.watchdog', lang)}:   {r.watchdog_procs}    {t('d.daemon', lang)}: {r.daemon_procs}",
+        f"{t('d.lock', lang)}:       {'yes' if r.lock else 'no'}    {t('d.tunnel', lang)}: {'yes' if r.in_tunnel else 'no'}",
+        f"{t('d.last_seen', lang)}:  {r.last_seen or '—'}  ({format_age(r.last_seen_age_s)} {t('d.ago', lang)})",
     ]
 
 
-def overview_lines(r: AgentRow | None, readme: str | None) -> list[str]:
+def overview_lines(r: AgentRow | None, readme: str | None, lang: str = "en") -> list[str]:
     """The Overview tab: basic status info + the agent's README (or a placeholder)."""
-    lines = detail_lines(r)
+    lines = detail_lines(r, lang)
     if r is None:
         return lines
-    lines += ["", "── README ──", ""]
-    lines += readme.splitlines() if readme else ["(no README)"]
+    lines += ["", f"── {t('sec.readme', lang)} ──", ""]
+    lines += readme.splitlines() if readme else [t("sec.no_readme", lang)]
     return lines
 
 
-def meta_lines(profile: str, model_labels: list[str], n_offers: int, n_wf: int) -> list[str]:
-    """Config section for the detail pane: llm profile + ordered model chain + offer/workflow counts."""
+def meta_lines(profile: str, model_labels: list[str], n_offers: int, n_wf: int, lang: str = "en") -> list[str]:
+    """The Config tab: llm profile + ordered model chain + offer/workflow-compat counts."""
     chain = "\n             ".join(model_labels) if model_labels else "—"
     return [
         "",
-        "── config ──",
-        f"llm profile: {profile}",
-        f"model chain: {chain}",
-        f"offers:      {n_offers}  ([green]{n_wf}[/] workflow-compatible)",
+        f"── {t('sec.config', lang)} ──",
+        f"{t('cfg.profile', lang)}: {profile}",
+        f"{t('cfg.chain', lang)}: {chain}",
+        f"{t('cfg.offers', lang)}:      {n_offers}  ([green]{n_wf}[/] {t('cfg.wf_compat', lang)})",
     ]
 
 
-def versions_line(vr: dict) -> str:
+def versions_line(vr: dict, lang: str = "en") -> str:
     """One-line version summary with an update flag per component."""
     if not vr:
-        return "versions: …"
+        return t("ver.loading", lang)
 
     def _fmt(part: dict) -> str:
         inst = part.get("installed") or "?"

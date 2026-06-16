@@ -59,3 +59,14 @@ def test_overview_lines_includes_basics_and_readme():
     assert "news-fetcher" in j and "── README ──" in j and "Hello from README" in j
     assert "(no README)" in "\n".join(render.overview_lines(_row(), None))
     assert render.overview_lines(None, None) == ["(no agent selected)"]
+
+
+def test_finnish_chrome():
+    assert render.columns("fi")[0] == "agentti"
+    snap = FleetSnapshot(serve_pid=1, serve_port=2, n_watchdogs=1, n_connectors=0,
+                         n_locks=1, zombies=[], rows=[])
+    sb = render.statusbar_text(snap, "fi")
+    assert "ajossa" in sb and "vahdit" in sb and "lukot" in sb
+    d = "\n".join(render.detail_lines(_row(agent="x"), "fi"))
+    assert "moodi" in d and "tunneli" in d
+    assert "asetukset" in "\n".join(render.meta_lines("content", ["xai:grok"], 1, 1, "fi"))

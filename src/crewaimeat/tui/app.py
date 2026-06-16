@@ -1,9 +1,10 @@
-"""Read-only fleet TUI (phase 2) — a lazydocker-style monitor over fleet_state.
+"""Read-only fleet TUI — a lazydocker-style monitor + manager over fleet_state.
 
-Layout: a status bar, an agent table (left), and a detail + log-tail pane (right). Two refresh
-tiers run off the UI thread (Textual thread workers): LOCAL (~2 s — process table, locks, serve.json;
-no network) and NODE (~13 s — one read-only aimeat_agents_list, cached so the fast tier never makes
-a network call). Read-only: no process is started or killed here (that is the actions phase).
+Layout: a status bar, an agent table (left), and a detail (Overview/Config/Logs tabs) + log pane
+(right). Two refresh tiers run off the UI thread: LOCAL (~2 s — process table, locks, serve.json;
+no network) and NODE (~13 s — one read-only aimeat_agents_list, cached). Actions (start/stop/restart
+a crew or the whole fleet, reap daemons, re-auth) sit behind confirm modals. Bilingual chrome (en/fi)
+— `f` toggles; default from $AIMEAT_TUI_LANG.
 
 Run:  uv run crewaimeat-tui
 """
@@ -19,7 +20,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Header, Static, TabbedContent, TabPane
 
-from crewaimeat.tui import actions, agent_meta, fleet_state as fs, render, versions
+from crewaimeat.tui import actions, agent_meta, fleet_state as fs, i18n, render, versions
 
 
 def _default_node_index(caller: str) -> dict:
@@ -40,14 +41,15 @@ class ConfirmScreen(ModalScreen[bool]):
     """
     BINDINGS = [("y", "yes", "Yes"), ("n", "no", "No"), ("escape", "no", "Cancel")]
 
-    def __init__(self, question: str) -> None:
+    def __init__(self, question: str, hint: str = "[b]y[/] confirm    [b]n[/] / esc cancel") -> None:
         super().__init__()
         self._question = question
+        self._hint = hint
 
     def compose(self) -> ComposeResult:
         with Vertical(id="confirm-box"):
             yield Static(self._question, id="confirm-q")
-            yield Static("[b]y[/] confirm    [b]n[/] / esc cancel")
+            yield Static(self._hint)
 
     def action_yes(self) -> None:
         self.dismiss(True)
@@ -67,6 +69,7 @@ class FleetApp(App):
     BINDINGS = [
         ("q", "quit", "Quit"),
         ("g", "refresh_node", "Refresh"),
+        ("f", "toggle_lang", "FI/EN"),
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
         ("s", "start", "Start crew"),
@@ -83,7 +86,7 @@ class FleetApp(App):
     ]
 
     def __init__(self, *, caller_agent: str = "news-fetcher", node_index_fn=None,
-                 snapshot_fn=None, auto_node: bool = True) -> None:
+                 snapshot_fn=None, auto_node: bool = True, lang: str | None = None) -> None:
         super().__init__()
         self.caller_agent = caller_agent
         self._node_index_fn = node_index_fn or _default_node_index
@@ -91,25 +94,28 @@ class FleetApp(App):
         self._auto_node = auto_node
         self._node_index: dict = {}
         self._snap = None
+        self.lang = lang or i18n.default_lang()
+
+    def _t(self, key: str) -> str:
+        return i18n.t(key, self.lang)
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield Static("loading…", id="statusbar")
-        yield Static("versions: …", id="versions")
+        yield Static("…", id="statusbar")
+        yield Static(self._t("ver.loading"), id="versions")
         with Horizontal():
             yield DataTable(id="agents", cursor_type="row", zebra_stripes=True)
             with TabbedContent(id="detail"):
-                with TabPane("Overview", id="tab-overview"):
-                    yield Static("(no agent selected)", id="ov")
-                with TabPane("Config", id="tab-config"):
+                with TabPane(self._t("tab.overview"), id="tab-overview"):
+                    yield Static(self._t("d.none_sel"), id="ov")
+                with TabPane(self._t("tab.config"), id="tab-config"):
                     yield Static("", id="cfg")
-                with TabPane("Logs", id="tab-logs"):
+                with TabPane(self._t("tab.logs"), id="tab-logs"):
                     yield Static("", id="logs")
         yield Footer()
 
     def on_mount(self) -> None:
-        table = self.query_one("#agents", DataTable)
-        table.add_columns(*render.COLUMNS)
+        self.query_one("#agents", DataTable).add_columns(*render.columns(self.lang))
         if self._auto_node:
             self.refresh_node()                       # initial node fetch (worker)
             self.refresh_versions()                   # version check (worker; cached, infrequent)
@@ -138,7 +144,24 @@ class FleetApp(App):
     @work(thread=True, exclusive=True, group="versions")
     def refresh_versions(self) -> None:
         vr = versions.version_report()
-        self.call_from_thread(lambda: self.query_one("#versions", Static).update(render.versions_line(vr)))
+        self.call_from_thread(
+            lambda: self.query_one("#versions", Static).update(render.versions_line(vr, self.lang)))
+
+    # ── language ──────────────────────────────────────────────────────────────
+    def action_toggle_lang(self) -> None:
+        self.lang = i18n.next_lang(self.lang)
+        table = self.query_one("#agents", DataTable)
+        table.clear(columns=True)
+        table.add_columns(*render.columns(self.lang))
+        tc = self.query_one("#detail", TabbedContent)
+        for pid, key in (("tab-overview", "tab.overview"), ("tab-config", "tab.config"),
+                         ("tab-logs", "tab.logs")):
+            try:
+                tc.get_tab(pid).label = self._t(key)
+            except Exception:  # noqa: BLE001 — relabel is cosmetic; never crash the toggle
+                pass
+        if self._snap is not None:
+            self._apply(self._snap)  # re-render status bar + table + detail in the new language
 
     # ── navigation (vim keys; arrows work natively via DataTable) ─────────────
     def action_cursor_down(self) -> None:
@@ -160,46 +183,39 @@ class FleetApp(App):
             if yes:
                 self.notify(f"{label}…")
                 self._do_action(label, fn)
-        self.push_screen(ConfirmScreen(question), _cb)
+        self.push_screen(ConfirmScreen(question, self._t("cf.yes_no")), _cb)
 
-    def _crew_action(self, label: str, question: str, fn) -> None:
+    def _crew_action(self, label: str, q_key: str, fn) -> None:
         """Shared guard for single-crew actions: require a selected crew that has a file on disk."""
         row = self._selected_row()
         if not row or not row.crew_file:
-            self.notify(f"Select a crew with a file to {label}.", severity="warning")
+            self.notify(self._t("warn.select").format(action=label), severity="warning")
             return
-        self._confirm(question.format(agent=row.agent), label, lambda: fn(row.agent))
+        self._confirm(self._t(q_key).format(agent=row.agent), label, lambda: fn(row.agent))
 
     def action_start(self) -> None:
-        self._crew_action("start", "Start crew '{agent}'?  (launch under the watchdog)",
-                          actions.start_crew)
+        self._crew_action("start", "cf.start", actions.start_crew)
 
     def action_stop(self) -> None:
-        self._crew_action("stop", "Stop crew '{agent}'?  (kill its watchdog + daemon)",
-                          actions.stop_crew)
+        self._crew_action("stop", "cf.stop", actions.stop_crew)
 
     def action_restart(self) -> None:
-        self._crew_action("restart", "Restart crew '{agent}'?  (stop → relaunch)",
-                          actions.restart_crew)
+        self._crew_action("restart", "cf.restart", actions.restart_crew)
 
     def action_reauth(self) -> None:
-        self._crew_action("re-auth", "Re-auth crew '{agent}'?", actions.reauth_crew)
+        self._crew_action("re-auth", "cf.reauth", actions.reauth_crew)
 
     def action_start_fleet(self) -> None:
-        self._confirm("Start the WHOLE fleet?  (ensure one serve daemon + launch every approved crew)",
-                      "start-fleet", actions.start_fleet)
+        self._confirm(self._t("cf.start_fleet"), "start-fleet", actions.start_fleet)
 
     def action_stop_fleet(self) -> None:
-        self._confirm("STOP the whole fleet?  (kills the serve daemon + every crew)",
-                      "stop-fleet", actions.stop_fleet)
+        self._confirm(self._t("cf.stop_fleet"), "stop-fleet", actions.stop_fleet)
 
     def action_restart_fleet(self) -> None:
-        self._confirm("RESTART the whole fleet?  (stop everything → bring it all back up)",
-                      "restart-fleet", actions.restart_fleet)
+        self._confirm(self._t("cf.restart_fleet"), "restart-fleet", actions.restart_fleet)
 
     def action_reap(self) -> None:
-        self._confirm("Reap stray serve daemons (enforce exactly one)?",
-                      "reap", actions.reap_serve_daemons)
+        self._confirm(self._t("cf.reap"), "reap", actions.reap_serve_daemons)
 
     # ── detail tabs ───────────────────────────────────────────────────────────
     def action_show_overview(self) -> None:
@@ -226,7 +242,7 @@ class FleetApp(App):
     # ── rendering ─────────────────────────────────────────────────────────────
     def _apply(self, snap) -> None:
         self._snap = snap
-        self.query_one("#statusbar", Static).update(render.statusbar_text(snap))
+        self.query_one("#statusbar", Static).update(render.statusbar_text(snap, self.lang))
         table = self.query_one("#agents", DataTable)
         prev = table.cursor_row
         table.clear()
@@ -246,7 +262,7 @@ class FleetApp(App):
         cfg = self.query_one("#cfg", Static)
         logs = self.query_one("#logs", Static)
         if not self._snap or not self._snap.rows:
-            ov.update("(no agents)")
+            ov.update(self._t("d.none"))
             cfg.update("")
             logs.update("")
             return
@@ -261,8 +277,8 @@ class FleetApp(App):
             n_off, n_wf = agent_meta.offer_summary(row.agent)
         except Exception:  # noqa: BLE001
             pass
-        ov.update("\n".join(render.overview_lines(row, readme)))
-        cfg.update("\n".join(render.meta_lines(profile, chain, n_off, n_wf)))
+        ov.update("\n".join(render.overview_lines(row, readme, self.lang)))
+        cfg.update("\n".join(render.meta_lines(profile, chain, n_off, n_wf, self.lang)))
         logs.update("\n".join(self._log_tail(row.agent, n=30)))
 
     def _log_tail(self, agent: str, n: int = 12) -> list[str]:
@@ -272,10 +288,10 @@ class FleetApp(App):
             p = Path("logs") / name
             try:
                 if p.is_file():
-                    return p.read_text(encoding="utf-8", errors="replace").splitlines()[-n:] or ["(empty log)"]
+                    return p.read_text(encoding="utf-8", errors="replace").splitlines()[-n:] or [self._t("log.empty")]
             except OSError:
                 pass
-        return ["(no log file)"]
+        return [self._t("log.none")]
 
 
 def main() -> None:
