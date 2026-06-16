@@ -1187,6 +1187,18 @@ def run_crew(spec: CrewSpec) -> None:
         )
         print(f"[{spec.agent_name}] set capability tags {list(spec.tags)}: {bool(res)}", file=sys.stderr)
 
+    # 1b3) Re-declare this agent's services (capabilities) on EVERY start — idempotent — so a plain
+    #      restart refreshes them with no full re-onboard. The onboarding-only path declares them the
+    #      first time; this keeps an already-onboarded agent's capabilities current (the ecosystem-app
+    #      picker reads capabilities + tags), so newly-added services appear after a restart.
+    if spec.services and _onboarding_completed(spec.agent_name):
+        res = _aimeat_call(
+            spec.agent_name,
+            "aimeat_onboarding_declare_services",
+            {"services": spec.services},
+        )
+        print(f"[{spec.agent_name}] re-declared {len(spec.services)} services: {bool(res)}", file=sys.stderr)
+
     # 1c) Publish the README (FIGLET / AVAILABLE_COMMANDS / LLM directives expanded). Every crew
     #     gets a README tab: the author's text if provided, otherwise a generated default so a
     #     forge-built crew (which passes no readme_md) is never blank.
