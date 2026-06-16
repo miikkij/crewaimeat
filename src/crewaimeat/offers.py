@@ -28,6 +28,24 @@ from crewaimeat.aimeat_crew import _aimeat_call
 _SAMPLE_ORG = "b784641b-a4dd-4d69-adb6-9954dc813e1e"
 _SAMPLE_WS = "ws-mq5vvdgsjwp"
 _SAMPLE_CHARS = 700
+_SAMPLE_MAX = 8000  # shared offer contract: deliverable.sample is capped at 8000 chars
+
+# A structured offer publishes its sample as a JSON OBJECT and wants deliverable.format="json".
+# The node's format enum doesn't carry "json" YET (coordinated with the aimeat-protocol side), so
+# until it does we keep format="document" + the object sample. Flip this ONE flag the moment the
+# enum ships and every JSON-shaped offer starts advertising the real format — no other change.
+JSON_FORMAT_SUPPORTED = False
+
+
+def _resolve_sample(live: str, authored):
+    """Golden-sample resolution (hard rule 1 — never invented): a REAL last-run excerpt when we
+    have one, else the authored representative example, else the literal 'untested'. `authored`
+    may be a markdown string OR a JSON object (structured offers)."""
+    if live and live != "untested":
+        return live
+    if authored is not None:
+        return authored
+    return "untested"
 
 
 def _md_excerpt(text: str, max_chars: int = _SAMPLE_CHARS) -> str:
@@ -61,6 +79,16 @@ _OFFER_META: dict[str, dict] = {
                 "real-time prices, paywalled sources, or opinions presented as facts."),
         "example": "topic: 'EU AI Act obligations for small SaaS companies', focus: 'what applies before 2027'",
         "cost": "cheap", "latency": "minutes", "consequences": [],
+        "sample": (
+            "## EU AI Act — obligations for small SaaS before 2027\n\n"
+            "**Bottom line:** most SaaS tools are *limited-risk*; the date that matters for you is "
+            "**2 Aug 2026** (GPAI + governance), not 2027.\n\n"
+            "- **Transparency (Art. 50):** label AI-generated output and chatbots — from 2 Aug 2026.\n"
+            "- **High-risk (Annex III):** only if you do hiring, credit or biometrics — full QMS + "
+            "conformity assessment.\n"
+            "- **GPAI passthrough:** wrapping a foundation model → keep the provider's technical docs on file.\n\n"
+            "Sources: [EUR-Lex 2024/1689](https://eur-lex.europa.eu/eli/reg/2024/1689), EU Commission AI Act FAQ.\n\n…"
+        ),
     },
     "market-scan": {
         "agent": "web-researcher",
@@ -70,6 +98,14 @@ _OFFER_META: dict[str, dict] = {
                 "from public web sources only — I don't access private databases or paid reports."),
         "example": "segment: 'AI agent platforms and orchestration consulting', region: 'Helsinki metro'",
         "cost": "expensive", "latency": "long-running", "consequences": [],
+        "sample": (
+            "## Market scan — AI agent orchestration consulting (Helsinki metro)\n\n"
+            "| Player | Positioning | Channels |\n|---|---|---|\n"
+            "| Studio A | \"agentic automation for mid-market\" | LinkedIn, meetups |\n"
+            "| Studio B | RPA→LLM migration | partner referrals |\n\n"
+            "**How to sell against them:** they lead with tooling — lead with *audited outcomes* instead.\n\n"
+            "Sources: company sites, LinkedIn, public case studies.\n\n…"
+        ),
     },
     "company-research": {
         "agent": "web-researcher",
@@ -79,6 +115,14 @@ _OFFER_META: dict[str, dict] = {
                 "presence. Public sources only — no credit data, no people's personal details."),
         "example": "company: 'Validera Ab', focus: 'product, pricing, funding'",
         "cost": "expensive", "latency": "long-running", "consequences": [],
+        "sample": (
+            "## Validera Ab — company profile\n\n"
+            "- **Business ID:** 1234567-8 (PRH/YTJ, active)\n"
+            "- **Founded:** 2019 · **Form:** Osakeyhtiö\n"
+            "- **Latest published revenue:** ~€2.1M (FY2024, where filed)\n"
+            "- **Web presence:** product site + active LinkedIn\n\n"
+            "*Public registry + web sources only — no credit data, no personal details.*\n\n…"
+        ),
     },
     "activity-report": {
         "agent": "activity-reporter",
@@ -88,6 +132,14 @@ _OFFER_META: dict[str, dict] = {
                 "the activity feed shows — I don't audit content quality or verify claims."),
         "example": "ws: '*', period_hours: 168, narrator: 'dry, precise chief of staff'",
         "cost": "cheap", "latency": "minutes", "consequences": [],
+        "sample": (
+            "## Workspace digest — last 168h\n\n"
+            "**Shipped:** 3 crews onboarded; offers surface enriched with golden samples.\n\n"
+            "- **web-researcher** published 5 research notes.\n"
+            "- **editorial-writer** ran the evening pipeline 7/7 days (all green).\n"
+            "- **crew-forge** built 1 new agent (rss-digest).\n\n"
+            "*Narrated from the activity feed — content quality not audited.*\n\n…"
+        ),
     },
     "moodboard": {
         "agent": "image-scout",
@@ -101,6 +153,12 @@ _OFFER_META: dict[str, dict] = {
             {"type": "publishes-public",
              "note": "curated images are stored under public storage keys so every workspace viewer can render them"},
         ],
+        "sample": (
+            "## Moodboard — retro-futuristic Finnish newsroom (4 images)\n\n"
+            "1. ![neon CRT desk](https://aimeat.io/v1/pub/<gaii>/moodboard/01.jpg) — *neon, dark, CRT glow* · source: unsplash\n"
+            "2. ![teletype wall](https://aimeat.io/v1/pub/<gaii>/moodboard/02.jpg) — *amber monochrome* · source: openverse\n\n"
+            "*Curated for internal reference; licenses not cleared.*\n\n…"
+        ),
     },
     "mail": {
         "agent": "postman",
@@ -115,6 +173,10 @@ _OFFER_META: dict[str, dict] = {
             {"type": "external-send",
              "note": "sends real email over SMTP; the AIMEAT_MAIL_TO allowlist is enforced on every send"},
         ],
+        "sample": (
+            "✅ Mail sent — subject **\"Weekly status\"** to `ops@example.com` (allowlisted). "
+            "SMTP 250 OK · 1 recipient · 2026-06-14T09:00 EET. Body rendered from the record's markdown."
+        ),
     },
     "image-request": {
         "agent": "image-maker",
@@ -129,6 +191,11 @@ _OFFER_META: dict[str, dict] = {
             {"type": "publishes-public",
              "note": "the generated image is stored at a public storage URL (~$0.04/image)"},
         ],
+        "sample": (
+            "## image-gallery — \"retro-futuristic Finnish newsroom\"\n\n"
+            "![generated](https://aimeat.io/v1/pub/<gaii>/images/newsroom-2k.jpg)\n\n"
+            "- **model:** bytedance-seed/seedream-4.5 · **size:** 2K · **aspect:** 16:9 · **cost:** ~$0.04\n\n…"
+        ),
     },
 }
 
@@ -198,7 +265,9 @@ def offer_from_contract(contract: dict, with_sample: bool = False) -> dict:
         "deliverable": {
             "format": deliverable_format,
             "location": {"space": (out or {}).get("namespace", ""), "visibility": "workspace"},
-            "sample": fetch_sample(meta["agent"], out) if with_sample else "untested",
+            # Golden sample: live last-run excerpt → authored representative example → "untested".
+            "sample": _resolve_sample(fetch_sample(meta["agent"], out), meta.get("sample"))
+                      if with_sample else "untested",
         },
     }
     # Workflow-compatibility: derive the three signals from the contract's request→result spaces,
@@ -258,13 +327,27 @@ _CREW_OFFERS: dict[str, list[dict]] = {
              {"type": "creates-agent", "persistent": True, "requiresApproval": True,
               "note": "registers a NEW persistent agent; blocks on a device-code approval"},
              {"type": "mutates-host", "note": "launches a watchdog + daemon process on the operator machine"},
-         ]},
+         ],
+         "sample": (
+             "✅ Built **rss-digest** — a crew that summarizes RSS feeds into a weekly digest.\n\n"
+             "- build_domain validated ✓ · agent registered ✓ · launched under watchdog ✓\n"
+             "- one device-code approval consumed\n"
+             "- AGENT_NAME: `rss-digest` · profile: content → grok\n\n"
+             "Send it a task to produce the first digest."
+         )},
         {"id": "fleet-status", "title": "Show which crews are running",
          "ask": ("Send '/list' (or '/status') and I report your crews and which are running. "
                  "Read-only — I don't start or stop anything for this offer."),
          "example": "/list",
          "cost": "free", "latency": "seconds", "repeatability": "idempotent",
-         "verification": "gated", "consequences": []},
+         "verification": "gated", "consequences": [],
+         "sample": (
+             "## Your crews (12 registered, 9 running)\n\n"
+             "| agent | running | last seen |\n|---|---|---|\n"
+             "| editorial-writer | ● | 2m ago |\n"
+             "| news-fetcher | ● | 2m ago |\n"
+             "| joker | ○ | 3h ago |\n\n*Read-only snapshot.*"
+         )},
     ],
     "workflow-manager": [
         {"id": "orchestrate-goal", "title": "Fan a goal out to the fleet and synthesize",
@@ -277,21 +360,41 @@ _CREW_OFFERS: dict[str, list[dict]] = {
          "consequences": [
              {"type": "delegates-to-agent", "dynamic": True,
               "note": "creates tasks for other crews and RATES their work afterwards (verify-grounded)"},
-         ]},
+         ],
+         "sample": (
+             "## Goal: monetizing the newspaper showcase — recommendation\n\n"
+             "Delegated to: idea-feasibility-rater, sanity-checker, web-researcher.\n\n"
+             "**Recommended:** sponsor-a-section + anonymized per-client audit links — highest "
+             "feasibility (4/5), lowest delivery risk.\n\n"
+             "Runner-up idea grafted in: a freemium quiz embed.\n\n"
+             "*Synthesized from delegate deliverables; each was rated.*\n\n…"
+         )},
     ],
     "joker": [
         {"id": "tell-jokes", "title": "Four comedians riff on your topic",
          "ask": ("Give me a topic and four comedian personas each riff on it; a host presents the set. "
                  "Humor only — I don't write marketing copy or serious prose."),
          "example": "aihe: etätyöpalaverit", "cost": "cheap", "latency": "minutes",
-         "repeatability": "accumulative", "verification": "ungated", "consequences": []},
+         "repeatability": "accumulative", "verification": "ungated", "consequences": [],
+         "sample": (
+             "**Aihe: etätyöpalaverit**\n\n*Juontaja:* Neljä koomikkoa, yksi aihe — aloitetaan.\n\n"
+             "**Riku:** \"Etäpalaveri on ainoa paikka, jossa voit olla yhtä aikaa läsnä ja poissa — "
+             "kuten kissani.\"\n\n"
+             "**Veera:** \"'Olitko sanomassa jotain?' — etätyön 'ole hyvä ja hyvästi' yhdessä lauseessa.\"\n\n…"
+         )},
     ],
     "joker-v2": [
         {"id": "tell-jokes-v2", "title": "Comedians draft many, keep the best (evolved variant)",
          "ask": ("Same job as joker, evolved: each comedian drafts several jokes and only the best "
                  "survive. Part of a live A/B pair — humor only, nothing serious."),
          "example": "aihe: tekoälyagenttien kokouskäytännöt", "cost": "cheap", "latency": "minutes",
-         "repeatability": "accumulative", "verification": "ungated", "consequences": []},
+         "repeatability": "accumulative", "verification": "ungated", "consequences": [],
+         "sample": (
+             "**Aihe: tekoälyagenttien kokouskäytännöt**\n\n"
+             "*(jokainen koomikko luonnosteli viisi; tässä parhaat)*\n\n"
+             "**Riku:** \"Agenttimme pitää daily standupin — paitsi ettei kukaan istu, kukaan ei "
+             "seiso, ja silti se kestää 45 minuuttia.\"\n\n…"
+         )},
     ],
     "sanity-checker": [
         {"id": "stress-test-idea", "title": "Stress-test an idea from multiple angles",
@@ -299,7 +402,15 @@ _CREW_OFFERS: dict[str, list[dict]] = {
                  "blind spots), then advise. I challenge — I don't rubber-stamp or implement."),
          "example": "Idea: sell organism exports as onboarding accelerators — what breaks?",
          "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
-         "verification": "ungated", "consequences": []},
+         "verification": "ungated", "consequences": [],
+         "sample": (
+             "## Stress test — \"sell organism exports as onboarding accelerators\"\n\n"
+             "**Feasibility:** plausible; the export already exists.\n"
+             "**Risks:** (1) buyers can't run them without the substrate; (2) export drifts from the live state.\n"
+             "**Blind spots:** support load after the sale.\n"
+             "**Advice:** sell a *guided import*, not raw exports.\n\n"
+             "*I challenge — I don't implement.*\n\n…"
+         )},
     ],
     "idea-feasibility-rater": [
         {"id": "rate-feasibility", "title": "Rate an idea's feasibility",
@@ -307,7 +418,18 @@ _CREW_OFFERS: dict[str, list[dict]] = {
                  "A judgment, not a build plan — I don't implement anything."),
          "example": "Idea: per-customer private AIMEAT nodes with a managed-hosting tier",
          "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
-         "verification": "ungated", "consequences": []},
+         "verification": "ungated", "consequences": [],
+         "json": True,  # structured judgment — sample is a JSON object
+         "sample": {
+             "idea": "per-customer private AIMEAT nodes with a managed-hosting tier",
+             "feasibility": 3,
+             "confidence": "medium",
+             "verdict": "feasible-with-investment",
+             "drivers": ["clear demand from compliance-sensitive customers",
+                         "substrate is already multi-tenant"],
+             "blockers": ["per-node ops cost", "upgrade/patch fan-out across nodes"],
+             "next_step": "price the ops overhead of one pilot node before committing",
+         }},
     ],
     "probability-creator": [
         {"id": "estimate-spectrum", "title": "Turn one question into an estimate spectrum",
@@ -315,7 +437,19 @@ _CREW_OFFERS: dict[str, list[dict]] = {
                  "and assumptions made explicit. Estimates, not guarantees — no financial advice."),
          "example": "How many Finnish SMEs adopt an AI 'digital employee' service by 2028?",
          "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
-         "verification": "ungated", "consequences": []},
+         "verification": "ungated", "consequences": [],
+         "json": True,  # structured estimate — sample is a JSON object
+         "sample": {
+             "question": "How many Finnish SMEs adopt an AI 'digital employee' service by 2028?",
+             "unit": "share of ~280k SMEs",
+             "spectrum": [
+                 {"scenario": "low", "estimate": "2%", "p": 0.25},
+                 {"scenario": "base", "estimate": "6%", "p": 0.5},
+                 {"scenario": "high", "estimate": "12%", "p": 0.25},
+             ],
+             "assumptions": ["adoption tracks the cloud-tool S-curve", "no major regulatory block"],
+             "caveat": "estimates, not guarantees; no financial advice",
+         }},
     ],
     "jingle-writer": [
         {"id": "write-jingle", "title": "Write a jingle or short creative copy",
@@ -323,7 +457,14 @@ _CREW_OFFERS: dict[str, list[dict]] = {
                  "Short-form creative only — I don't write long articles or technical docs."),
          "example": "Jingle for a morning report that arrives before you wake up",
          "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
-         "verification": "ungated", "consequences": []},
+         "verification": "ungated", "consequences": [],
+         "sample": (
+             "**Jingle — \"the morning report that arrives before you wake\"**\n\n*(upbeat, 4 lines)*\n\n"
+             "☀️ Eyes still closed, the news is read,\n"
+             "Your briefing's waiting by the bed.\n"
+             "No scroll, no doom — just what is true,\n"
+             "The morning, sorted — made for you.\n\n…"
+         )},
     ],
     "web-tester": [
         {"id": "test-web-flow", "title": "Drive a real browser through a web flow",
@@ -336,7 +477,14 @@ _CREW_OFFERS: dict[str, list[dict]] = {
          "consequences": [
              {"type": "mutates-live-app",
               "note": "clicks and types against the target; interactions can change app state"},
-         ]},
+         ],
+         "sample": (
+             "## Web flow test — public newspaper + quiz\n\n"
+             "1. GET / → rendered (200, front-page index present) ✓\n"
+             "2. Click first quiz option → answer accepted, score updated ✓\n"
+             "3. Anonymous viewer → reads front page, cannot edit ✓\n\n"
+             "**Result: PASS** (3/3). Evidence: screenshots + DOM assertions attached.\n\n…"
+         )},
     ],
     "librarian": [
         {"id": "map-knowledge", "title": "Map the fleet's deliverables and reuse",
@@ -345,7 +493,14 @@ _CREW_OFFERS: dict[str, list[dict]] = {
                  "I don't produce new domain content."),
          "example": "What do we already have about onboarding flows?",
          "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
-         "verification": "ungated", "consequences": []},
+         "verification": "ungated", "consequences": [],
+         "sample": (
+             "## Knowledge map — \"onboarding flows\"\n\n"
+             "| deliverable | agent | freshness | reuse |\n|---|---|---|---|\n"
+             "| onboarding-checklist | daily-briefing-crew | 2d | reuse as-is |\n"
+             "| onboarding accelerator notes | sanity-checker | 9d | stale — re-run |\n\n"
+             "**Reuse pointer:** start from the checklist; the accelerator notes need a refresh.\n\n…"
+         )},
     ],
     "aimeat-app-conductor": [
         {"id": "build-or-fix-app", "title": "Route an app idea to the right SDLC specialist",
@@ -358,7 +513,14 @@ _CREW_OFFERS: dict[str, list[dict]] = {
          "consequences": [
              {"type": "delegates-to-agent", "dynamic": True, "note": "routes to the SDLC specialist crews"},
              {"type": "mutates-live-app", "note": "the routed specialist publishes/edits a live app"},
-         ]},
+         ],
+         "sample": (
+             "## Routed: \"simple notes app with login\"\n\n"
+             "→ **aimeat-app-builder** (new domain, login-bar mode).\n\n"
+             "**Outcome:** published `notes.html` v1, render gate PASS, login-bar present. "
+             "Editor handed the follow-up (per-user save).\n\n"
+             "*I coordinate; the specialist wrote the code.*\n\n…"
+         )},
     ],
     "aimeat-app-builder": [
         {"id": "build-app", "title": "Build a working AIMEAT app from a description",
@@ -368,7 +530,14 @@ _CREW_OFFERS: dict[str, list[dict]] = {
          "example": "A checklist app that saves items per user and works for anonymous viewers read-only",
          "cost": "expensive", "latency": "long-running", "repeatability": "accumulative",
          "verification": "gated",
-         "consequences": [{"type": "mutates-live-app", "note": "publishes a new app/version under your profile"}]},
+         "consequences": [{"type": "mutates-live-app", "note": "publishes a new app/version under your profile"}],
+         "sample": (
+             "## Built: checklist app (per-user, anon read-only)\n\n"
+             "- `checklist.html` published v1 on the starter template\n"
+             "- mountLoginButton + await-login wired (no boot race)\n"
+             "- render gate **PASS**; anonymous viewer renders read-only\n\n"
+             "Open it from your profile to add items.\n\n…"
+         )},
     ],
     "aimeat-app-editor": [
         {"id": "edit-app", "title": "Make a surgical edit to an existing app",
@@ -377,7 +546,14 @@ _CREW_OFFERS: dict[str, list[dict]] = {
          "example": "Add a 'Reset scores' button to tictactoe.html",
          "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
          "verification": "gated",
-         "consequences": [{"type": "mutates-live-app", "note": "publishes a new version of the existing app"}]},
+         "consequences": [{"type": "mutates-live-app", "note": "publishes a new version of the existing app"}],
+         "sample": (
+             "## Edited: tictactoe.html\n\n"
+             "- read live stack ✓\n"
+             "- added **Reset scores** button (in-place edit, no rewrite)\n"
+             "- published v3 · render gate **PASS**\n\n"
+             "*Surgical change only.*\n\n…"
+         )},
     ],
     "daily-briefing-crew": [
         {"id": "daily-briefing", "title": "Compose a briefing on demand",
@@ -385,7 +561,13 @@ _CREW_OFFERS: dict[str, list[dict]] = {
                  "A summary for humans — I don't make decisions or take actions."),
          "example": "Brief me on this week's fleet activity and open questions",
          "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
-         "verification": "ungated", "consequences": []},
+         "verification": "ungated", "consequences": [],
+         "sample": (
+             "## Briefing — this week's fleet activity & open questions\n\n"
+             "**Activity:** evening pipeline green 7/7; offers surface enriched with golden samples.\n"
+             "**Open questions:** (1) extend the format enum to `json`? (2) per-offer run-history UI.\n\n"
+             "*A summary — I don't decide or act.*\n\n…"
+         )},
     ],
     "finnish-corporate-researcher": [
         {"id": "research-fi-company", "title": "Profile a Finnish company (registry-grounded)",
@@ -393,7 +575,15 @@ _CREW_OFFERS: dict[str, list[dict]] = {
                  "registries and public web. Public sources only — no credit ratings, no personal data."),
          "example": "Profile: Supercell Oy — ownership, financials trend, public footprint",
          "cost": "expensive", "latency": "long-running", "repeatability": "accumulative",
-         "verification": "ungated", "consequences": []},
+         "verification": "ungated", "consequences": [],
+         "sample": (
+             "## Supercell Oy — profile (registry-grounded)\n\n"
+             "- **Business ID:** 1832591-6 (PRH, active) · **Founded:** 2010\n"
+             "- **Ownership:** majority Tencent (public reporting)\n"
+             "- **Financials trend:** revenue down from the 2021 peak (last filed accounts)\n"
+             "- **Footprint:** global mobile games; HQ Helsinki\n\n"
+             "*Official registries + public web only — no credit ratings, no personal data.*\n\n…"
+         )},
     ],
     "space-weather-writer": [
         {"id": "space-weather", "title": "Space-weather article from NOAA/NASA data",
@@ -403,7 +593,14 @@ _CREW_OFFERS: dict[str, list[dict]] = {
          "example": "Re-run today's space weather article (evening edition)",
          "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
          "verification": "ungated", "scheduleBorn": "daily 17:00 Europe/Helsinki — runs automatically",
-         "consequences": [{"type": "publishes-public", "note": "the article is public newspaper content"}]},
+         "consequences": [{"type": "publishes-public", "note": "the article is public newspaper content"}],
+         "sample": (
+             "## Avaruussää — 2026-06-16 (iltapainos)\n\n"
+             "Aurinko on rauhallinen: **Kp-indeksi 2** (NOAA SWPC), ei merkittäviä purkauksia viimeisen "
+             "24 t aikana. Aurinkotuuli ~380 km/s.\n\n"
+             "**Revontulet:** epätodennäköisiä Etelä-Suomessa tänä yönä.\n\n"
+             "Lähteet: NOAA SWPC, NASA DONKI.\n\n…"
+         )},
     ],
     "tagline-translator": [
         {"id": "tagline-or-translation", "title": "Write a tagline or translate a short text",
@@ -411,7 +608,12 @@ _CREW_OFFERS: dict[str, list[dict]] = {
                  "Short-form only — no long documents, no legal translation."),
          "example": "Translate to English, keep the tone: 'Muisti joka ei vanhene'",
          "cost": "free", "latency": "seconds", "repeatability": "accumulative",
-         "verification": "ungated", "consequences": []},
+         "verification": "ungated", "consequences": [],
+         "sample": (
+             "**Source (fi):** \"Muisti joka ei vanhene\"\n"
+             "**Target (en):** \"Memory that never fades\"\n\n"
+             "*(tone preserved: quiet, durable)* — alt: \"A memory that doesn't age.\""
+         )},
     ],
     "image-maker": [
         {"id": "generate-image", "title": "Generate an image from a description",
@@ -422,7 +624,13 @@ _CREW_OFFERS: dict[str, list[dict]] = {
          "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
          "verification": "deterministic",  # generation + presigned upload are code; output is a real stored image
          "consequences": [{"type": "publishes-public",
-                           "note": "the generated image is stored at a public storage URL (~$0.04/image)"}]},
+                           "note": "the generated image is stored at a public storage URL (~$0.04/image)"}],
+         "sample": (
+             "## Generated image\n\n"
+             "![lakeside cottage](https://aimeat.io/v1/pub/<gaii>/images/cottage-golden-hour.jpg)\n\n"
+             "- **prompt:** serene Finnish lakeside summer cottage at golden hour, soft watercolor\n"
+             "- **model:** bytedance-seed/seedream-4.5 · **cost:** ~$0.04 · stored at a public URL\n\n…"
+         )},
     ],
     "editorial-writer": [
         {"id": "evening-editorial", "title": "The gonzo S.J. editorial + front-page index",
@@ -433,7 +641,13 @@ _CREW_OFFERS: dict[str, list[dict]] = {
          "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
          "verification": "deterministic",  # index build + verbatim store are code; self-heal checks output existence
          "scheduleBorn": "daily 18:00 Europe/Helsinki — runs automatically (self-healing at 18:15)",
-         "consequences": [{"type": "publishes-public", "note": "editorial + front-page index are public newspaper content"}]},
+         "consequences": [{"type": "publishes-public", "note": "editorial + front-page index are public newspaper content"}],
+         "sample": (
+             "## Pääkirjoitus — 2026-06-16 (S.J.)\n\n"
+             "Niin, taas yksi ilta jolloin algoritmit lupaavat pelastaa meidät tylsyydeltä ja "
+             "onnistuvat vain tuottamaan sitä teollisessa mittakaavassa…\n\n"
+             "*(etusivuindeksi rakennettu uudelleen: 18 artikkelia + visa + erikoisosiot)*\n\n…"
+         )},
     ],
     "news-fetcher": [
         {"id": "fetch-edition-raw", "title": "Fetch the day's raw news per category",
@@ -444,7 +658,14 @@ _CREW_OFFERS: dict[str, list[dict]] = {
          "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
          "verification": "deterministic",  # the loop and extraction are code; no LLM in the fetch
          "scheduleBorn": "daily 17:00 Europe/Helsinki — runs automatically",
-         "consequences": []},
+         "consequences": [],
+         "sample": (
+             "## Edition raw — 2026-06-16 evening (per category)\n\n"
+             "- **talous:** 6 lähdettä, full-text poimittu ✓\n"
+             "- **politiikka:** 5 ✓ · **urheilu:** 7 ✓ · **tiede:** 4 ✓ … (20 kategoriaa)\n\n"
+             "Yhteensä 112 artikkelin raakateksti tallennettu `news.2026-06-16.evening.raw.*`. "
+             "Ei LLM:ää — haku + ekstraktio koodissa.\n\n…"
+         )},
     ],
     "news-writer": [
         {"id": "evening-write-a", "title": "Write the Desk A news articles",
@@ -456,7 +677,14 @@ _CREW_OFFERS: dict[str, list[dict]] = {
          "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
          "verification": "deterministic",  # the category loop is code; grok writes each article
          "scheduleBorn": "daily ~17:25 Europe/Helsinki — runs automatically",
-         "consequences": [{"type": "publishes-public", "note": "the articles are public newspaper content"}]},
+         "consequences": [{"type": "publishes-public", "note": "the articles are public newspaper content"}],
+         "sample": (
+             "## Desk A — talous (2026-06-16)\n\n"
+             "**Korot pysyvät ennallaan — mitä se tarkoittaa lainanottajalle**\n\n"
+             "Suomen Pankin mukaan… *(täysi suomenkielinen artikkeli per kategoria: politiikka, "
+             "urheilu, kulttuuri, tiede, terveys).*\n\n"
+             "*Kirjoitettu päivän raakamateriaalista.*\n\n…"
+         )},
     ],
     "news-writer-b": [
         {"id": "evening-write-b", "title": "Write the Desk B news articles",
@@ -468,7 +696,13 @@ _CREW_OFFERS: dict[str, list[dict]] = {
          "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
          "verification": "deterministic",
          "scheduleBorn": "daily ~17:25 Europe/Helsinki — runs automatically",
-         "consequences": [{"type": "publishes-public", "note": "the articles are public newspaper content"}]},
+         "consequences": [{"type": "publishes-public", "note": "the articles are public newspaper content"}],
+         "sample": (
+             "## Desk B — tekoäly (2026-06-16)\n\n"
+             "**Agenttiparvet siirtyvät tuotantoon — hype vai käännekohta?**\n\n"
+             "… *(täysi artikkeli per kategoria: pelit, pelidevaus, startup, ruoka, luonto, mieli, filosofia).*\n\n"
+             "*Kirjoitettu päivän raakamateriaalista.*\n\n…"
+         )},
     ],
     "feedback-wisdom": [
         {"id": "feedback-wisdom", "title": "Turn feedback stats into support guidance",
@@ -484,7 +718,14 @@ _CREW_OFFERS: dict[str, list[dict]] = {
              {"type": "mutates-live-app",
               "note": "advisories are written to the AIMEAT outbox; after OWNER-GATED AIMEAT delivery "
                       "(deliver-advisory) they appear in the app's Guidance tab — indirect, never a direct write"},
-         ]},
+         ],
+         "sample": (
+             "## Support advisory — 2026-06-16\n\n"
+             "**Rising tag:** `billing` +38% WoW — staff the queue earlier.\n"
+             "**Slow resolution:** `integration` median 14h → 22h (cite: feedback-stats@1, 2026-06-15→16).\n"
+             "**VIP pressure:** 2 VIP tickets aged >24h.\n\n"
+             "*Reasoned over aggregates; written to the advisory outbox for owner-gated delivery.*\n\n…"
+         )},
     ],
     "daily-features-writer": [
         {"id": "evening-features", "title": "Evening features + the validated news quiz",
@@ -495,7 +736,24 @@ _CREW_OFFERS: dict[str, list[dict]] = {
          "cost": "cheap", "latency": "minutes", "repeatability": "accumulative",
          "verification": "gated",  # quiz JSON is structurally validated; placeholder output rejects
          "scheduleBorn": "daily 17:45 Europe/Helsinki — runs automatically (quiz self-heal at 18:00)",
-         "consequences": [{"type": "publishes-public", "note": "features + quiz are public newspaper content"}]},
+         "consequences": [{"type": "publishes-public", "note": "features + quiz are public newspaper content"}],
+         "json": True,  # the validated quiz is structured — sample is a JSON object
+         "sample": {
+             "edition": "2026-06-16 evening",
+             "features": ["koodaus", "prompt", "matikka"],
+             "quiz": {
+                 "title": "Päivän uutisvisa",
+                 "questions": [
+                     {"q": "Mikä oli Suomen Pankin korkopäätös tänään?",
+                      "options": ["Nosto", "Lasku", "Ennallaan", "Ei päätöstä"],
+                      "answer": 2, "source": "news.2026-06-16.evening.article.talous"},
+                     {"q": "Mikä teema hallitsi tekoälyuutisia?",
+                      "options": ["Sääntely", "Agenttiparvet", "Kuvageneraatio", "Robotiikka"],
+                      "answer": 1, "source": "news.2026-06-16.evening.article.tekoaly"},
+                 ],
+             },
+             "note": "validated; skipped rather than fabricated when articles are missing",
+         }},
     ],
 }
 
@@ -535,6 +793,9 @@ _GENERIC_WORKFLOW_OFFERS = {
 
 def crew_offer(agent: str, meta: dict, with_sample: bool = False) -> dict:
     """One spec-shaped offer for a task-runner crew (deliverable = memory prefix, Run flow)."""
+    # A structured offer wants format="json" + an object sample. The node enum doesn't carry "json"
+    # yet, so until JSON_FORMAT_SUPPORTED flips we keep "document" and just publish the object sample.
+    fmt = "json" if (meta.get("json") and JSON_FORMAT_SUPPORTED) else "document"
     offer = {
         "id": meta["id"],
         "title": meta["title"],
@@ -550,11 +811,19 @@ def crew_offer(agent: str, meta: dict, with_sample: bool = False) -> dict:
         "requirements": [],  # a registered+approved task-runner needs nothing else
         "consequences": list(meta["consequences"]),
         "deliverable": {
-            "format": "document",
+            "format": fmt,
             "location": {"space": f"crews.{agent}.", "visibility": "owner"},
-            "sample": fetch_crew_sample(agent) if with_sample else "untested",
+            # Golden sample: live last-run excerpt → authored representative example → "untested".
+            "sample": _resolve_sample(fetch_crew_sample(agent), meta.get("sample"))
+                      if with_sample else "untested",
         },
     }
+    # dependsOn: upstream offers this one needs, derived from the workflow `after` edges (single
+    # source = workflow_spec). Pure data — the aimeat-side renderer shows prerequisites / gates runnability.
+    from crewaimeat.workflow_spec import offer_dependencies
+    deps = offer_dependencies(meta["id"])
+    if deps:
+        offer["dependsOn"] = deps
     # Workflow-compatibility: an offer that declares its signals can be wired into a workflow step.
     # The signals carry {date}/{edition} placeholders the workflow templates per run. Single source:
     # crewaimeat.workflow_spec.AGENT_SIGNALS (also consumed by the workflow definition itself). The
@@ -592,8 +861,9 @@ def offers_doc_any(agent: str, with_samples: bool = False) -> dict:
         o = crew_offer(agent, meta, with_sample=False)
         if with_samples:
             if sample is None:
-                sample = fetch_crew_sample(agent)
-            o["deliverable"]["sample"] = sample
+                sample = fetch_crew_sample(agent)  # one network read per agent; all offers share the prefix
+            # live last-run excerpt → this offer's authored example → "untested" (golden sample, never invented)
+            o["deliverable"]["sample"] = _resolve_sample(sample, meta.get("sample"))
         doc["offers"].append(o)
     return doc
 

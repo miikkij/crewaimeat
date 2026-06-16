@@ -276,6 +276,31 @@ WORKFLOWS: dict[str, dict] = {
 }
 
 
+def offer_dependencies(offer_id: str) -> list[dict]:
+    """Hard upstream dependencies of an offer, derived from the workflow `after` edges (single
+    source = WORKFLOWS — the same graph the node executes). For every step that fulfils `offer_id`,
+    map each `after` step-id to the offer that step fulfils; that upstream offer must run first
+    (the consumer's `required_to_function` reads what the producer's `success_signal` writes).
+    Returns [{offer, agent, workflow}] — empty when the offer has no hard upstream. Pure data."""
+    deps: list[dict] = []
+    seen: set = set()
+    for wf in WORKFLOWS.values():
+        by_id = {s["id"]: s for s in wf["steps"]}
+        for s in wf["steps"]:
+            if s.get("offer") != offer_id:
+                continue
+            for up_id in s.get("after") or []:
+                up = by_id.get(up_id)
+                if not up or not up.get("offer"):
+                    continue
+                key = (wf["id"], up["offer"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                deps.append({"offer": up["offer"], "agent": up.get("agent"), "workflow": wf["id"]})
+    return deps
+
+
 def node_definition(wf_id: str = "laimeat-sanomat-evening") -> dict:
     """Emit the exact `definition` payload for aimeat_workflow_save: localized title/description,
     one schedule trigger, typed vars, and steps as {id, agent, offer, after, description, retry}.
