@@ -76,7 +76,7 @@ def test_crew_offers_match_spec_shape():
             # base spec fields always; workflow-compat fields are OPTIONAL (only agents whose offer
             # declares its signals get them — that's what makes them workflow-compatible).
             assert SPEC_FIELDS <= set(o)
-            assert set(o) - SPEC_FIELDS <= {"required_to_function", "success_signal"}
+            assert set(o) - SPEC_FIELDS <= {"required_to_function", "success_signal", "dependsOn"}
             assert o["cost"] in COSTS and o["latency"] in LATENCIES
             assert o["repeatability"] in {"idempotent", "accumulative", "destructive"}
             assert o["verification"] in VERIFICATIONS and o["dataHandling"] in DATA_HANDLING
@@ -90,3 +90,91 @@ def test_crew_offers_match_spec_shape():
     build = next(o for o in forge if o["id"] == "build-crew")
     assert any(c.get("requiresApproval") for c in build["consequences"])
     assert build["repeatability"] == "accumulative"
+
+
+# ── Golden samples (task 1): every published offer carries a real example, never "untested" ──
+import json as _json  # noqa: E402
+
+import crewaimeat.offers as _off  # noqa: E402
+
+
+def _no_live_samples(monkeypatch):
+    """Simulate an agent that has never run: no live sample, so authored examples must fill in."""
+    monkeypatch.setattr(_off, "fetch_crew_sample", lambda agent: "untested")
+    monkeypatch.setattr(_off, "fetch_sample", lambda agent, out: "untested")
+
+
+def test_golden_sample_never_untested(monkeypatch):
+    _no_live_samples(monkeypatch)
+    for agent in _off.PILOT_AGENTS + _off.CREW_AGENTS:
+        for o in _off.offers_doc_any(agent, with_samples=True)["offers"]:
+            s = o["deliverable"]["sample"]
+            assert s != "untested", f"{agent}/{o['id']}: authored golden sample missing"
+            assert isinstance(s, (str, dict)), f"{agent}/{o['id']}: sample must be markdown or a JSON object"
+            size = len(s) if isinstance(s, str) else len(_json.dumps(s))
+            assert size <= 8000, f"{agent}/{o['id']}: sample exceeds the 8000-char contract cap"
+
+
+def test_live_sample_wins_over_authored(monkeypatch):
+    monkeypatch.setattr(_off, "fetch_crew_sample", lambda agent: "LIVE EXCERPT")
+    doc = _off.offers_doc_any("joker", with_samples=True)
+    assert doc["offers"][0]["deliverable"]["sample"] == "LIVE EXCERPT"
+
+
+# ── JSON-shaped output (task 2): structured offers publish an object sample + a valid format ──
+def test_json_shaped_offers_have_object_sample(monkeypatch):
+    _no_live_samples(monkeypatch)
+    for agent, oid in (("idea-feasibility-rater", "rate-feasibility"),
+                       ("probability-creator", "estimate-spectrum"),
+                       ("daily-features-writer", "evening-features")):
+        o = next(x for x in _off.offers_doc_any(agent, with_samples=True)["offers"] if x["id"] == oid)
+        assert isinstance(o["deliverable"]["sample"], dict), f"{oid}: structured offer needs an object sample"
+        # format stays "document" until the node enum adds "json" (JSON_FORMAT_SUPPORTED flip)
+        assert o["deliverable"]["format"] in (FORMATS | {"json"})
+
+
+# ── dependsOn (task 4): pipeline offers advertise their upstream, derived from the workflow ──
+def test_depends_on_derives_from_workflow():
+    from crewaimeat.offers import offers_doc_any as _doc
+    ed = next(o for o in _doc("editorial-writer")["offers"] if o["id"] == "evening-editorial")
+    assert "dependsOn" in ed
+    up = {d["offer"] for d in ed["dependsOn"]}
+    assert {"evening-write-a", "evening-write-b", "space-weather"} <= up
+    for d in ed["dependsOn"]:
+        assert {"offer", "agent", "workflow"} <= set(d)
+    # an offer with no hard upstream omits dependsOn entirely
+    joker = _doc("joker")["offers"][0]
+    assert "dependsOn" not in joker
+
+
+# ── Per-offer run tagging (task 3): the deliverable write carries both task:<id> and offer:<id> ──
+def test_offer_tag_emitted_on_publish(monkeypatch):
+    import crewaimeat.aimeat_crew as ac
+    calls: list = []
+    monkeypatch.setattr(ac, "_aimeat_call",
+                        lambda agent, tool, payload: (calls.append((tool, payload)) or {"ok": True}))
+    cb = ac._make_publish_cb("joker", "crews.joker.task-1", task_id="task-1-abc", offer_id="tell-jokes")
+
+    class _Out:
+        raw = "a joke"
+
+    cb(_Out())
+    writes = [p for (t, p) in calls if t == "aimeat_memory_write" and p["key"] == "crews.joker.task-1"]
+    assert writes, "the deliverable must be written"
+    tags = writes[0]["tags"]
+    assert "task:task-1-abc" in tags and "offer:tell-jokes" in tags
+
+
+def test_no_offer_tag_when_not_an_offer_task(monkeypatch):
+    import crewaimeat.aimeat_crew as ac
+    calls: list = []
+    monkeypatch.setattr(ac, "_aimeat_call",
+                        lambda agent, tool, payload: (calls.append((tool, payload)) or {"ok": True}))
+    cb = ac._make_publish_cb("joker", "crews.joker.task-1", task_id="task-1-abc")  # no offer_id
+
+    class _Out:
+        raw = "a joke"
+
+    cb(_Out())
+    tags = next(p for (t, p) in calls if p["key"] == "crews.joker.task-1")["tags"]
+    assert tags == ["task:task-1-abc"]
