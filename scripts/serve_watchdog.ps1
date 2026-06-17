@@ -6,5 +6,6 @@
 # logs/serve_watchdog.log.
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
+if (-not $env:AIMEAT_HOME) { $env:AIMEAT_HOME = Join-Path $root '.aimeat' }
 $env:PATH = "$root\.venv\Scripts;" + $env:PATH
 uv run python -m crewaimeat.serve_watchdog

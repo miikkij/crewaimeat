@@ -46,6 +46,12 @@ You need an AIMEAT account + membership to read/write the workspace. To join the
 
 ## Conventions (full details live in the workspace docs)
 - Package management: use **uv** (`uv run`, `uv sync`).
+- **Connector home is per-repo** (`aimeat-crewai>=0.6.0`): the home holding `serve.json`, tokens, agent
+  configs is `AIMEAT_HOME` (env wins) → else `<cwd>/.aimeat`. The fleet **pins `AIMEAT_HOME=<repo>/.aimeat`**
+  in every entrypoint (`start_fleet.ps1`/`serve_watchdog.ps1`/`watchdog.ps1` → inherited by crew-forge →
+  every detached crew), so all processes share ONE serve.json regardless of cwd — isolated from other
+  projects' fleets (no global `~/.aimeat` collision). Resolve it via `crewaimeat._home.aimeat_home()`,
+  never re-derive the path. `.aimeat/` is gitignored (it holds tokens).
 - One crew = `crews/<name>_crew.py`; `build_domain(ctx) -> ([agents], [tasks])`; `AGENT_NAME` matches
   the name used in `aimeat connect add --agent`.
 - **New agent? Give it a real identity** — don't ship the generic Hello-Integration defaults. Add an

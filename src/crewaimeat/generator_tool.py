@@ -51,8 +51,9 @@ def _discover_owner(agent_name: str) -> str | None:
     """Find the owner from the token filename (~/.aimeat/tokens/<agent>@<owner>.token).
 
     Deterministic and env-free: there is exactly one token file per (agent, owner)."""
-    home = Path(os.environ.get("AIMEAT_HOME") or (Path.home() / ".aimeat"))
-    tokens = home / "tokens"
+    from crewaimeat._home import aimeat_home
+
+    tokens = aimeat_home() / "tokens"
     try:
         for p in tokens.glob(f"{agent_name}@*.token"):
             stem = p.name[: -len(".token")]

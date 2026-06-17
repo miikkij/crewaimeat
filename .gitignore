@@ -8,6 +8,8 @@ dist/
 docs/aimeat-guides
 # Salaisuudet
 .env
+# AIMEAT-konnektorin koti (AIMEAT_HOME): serve.json, agenttitokenit, configit — EI committia
+.aimeat/
 
 # Crew-ajojen tulokset (säilytetään kansio, ei tiedostoja)
 output/*

@@ -30,7 +30,6 @@ _WATCHDOG_RE = re.compile(r"watchdog\.(ps1|sh)")
 _CONNECT_RE = re.compile(r"connect\s+serve")
 
 _LOCKS_DIR = Path("logs/.locks")
-_SERVE_JSON = Path(os.path.expanduser("~")) / ".aimeat" / "serve.json"
 
 # Node last_seen older than this WHILE the local daemon is up = the daemon isn't heartbeating to the
 # node (the "orange" stale-heartbeat case: image-maker / ledger-reader / research-crew / doc-fact-reader).
@@ -196,8 +195,10 @@ def collect_locks() -> set[str]:
 
 
 def collect_serve() -> dict:
+    from crewaimeat._home import serve_json_path
+
     try:
-        return json.loads(_SERVE_JSON.read_text(encoding="utf-8"))
+        return json.loads(serve_json_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
 

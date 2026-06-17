@@ -13,6 +13,11 @@ param(
     [int]$RapidWindowSeconds = 60    # an exit faster than this counts as "quick"
 )
 
+# Resolve the connector home the same way every entrypoint does, so a crew launched standalone (not via
+# start_fleet) still shares the fleet's serve.json/tokens. A preset/inherited AIMEAT_HOME wins.
+$root = (Resolve-Path "$PSScriptRoot\..").Path
+if (-not $env:AIMEAT_HOME) { $env:AIMEAT_HOME = Join-Path $root '.aimeat' }
+
 $fails = 0
 while ($true) {
     $start = Get-Date

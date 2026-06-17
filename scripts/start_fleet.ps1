@@ -22,6 +22,14 @@ $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path "$PSScriptRoot\..").Path
 Set-Location $root
 
+# Pin the AIMEAT connector home to THIS repo (isolated from other projects' fleets on the machine, so
+# two `aimeat connect serve` daemons can never collide on one global ~/.aimeat/serve.json). Every child
+# inherits it — ensure_serve's daemon, the serve-watchdog, and crew-forge -> reconcile_fleet -> each
+# detached crew — so all fleet processes resolve the SAME serve.json/tokens regardless of cwd. An
+# explicitly preset AIMEAT_HOME wins (same precedence as the connector).
+if (-not $env:AIMEAT_HOME) { $env:AIMEAT_HOME = Join-Path $root '.aimeat' }
+Write-Host "[start_fleet] AIMEAT_HOME = $env:AIMEAT_HOME"
+
 # Put the venv's Scripts dir first on PATH so `uv` (and the watchdog's `uv run`) resolve even
 # if this shell's PATH lacks uv (uv.exe lives next to the venv python).
 $venvScripts = Join-Path $root '.venv\Scripts'

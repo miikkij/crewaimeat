@@ -379,8 +379,9 @@ def _token_exists(agent_name: str, owner: str | None) -> bool:
     """
     import glob
 
-    home = Path(os.environ.get("AIMEAT_HOME") or (Path.home() / ".aimeat"))
-    tokens = home / "tokens"
+    from crewaimeat._home import aimeat_home
+
+    tokens = aimeat_home() / "tokens"
     if owner:
         return (tokens / f"{agent_name}@{owner}.token").is_file()
     return bool(glob.glob(str(tokens / f"{agent_name}@*.token")))
