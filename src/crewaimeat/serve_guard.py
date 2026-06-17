@@ -209,6 +209,14 @@ def _reap_duplicates(keep_pid: int | None) -> int:
     return reaped
 
 
+def this_home_serve_pids() -> list[int]:
+    """PIDs of serve daemons that serve THIS AIMEAT_HOME. terminate_fleet uses this to stop ONLY our
+    own daemon — never another home's (the desktop's isolated serve must survive our shutdown). A pid
+    whose home cannot be read is treated as NOT ours (fail-safe: leave foreign/unknown serves alone)."""
+    our_home = _norm(_aimeat_home())
+    return [p for p in _serve_pids() if _process_aimeat_home(p) == our_home]
+
+
 def ensure_single_serve(timeout: float = 60.0) -> dict:
     """Ensure EXACTLY ONE serve daemon is running and return its discovery doc.
 
