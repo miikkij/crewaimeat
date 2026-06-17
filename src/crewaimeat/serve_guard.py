@@ -25,7 +25,85 @@ import time
 from pathlib import Path
 
 _LOCK = Path("logs/.locks/serve-spawn.lock")
-_SERVE_JSON = Path(os.path.expanduser("~")) / ".aimeat" / "serve.json"
+
+
+def _aimeat_home() -> Path:
+    """The connector home for THIS process. AIMEAT_HOME env wins (matches the connector +
+    aimeat_crewai), else the legacy global ~/.aimeat. Every home gets its OWN serve daemon —
+    the desktop's isolated home must NOT reap the user's global fleet serve, and vice versa."""
+    h = os.environ.get("AIMEAT_HOME")
+    return Path(h) if h else (Path(os.path.expanduser("~")) / ".aimeat")
+
+
+def _norm(p: str | Path | None) -> str | None:
+    if not p:
+        return None
+    try:
+        return os.path.normcase(os.path.realpath(str(p)))
+    except OSError:
+        return None
+
+
+def _process_aimeat_home(pid: int) -> str | None:
+    """Best-effort: the AIMEAT_HOME env of another process, normalized. None if it can't be read
+    (in which case the caller MUST NOT reap it — we only ever kill serves we can prove are ours)."""
+    # POSIX: /proc/<pid>/environ is a NUL-separated KEY=VALUE list.
+    if os.name != "nt":
+        try:
+            data = Path(f"/proc/{pid}/environ").read_bytes().decode("utf-8", "ignore")
+            for kv in data.split("\x00"):
+                if kv.startswith("AIMEAT_HOME="):
+                    return _norm(kv.split("=", 1)[1])
+            return _norm(str(Path(os.path.expanduser("~")) / ".aimeat"))  # env unset → legacy home
+        except OSError:
+            return None
+    # Windows: read the target PEB → ProcessParameters → Environment via ctypes (x64). Any failure
+    # (dead pid, access denied, layout mismatch) returns None → the process is left alone.
+    try:
+        import ctypes
+        import struct
+
+        k = ctypes.windll.kernel32
+        ntdll = ctypes.windll.ntdll
+        k.OpenProcess.restype = ctypes.c_void_p
+        k.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+        h = k.OpenProcess(0x0410, False, int(pid))  # QUERY_INFORMATION | VM_READ
+        if not h:
+            return None
+        try:
+            buf = (ctypes.c_void_p * 6)()
+            if ntdll.NtQueryInformationProcess(ctypes.c_void_p(h), 0, buf, ctypes.sizeof(buf), None) != 0:
+                return None
+            peb = buf[1]
+            if not peb:
+                return None
+
+            def rd(addr: int, size: int) -> bytes | None:
+                b = ctypes.create_string_buffer(size)
+                n = ctypes.c_size_t()
+                if not k.ReadProcessMemory(ctypes.c_void_p(h), ctypes.c_void_p(addr), b, size, ctypes.byref(n)):
+                    return None
+                return b.raw
+
+            d = rd(peb + 0x20, 8)
+            if not d:
+                return None
+            pp = struct.unpack("<Q", d)[0]
+            env_ptr = struct.unpack("<Q", rd(pp + 0x80, 8))[0]
+            env_len = struct.unpack("<Q", rd(pp + 0x3F0, 8))[0]
+            if not env_ptr:
+                return None
+            raw = rd(env_ptr, min(env_len or 32768, 1 << 20))
+            if not raw:
+                return None
+            for kv in raw.decode("utf-16-le", "ignore").split("\x00"):
+                if kv[:1] and "=" in kv[1:] and kv.split("=", 1)[0].upper() == "AIMEAT_HOME":
+                    return _norm(kv.split("=", 1)[1])
+            return _norm(str(Path(os.path.expanduser("~")) / ".aimeat"))  # env unset → legacy home
+        finally:
+            k.CloseHandle(ctypes.c_void_p(h))
+    except Exception:  # noqa: BLE001
+        return None
 
 
 class _CrossProcessLock:
@@ -110,19 +188,24 @@ def _kill(pid: int) -> None:
 
 
 def _reap_duplicates(keep_pid: int | None) -> int:
-    """Kill every serve daemon except keep_pid. Returns how many were reaped."""
-    pids = _serve_pids()
+    """Kill duplicate serve daemons FOR THIS HOME only. A serve daemon belongs to whichever
+    AIMEAT_HOME it was launched with; the desktop's isolated home and the user's global ~/.aimeat
+    fleet each run their own serve and must NOT reap each other (that caused a relaunch storm where
+    the desktop's serve killed the fleet's and the fleet watchdog relaunched all 40 agents). So we
+    only kill a process we can POSITIVELY confirm shares our home; unknown/other-home serves are
+    left untouched. Returns how many were reaped."""
+    our_home = _norm(_aimeat_home())
+    pids = [p for p in _serve_pids() if _process_aimeat_home(p) == our_home]  # same-home serves only
     reaped = 0
     if keep_pid is None:
-        # No canonical pid known: keep the lowest pid (oldest-ish), kill the rest.
         if len(pids) <= 1:
             return 0
-        keep_pid = min(pids)
+        keep_pid = min(pids)  # keep the oldest-ish of OUR home's serves
     for pid in pids:
         if pid != keep_pid:
             _kill(pid)
             reaped += 1
-            print(f"[serve-guard] reaped duplicate serve daemon pid {pid} (kept {keep_pid})", flush=True)
+            print(f"[serve-guard] reaped duplicate serve daemon pid {pid} (kept {keep_pid}, home {our_home})", flush=True)
     return reaped
 
 
@@ -143,6 +226,6 @@ def ensure_single_serve(timeout: float = 60.0) -> dict:
 
 if __name__ == "__main__":
     d = ensure_single_serve()
-    print(f"[serve-guard] single serve daemon: pid {d.get('pid')} port {d.get('port')} "
-          f"agents {len(d.get('agents') or [])}"
+    print(f"[serve-guard] single serve daemon for home {_norm(_aimeat_home())}: "
+          f"pid {d.get('pid')} port {d.get('port')} agents {len(d.get('agents') or [])}"
           + (f" (reaped {d['_reaped_duplicates']} duplicate(s))" if d.get("_reaped_duplicates") else ""))
