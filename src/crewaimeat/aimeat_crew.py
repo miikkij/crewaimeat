@@ -1222,6 +1222,18 @@ def run_crew(spec: CrewSpec) -> None:
         res = _aimeat_call(spec.agent_name, "aimeat_agent_capabilities_report", payload)
         print(f"[{spec.agent_name}] reported capabilities {list(payload)}: {bool(res)}", file=sys.stderr)
 
+    # 1b5) Publish this agent's OFFERS (with golden samples) on EVERY start — idempotent — so the
+    #      Tarjoama / "what can I do" surface shows a real last-run sample. Offers are otherwise only
+    #      pushed by a manual publish_all, so a plain restart never refreshed them (the samples stayed
+    #      'untested'). Only agents with an authored offer publish; best-effort — a publish failure is
+    #      logged loud but never blocks the daemon start. Lazy import avoids an import cycle with offers.
+    try:
+        from crewaimeat.offers import CREW_AGENTS, PILOT_AGENTS, publish_offers_any
+        if spec.agent_name in CREW_AGENTS or spec.agent_name in PILOT_AGENTS:
+            publish_offers_any(spec.agent_name, with_samples=True)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[{spec.agent_name}] offer publish skipped ({exc!r})", file=sys.stderr)
+
     # 1c) Publish the README (FIGLET / AVAILABLE_COMMANDS / LLM directives expanded). Every crew
     #     gets a README tab: the author's text if provided, otherwise a generated default so a
     #     forge-built crew (which passes no readme_md) is never blank.

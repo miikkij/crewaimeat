@@ -11,6 +11,7 @@ import re
 
 from crewaimeat.aimeat_crew import _aimeat_call
 from crewaimeat.llm import get_llm
+from crewaimeat.prose_style import FINNISH_NATIVE_STYLE
 
 _TIDBITS = {
     "koodaus": ("PÄIVÄN KOODAUSOSIO — yksi näppärä, itsenäinen ohjelmointivinkki (kikka, kuvio tai sudenkuoppa) "
@@ -26,13 +27,14 @@ _QUIZ_EXCL = {"koodaus", "prompt-niksi", "matikka"}
 
 
 def build_features(agent_name: str, date: str, edition: str) -> str:
-    llm = get_llm(for_tool_use=False, temperature=0.7)
+    llm = get_llm(for_tool_use=False, temperature=0.7, agent_name=agent_name)
     lines = []
     for cat, brief in _TIDBITS.items():
-        out = llm.call([{"role": "user", "content": "Kirjoita markdownina: " + brief}])
+        content = "Kirjoita markdownina: " + brief + FINNISH_NATIVE_STYLE
+        out = llm.call([{"role": "user", "content": content}])
         out = out if isinstance(out, str) else str(out)
         if len(out.strip()) < 80:  # hiccup → retry once
-            out = llm.call([{"role": "user", "content": "Kirjoita markdownina: " + brief}])
+            out = llm.call([{"role": "user", "content": content}])
             out = out if isinstance(out, str) else str(out)
         _aimeat_call(agent_name, "aimeat_memory_write",
                      {"key": f"news.{date}.{edition}.article.{cat}", "value": out, "visibility": "public"})
@@ -84,7 +86,7 @@ def build_quiz(agent_name: str, date: str, edition: str) -> str:
         print(f"[{agent_name}] quiz SKIPPED: only {len(arts)} readable articles for {date} {edition} "
               f"(writers still running or read lag) — will not fabricate", file=sys.stderr)
         return f"quiz=SKIPPED({len(arts)} articles)"
-    llm = get_llm(for_tool_use=False, temperature=0.7)
+    llm = get_llm(for_tool_use=False, temperature=0.7, agent_name=agent_name)
     quiz_prompt = (
         "Rakenna PÄIVÄN UUTISVISA näistä uutisartikkeleista. TASAN 5 kysymystä, kukin 5 vaihtoehtoa, yksi TAI "
         "useampi oikein. Perusta kysymykset VAIN siihen mitä artikkelit sanovat. Palauta VAIN JSON (ei muuta):\n"

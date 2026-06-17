@@ -14,6 +14,7 @@ import json
 
 from crewaimeat.aimeat_crew import _aimeat_call
 from crewaimeat.llm import get_llm
+from crewaimeat.prose_style import FINNISH_NATIVE_STYLE
 
 PERSONAS: dict[str, str] = {
     "talous": "Markus Markka", "politiikka-suomi": "Valtteri Valta", "politiikka-globaali": "Maija Maailma",
@@ -52,7 +53,7 @@ def _read_raw(agent_name: str, category: str, date: str, edition: str) -> list:
 
 
 def write_edition_articles(agent_name: str, date: str, edition: str, categories: list[str]) -> str:
-    llm = get_llm(for_tool_use=False, temperature=0.7)
+    llm = get_llm(for_tool_use=False, temperature=0.7, agent_name=agent_name)
     lines = [f"deterministic write — {date} {edition} ({agent_name})"]
     for cat in categories:
         raw = _read_raw(agent_name, cat, date, edition)
@@ -67,7 +68,8 @@ def write_edition_articles(agent_name: str, date: str, edition: str, categories:
         prompt = (f"Kirjoita TÄYSIMITTAINEN, syvällinen suomenkielinen uutisartikkeli kategoriaan '{cat}' näistä "
                   "lähteistä. VÄHINTÄÄN 4-6 kappaletta — ei stub, ei yksi kappale. Journalistinen ote, omin "
                   "sanoin (älä kopioi suoraan), taustoita ja yhdistä lähteet luontevaksi jutuksi. Aloita "
-                  f"otsikolla. {extra} Lopeta omalle rivilleen '— {persona}'.\n\nLÄHTEET (JSON):\n{src}")
+                  f"otsikolla. {extra} Lopeta omalle rivilleen '— {persona}'."
+                  + FINNISH_NATIVE_STYLE + f"\n\nLÄHTEET (JSON):\n{src}")
         art = llm.call([{"role": "user", "content": prompt}])
         art = art if isinstance(art, str) else str(art)
         if len(art.strip()) < 200:  # grok hiccup → one retry

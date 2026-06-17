@@ -17,6 +17,7 @@ import requests
 
 from crewaimeat.aimeat_crew import _aimeat_call
 from crewaimeat.llm import get_llm
+from crewaimeat.prose_style import FINNISH_NATIVE_STYLE
 
 _AVARUUSSAA = "avaruussaa"
 
@@ -53,14 +54,15 @@ def write_space_weather(agent_name: str, date: str, edition: str) -> str:
     """Fetch NOAA/spaceweather.com and write ONE original Finnish 'Avaruussää tänään' article into
     news.<date>.<edition>.article.avaruussaa (public). The edition is passed in, never guessed."""
     sources = _fetch_sources()
-    llm = get_llm(for_tool_use=False, temperature=0.6)
+    llm = get_llm(for_tool_use=False, temperature=0.6, agent_name=agent_name)
     prompt = (
         "Olet TÄHTI SOINTU, AIMEAT Sanomat'n avaruussää-kirjeenvaihtaja. Kirjoita YKSI alkuperäinen, "
         "selkeä ja hieman ihmettelevä suomenkielinen artikkeli otsikolla 'Avaruussää tänään' näistä "
         "lähteistä. Käsittele: revontulten näkyvyys Suomessa lähiöinä, auringon aktiivisuus, mahdollinen "
         "magneettinen myrsky (Kp-indeksi), aurinkotuuli / koronaaliaukot / purkaukset. Selitä Kp ja "
         "koronaaliaukot kansantajuisesti, älä lietso. Toista FAKTAT omin suomalaisin sanoin (älä kopioi "
-        "lähdetekstiä). Aloita otsikolla, lopeta omalle rivilleen '— Tähti Sointu'.\n\nLÄHTEET:\n" + sources)
+        "lähdetekstiä). Aloita otsikolla, lopeta omalle rivilleen '— Tähti Sointu'."
+        + FINNISH_NATIVE_STYLE + "\n\nLÄHTEET:\n" + sources)
     art = llm.call([{"role": "user", "content": prompt}])
     art = art if isinstance(art, str) else str(art)
     if len(art.strip()) < 200:  # grok hiccup → one retry

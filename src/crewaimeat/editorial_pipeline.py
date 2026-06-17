@@ -11,6 +11,7 @@ from __future__ import annotations
 from crewaimeat.aimeat_crew import _aimeat_call
 from crewaimeat.llm import get_llm
 from crewaimeat.memory_tools import make_memory_tools
+from crewaimeat.prose_style import FINNISH_NATIVE_STYLE
 
 _EXCL = {"koodaus", "prompt-niksi", "matikka", "editorial"}
 
@@ -21,8 +22,9 @@ _PROMPT = (
     "vahvinta lankaa ja KEHITÄ ne konkreettisesti — kaiva yksityiskohtiin, rakenna argumentti, yhdistä langat. "
     "Tämä on HYÖKKÄYS, ei kohtelias kolumni: repäise tekopyhyys auki, kiroile kun se osuu "
     "(saatana/paska/helvetti), musta huumori, vahva minä-ääni, ei tasapuolisuutta. Aloita koukulla joka "
-    "tarttuu kurkusta, päätä lauseeseen joka jää kaivertamaan. Lopeta omalle rivilleen: — S.J.\n\n"
-    "TÄMÄN ILLAN UUTISET:\n"
+    "tarttuu kurkusta, päätä lauseeseen joka jää kaivertamaan. Lopeta omalle rivilleen: — S.J."
+    + FINNISH_NATIVE_STYLE +
+    "\n\nTÄMÄN ILLAN UUTISET:\n"
 )
 
 
@@ -38,7 +40,7 @@ def build_editorial_and_index(agent_name: str, date: str, edition: str) -> str:
         heads.append(f"- {cat}: {txt.strip().splitlines()[0][:80] if txt.strip() else cat}")
     if not heads:
         return f"NO_ARTICLES for {date} {edition} — editorial skipped."
-    llm = get_llm(for_tool_use=False, temperature=0.95)
+    llm = get_llm(for_tool_use=False, temperature=0.95, agent_name=agent_name)
     ed = llm.call([{"role": "user", "content": _PROMPT + "\n".join(heads)}])
     ed = ed if isinstance(ed, str) else str(ed)
     if len(ed.strip()) < 400:  # grok hiccup → one retry
