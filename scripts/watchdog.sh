@@ -10,6 +10,11 @@
 
 set -u
 CREW="${1:?usage: ./scripts/watchdog.sh crews/<your>_crew.py}"
+
+# Resolve the connector home the same way every entrypoint does, so a crew launched standalone (not
+# via start_fleet) still shares the fleet's serve.json/tokens. A preset/inherited AIMEAT_HOME wins.
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+: "${AIMEAT_HOME:="$root/.aimeat"}"; export AIMEAT_HOME
 MAX_RAPID_FAILURES="${MAX_RAPID_FAILURES:-5}"   # stop after this many quick exits in a row
 RAPID_WINDOW_SECONDS="${RAPID_WINDOW_SECONDS:-60}"  # an exit faster than this counts as "quick"
 

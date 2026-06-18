@@ -40,6 +40,14 @@ Dates are the working dates; entries are **uncommitted and take effect on the ne
 - **Exclusive supervisor lock** in the serve-watchdog prevents multiple supervisor instances.
 - Crews re-declare their services on every start (idempotent).
 
+### Fixed
+- **Linux fleet entrypoints reach parity with Windows.** `start_fleet.sh` now pins `AIMEAT_HOME`,
+  pre-starts the shared serve daemon (`ensure_serve.py`) and launches a serve-daemon supervisor before
+  crew-forge; `watchdog.sh` pins `AIMEAT_HOME` so a standalone crew shares the fleet's serve.json/tokens;
+  new `serve_watchdog.sh` ports the supervisor. Without these a Linux self-host crashed every crew with
+  `AimeatServeError: No live serve daemon found … auto_start=False` (no daemon pre-started), and with
+  0.6.0's per-directory home it resolved `<cwd>/.aimeat` instead of where the tokens live.
+
 ## [0.3.0] — 2026-06-13 → 2026-06-15
 
 ### Added
