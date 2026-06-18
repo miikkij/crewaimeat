@@ -10,7 +10,8 @@ dependencies = [
     "aimeat-crewai>=0.6.0",  # 0.6.0: per-directory connector home (AIMEAT_HOME env wins, else <cwd>/.aimeat)
     #                          + aimeat_crewai.paths.aimeat_home single source; 0.5.0: native offers +
     #                          workflow-compat (Sig, build_offer/publish_offers, aimeat-offers CLI, liaison)
-    "tavily-python>=0.5.0",  # optional Tavily fallback (USE_TAVILY=1); default web search is SearXNG
+    "tavily-python>=0.5.0",  # optional Tavily fallback (USE_TAVILY=1); default web search is SearXNG/DDG
+    "ddgs>=6.0",             # free DuckDuckGo web search — zero-infra fallback when no SearXNG is running
     "requests>=2.31",        # SearXNG web-search tool + REST helpers + qwen-vl vision (browser screenshots)
     "playwright>=1.44",      # web-tester browser tool (plan-then-execute); needs `uv run playwright install chromium`
     "python-dotenv>=1.0.1",

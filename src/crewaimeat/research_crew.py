@@ -18,6 +18,7 @@ import os
 from crewai import Agent, Task
 
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
+from crewaimeat.article_extract import fetch_article_text
 from crewaimeat.crew import _web_tools
 
 AGENT_NAME = "research-crew"
@@ -36,9 +37,12 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
         goal="Gather relevant, up-to-date background for the given task",
         backstory=(
             "You are a thorough researcher who assembles facts and sources before analysis. "
-            "You use web search to make sure the information is current."
+            "You use web search to find current, relevant pages, then you open the most "
+            "relevant results with the fetch_article_text tool to read their FULL text — you "
+            "never draw conclusions from one-line search snippets alone."
         ),
-        tools=_web_tools(),
+        # Web search first, then fetch_article_text to read the full body of the top results.
+        tools=[*_web_tools(), fetch_article_text],
         llm=llm,
         verbose=True,
     )
@@ -58,8 +62,14 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     )
 
     research = Task(
-        description=f"{today}\n\nResearch and gather the key background for the task:\n{prompt}",
-        expected_output="A list of the key findings and facts with sources.",
+        description=(
+            f"{today}\n\nResearch and gather the key background for the task below. Work in two "
+            "steps: (1) use Web Search to find the most relevant, current pages; (2) take the best "
+            "result URLs and call fetch_article_text with a JSON array of those URLs to read each "
+            "page's FULL text. Base your findings on the full article bodies, not the search "
+            f"snippets, and cite the source URL for each fact:\n{prompt}"
+        ),
+        expected_output="A list of the key findings and facts, each with its source URL.",
         agent=researcher,
     )
     analysis = Task(

@@ -4,9 +4,21 @@ Notable changes to crewaimeat. Format loosely follows [Keep a Changelog](https:/
 Dates are the working dates; entries are **uncommitted and take effect on the next fleet restart**
 (the daemons import the modules at start).
 
-## [0.4.0] — 2026-06-15 → 2026-06-17
+## [0.4.0] — 2026-06-15 → 2026-06-18
 
 ### Added
+- **Zero-infra web search (DuckDuckGo fallback).** New `crewaimeat.ddg_search.DdgSearchTool` queries
+  DuckDuckGo directly via `ddgs` — no API key, no server, no Docker — emitting the exact same numbered
+  title/URL/snippet block as the SearXNG tool, so crews need no changes. `crew._web_tools()` now
+  auto-selects: `USE_TAVILY` → Tavily; `WEB_SEARCH=searxng|ddg|tavily` forces a backend; a reachable
+  `SEARXNG_URL` (cached 1.5 s probe) → SearXNG; otherwise → DuckDuckGo. A self-hosted SearXNG is used
+  transparently when present (dev fleet), while a bundled desktop install with nothing running falls
+  back to DuckDuckGo automatically — zero configuration. Adds `ddgs>=6.0`.
+- **research-crew reads full article bodies.** The Researcher agent in `research_crew.py` now carries
+  `fetch_article_text` (trafilatura main-text extraction + crash-safe subprocess, Playwright fallback)
+  alongside web search, and its task instructs the search → fetch-full-text → conclude chain. Findings
+  are grounded in real article bodies instead of one-line search snippets. Verified end-to-end on a
+  local gemma4 model: it correctly chained `web_search` → `fetch_article_text` (105k chars extracted).
 - **Per-repo connector isolation (`AIMEAT_HOME`).** The connector home holding `serve.json`, tokens and
   agent configs is now resolved per-repo — `AIMEAT_HOME` (env wins) → else `<cwd>/.aimeat` — via
   `crewaimeat._home.aimeat_home()`, and the fleet pins `AIMEAT_HOME=<repo>/.aimeat` in every entrypoint
