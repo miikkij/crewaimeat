@@ -4,6 +4,30 @@ Notable changes to crewaimeat. Format loosely follows [Keep a Changelog](https:/
 Dates are the working dates; entries are **uncommitted and take effect on the next fleet restart**
 (the daemons import the modules at start).
 
+## [0.4.0] — 2026-06-15 → 2026-06-17
+
+### Added
+- **Per-repo connector isolation (`AIMEAT_HOME`).** The connector home holding `serve.json`, tokens and
+  agent configs is now resolved per-repo — `AIMEAT_HOME` (env wins) → else `<cwd>/.aimeat` — via
+  `crewaimeat._home.aimeat_home()`, and the fleet pins `AIMEAT_HOME=<repo>/.aimeat` in every entrypoint
+  (`start_fleet`/`serve_watchdog`/`watchdog` → inherited by crew-forge → every detached crew). All
+  processes share ONE `serve.json` regardless of cwd, fully isolated from other projects' fleets (no global
+  `~/.aimeat` collision). Requires `aimeat-crewai>=0.6.0`.
+- **Curated fleet identity registry (`src/crewaimeat/fleet_identity.py`).** Central per-agent `tags`
+  (charset-safe `[a-z0-9._-]`) + specific `capabilities` {technical, domain, languages}; the scaffold sets
+  tags and reports capabilities on every start. A crew may override inline via `CrewSpec.tags`/`.capabilities`.
+- **Offers: golden samples, JSON-shaped output, `dependsOn`, per-offer tagging.** Offer deliverables are
+  tagged `offer:<id>`; tests cover golden samples, JSON shape, `dependsOn` and per-offer tags.
+- **Bilingual TUI chrome (en/fi)** in `crewaimeat-tui`.
+- **Content pipelines** — deterministic space-weather article writing + fetch pipeline; Finnish content
+  generation with native style and agent-specific parameters.
+
+### Changed
+- **Home-scoped serve dedup + termination.** `serve_guard` dedup and `terminate_fleet` are scoped to this
+  repo's `AIMEAT_HOME`, so they never reap or kill another home's serve daemons / fleet processes.
+- **Exclusive supervisor lock** in the serve-watchdog prevents multiple supervisor instances.
+- Crews re-declare their services on every start (idempotent).
+
 ## [0.3.0] — 2026-06-13 → 2026-06-15
 
 ### Added
