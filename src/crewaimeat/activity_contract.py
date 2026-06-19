@@ -39,14 +39,26 @@ OUT_SPACE, OUT_NS = "activity-report", "shared.activity_reports"  # a DOCUMENT s
 CONTRACT = {
     "id": "activity-report",
     "spaces": [
-        {"space": IN_SPACE, "namespace": IN_NS, "mode": "records",
-         "schema": {"type": "object", "required": ["id", "status"],
-                    "properties": {"id": {"type": "string"}, "ws": {"type": "string"},
-                                   "period_hours": {"type": "integer"}, "narrator": {"type": "string"},
-                                   "since": {"type": "string"}, "last_run": {"type": "string"},
-                                   "last_report": {"type": "string"}, "error": {"type": "string"},
-                                   "status": {"type": "string",
-                                              "enum": ["requested", "active", "in-progress", "done", "failed"]}}}},
+        {
+            "space": IN_SPACE,
+            "namespace": IN_NS,
+            "mode": "records",
+            "schema": {
+                "type": "object",
+                "required": ["id", "status"],
+                "properties": {
+                    "id": {"type": "string"},
+                    "ws": {"type": "string"},
+                    "period_hours": {"type": "integer"},
+                    "narrator": {"type": "string"},
+                    "since": {"type": "string"},
+                    "last_run": {"type": "string"},
+                    "last_report": {"type": "string"},
+                    "error": {"type": "string"},
+                    "status": {"type": "string", "enum": ["requested", "active", "in-progress", "done", "failed"]},
+                },
+            },
+        },
         {"space": OUT_SPACE, "namespace": OUT_NS, "mode": "document"},
     ],
 }
@@ -75,12 +87,15 @@ def _activity_events(org_id: str, ws: str) -> list[dict]:
     own token, for environments without the daemon."""
     try:
         from crewaimeat.aimeat_crew import _serve_api
+
         api = _serve_api()
         if api is not None:
             base, session = api
             r = session.get(
                 f"{base}/v1/organisms/{org_id}/workspace/activity",
-                params={"ws": ws}, headers={"X-Aimeat-Agent": AGENT}, timeout=30,
+                params={"ws": ws},
+                headers={"X-Aimeat-Agent": AGENT},
+                timeout=30,
             )
         else:
             owner = _discover_owner(AGENT)
@@ -89,7 +104,9 @@ def _activity_events(org_id: str, ws: str) -> list[dict]:
                 return []
             r = requests.get(
                 f"{url.rstrip('/')}/v1/organisms/{org_id}/workspace/activity",
-                params={"ws": ws}, headers={"Authorization": f"Bearer {tok}"}, timeout=30,
+                params={"ws": ws},
+                headers={"Authorization": f"Bearer {tok}"},
+                timeout=30,
             )
         evs = ((r.json() or {}).get("data") or {}).get("events") or []
         for e in evs:
@@ -120,8 +137,8 @@ def _gather(org_id: str, ws_spec: str, since: str) -> list[dict]:
 
 def _distill(events: list[dict], scope: str, since: str, narrator: str) -> str:
     lines = [
-        f"- {e.get('at','')} · {(e.get('agent') or e.get('actor') or '?')} {e.get('action')} "
-        f"{e.get('type')}/{e.get('instance')}" + (f" [{e.get('ws')}]" if e.get('ws') else "")
+        f"- {e.get('at', '')} · {(e.get('agent') or e.get('actor') or '?')} {e.get('action')} "
+        f"{e.get('type')}/{e.get('instance')}" + (f" [{e.get('ws')}]" if e.get("ws") else "")
         for e in events
     ]
     feed = "\n".join(lines[:250]) if lines else "(no activity in this window)"
@@ -142,7 +159,9 @@ def _distill(events: list[dict], scope: str, since: str, narrator: str) -> str:
 
 def _advance(org_id: str, ws_id: str, rec: dict, **changes) -> None:
     out = {k: v for k, v in {**rec, **changes}.items() if not k.startswith("_")}
-    if _call("aimeat_workspace_write", {"organism_id": org_id, "ws": ws_id, "space": IN_SPACE, "id": out["id"], "value": out}):
+    if _call(
+        "aimeat_workspace_write", {"organism_id": org_id, "ws": ws_id, "space": IN_SPACE, "id": out["id"], "value": out}
+    ):
         _call("aimeat_workspace_publish", {"organism_id": org_id, "ws": ws_id, "namespace": IN_NS, "id": out["id"]})
 
 
@@ -186,6 +205,7 @@ def process_activity_reports(targets: list[tuple[str, str]] | None = None) -> di
             # Durable per-machine guard (the 5-publishes-in-7-minutes storm + restart re-runs):
             # a stale workspace read must never re-trigger a report this machine just made.
             from crewaimeat.local_marks import ran_within
+
             if ran_within("activity_report", rid, max(1.0, period_h * 0.9)):
                 _REPORTED.add(rid)
                 continue
@@ -211,16 +231,34 @@ def process_activity_reports(targets: list[tuple[str, str]] | None = None) -> di
                 continue
             out_id = f"report-{rid}-{nowiso[:10]}"
             title = f"Activity report · {scope} · {nowiso[:10]}"
-            wrote = _call("aimeat_workspace_write",
-                          {"organism_id": org_id, "ws": ws_id, "space": OUT_SPACE, "id": out_id,
-                           "value": {"title": title, "markdown": report}})
-            pub = _call("aimeat_workspace_publish",
-                        {"organism_id": org_id, "ws": ws_id, "namespace": OUT_NS, "id": out_id}) if wrote else None
+            wrote = _call(
+                "aimeat_workspace_write",
+                {
+                    "organism_id": org_id,
+                    "ws": ws_id,
+                    "space": OUT_SPACE,
+                    "id": out_id,
+                    "value": {"title": title, "markdown": report},
+                },
+            )
+            pub = (
+                _call(
+                    "aimeat_workspace_publish", {"organism_id": org_id, "ws": ws_id, "namespace": OUT_NS, "id": out_id}
+                )
+                if wrote
+                else None
+            )
             if wrote and pub:
-                _advance(org_id, ws_id, rec,
-                         status=("done" if status == "requested" else "active"),
-                         last_run=nowiso, last_report=out_id)
+                _advance(
+                    org_id,
+                    ws_id,
+                    rec,
+                    status=("done" if status == "requested" else "active"),
+                    last_run=nowiso,
+                    last_report=out_id,
+                )
                 from crewaimeat.local_marks import mark_local_run
+
                 mark_local_run("activity_report", rid)
                 made += 1
             else:

@@ -12,17 +12,17 @@ from __future__ import annotations
 
 from crewai import Agent, Task
 
-from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
+from crewaimeat.aimeat_crew import CrewSpec, run_crew
 from crewaimeat.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is set, else []
 
 AGENT_NAME = "daily-briefing-crew"
 
-README = '''[[FIGLET:slant]["Daily Briefing Crew"]]]
+README = """[[FIGLET:slant]["Daily Briefing Crew"]]]
 
 Compiles a concise morning briefing: top world news, local weather, and a productivity tip — delivered in a scannable format to start your day informed.
 
 **How to task me:** Send a prompt like "Give me my morning briefing for today" or "What's the briefing for 2026-06-03?" and I'll research and deliver a structured summary.
-'''
+"""
 
 
 def build_domain(ctx):

@@ -11,8 +11,14 @@ def _stuck_requested_read(_tool, _payload):
     """A workspace that ALWAYS returns the same record as 'requested' — i.e. the 'done' write never
     sticks (cross-agent settle / frozen read). Write/publish calls just succeed."""
     if _tool == "aimeat_workspace_read":
-        return {"manifest": {}, "objects": {mc.IN_SPACE: [
-            {"id": "mail-scan-x", "subject": "Market scan · x", "body_md": "body", "status": "requested"}]}}
+        return {
+            "manifest": {},
+            "objects": {
+                mc.IN_SPACE: [
+                    {"id": "mail-scan-x", "subject": "Market scan · x", "body_md": "body", "status": "requested"}
+                ]
+            },
+        }
     return {"ok": True}  # write / publish succeed
 
 

@@ -26,9 +26,9 @@ from __future__ import annotations
 import json
 
 import requests
+from crewai.tools import tool
 
 from crewaimeat.generator_tool import _discover_owner, _token
-from crewai.tools import tool
 
 SCHED_TIMEOUT = 30
 
@@ -44,9 +44,13 @@ def make_schedule_tools(agent_name: str, owner: str | None = None) -> list:
             return None, f"no token/url for '{who}' (is it registered + approved? same owner?)"
         base = url.rstrip("/")
         try:
-            r = requests.request(method, f"{base}{path}",
-                                 headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
-                                 json=body, timeout=SCHED_TIMEOUT)
+            r = requests.request(
+                method,
+                f"{base}{path}",
+                headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
+                json=body,
+                timeout=SCHED_TIMEOUT,
+            )
         except Exception as e:  # noqa: BLE001
             return None, f"request failed: {e!r}"
         try:
@@ -65,11 +69,22 @@ def make_schedule_tools(agent_name: str, owner: str | None = None) -> list:
         return ((data or {}).get("data") or {}).get("managed") or []
 
     @tool("schedule_create")
-    def schedule_create(kind: str, cron: str, display_name: str, purpose: str,
-                        timezone: str = "Europe/Helsinki", target_agent: str = "",
-                        task_title: str = "", task_description: str = "",
-                        prompt: str = "", input_keys_json: str = "", output_key: str = "", model: str = "",
-                        extension_name: str = "", action_id: str = "") -> str:
+    def schedule_create(
+        kind: str,
+        cron: str,
+        display_name: str,
+        purpose: str,
+        timezone: str = "Europe/Helsinki",
+        target_agent: str = "",
+        task_title: str = "",
+        task_description: str = "",
+        prompt: str = "",
+        input_keys_json: str = "",
+        output_key: str = "",
+        model: str = "",
+        extension_name: str = "",
+        action_id: str = "",
+    ) -> str:
         """Create a SERVER-RUN schedule on AIMEAT (the node owns the cron clock — it fires even when you
         are offline, and the owner sees + can pause/cancel it in Profile -> Scheduler).
 
@@ -110,7 +125,7 @@ def make_schedule_tools(agent_name: str, owner: str | None = None) -> list:
                 try:
                     body["input_keys"] = json.loads(input_keys_json)
                 except Exception:  # noqa: BLE001
-                    return "FAILED: input_keys_json must be a JSON array of owner memory keys, e.g. [\"news.today.raw\"]."
+                    return 'FAILED: input_keys_json must be a JSON array of owner memory keys, e.g. ["news.today.raw"].'
             if output_key:
                 body["output_key"] = output_key
             if model:
@@ -128,8 +143,10 @@ def make_schedule_tools(agent_name: str, owner: str | None = None) -> list:
         sched = (data or {}).get("data") or {}
         sid = sched.get("id") or (sched.get("schedule") or {}).get("id")
         tgt = f", dispatches to '{post_as}'" if kind == "agent_task" else ""
-        return (f"OK: schedule created (id={sid}, kind={kind}, cron='{cron}' {timezone}{tgt}). The owner "
-                f"can see/pause/cancel it in Profile -> Scheduler.")
+        return (
+            f"OK: schedule created (id={sid}, kind={kind}, cron='{cron}' {timezone}{tgt}). The owner "
+            f"can see/pause/cancel it in Profile -> Scheduler."
+        )
 
     @tool("schedule_list")
     def schedule_list() -> str:
@@ -142,15 +159,16 @@ def make_schedule_tools(agent_name: str, owner: str | None = None) -> list:
         for s in items:
             out.append(
                 f"- id={s.get('id')} | kind={s.get('kind')} | cron='{s.get('cron')}' "
-                f"{s.get('timezone','')} | enabled={s.get('enabled')} | "
+                f"{s.get('timezone', '')} | enabled={s.get('enabled')} | "
                 f"name={s.get('displayName') or s.get('display_name')} | "
                 f"next={s.get('nextRunAt') or s.get('next_run_at') or '?'} | runs={s.get('runCount', s.get('run_count', 0))}"
             )
         return "Your schedules:\n" + "\n".join(out)
 
     @tool("schedule_update")
-    def schedule_update(schedule_id: str, enabled: str = "", cron: str = "",
-                        timezone: str = "", display_name: str = "") -> str:
+    def schedule_update(
+        schedule_id: str, enabled: str = "", cron: str = "", timezone: str = "", display_name: str = ""
+    ) -> str:
         """Update one of your schedules (get its id from schedule_list). enabled='false' PAUSES it,
         'true' RESUMES it; cron/timezone/display_name change the rest. Re-arms the live cron immediately.
         Pass only the fields you want to change."""

@@ -10,25 +10,24 @@ Run: uv run python crews/aimeat_extension_builder_crew.py
 
 from __future__ import annotations
 
+from crewai import Agent, Task
+
+from crewaimeat.aimeat_crew import CrewSpec, run_crew
 from crewaimeat.author_tool import make_author_tools
 from crewaimeat.workflow import make_workflow_tools
 
-from crewai import Agent, Task
-
-from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
-from crewaimeat.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is set, else []
-
 AGENT_NAME = "aimeat-extension-builder"
 
-README = '''[[FIGLET:slant]["AIMEAT Extension Builder"]]
+README = """[[FIGLET:slant]["AIMEAT Extension Builder"]]
 
 Purpose: Builds AIMEAT apps that need SERVER-SIDE logic — authors a WASM extension (ext: namespace; each action is `export default async function(ctx, input)`; optional cron schedules; ctx.memory.get/set, ctx.memory.getPublic, ctx.fetch, ctx.api.post for agent task-dispatch) PLUS a cortex that calls the extension via callExt/ext action paths PLUS an app HTML. Installs extension + cortex, publishes the app, and verify_renders until VERIFY PASS.
 
 How to task me: Give me your app idea that requires server-side logic (external API calls with secrets, server-validated writes, scheduled refresh jobs, or agent task-dispatch). I'll design the architecture, author the extension + cortex + app, install everything, publish, and verify.
-'''
+"""
 
 
 AGENT_NAME = "aimeat-extension-builder"
+
 
 def build_domain(ctx):
     tid = (ctx.task or {}).get("id") or "manual"
@@ -39,7 +38,12 @@ def build_domain(ctx):
         role="AIMEAT Extension Builder Specialist",
         goal="Author, install, publish, and verify an AIMEAT app with server-side logic: a WASM extension (ext: namespace actions as `export default async function(ctx, input)` with optional cron schedules, ctx.memory.get/set, ctx.memory.getPublic, ctx.fetch, ctx.api.post for agent task-dispatch) plus a cortex that calls the extension via callExt/ext action paths, plus an app HTML that loads aimeat-auth.js + aimeat-data.js + every AIMEAT.<lib> the cortex uses + the cortex itself; boot line = `(await AIMEAT.auth.login()) || AIMEAT.auth.getSession()`. Install the extension with install_extension, the cortex with install_cortex, publish the app with publish_app, and verify with verify_render until VERIFY PASS.",
         backstory="Expert AIMEAT server-side app builder. Uses make_author_tools to author real AIMEAT apps directly. Knows the gotchas cold: the app HTML must loadScript aimeat-auth.js + aimeat-data.js + the cortex + every AIMEAT.<lib> the cortex depends on; the boot line is `let session = (await AIMEAT.auth.login()) || AIMEAT.auth.getSession();`; server-side logic lives in a WASM extension — one top-level `export default async function (ctx, input)` per action path; ctx.memory.get/set for private state, ctx.memory.getPublic for shared state, ctx.fetch for external HTTP calls, ctx.api.post('/v1/agents/<name>/tasks', ...) for dispatching tasks to other agents; optional cron schedules for recurring jobs. The build is not done until verify_render returns VERIFY PASS. Good fits: external-API-backed apps needing server-side fetch/secrets, server-validated writes, scheduled refresh jobs, and apps that dispatch tasks to other agents.",
-        tools=[*author_tools, *deleg], llm=ctx.llm, max_iter=60, allow_delegation=False, verbose=True)
+        tools=[*author_tools, *deleg],
+        llm=ctx.llm,
+        max_iter=60,
+        allow_delegation=False,
+        verbose=True,
+    )
 
     design = Task(
         description=(
@@ -57,7 +61,7 @@ def build_domain(ctx):
             "Produce a compact design: extension action map, cortex call map, app load order, key data flows."
         ),
         expected_output="A compact design: extension action paths + cron schedules (if any) + cortex call map + app HTML load order + key data flows.",
-        agent=specialist
+        agent=specialist,
     )
 
     build = Task(
@@ -75,7 +79,7 @@ def build_domain(ctx):
         ),
         expected_output="Extension installed (action paths confirmed) + cortex installed + app published with the live URL.",
         agent=specialist,
-        context=[design]
+        context=[design],
     )
 
     verify = Task(
@@ -91,7 +95,7 @@ def build_domain(ctx):
         ),
         expected_output="VERIFY PASS + live URL of the published app.",
         agent=specialist,
-        context=[build]
+        context=[build],
     )
 
     return [specialist], [design, build, verify]

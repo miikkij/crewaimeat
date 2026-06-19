@@ -44,7 +44,9 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     )
 
     research_topic = Task(
-        description=f"{ctx.today}\n\n" + "Read the user's content request below and identify the topic, intended format (blog post, article, or social thread), audience, and any constraints. Research the topic and gather the most relevant, accurate, and current facts, statistics, examples, and angles that would make the piece informative and credible. Note anything time-sensitive or recently changed. Capture sources for any specific claims." + f"\n\nRequest:\n{ctx.prompt}",
+        description=f"{ctx.today}\n\n"
+        + "Read the user's content request below and identify the topic, intended format (blog post, article, or social thread), audience, and any constraints. Research the topic and gather the most relevant, accurate, and current facts, statistics, examples, and angles that would make the piece informative and credible. Note anything time-sensitive or recently changed. Capture sources for any specific claims."
+        + f"\n\nRequest:\n{ctx.prompt}",
         expected_output="A concise briefing: the inferred topic/format/audience, 5-8 key facts or angles worth covering (with sources for specific claims), and any notable recent developments.",
         agent=researcher,
     )
@@ -54,7 +56,9 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
         agent=strategist,
     )
     write_draft = Task(
-        description=f"{ctx.today}\n\n" + "Write the polished final draft following the outline and the research. Match the format, tone, and audience implied by the original request below, and honor any explicit instructions (language, length, style, platform); otherwise choose what fits best. For a blog post or article, include a title, an engaging introduction, well-developed sections with headings, and a strong conclusion. For a social thread, write numbered posts that flow naturally and respect typical length limits. Present the approved outline at the top, then the full final draft beneath it. If you mention any date, use the current time provided above." + f"\n\nRequest:\n{ctx.prompt}",
+        description=f"{ctx.today}\n\n"
+        + "Write the polished final draft following the outline and the research. Match the format, tone, and audience implied by the original request below, and honor any explicit instructions (language, length, style, platform); otherwise choose what fits best. For a blog post or article, include a title, an engaging introduction, well-developed sections with headings, and a strong conclusion. For a social thread, write numbered posts that flow naturally and respect typical length limits. Present the approved outline at the top, then the full final draft beneath it. If you mention any date, use the current time provided above."
+        + f"\n\nRequest:\n{ctx.prompt}",
         expected_output="The deliverable: first the outline, then a complete, polished, ready-to-publish draft in the requested format.",
         agent=writer,
     )

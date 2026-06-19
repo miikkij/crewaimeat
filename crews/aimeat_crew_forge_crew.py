@@ -35,7 +35,7 @@ validate, register, and launch it. You approve the new agent once. aimeat-app-co
 # A known-good AIMEAT-SDLC build_domain shape the Architect ADAPTS to the requested domain. It mirrors
 # aimeat-app-builder: one specialist agent on make_author_tools, three tasks (Design -> Build -> Verify),
 # the last gated by verify_render. (Triple-quoted so it embeds verbatim in the Architect's brief.)
-_SHAPE = '''def build_domain(ctx):
+_SHAPE = """def build_domain(ctx):
     tid = (ctx.task or {}).get("id") or "manual"
     author_tools, _state = make_author_tools(AGENT_NAME, task_id=tid)
     wf = make_workflow_tools(coordinator_name=AGENT_NAME, run_id=tid, task_id=tid, tag="workflow", timeout=1800)
@@ -65,7 +65,7 @@ _SHAPE = '''def build_domain(ctx):
                   expected_output="verify_render PASS (and verify_interaction PASS for interactive apps) + live URL",
                   agent=specialist, context=[build])
     return [specialist], [design, build, verify]
-'''
+"""
 
 
 def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
@@ -122,7 +122,7 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "from crewaimeat.author_tool import make_author_tools\n"
             "from crewaimeat.workflow import make_workflow_tools\n"
             "README:\n"
-            "<short README markdown for the new crew: a [[FIGLET:slant][\"...\"]] line + one-line purpose + "
+            '<short README markdown for the new crew: a [[FIGLET:slant]["..."]] line + one-line purpose + '
             "a 'How to task me' line>\n"
             "BUILD_DOMAIN:\n"
             "<the full def build_domain(ctx): ... using make_author_tools>"
@@ -144,8 +144,7 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "the owner must do, the watchdog log path, and how to queue its first task. Short + actionable."
         ),
         expected_output=(
-            "A short report: new agent name + file, registration + launch status, the approve step, and how "
-            "to task it."
+            "A short report: new agent name + file, registration + launch status, the approve step, and how to task it."
         ),
         agent=builder,
         context=[design],

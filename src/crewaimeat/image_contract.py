@@ -47,22 +47,32 @@ OUT_SPACE, OUT_NS = "moodboard", "shared.moodboards"  # a DOCUMENT space
 CONTRACT = {
     "id": "moodboard",
     "spaces": [
-        {"space": IN_SPACE, "namespace": IN_NS, "mode": "records",
-         "schema": {"type": "object", "required": ["id", "brief", "status"],
-                    "properties": {"id": {"type": "string"}, "brief": {"type": "string"},
-                                   "n_images": {"type": "integer"},
-                                   "mode": {"type": "string", "enum": ["moodboard", "upload-only"]},
-                                   "requested_by": {"type": "string"}, "result_ref": {"type": "string"},
-                                   "error": {"type": "string"},
-                                   "status": {"type": "string",
-                                              "enum": ["requested", "in-progress", "done", "failed"]}}}},
+        {
+            "space": IN_SPACE,
+            "namespace": IN_NS,
+            "mode": "records",
+            "schema": {
+                "type": "object",
+                "required": ["id", "brief", "status"],
+                "properties": {
+                    "id": {"type": "string"},
+                    "brief": {"type": "string"},
+                    "n_images": {"type": "integer"},
+                    "mode": {"type": "string", "enum": ["moodboard", "upload-only"]},
+                    "requested_by": {"type": "string"},
+                    "result_ref": {"type": "string"},
+                    "error": {"type": "string"},
+                    "status": {"type": "string", "enum": ["requested", "in-progress", "done", "failed"]},
+                },
+            },
+        },
         {"space": OUT_SPACE, "namespace": OUT_NS, "mode": "document"},
     ],
 }
 
 _DEFAULT_VISION_MODEL = "qwen/qwen3-vl-30b-a3b-instruct"  # same default as browser_tool
-_MAX_IMAGE_BYTES = 8 * 1024 * 1024   # sane moodboard cap (binary PUTs go straight to the node)
-_MIN_IMAGE_BYTES = 5 * 1024          # skip icons/trackers
+_MAX_IMAGE_BYTES = 8 * 1024 * 1024  # sane moodboard cap (binary PUTs go straight to the node)
+_MIN_IMAGE_BYTES = 5 * 1024  # skip icons/trackers
 _IMAGE_MIMES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}
 
 # Runaway guard (canon rule 5): ids handled THIS run; the OUTPUT-dedup below is the primary,
@@ -97,11 +107,9 @@ def _searxng_images(query: str, n: int) -> list[dict]:
     """SearXNG image search -> [{img_src, url(source page), title}]."""
     base = os.getenv("SEARXNG_URL", "http://localhost:21333").rstrip("/")
     try:
-        r = requests.get(base + "/search",
-                         params={"q": query, "format": "json", "categories": "images"},
-                         timeout=20)
+        r = requests.get(base + "/search", params={"q": query, "format": "json", "categories": "images"}, timeout=20)
         out = []
-        for it in (r.json().get("results") or []):
+        for it in r.json().get("results") or []:
             src = it.get("img_src") or ""
             if src.startswith("http"):
                 out.append({"img_src": src, "url": it.get("url") or src, "title": it.get("title") or ""})
@@ -146,10 +154,19 @@ def _vision_meta(image: bytes, mime: str, brief: str) -> dict | None:
         r = requests.post(
             os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/") + "/chat/completions",
             headers={"Authorization": f"Bearer {api_key}"},
-            json={"model": model, "messages": [{"role": "user", "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": data_uri}},
-            ]}], "max_tokens": 400},
+            json={
+                "model": model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {"url": data_uri}},
+                        ],
+                    }
+                ],
+                "max_tokens": 400,
+            },
             timeout=90,
         )
         text = (r.json()["choices"][0]["message"]["content"] or "").strip()
@@ -177,14 +194,14 @@ def _upload_public(key: str, image: bytes, mime: str) -> bool:
         api = _serve_api()
         if api is not None:
             base, session = api
-            r = session.post(f"{base}/v1/storage", json=presign,
-                             headers={"X-Aimeat-Agent": AGENT}, timeout=60)
+            r = session.post(f"{base}/v1/storage", json=presign, headers={"X-Aimeat-Agent": AGENT}, timeout=60)
         else:
             tok, url = _token(AGENT, _discover_owner(AGENT))
             if not tok or not url:
                 return False
-            r = requests.post(f"{url.rstrip('/')}/v1/storage", json=presign,
-                              headers={"Authorization": f"Bearer {tok}"}, timeout=60)
+            r = requests.post(
+                f"{url.rstrip('/')}/v1/storage", json=presign, headers={"Authorization": f"Bearer {tok}"}, timeout=60
+            )
         upload_url = ((r.json() or {}).get("data") or {}).get("upload_url") if r.status_code == 200 else None
         if not upload_url:
             print(f"[{AGENT}] presign {key} failed: HTTP {r.status_code} {r.text[:160]}", file=sys.stderr)
@@ -240,8 +257,10 @@ def build_moodboard(rid: str, brief: str, n_images: int = 6) -> tuple[list[dict]
 
 
 def _moodboard_markdown(brief: str, items: list[dict], today: str) -> str:
-    head = (f"*{len(items)} images · curated by image-scout · {today} · internal reference use only "
-            f"(sourced from the open web)*\n")
+    head = (
+        f"*{len(items)} images · curated by image-scout · {today} · internal reference use only "
+        f"(sourced from the open web)*\n"
+    )
     parts = [head]
     for i, it in enumerate(items, start=1):
         m = it["meta"]
@@ -258,7 +277,9 @@ def _moodboard_markdown(brief: str, items: list[dict], today: str) -> str:
 
 def _advance(oid: str, wid: str, req: dict, **changes) -> None:
     rec = {k: v for k, v in {**req, **changes}.items() if not k.startswith("_")}
-    if _call("aimeat_workspace_write", {"organism_id": oid, "ws": wid, "space": IN_SPACE, "id": rec["id"], "value": rec}):
+    if _call(
+        "aimeat_workspace_write", {"organism_id": oid, "ws": wid, "space": IN_SPACE, "id": rec["id"], "value": rec}
+    ):
         _call("aimeat_workspace_publish", {"organism_id": oid, "ws": wid, "namespace": IN_NS, "id": rec["id"]})
 
 
@@ -307,11 +328,21 @@ def process_moodboards(max_items: int = 2, targets: list[tuple[str, str]] | None
                 continue
             out_id = f"mood-{rid}"
             title = f"Moodboard · {(req.get('brief') or '').strip()[:70]}"
-            wrote = _call("aimeat_workspace_write",
-                          {"organism_id": oid, "ws": wid, "space": OUT_SPACE, "id": out_id,
-                           "value": {"title": title, "markdown": _moodboard_markdown(req.get("brief", ""), items, today)}})
-            pub = _call("aimeat_workspace_publish",
-                        {"organism_id": oid, "ws": wid, "namespace": OUT_NS, "id": out_id}) if wrote else None
+            wrote = _call(
+                "aimeat_workspace_write",
+                {
+                    "organism_id": oid,
+                    "ws": wid,
+                    "space": OUT_SPACE,
+                    "id": out_id,
+                    "value": {"title": title, "markdown": _moodboard_markdown(req.get("brief", ""), items, today)},
+                },
+            )
+            pub = (
+                _call("aimeat_workspace_publish", {"organism_id": oid, "ws": wid, "namespace": OUT_NS, "id": out_id})
+                if wrote
+                else None
+            )
             if wrote and pub:
                 _advance(oid, wid, req, status="done", result_ref=out_id)
                 processed += 1

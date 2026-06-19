@@ -27,11 +27,11 @@ from crewaimeat.aimeat_crew import _GROUNDING_RULE, _aimeat_call, _rate_task
 
 POLL_SECONDS = 15
 DEFAULT_TIMEOUT = 1800  # default per collect_results / delegate_and_wait / wait_for_crew (30 min).
-                        # Overridable per coordinator via make_workflow_tools(timeout=...). A commissioned
-                        # crew must be built + onboarded + owner-approved + run before its deliverable
-                        # lands, and deep workers (e.g. multi-search research) can run long, so the
-                        # coordinator's wait must be generous (workflow-manager uses 60 min).
-MAX_SUBTASKS = 6       # hard cap so a coordinator can't fan out a token storm
+# Overridable per coordinator via make_workflow_tools(timeout=...). A commissioned
+# crew must be built + onboarded + owner-approved + run before its deliverable
+# lands, and deep workers (e.g. multi-search research) can run long, so the
+# coordinator's wait must be generous (workflow-manager uses 60 min).
+MAX_SUBTASKS = 6  # hard cap so a coordinator can't fan out a token storm
 CLARIFY_TIMEOUT = 300  # ask_owner: max seconds to wait for the human to answer (5 min/question)
 MAX_CLARIFICATIONS = 5  # cap clarification questions per run (covers the specs-designer's 3-5 question interview)
 
@@ -48,25 +48,37 @@ _JUDGE_UNSUP_RE = re.compile(r"unsupported\s*=\s*(\d+)", re.I)
 _GROUNDED_CONTEXTS = {"factual", "research", "code", "summarization"}
 
 
-def _judge_deliverable(llm: Any, instruction: str, deliverable: str) -> "tuple[str, int, int] | None":
+def _judge_deliverable(llm: Any, instruction: str, deliverable: str) -> tuple[str, int, int] | None:
     """The coordinator's grader, factored out so the calibration-runner measures the EXACT same judge.
 
     One LLM call classifies the deliverable's context and scores the matching dimension: faithfulness
     vs the sources it cites for factual/research/code/summarization, or output-alone craft for creative.
     Returns (context, score 1-5, unsupported) or None if the reply can't be parsed."""
     try:
-        reply = str(llm.call([{"role": "user", "content": (
-            "You delegated this subtask to a worker agent:\n" + (instruction or "") +
-            "\n\nThe worker returned this deliverable:\n" + (deliverable or "")[:6000] +
-            "\n\nFirst classify the work's context as ONE of: factual, research, code, summarization, "
-            "planning, communication, creative.\n"
-            "- If factual/research/code/summarization: FACT-CHECK it against the sources IT cites; count "
-            "atomic claims presented as sourced facts but NOT supported by a cited source as 'unsupported', "
-            "and score faithfulness 1-5 (5 = fully supported, no invented specifics).\n"
-            "- If creative: judge CRAFT against the brief (fulfils the request, originality, polish, "
-            "language) and score 1-5; set unsupported=0 (creative work has no sources to check).\n"
-            "Reply with EXACTLY one line: 'context=<ctx> | score=<1-5> | unsupported=<N>'."
-        )}]) or "")
+        reply = str(
+            llm.call(
+                [
+                    {
+                        "role": "user",
+                        "content": (
+                            "You delegated this subtask to a worker agent:\n"
+                            + (instruction or "")
+                            + "\n\nThe worker returned this deliverable:\n"
+                            + (deliverable or "")[:6000]
+                            + "\n\nFirst classify the work's context as ONE of: factual, research, code, summarization, "
+                            "planning, communication, creative.\n"
+                            "- If factual/research/code/summarization: FACT-CHECK it against the sources IT cites; count "
+                            "atomic claims presented as sourced facts but NOT supported by a cited source as 'unsupported', "
+                            "and score faithfulness 1-5 (5 = fully supported, no invented specifics).\n"
+                            "- If creative: judge CRAFT against the brief (fulfils the request, originality, polish, "
+                            "language) and score 1-5; set unsupported=0 (creative work has no sources to check).\n"
+                            "Reply with EXACTLY one line: 'context=<ctx> | score=<1-5> | unsupported=<N>'."
+                        ),
+                    }
+                ]
+            )
+            or ""
+        )
     except Exception:  # noqa: BLE001
         return None
     sm = _JUDGE_SCORE_RE.search(reply)
@@ -174,13 +186,16 @@ def _read_agent_messages(agent_name: str) -> dict | None:
     token. Returns the parsed JSON (e.g. {"messages":[...]}) or None."""
     try:
         import os as _os
+
         import requests as _requests
         from aimeat_crewai.daemon import _read_token as _rt
+
         token, node = _rt(agent_name, owner=_os.environ.get("AIMEAT_OWNER") or None)
         r = _requests.get(
             f"{node.rstrip('/')}/v1/agents/{agent_name}/messages",
             headers={"Authorization": f"Bearer {token}"},
-            params={"per_page": 50}, timeout=20,
+            params={"per_page": 50},
+            timeout=20,
         )
         return r.json() if r.status_code == 200 else None
     except Exception:  # noqa: BLE001
@@ -306,10 +321,20 @@ def _reputation(coordinator_name: str, agent: str, gaii: str | None) -> tuple[st
     if not gaii:
         return "", None, None
     try:
-        sel = _mem_value(_aimeat_call(coordinator_name, "aimeat_memory_read_public",
-                                      {"gaii": gaii, "key": f"agents.{agent}.statistics.custom.selection"}))
-        bench = _mem_value(_aimeat_call(coordinator_name, "aimeat_memory_read_public",
-                                        {"gaii": gaii, "key": f"agents.{agent}.statistics.custom.benchmark"}))
+        sel = _mem_value(
+            _aimeat_call(
+                coordinator_name,
+                "aimeat_memory_read_public",
+                {"gaii": gaii, "key": f"agents.{agent}.statistics.custom.selection"},
+            )
+        )
+        bench = _mem_value(
+            _aimeat_call(
+                coordinator_name,
+                "aimeat_memory_read_public",
+                {"gaii": gaii, "key": f"agents.{agent}.statistics.custom.benchmark"},
+            )
+        )
     except Exception:  # noqa: BLE001 — reputation is advisory; never break discovery
         return "", None, None
     sel = sel if isinstance(sel, dict) else None
@@ -320,9 +345,13 @@ def _reputation(coordinator_name: str, agent: str, gaii: str | None) -> tuple[st
         parts.append(f"live {sel.get('context')} {sel.get('normalized')} ({conf})")
     if bench and bench.get("normalized") is not None:
         vs = bench.get("vs_baseline") or {}
-        flag = f" vs {vs.get('base')}=PROMOTE" if vs.get("promote") else (f" vs {vs.get('base')}" if vs.get("base") else "")
+        flag = (
+            f" vs {vs.get('base')}=PROMOTE"
+            if vs.get("promote")
+            else (f" vs {vs.get('base')}" if vs.get("base") else "")
+        )
         dom = bench.get("by_domain") or {}
-        best = (f"; best@{max(dom, key=dom.get)}" if dom and any(v is not None for v in dom.values()) else "")
+        best = f"; best@{max(dom, key=dom.get)}" if dom and any(v is not None for v in dom.values()) else ""
         parts.append(f"benchmark {bench.get('dimension')} {bench.get('normalized')}{flag}{best}")
     suffix = ("   [" + " · ".join(parts) + "]") if parts else "   [no reputation yet]"
     return suffix, sel, bench
@@ -525,7 +554,10 @@ def make_workflow_tools(
         job["rated"] = True
         verdict = _judge_deliverable(llm, job.get("instruction") or job["title"], job["result"])
         if not verdict:
-            print(f"[{coordinator_name}] rating skipped for {job['agent']}: judge gave no parseable verdict", file=sys.stderr)
+            print(
+                f"[{coordinator_name}] rating skipped for {job['agent']}: judge gave no parseable verdict",
+                file=sys.stderr,
+            )
             return
         context, stars, unsupported = verdict
         # factual-type contexts are rated source-grounded (faithfulness vs cited sources); creative is
@@ -536,7 +568,10 @@ def make_workflow_tools(
         elif context == "creative":
             source_grounded = False
         else:
-            print(f"[{coordinator_name}] rating skipped for {job['agent']}: context '{context}' not auto-rated in v1", file=sys.stderr)
+            print(
+                f"[{coordinator_name}] rating skipped for {job['agent']}: context '{context}' not auto-rated in v1",
+                file=sys.stderr,
+            )
             _event(f"Rating skipped for {job['agent']}: context '{context}' not auto-rated in v1")
             return
         ectx = job.get("evalctx") or {}
@@ -548,7 +583,8 @@ def make_workflow_tools(
             "unsupported": unsupported,
             "evaluated_model": ectx.get("model") or os.getenv("OPENROUTER_MODEL"),
             "metadata": meta,
-            "comment": ("source-grounded faithfulness judge" if source_grounded else "output-alone craft judge") + " by coordinator",
+            "comment": ("source-grounded faithfulness judge" if source_grounded else "output-alone craft judge")
+            + " by coordinator",
         }
         # The deliverable lands in the tag area (worker's publish callback) BEFORE the worker's task is
         # marked 'done' (its finalize callback runs after); the rate endpoint accepts only 'done' tasks,
@@ -614,8 +650,10 @@ def make_workflow_tools(
         PASS?), fix_rounds (how many fix->reverify cycles you ran), optional short note."""
         jobs = [j for j in state["jobs"] if j.get("agent") == target_agent and j.get("tid")]
         if not jobs:
-            return (f"Refused: no delegated job for '{target_agent}' in this run to rate. Only rate a crew "
-                    "you delegated to (via delegate_and_wait / delegate_subtask) this run.")
+            return (
+                f"Refused: no delegated job for '{target_agent}' in this run to rate. Only rate a crew "
+                "you delegated to (via delegate_and_wait / delegate_subtask) this run."
+            )
         job = jobs[-1]
         if job.get("rated"):
             return f"Already rated {target_agent} for this run."
@@ -634,8 +672,8 @@ def make_workflow_tools(
             "unsupported": 0,
             "evaluated_model": ectx.get("model") or os.getenv("OPENROUTER_MODEL"),
             "metadata": meta,
-            "comment": (f"verify-grounded: {verdict} after {fr} fix round(s) — conductor deterministic "
-                        "render gate") + (f". {note}" if note else ""),
+            "comment": (f"verify-grounded: {verdict} after {fr} fix round(s) — conductor deterministic render gate")
+            + (f". {note}" if note else ""),
         }
         ok, status, detail = _rate_task(coordinator_name, target_agent, job["tid"], body)
         attempts = 1
@@ -715,13 +753,16 @@ def make_workflow_tools(
         short kebab `agent_name` and a clear `capability` description. crew-forge designs, registers,
         and launches it; the owner approves it once. AFTER commissioning, call wait_for_crew(agent_name)
         before delegating to it. Use this only for a genuine capability gap — prefer existing crews."""
-        instruction = (
-            f"/build Create a task-runner crew named exactly '{agent_name}'. It should: {capability}"
-        )
+        instruction = f"/build Create a task-runner crew named exactly '{agent_name}'. It should: {capability}"
         resp = _aimeat_call(
             coordinator_name,
             "aimeat_task_create",
-            {"target_agent": "crew-forge", "title": f"Build {agent_name}", "description": instruction, "status": "queued"},
+            {
+                "target_agent": "crew-forge",
+                "title": f"Build {agent_name}",
+                "description": instruction,
+                "status": "queued",
+            },
         )
         tid = _find_id(resp)
         if not tid:
@@ -787,7 +828,7 @@ def make_workflow_tools(
             payload["linked_task_id"] = task_id
         send = _aimeat_call(coordinator_name, "aimeat_message_send", payload)
         _event(f"Asked owner for clarification: {question[:80]}")
-        thread_id = _find_thread_id(send)
+        thread_id = _find_thread_id(send)  # noqa: F841  (kept for clarity; correlated below by task id)
         waited = 0
         while waited < CLARIFY_TIMEOUT:
             hist = _read_agent_messages(coordinator_name)  # REST: the CLI has no message_history tool
@@ -802,7 +843,17 @@ def make_workflow_tools(
             f"'{question[:60]}' and note the assumption in your result."
         )
 
-    tools = [discover_crews, delegate_subtask, delegate_and_wait, rate_delegated_work, collect_results, cancel_pending, commission_crew, wait_for_crew, ask_owner]
+    tools = [
+        discover_crews,
+        delegate_subtask,
+        delegate_and_wait,
+        rate_delegated_work,
+        collect_results,
+        cancel_pending,
+        commission_crew,
+        wait_for_crew,
+        ask_owner,
+    ]
     # Disable CrewAI's tool-result cache on ALL of these. They are stateful / side-effecting and
     # several are argument-identical across calls (collect_results / cancel_pending take no args), so
     # the cache would serve a stale first-call result for a later call — e.g. collect_results returning

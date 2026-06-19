@@ -18,7 +18,8 @@ def _capture_calls(monkeypatch):
     """Replace _aimeat_call so we can see whether complete or fail was invoked."""
     calls = []
     monkeypatch.setattr(
-        ac, "_aimeat_call",
+        ac,
+        "_aimeat_call",
         lambda agent, tool, payload: calls.append((tool, payload)) or {"ok": True},
     )
     return calls
@@ -79,8 +80,8 @@ def test_baseline_registry_records_first_only_and_resets():
     at.reset_published_baselines("bk")
     assert at.get_published_baselines("bk") == {}
     at._record_publish_baseline("bk", "app.html", 4)
-    at._record_publish_baseline("bk", "app.html", 9)      # later publishes don't move the baseline
-    at._record_publish_baseline("bk", "new.html", None)   # brand-new app -> no prior version
+    at._record_publish_baseline("bk", "app.html", 9)  # later publishes don't move the baseline
+    at._record_publish_baseline("bk", "new.html", None)  # brand-new app -> no prior version
     b = at.get_published_baselines("bk")
     assert b["app.html"] == 4 and b["new.html"] is None
     at.reset_published_baselines("bk")
@@ -95,11 +96,12 @@ def test_revert_apps_to_baseline_only_reverts_apps_with_a_prior_version(monkeypa
     monkeypatch.setattr(at, "_discover_owner", lambda a: "owner")
     monkeypatch.setattr(at, "_node_base", lambda a, o: "http://n")
     monkeypatch.setattr(
-        at, "_revert_app_rest",
+        at,
+        "_revert_app_rest",
         lambda agent, owner, base, filename, to_version: calls.append((filename, to_version)) or (True, ""),
     )
     out = at.revert_apps_to_baseline("agent-x", "rb")
-    assert calls == [("good.html", 3)]   # brandnew.html (no prior version) is skipped
+    assert calls == [("good.html", 3)]  # brandnew.html (no prior version) is skipped
     by_file = {r["filename"]: r for r in out}
     assert by_file["good.html"]["ok"] is True
     assert by_file["brandnew.html"]["ok"] is False
@@ -112,12 +114,15 @@ def test_gate_fail_with_auto_revert_reverts_and_still_fails_task(monkeypatch):
     tools = _capture_calls(monkeypatch)
     rev_calls = []
     monkeypatch.setattr(
-        at, "revert_apps_to_baseline",
-        lambda agent, tid, owner=None: rev_calls.append((agent, tid, owner))
-        or [{"filename": "broken.html", "to_version": 7, "ok": True, "detail": ""}],
+        at,
+        "revert_apps_to_baseline",
+        lambda agent, tid, owner=None: (
+            rev_calls.append((agent, tid, owner))
+            or [{"filename": "broken.html", "to_version": 7, "ok": True, "detail": ""}]
+        ),
     )
     ac._make_complete_cb("agent-x", "t-rev", require_verify=True, owner="owner", auto_revert=True)(MagicMock())
-    assert rev_calls and rev_calls[0][1] == "t-rev"                # live rollback attempted
+    assert rev_calls and rev_calls[0][1] == "t-rev"  # live rollback attempted
     tool_names = [c[0] for c in tools]
     assert "aimeat_task_fail" in tool_names and "aimeat_task_complete" not in tool_names
 
@@ -129,11 +134,12 @@ def test_gate_fail_without_auto_revert_does_not_touch_the_live_app(monkeypatch):
     tools = _capture_calls(monkeypatch)
     rev_calls = []
     monkeypatch.setattr(
-        at, "revert_apps_to_baseline",
+        at,
+        "revert_apps_to_baseline",
         lambda agent, tid, owner=None: rev_calls.append((agent, tid, owner)) or [],
     )
     # auto_revert defaults False -> the gate fails the task, but the live app is NOT reverted
     ac._make_complete_cb("agent-x", "t-norev", require_verify=True, owner="owner")(MagicMock())
-    assert rev_calls == []                                         # no live rollback
+    assert rev_calls == []  # no live rollback
     tool_names = [c[0] for c in tools]
     assert "aimeat_task_fail" in tool_names and "aimeat_task_complete" not in tool_names

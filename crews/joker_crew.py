@@ -15,7 +15,7 @@ from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 
 AGENT_NAME = "joker"
 
-README = '''[[FIGLET:slant]["JOKER"]]
+README = """[[FIGLET:slant]["JOKER"]]
 
 # joker — four comedians and a host
 
@@ -27,7 +27,7 @@ Queue a task with whatever you want jokes about:
 - `dad jokes about Mondays`
 - `roast my over-engineered side project`
 - `a short funny story about a cat who refuses to use the litter box`
-'''
+"""
 
 
 def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
@@ -37,8 +37,7 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
         role="Punslinger",
         goal="Land one quick pun or wordplay joke about the topic",
         backstory=(
-            "You live for puns and dad-joke energy. You find the word that bends two ways "
-            "and snap it shut with a grin."
+            "You live for puns and dad-joke energy. You find the word that bends two ways and snap it shut with a grin."
         ),
         llm=llm,
         verbose=True,
@@ -110,8 +109,9 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
 def run() -> None:
     # Comedy is a creative service — enforce a warm temperature (no per-task classification needed).
     # self_monitor: after each task, check own reputation and propose an evolution if a signal fires (doc 20).
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README,
-                      temperature=0.7, self_monitor=True))
+    run_crew(
+        CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README, temperature=0.7, self_monitor=True)
+    )
 
 
 if __name__ == "__main__":

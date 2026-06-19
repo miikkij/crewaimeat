@@ -68,8 +68,10 @@ def statusbar_text(snap: FleetSnapshot, lang: str = "en") -> str:
         warn += f"  [bold red]DUPLICATE: {', '.join(dups)}[/]"
     if snap.zombies:
         warn += f"  [magenta]zombie: {', '.join(snap.zombies)}[/]"
-    return (f"serve {serve} · {snap.n_watchdogs} {t('sb.watchdogs', lang)} · {snap.n_locks} {t('sb.locks', lang)} · "
-            f"[green]{n_run} {t('sb.running', lang)}[/] · [yellow]{n_stale} {t('sb.stale', lang)}[/]{warn}")
+    return (
+        f"serve {serve} · {snap.n_watchdogs} {t('sb.watchdogs', lang)} · {snap.n_locks} {t('sb.locks', lang)} · "
+        f"[green]{n_run} {t('sb.running', lang)}[/] · [yellow]{n_stale} {t('sb.stale', lang)}[/]{warn}"
+    )
 
 
 def detail_lines(r: AgentRow | None, lang: str = "en") -> list[str]:
@@ -96,10 +98,20 @@ def overview_lines(r: AgentRow | None, readme: str | None, lang: str = "en") -> 
     return lines
 
 
-def meta_lines(profile: str, model_labels: list[str], n_offers: int, n_wf: int, lang: str = "en",
-               *, override: dict | None = None, offers: list | None = None,
-               contracts: list | None = None, tags: list | None = None,
-               capabilities: dict | None = None, workflows: list | None = None) -> list[str]:
+def meta_lines(
+    profile: str,
+    model_labels: list[str],
+    n_offers: int,
+    n_wf: int,
+    lang: str = "en",
+    *,
+    override: dict | None = None,
+    offers: list | None = None,
+    contracts: list | None = None,
+    tags: list | None = None,
+    capabilities: dict | None = None,
+    workflows: list | None = None,
+) -> list[str]:
     """The Config tab: llm profile + ordered model chain + offer/workflow-compat counts, and (when
     supplied) the agent's pinned override, offer titles, contract schemas, capabilities and the
     workflows it has a step in. The extra sections are keyword-only so the basic 5-arg call stays."""

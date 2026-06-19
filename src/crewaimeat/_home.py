@@ -22,6 +22,7 @@ def aimeat_home() -> Path:
     """The resolved AIMEAT connector home directory."""
     try:
         from aimeat_crewai.paths import aimeat_home as _pkg_home  # 0.6.0+
+
         return Path(_pkg_home())
     except Exception:  # noqa: BLE001 — 0.5.0 has no paths module; fall back to the env/legacy default
         env = os.environ.get("AIMEAT_HOME")

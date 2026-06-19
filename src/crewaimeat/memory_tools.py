@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import json
 
-from crewaimeat.aimeat_crew import _aimeat_call
 from crewai.tools import tool
+
+from crewaimeat.aimeat_crew import _aimeat_call
 
 
 def make_memory_tools(agent_name: str) -> list:
@@ -57,7 +58,7 @@ def make_memory_tools(agent_name: str) -> list:
         # across ALL same-owner agents (the pattern workflow.py uses to collect workers' deliverables).
         r = _aimeat_call(agent_name, "aimeat_memory_list", {"owner_scope": True, "prefix": key})
         items = (r or {}).get("items") if isinstance(r, dict) else None
-        for it in (items or []):
+        for it in items or []:
             if isinstance(it, dict) and it.get("key") == key and it.get("value") is not None:
                 return it.get("value")
         return None
@@ -129,12 +130,18 @@ def make_memory_tools(agent_name: str) -> list:
         clean = []
         for it in new:
             if isinstance(it, dict) and it.get("gaii") and it.get("key"):
-                clean.append({k: it.get(k) for k in ("gaii", "key", "title", "date", "summary",
-                                                      "edition", "category", "kind", "sources")
-                              if it.get(k) is not None})
+                clean.append(
+                    {
+                        k: it.get(k)
+                        for k in ("gaii", "key", "title", "date", "summary", "edition", "category", "kind", "sources")
+                        if it.get(k) is not None
+                    }
+                )
         if not clean:
-            return ("FAILED: each entry needs at least gaii + key (the body's owner GAII + its exact public "
-                    "key, both from list_memory). Nothing had both.")
+            return (
+                "FAILED: each entry needs at least gaii + key (the body's owner GAII + its exact public "
+                "key, both from list_memory). Nothing had both."
+            )
         # Read the current index (own GAII). _aimeat_call returns None for an unset key — start empty.
         cur = _aimeat_call(agent_name, "aimeat_memory_read", {"key": index_key})
         curval = cur.get("value") if isinstance(cur, dict) else None
@@ -154,24 +161,26 @@ def make_memory_tools(agent_name: str) -> list:
                 merged[_slot(e)] = e
         for e in clean:  # incoming overrides any stale entry for the same slot
             merged[_slot(e)] = e
-        out = sorted(merged.values(),
-                     key=lambda e: (str(e.get("date") or ""), str(e.get("edition") or "")), reverse=True)[:80]
-        w = _aimeat_call(agent_name, "aimeat_memory_write",
-                         {"key": index_key, "value": out, "visibility": "public"})
+        out = sorted(
+            merged.values(), key=lambda e: (str(e.get("date") or ""), str(e.get("edition") or "")), reverse=True
+        )[:80]
+        w = _aimeat_call(agent_name, "aimeat_memory_write", {"key": index_key, "value": out, "visibility": "public"})
         if w is None:
             return f"FAILED to write the front-page index '{index_key}' (no result from memory_write)."
         # Discover our own GAII (the PUBLISHER) from the just-written key's owner_gaii.
         pub = ""
         lr = _aimeat_call(agent_name, "aimeat_memory_list", {"prefix": index_key})
-        for it in (((lr or {}).get("items") if isinstance(lr, dict) else None) or []):
+        for it in ((lr or {}).get("items") if isinstance(lr, dict) else None) or []:
             if isinstance(it, dict) and it.get("key") == index_key and it.get("owner_gaii"):
                 pub = it["owner_gaii"]
                 break
         pub_txt = pub or "<your own GAII — list_memory the index key to read its gaii=…>"
-        return (f"OK: front-page index '{index_key}' now lists {len(out)} item(s), visibility=public. "
-                f"PUBLISHER (point the viewer app's `const PUBLISHER` at THIS) = {pub_txt}. "
-                f"INDEX_KEY = '{index_key}'. The viewer reads this index, then getPublic(item.gaii, item.key) "
-                "for each body.")
+        return (
+            f"OK: front-page index '{index_key}' now lists {len(out)} item(s), visibility=public. "
+            f"PUBLISHER (point the viewer app's `const PUBLISHER` at THIS) = {pub_txt}. "
+            f"INDEX_KEY = '{index_key}'. The viewer reads this index, then getPublic(item.gaii, item.key) "
+            "for each body."
+        )
 
     @tool("index_frontpage_auto")
     def index_frontpage_auto(date: str, edition: str, index_key: str = "newspaper.frontpage") -> str:
@@ -206,7 +215,7 @@ def make_memory_tools(agent_name: str) -> list:
         clean = []
         for it in rows:
             k = it.get("key") or ""
-            is_ed = (k == epref)
+            is_ed = k == epref
             if not (k.startswith(apref) or is_ed):
                 continue
             cat = "editorial" if is_ed else k.rsplit(".", 1)[-1]
@@ -215,10 +224,16 @@ def make_memory_tools(agent_name: str) -> list:
                 body = _owner_scope_value(k)
             txt = body if isinstance(body, str) else (json.dumps(body, ensure_ascii=False) if body is not None else "")
             lines = [ln.strip().lstrip("#").strip() for ln in txt.splitlines() if ln.strip()]
-            entry = {"gaii": it.get("owner_gaii") or it.get("gaii"), "key": k, "date": date, "edition": edition,
-                     "category": cat, "summary": (" ".join(lines))[:140],
-                     "kind": "editorial" if is_ed else "article",
-                     "title": (f"Editorial | {date} {edition}" if is_ed else f"{cat.capitalize()} | {date}")}
+            entry = {
+                "gaii": it.get("owner_gaii") or it.get("gaii"),
+                "key": k,
+                "date": date,
+                "edition": edition,
+                "category": cat,
+                "summary": (" ".join(lines))[:140],
+                "kind": "editorial" if is_ed else "article",
+                "title": (f"Editorial | {date} {edition}" if is_ed else f"{cat.capitalize()} | {date}"),
+            }
             if (not is_ed) and (cat not in FEATURE) and (cat in raw_counts):
                 entry["sources"] = raw_counts[cat]
             clean.append(entry)
@@ -227,25 +242,28 @@ def make_memory_tools(agent_name: str) -> list:
         cur = _aimeat_call(agent_name, "aimeat_memory_read", {"key": index_key})
         existing = cur.get("value") if isinstance(cur, dict) else None
         merged: dict = {}
-        for e in (existing if isinstance(existing, list) else []):
+        for e in existing if isinstance(existing, list) else []:
             if isinstance(e, dict) and e.get("gaii") and e.get("key"):
                 merged[(e.get("gaii"), e.get("key"))] = e
         for e in clean:
             merged[(e.get("gaii"), e.get("key"))] = e
-        out = sorted(merged.values(),
-                     key=lambda e: (str(e.get("date") or ""), str(e.get("edition") or "")), reverse=True)[:120]
+        out = sorted(
+            merged.values(), key=lambda e: (str(e.get("date") or ""), str(e.get("edition") or "")), reverse=True
+        )[:120]
         w = _aimeat_call(agent_name, "aimeat_memory_write", {"key": index_key, "value": out, "visibility": "public"})
         if w is None:
             return f"FAILED to write the front-page index '{index_key}'."
         pub = ""
-        for it in (((_aimeat_call(agent_name, "aimeat_memory_list", {"prefix": index_key}) or {}).get("items")) or []):
+        for it in ((_aimeat_call(agent_name, "aimeat_memory_list", {"prefix": index_key}) or {}).get("items")) or []:
             if isinstance(it, dict) and it.get("key") == index_key and it.get("owner_gaii"):
                 pub = it["owner_gaii"]
                 break
         ev = sum(1 for e in out if e.get("date") == date and e.get("edition") == edition)
-        return (f"OK: front-page index '{index_key}' rebuilt for {date} {edition} — {ev} items this edition, "
-                f"{len(out)} total, visibility=public. PUBLISHER = {pub or '<list_memory the index key>'}. "
-                f"INDEX_KEY = '{index_key}'.")
+        return (
+            f"OK: front-page index '{index_key}' rebuilt for {date} {edition} — {ev} items this edition, "
+            f"{len(out)} total, visibility=public. PUBLISHER = {pub or '<list_memory the index key>'}. "
+            f"INDEX_KEY = '{index_key}'."
+        )
 
     tools = [write_memory, read_memory, list_memory, index_frontpage, index_frontpage_auto]
     for _t in tools:  # side-effecting / live-state — never serve a cached result

@@ -17,11 +17,11 @@ def test_memory_key_is_deterministic_and_slugged():
     task = {"id": "abc12345-def6-7890", "description": "Build a TicTacToe app!!!"}
     k1 = ac._memory_key("aimeat-app-builder", None, task)
     k2 = ac._memory_key("aimeat-app-builder", None, task)
-    assert k1 == k2                                     # deterministic
-    assert k1.startswith("crews.aimeat-app-builder.")   # default base (prefix=None)
+    assert k1 == k2  # deterministic
+    assert k1.startswith("crews.aimeat-app-builder.")  # default base (prefix=None)
     assert k1.endswith(".latest_output")
-    assert "build-a-tictactoe-app" in k1                # lowercased, hyphen-slugged
-    assert "abc12345" in k1                             # short task-id token
+    assert "build-a-tictactoe-app" in k1  # lowercased, hyphen-slugged
+    assert "abc12345" in k1  # short task-id token
 
 
 def test_memory_key_honours_explicit_prefix():
@@ -48,9 +48,7 @@ def test_parse_verify_directive():
 
 # ---- directives / commands rendering (steerability of the live agent) ----
 def test_format_directives_renders_purpose_and_rules():
-    out = ac._format_directives(
-        {"purpose": "Be terse", "rules": [{"source": "owner", "description": "No emojis"}]}
-    )
+    out = ac._format_directives({"purpose": "Be terse", "rules": [{"source": "owner", "description": "No emojis"}]})
     assert "Be terse" in out and "No emojis" in out
 
 
@@ -104,13 +102,13 @@ def test_publish_cb_applies_clean_deliverable():
 # ---- task-nature classifier keyword fallback (must not depend on the LLM call succeeding) ----
 def test_runtime_max_execution_time_reads_env(monkeypatch):
     monkeypatch.delenv("AIMEAT_AGENT_MAX_EXECUTION_TIME", raising=False)
-    assert ac._runtime_max_execution_time() is None          # off by default
+    assert ac._runtime_max_execution_time() is None  # off by default
     monkeypatch.setenv("AIMEAT_AGENT_MAX_EXECUTION_TIME", "1800")
     assert ac._runtime_max_execution_time() == 1800
     monkeypatch.setenv("AIMEAT_AGENT_MAX_EXECUTION_TIME", "0")
-    assert ac._runtime_max_execution_time() is None          # non-positive -> off
+    assert ac._runtime_max_execution_time() is None  # non-positive -> off
     monkeypatch.setenv("AIMEAT_AGENT_MAX_EXECUTION_TIME", "notanint")
-    assert ac._runtime_max_execution_time() is None          # garbage -> off, never raises
+    assert ac._runtime_max_execution_time() is None  # garbage -> off, never raises
 
 
 def test_classify_nature_keyword_fallback_when_llm_errors():

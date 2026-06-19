@@ -18,12 +18,12 @@ from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 from crewaimeat.features_pipeline import make_features_tools
 
 AGENT_NAME = "daily-features-writer"
-README = '''[[FIGLET:slant]["Features"]]
+README = """[[FIGLET:slant]["Features"]]
 
 Writes the evening special sections — **päivän koodausosio (Koodi-Kalle), prompt-niksinurkka (Prompt-Pia),
 matematiikkahetki (Matikka-Make)** — and the **interactive news quiz** (5 Q, validated JSON from the day's
 news). Deterministic: grok writes each piece in a code loop, nothing skipped.
-'''
+"""
 
 
 def build_domain(ctx: BuildContext):
@@ -31,8 +31,8 @@ def build_domain(ctx: BuildContext):
         role="Features Runner",
         goal="Resolve the target date + edition and trigger the deterministic features + quiz build.",
         backstory="You do not write the tidbits or quiz by hand. You read the request, work out the target date "
-                  "and edition, and call write_features ONCE — the tool writes koodaus, prompt-niksi, matikka "
-                  "and the validated quiz. You then report what it did.",
+        "and edition, and call write_features ONCE — the tool writes koodaus, prompt-niksi, matikka "
+        "and the validated quiz. You then report what it did.",
         llm=ctx.llm,
         tools=[*make_features_tools(AGENT_NAME)],
     )
@@ -72,8 +72,16 @@ def run() -> None:
         print(f"[{AGENT_NAME}] self-heal: news.{date}.evening.quiz missing after 18:00 -> rebuilding", flush=True)
         print(build_quiz(AGENT_NAME, date, "evening"), flush=True)
 
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README,
-                      temperature=0.2, idle_hook=_ensure_quiz, idle_hook_seconds=300))
+    run_crew(
+        CrewSpec(
+            agent_name=AGENT_NAME,
+            build_domain=build_domain,
+            readme_md=README,
+            temperature=0.2,
+            idle_hook=_ensure_quiz,
+            idle_hook_seconds=300,
+        )
+    )
 
 
 if __name__ == "__main__":

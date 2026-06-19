@@ -10,17 +10,15 @@ Run: uv run python crews/aimeat_realtime_presence_board_builder_crew.py
 
 from __future__ import annotations
 
+from crewai import Agent, Task
+
+from crewaimeat.aimeat_crew import CrewSpec, run_crew
 from crewaimeat.author_tool import make_author_tools
 from crewaimeat.workflow import make_workflow_tools
 
-from crewai import Agent, Task
-
-from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
-from crewaimeat.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is set, else []
-
 AGENT_NAME = "aimeat-realtime-presence-board-builder"
 
-README = '''```
+README = """```
   ____            _           _     ____                _ _     _            
  |  _ \\ ___ _ __ | | __ _  __| |   |  _ \\ ___ _ __ ___ | (_)___(_) ___  _ __ 
  | |_) / _ \\ '_ \\| |/ _` |/ _` |   | |_) / _ \\ '_ ` _ \\| | / __| |/ _ \\| '_ \\
@@ -31,7 +29,7 @@ README = '''```
 **Purpose:** Build AIMEAT-native realtime presence board apps using the AimeatRealtime `/lib/realtime.js` presence+broadcast API — ephemeral realtime-only state, peer presence lists, broadcast notes feeds, auth-gated posting, and anonymous visitor support.
 
 **How to task me:** Give me a presence board concept (e.g. "team standup board", "live audience Q&A", "realtime study room") and I'll design, build, install, publish, and fully verify a working AIMEAT app — cortex + app HTML — ending with `verify_render PASS` and (for interactive boards) `verify_interaction PASS`.
-'''
+"""
 
 
 def build_domain(ctx):
@@ -43,7 +41,12 @@ def build_domain(ctx):
         role="AIMEAT Realtime Presence Board Specialist",
         goal="Author, install, publish, and fully verify an AIMEAT-native realtime presence board app — one cortex + one app HTML — using the AimeatRealtime /lib/realtime.js presence+broadcast API, with ephemeral realtime-only state (no persistent memory keys), presence list from peer-joined/peer-left events, notes feed from broadcast events, auth-gated note posting, unconditional startApp() for anonymous visitors, and stable DOM selectors for testing",
         backstory="Expert AIMEAT realtime app builder. Uses make_author_tools for the full direct-build toolkit. ALWAYS starts the app HTML from read_app_template('public_viewer') — this wires auth correctly (loads aimeat-auth.js + aimeat-data.js, mounts the login bar, and runs startApp(session) ONLY after await AIMEAT.auth.login(), so there is no boot-order race). Inside boot() adds loadScript for the cortex + AIMEAT.Realtime from /lib/realtime.js. AUTHORS STRICTLY AGAINST read_lib_api — reads the real /lib/realtime.js API to get every method AND every emitted EVENT name (peer-joined, peer-left, broadcast, etc.) — never guesses. For any server-side logic authors a separate extension (export default async function(ctx, input)). Uses read_cortex_example for cortex patterns and read_node_api for server-side APIs. The app uses ephemeral realtime-only state — no persistent memory keys. Anonymous visitors get unconditional startApp() so they can see the presence board without logging in. All interactive elements use stable data-testid or id selectors for verify_interaction. Ends every build with verify_render until VERIFY PASS, plus verify_interaction for the interactive note-posting feature.",
-        tools=[*author_tools, *deleg], llm=ctx.llm, max_iter=60, allow_delegation=False, verbose=True)
+        tools=[*author_tools, *deleg],
+        llm=ctx.llm,
+        max_iter=60,
+        allow_delegation=False,
+        verbose=True,
+    )
 
     design = Task(
         description=(
@@ -64,7 +67,7 @@ def build_domain(ctx):
             "what the app HTML does, the DOM id map, and the realtime event flow."
         ),
         expected_output="Compact design: cortex + extension (if any) responsibilities, app HTML structure, stable DOM id selector map, realtime event flow (peer-joined/peer-left/broadcast), auth-gating strategy for note posting, anon visitor startApp() path.",
-        agent=specialist
+        agent=specialist,
     )
 
     build = Task(
@@ -86,7 +89,7 @@ def build_domain(ctx):
         ),
         expected_output="Cortex installed (+ extension if needed) + app published with the live URL. App uses ephemeral realtime state only, has stable DOM selectors, supports anon visitors, and gates note posting behind auth.",
         agent=specialist,
-        context=[design]
+        context=[design],
     )
 
     verify = Task(
@@ -107,7 +110,7 @@ def build_domain(ctx):
         ),
         expected_output="verify_render PASS + verify_interaction PASS + live URL. All presence board features verified: anon-readable, presence list, notes feed, auth-gated posting.",
         agent=specialist,
-        context=[build]
+        context=[build],
     )
 
     return [specialist], [design, build, verify]

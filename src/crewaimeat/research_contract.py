@@ -33,14 +33,25 @@ OUT_SPACE, OUT_NS = "research-result", "shared.research_docs"  # a DOCUMENT spac
 CONTRACT = {
     "id": "research",
     "spaces": [
-        {"space": IN_SPACE, "namespace": IN_NS, "mode": "records",
-         "schema": {"type": "object", "required": ["id", "brief", "status"],
-                    "properties": {"id": {"type": "string"}, "brief": {"type": "string"},
-                                   "depth": {"type": "integer"}, "focus": {"type": "string"},
-                                   "requested_by": {"type": "string"}, "result_ref": {"type": "string"},
-                                   "error": {"type": "string"},
-                                   "status": {"type": "string",
-                                              "enum": ["requested", "in-progress", "done", "failed"]}}}},
+        {
+            "space": IN_SPACE,
+            "namespace": IN_NS,
+            "mode": "records",
+            "schema": {
+                "type": "object",
+                "required": ["id", "brief", "status"],
+                "properties": {
+                    "id": {"type": "string"},
+                    "brief": {"type": "string"},
+                    "depth": {"type": "integer"},
+                    "focus": {"type": "string"},
+                    "requested_by": {"type": "string"},
+                    "result_ref": {"type": "string"},
+                    "error": {"type": "string"},
+                    "status": {"type": "string", "enum": ["requested", "in-progress", "done", "failed"]},
+                },
+            },
+        },
         {"space": OUT_SPACE, "namespace": OUT_NS, "mode": "document"},
     ],
 }
@@ -78,8 +89,7 @@ def do_research(brief: str, depth: int = 5, focus: str = "") -> tuple[str | None
         return None, []
     context = "\n\n".join(f"[{i + 1}] {d['url']}\n{d['text']}" for i, d in enumerate(docs))
     prompt = (
-        f"Research brief: {brief}\n" + (f"Focus: {focus}\n" if focus else "") +
-        f"\nSources (numbered):\n{context}\n\n"
+        f"Research brief: {brief}\n" + (f"Focus: {focus}\n" if focus else "") + f"\nSources (numbered):\n{context}\n\n"
         "Write a useful, FACTUAL research note in markdown:\n"
         "## Summary\n(3-5 sentences)\n\n## Key findings\n(4-8 bullets; each cites a source as [n])\n\n"
         "Use ONLY facts present in the sources and cite them by [n]. No fluff, no invented specifics; "
@@ -97,7 +107,9 @@ def do_research(brief: str, depth: int = 5, focus: str = "") -> tuple[str | None
 def _advance(oid: str, wid: str, req: dict, **changes) -> None:
     # Drop server metadata (_createdAt/_updatedAt/_version) — a strict-locked schema rejects extra fields.
     rec = {k: v for k, v in {**req, **changes}.items() if not k.startswith("_")}
-    if _call("aimeat_workspace_write", {"organism_id": oid, "ws": wid, "space": IN_SPACE, "id": rec["id"], "value": rec}):
+    if _call(
+        "aimeat_workspace_write", {"organism_id": oid, "ws": wid, "space": IN_SPACE, "id": rec["id"], "value": rec}
+    ):
         _call("aimeat_workspace_publish", {"organism_id": oid, "ws": wid, "namespace": IN_NS, "id": rec["id"]})
 
 
@@ -150,12 +162,22 @@ def process_research_requests(max_items: int = 5, targets: list[tuple[str, str]]
             # research-result is a DOCUMENT space → write a markdown note (renders as a page), not a record.
             title = (req.get("brief", "") or "Research note").strip()[:90]
             srcs = "\n".join(f"- {u}" for u in sources)
-            md = f"{summary}\n\n## Sources\n{srcs}\n\n*Research brief: {req.get('brief','')} · requested by {req.get('requested_by','?')} · {today}*"
-            wrote = _call("aimeat_workspace_write",
-                          {"organism_id": oid, "ws": wid, "space": OUT_SPACE, "id": out_id,
-                           "value": {"title": title, "markdown": md}})
-            pub = _call("aimeat_workspace_publish",
-                        {"organism_id": oid, "ws": wid, "namespace": OUT_NS, "id": out_id}) if wrote else None
+            md = f"{summary}\n\n## Sources\n{srcs}\n\n*Research brief: {req.get('brief', '')} · requested by {req.get('requested_by', '?')} · {today}*"
+            wrote = _call(
+                "aimeat_workspace_write",
+                {
+                    "organism_id": oid,
+                    "ws": wid,
+                    "space": OUT_SPACE,
+                    "id": out_id,
+                    "value": {"title": title, "markdown": md},
+                },
+            )
+            pub = (
+                _call("aimeat_workspace_publish", {"organism_id": oid, "ws": wid, "namespace": OUT_NS, "id": out_id})
+                if wrote
+                else None
+            )
             if wrote and pub:
                 _advance(oid, wid, req, status="done", result_ref=out_id)  # ADVANCE
                 processed += 1

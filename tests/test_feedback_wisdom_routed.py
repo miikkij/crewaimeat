@@ -37,8 +37,8 @@ def test_ensure_adopts_when_undeclared(monkeypatch):
     adopted = []
     monkeypatch.setattr(ca, "adopt_contract", lambda agent, c, oid, wid: adopted.append((oid, wid)) or "ok")
     out = ca.ensure_routed_workspaces("AG", CONTRACT, _task("ORG"))
-    assert out == [("ORG", "w1")]       # only the routed org, not OTHER
-    assert adopted == [("ORG", "w1")]   # spaces provisioned because the workspace lacked them
+    assert out == [("ORG", "w1")]  # only the routed org, not OTHER
+    assert adopted == [("ORG", "w1")]  # spaces provisioned because the workspace lacked them
 
 
 def test_ensure_skips_adopt_when_already_declared(monkeypatch):
@@ -47,14 +47,14 @@ def test_ensure_skips_adopt_when_already_declared(monkeypatch):
     adopted = []
     monkeypatch.setattr(ca, "adopt_contract", lambda *a: adopted.append(a))
     assert ca.ensure_routed_workspaces("AG", CONTRACT, _task("ORG")) == [("ORG", "w1")]
-    assert adopted == []                # already declares the contract space → no re-adopt
+    assert adopted == []  # already declares the contract space → no re-adopt
 
 
 def test_ensure_no_routed_org_never_lists_workspaces(monkeypatch):
     called = []
     monkeypatch.setattr(ca, "member_workspaces", lambda a: called.append(a) or [])
     assert ca.ensure_routed_workspaces("AG", CONTRACT, {"scope": [], "description": "run"}) == []
-    assert called == []                 # no routed org → no network at all
+    assert called == []  # no routed org → no network at all
 
 
 def test_ensure_empty_when_no_accessible_workspace(monkeypatch):
@@ -72,16 +72,23 @@ def test_merge_targets_dedups_preserving_order():
 # ── capability tags + the SPECIFIC capability report (what the picker's matcher reads) ───────
 def test_crew_advertises_feedback_analysis_tag_and_versioned_domain_capabilities():
     import re
+
     from crews import feedback_wisdom_crew as crew
-    assert "feedback-analysis" in crew.CAPABILITY_TAGS          # the manifest's primary match (a tag)
-    for t in crew.CAPABILITY_TAGS:                              # tags must be charset-safe
+
+    assert "feedback-analysis" in crew.CAPABILITY_TAGS  # the manifest's primary match (a tag)
+    for t in crew.CAPABILITY_TAGS:  # tags must be charset-safe
         assert re.fullmatch(r"[a-z0-9._-]+", t), f"tag {t!r} carries chars AIMEAT rejects (: or @)"
-    domain = crew.CAPABILITIES["domain"]                        # the @1 ids ride DOMAIN capabilities
+    domain = crew.CAPABILITIES["domain"]  # the @1 ids ride DOMAIN capabilities
     assert "consumes:feedback-stats@1" in domain and "produces:support-advisory@1" in domain
 
 
 def test_crewspec_accepts_tags_and_capabilities():
     from crewaimeat.aimeat_crew import CrewSpec
-    spec = CrewSpec(agent_name="x", build_domain=lambda ctx: ([], []),
-                    tags=["feedback-analysis"], capabilities={"domain": ["feedback analysis"]})
+
+    spec = CrewSpec(
+        agent_name="x",
+        build_domain=lambda ctx: ([], []),
+        tags=["feedback-analysis"],
+        capabilities={"domain": ["feedback analysis"]},
+    )
     assert spec.tags == ["feedback-analysis"] and spec.capabilities["domain"] == ["feedback analysis"]

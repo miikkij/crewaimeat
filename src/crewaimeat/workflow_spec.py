@@ -21,8 +21,8 @@ from __future__ import annotations
 
 import fnmatch
 import json
-import re
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from aimeat_crewai.workflow_spec import NONE, Sig  # the published grammar (single source of truth)
 
@@ -32,9 +32,9 @@ from crewaimeat.aimeat_crew import _aimeat_call
 # ── memory access (injectable for tests) ─────────────────────────────────────
 def _default_reader(agent: str) -> Callable[[str], list[dict]]:
     """Return a fn(prefix) -> [{key, value}] listing owner-scope memory under a prefix."""
+
     def _list(prefix: str) -> list[dict]:
-        r = _aimeat_call(agent, "aimeat_memory_list",
-                         {"owner_scope": True, "prefix": prefix, "limit": 500}) or {}
+        r = _aimeat_call(agent, "aimeat_memory_list", {"owner_scope": True, "prefix": prefix, "limit": 500}) or {}
         items = r.get("items") or []
         out = []
         for it in items:
@@ -43,6 +43,7 @@ def _default_reader(agent: str) -> Callable[[str], list[dict]]:
                 v = (_aimeat_call(agent, "aimeat_memory_read", {"key": it.get("key")}) or {}).get("value")
             out.append({"key": it.get("key"), "value": v})
         return out
+
     return _list
 
 
@@ -158,7 +159,11 @@ def check_signal(node: Any, vars: dict, lister, llm_judge=None) -> tuple[bool, s
         # val is a JSON array; count items where item[where_field] == templated where_equals.
         arr = _as_obj(val)
         field, want = node.get("where_field"), _templ(node.get("where_equals"), vars)
-        n = sum(1 for it in (arr or []) if isinstance(it, dict) and it.get(field) == want) if isinstance(arr, list) else 0
+        n = (
+            sum(1 for it in (arr or []) if isinstance(it, dict) and it.get(field) == want)
+            if isinstance(arr, list)
+            else 0
+        )
         need = int(node.get("min", 1))
         return n >= need, f"{key_glob}: {n} item(s) with {field}={want!r} (need {need})"
     return False, f"unknown check {check!r}"
@@ -176,14 +181,14 @@ _ART = "news.{date}.{edition}.article.*"
 _QUIZ = "news.{date}.{edition}.quiz"
 _EDITORIAL = "news.{date}.{edition}.editorial"
 _AVARUUSSAA = "news.{date}.{edition}.article.avaruussaa"
-_RAW_MIN = 12     # ~20 categories fetched; loud floor
-_ART_MIN = 12     # the day's article set across both desks
-_DOWN_MIN = 3     # features/editorial just need a handful to work on
+_RAW_MIN = 12  # ~20 categories fetched; loud floor
+_ART_MIN = 12  # the day's article set across both desks
+_DOWN_MIN = 3  # features/editorial just need a handful to work on
 
 AGENT_SIGNALS: dict[str, dict] = {
     # offer id -> {required_to_function, success_signal, deliverable_location}
     "fetch-edition-raw": {
-        "required_to_function": NONE,   # reads live feeds, not memory — no input gate
+        "required_to_function": NONE,  # reads live feeds, not memory — no input gate
         "success_signal": Sig.count_nonempty(key_glob=_RAW, min=_RAW_MIN),
         "deliverable_location": {"key": _RAW},
     },
@@ -213,7 +218,7 @@ AGENT_SIGNALS: dict[str, dict] = {
         "deliverable_location": {"key": _EDITORIAL},
     },
     "space-weather": {
-        "required_to_function": NONE,   # fetches NOAA/NASA itself; independent of the fetch step
+        "required_to_function": NONE,  # fetches NOAA/NASA itself; independent of the fetch step
         "success_signal": Sig.nonempty(key=_AVARUUSSAA),
         "deliverable_location": {"key": _AVARUUSSAA},
     },
@@ -232,45 +237,96 @@ WORKFLOWS: dict[str, dict] = {
     "laimeat-sanomat-evening": {
         "id": "laimeat-sanomat-evening",
         "title": {"fi_FI": "(L)AIMEAT Sanomat — iltapainos", "en_US": "(L)AIMEAT Sanomat — evening"},
-        "description": {"fi_FI": "Iltapainoksen tuotantoketju: hae raaka → kirjoita → erikoisosiot+visa → editoriaali+etusivu.",
-                        "en_US": "Evening edition pipeline: fetch raw → write → features+quiz → editorial+frontpage."},
+        "description": {
+            "fi_FI": "Iltapainoksen tuotantoketju: hae raaka → kirjoita → erikoisosiot+visa → editoriaali+etusivu.",
+            "en_US": "Evening edition pipeline: fetch raw → write → features+quiz → editorial+frontpage.",
+        },
         "schedule": {"cron": "0 17 * * *", "timezone": "Europe/Helsinki"},
         "vars": [
-            {"name": "date", "type": "date", "default": "<run-date>", "example": "2026-06-11",
-             "description": {"fi_FI": "Painoksen päivä (YYYY-MM-DD)", "en_US": "Edition date (YYYY-MM-DD)"}},
-            {"name": "edition", "type": "string", "default": "evening",
-             "description": {"fi_FI": "Painos (evening/morning)", "en_US": "Edition (evening/morning)"}},
+            {
+                "name": "date",
+                "type": "date",
+                "default": "<run-date>",
+                "example": "2026-06-11",
+                "description": {"fi_FI": "Painoksen päivä (YYYY-MM-DD)", "en_US": "Edition date (YYYY-MM-DD)"},
+            },
+            {
+                "name": "edition",
+                "type": "string",
+                "default": "evening",
+                "description": {"fi_FI": "Painos (evening/morning)", "en_US": "Edition (evening/morning)"},
+            },
         ],
         "steps": [
-            {"id": "fetch", "agent": "news-fetcher", "offer": "fetch-edition-raw",
-             "description": {"fi_FI": "Hae päivän raakauutismateriaali per kategoria.",
-                             "en_US": "Fetch the day's raw news per category."},
-             "stage": ("crewaimeat.fetch_pipeline", "build_edition_raw")},
+            {
+                "id": "fetch",
+                "agent": "news-fetcher",
+                "offer": "fetch-edition-raw",
+                "description": {
+                    "fi_FI": "Hae päivän raakauutismateriaali per kategoria.",
+                    "en_US": "Fetch the day's raw news per category.",
+                },
+                "stage": ("crewaimeat.fetch_pipeline", "build_edition_raw"),
+            },
             # Desk A + Desk B run in parallel after fetch; one agent each, signals inherited from offers.
-            {"id": "write-a", "agent": "news-writer", "offer": "evening-write-a", "after": ["fetch"],
-             "description": {"fi_FI": "Kirjoita Desk A:n kategorioiden artikkelit.",
-                             "en_US": "Write the Desk A category articles."},
-             "stage": ("crewaimeat.write_pipeline", "write_edition_articles"), "desk": "A"},
-            {"id": "write-b", "agent": "news-writer-b", "offer": "evening-write-b", "after": ["fetch"],
-             "description": {"fi_FI": "Kirjoita Desk B:n kategorioiden artikkelit.",
-                             "en_US": "Write the Desk B category articles."},
-             "stage": ("crewaimeat.write_pipeline", "write_edition_articles"), "desk": "B"},
+            {
+                "id": "write-a",
+                "agent": "news-writer",
+                "offer": "evening-write-a",
+                "after": ["fetch"],
+                "description": {
+                    "fi_FI": "Kirjoita Desk A:n kategorioiden artikkelit.",
+                    "en_US": "Write the Desk A category articles.",
+                },
+                "stage": ("crewaimeat.write_pipeline", "write_edition_articles"),
+                "desk": "A",
+            },
+            {
+                "id": "write-b",
+                "agent": "news-writer-b",
+                "offer": "evening-write-b",
+                "after": ["fetch"],
+                "description": {
+                    "fi_FI": "Kirjoita Desk B:n kategorioiden artikkelit.",
+                    "en_US": "Write the Desk B category articles.",
+                },
+                "stage": ("crewaimeat.write_pipeline", "write_edition_articles"),
+                "desk": "B",
+            },
             # Independent: pulls NOAA/NASA itself, writes the avaruussaa article into the set.
-            {"id": "space-weather", "agent": "space-weather-writer", "offer": "space-weather",
-             "description": {"fi_FI": "Avaruussää-artikkeli (NOAA/NASA).",
-                             "en_US": "Space-weather article (NOAA/NASA)."},
-             "stage": ("crewaimeat.space_weather_pipeline", "write_space_weather")},
-            {"id": "features", "agent": "daily-features-writer", "offer": "evening-features",
-             "after": ["write-a", "write-b"],
-             "description": {"fi_FI": "Erikoisosiot + uutisvisa päivän artikkeleista.",
-                             "en_US": "Features + news quiz from the day's articles."},
-             "stage": ("crewaimeat.features_pipeline", "build_quiz")},
-            {"id": "editorial", "agent": "editorial-writer", "offer": "evening-editorial",
-             "after": ["write-a", "write-b", "space-weather"],
-             "retry": {"max": 2, "backoff_min": 5},
-             "description": {"fi_FI": "Gonzo-pääkirjoitus + julkinen etusivuindeksi.",
-                             "en_US": "Gonzo editorial + public front-page index."},
-             "stage": ("crewaimeat.editorial_pipeline", "build_editorial_and_index")},
+            {
+                "id": "space-weather",
+                "agent": "space-weather-writer",
+                "offer": "space-weather",
+                "description": {
+                    "fi_FI": "Avaruussää-artikkeli (NOAA/NASA).",
+                    "en_US": "Space-weather article (NOAA/NASA).",
+                },
+                "stage": ("crewaimeat.space_weather_pipeline", "write_space_weather"),
+            },
+            {
+                "id": "features",
+                "agent": "daily-features-writer",
+                "offer": "evening-features",
+                "after": ["write-a", "write-b"],
+                "description": {
+                    "fi_FI": "Erikoisosiot + uutisvisa päivän artikkeleista.",
+                    "en_US": "Features + news quiz from the day's articles.",
+                },
+                "stage": ("crewaimeat.features_pipeline", "build_quiz"),
+            },
+            {
+                "id": "editorial",
+                "agent": "editorial-writer",
+                "offer": "evening-editorial",
+                "after": ["write-a", "write-b", "space-weather"],
+                "retry": {"max": 2, "backoff_min": 5},
+                "description": {
+                    "fi_FI": "Gonzo-pääkirjoitus + julkinen etusivuindeksi.",
+                    "en_US": "Gonzo editorial + public front-page index.",
+                },
+                "stage": ("crewaimeat.editorial_pipeline", "build_editorial_and_index"),
+            },
         ],
         "on_step_fail": "inspect",
     },
@@ -311,8 +367,7 @@ def node_definition(wf_id: str = "laimeat-sanomat-evening") -> dict:
     wf = WORKFLOWS[wf_id]
     steps = []
     for s in wf["steps"]:
-        step = {"id": s["id"], "agent": s["agent"], "offer": s["offer"],
-                "description": s["description"]}
+        step = {"id": s["id"], "agent": s["agent"], "offer": s["offer"], "description": s["description"]}
         if s.get("after"):
             step["after"] = s["after"]
         if s.get("retry"):
@@ -322,15 +377,20 @@ def node_definition(wf_id: str = "laimeat-sanomat-evening") -> dict:
         if AGENT_SIGNALS.get(s["offer"], {}).get("required_to_function") == "none":
             step["required_to_function"] = "none"
         steps.append(step)
-    vars_out = [{"name": v["name"], "type": v["type"], "description": v["description"],
-                 **({"default": v["default"]} if "default" in v else {}),
-                 **({"example": v["example"]} if "example" in v else {})}
-                for v in wf["vars"]]
+    vars_out = [
+        {
+            "name": v["name"],
+            "type": v["type"],
+            "description": v["description"],
+            **({"default": v["default"]} if "default" in v else {}),
+            **({"example": v["example"]} if "example" in v else {}),
+        }
+        for v in wf["vars"]
+    ]
     return {
         "title": wf["title"],
         "description": wf["description"],
-        "trigger": {"kind": "schedule", "cron": wf["schedule"]["cron"],
-                    "timezone": wf["schedule"]["timezone"]},
+        "trigger": {"kind": "schedule", "cron": wf["schedule"]["cron"], "timezone": wf["schedule"]["timezone"]},
         "vars": vars_out,
         "steps": steps,
         "on_step_fail": wf.get("on_step_fail", "inspect"),
@@ -351,8 +411,7 @@ def loc(localized: Any, locale: str = "fi_FI") -> str:
     return localized or ""
 
 
-def check_workflow(wf_id: str, params: dict, *, agent: str = "news-fetcher",
-                   lister=None, llm_judge=None) -> dict:
+def check_workflow(wf_id: str, params: dict, *, agent: str = "news-fetcher", lister=None, llm_judge=None) -> dict:
     """Signals-only test run: evaluate BOTH signals of every step against existing memory.
     Returns {workflow, params, steps:[{id, state, input, output}]}. No dispatch, no LLM unless
     a judge is wired. `state` ∈ GREEN | input-RED | output-RED."""
@@ -366,7 +425,12 @@ def check_workflow(wf_id: str, params: dict, *, agent: str = "news-fetcher",
         in_ok, in_obs = check_signal(req, vars, lister, llm_judge)
         out_ok, out_obs = check_signal(succ, vars, lister, llm_judge)
         state = "GREEN" if (in_ok and out_ok) else ("input-RED" if not in_ok else "output-RED")
-        steps_out.append({"id": step["id"], "state": state,
-                          "input": {"ok": in_ok, "observed": in_obs},
-                          "output": {"ok": out_ok, "observed": out_obs}})
+        steps_out.append(
+            {
+                "id": step["id"],
+                "state": state,
+                "input": {"ok": in_ok, "observed": in_obs},
+                "output": {"ok": out_ok, "observed": out_obs},
+            }
+        )
     return {"workflow": wf_id, "params": vars, "steps": steps_out}

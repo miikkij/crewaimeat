@@ -35,11 +35,15 @@ def main() -> None:
     text = ""
     if html:
         text = trafilatura.extract(html, include_comments=False, favor_recall=True) or ""
-    sys.stdout.write(json.dumps({"text": text}))  # ensure_ascii=True: pure-ASCII stdout survives any (cp1252) Windows pipe encoding
+    sys.stdout.write(
+        json.dumps({"text": text})
+    )  # ensure_ascii=True: pure-ASCII stdout survives any (cp1252) Windows pipe encoding
 
 
 if __name__ == "__main__":
     try:
         main()
     except Exception as exc:  # noqa: BLE001 — a clean error still returns empty (never crash the caller's parse)
-        sys.stdout.write(json.dumps({"text": "", "error": str(exc)[:200]}))  # ensure_ascii=True: pure-ASCII stdout survives any (cp1252) Windows pipe encoding
+        sys.stdout.write(
+            json.dumps({"text": "", "error": str(exc)[:200]})
+        )  # ensure_ascii=True: pure-ASCII stdout survives any (cp1252) Windows pipe encoding

@@ -19,8 +19,7 @@ import datetime
 from zoneinfo import ZoneInfo
 
 from crewaimeat.aimeat_crew import _aimeat_call
-from crewaimeat.workflow_spec import WORKFLOWS, check_workflow, loc, resolve_step_signals, check_signal
-from crewaimeat.workflow_spec import _default_reader
+from crewaimeat.workflow_spec import WORKFLOWS, _default_reader, check_workflow, loc
 
 AGENT = "workflow-inspector"
 _TZ = ZoneInfo("Europe/Helsinki")
@@ -33,9 +32,11 @@ def _rerun_step(step_id: str, date: str, edition: str) -> str:
     the inspector calls the stage directly as the safe repair."""
     if step_id == "fetch":
         from crewaimeat.fetch_pipeline import build_edition_raw
+
         return build_edition_raw("news-fetcher", date, edition)
     if step_id in ("write-a", "write"):  # "write" kept for older single-desk definitions
         from crewaimeat.write_pipeline import DESK_A, DESK_B, write_edition_articles
+
         a = write_edition_articles("news-writer", date, edition, DESK_A)
         if step_id == "write":
             b = write_edition_articles("news-writer-b", date, edition, DESK_B)
@@ -43,15 +44,19 @@ def _rerun_step(step_id: str, date: str, edition: str) -> str:
         return a
     if step_id == "write-b":
         from crewaimeat.write_pipeline import DESK_B, write_edition_articles
+
         return write_edition_articles("news-writer-b", date, edition, DESK_B)
     if step_id == "space-weather":
         from crewaimeat.space_weather_pipeline import write_space_weather
+
         return write_space_weather("space-weather-writer", date, edition)
     if step_id == "features":
         from crewaimeat.features_pipeline import build_quiz
+
         return build_quiz("daily-features-writer", date, edition)
     if step_id == "editorial":
         from crewaimeat.editorial_pipeline import build_editorial_and_index
+
         return build_editorial_and_index("editorial-writer", date, edition)
     return f"no re-run adapter for step {step_id}"
 
@@ -108,25 +113,40 @@ def inspect(wf_id: str, params: dict, *, repair: bool = True, lister=None) -> di
         agents = agents if isinstance(agents, list) else [agents]
         if s["state"] == "input-RED":
             ups = ", ".join(step.get("after") or []) or "—"
-            diagnoses.append(f"**{s['id']}** input-RED → blocked on upstream ({ups}); fix that first. "
-                             f"Observed: {s['input']['observed']}")
+            diagnoses.append(
+                f"**{s['id']}** input-RED → blocked on upstream ({ups}); fix that first. "
+                f"Observed: {s['input']['observed']}"
+            )
         else:  # output-RED after re-runs exhausted
             states = "; ".join(_agent_task_state(a) for a in agents)
-            diagnoses.append(f"**{s['id']}** output-RED after {reruns} re-run(s) → not a transient miss. "
-                             f"Evidence: {states}. Observed: {s['output']['observed']}. "
-                             f"Likely: model unreachable / daemon crash-looping / stage bug — needs attention.")
+            diagnoses.append(
+                f"**{s['id']}** output-RED after {reruns} re-run(s) → not a transient miss. "
+                f"Evidence: {states}. Observed: {s['output']['observed']}. "
+                f"Likely: model unreachable / daemon crash-looping / stage bug — needs attention."
+            )
 
     overall = "GREEN" if not still_red else "RED"
     report = _report_md(wf, vars, final, actions, diagnoses, overall)
-    return {"workflow": wf_id, "date": date, "edition": edition, "overall": overall,
-            "fixed": fixed, "still_red": [s["id"] for s in still_red],
-            "steps": final["steps"], "actions": actions, "report_md": report}
+    return {
+        "workflow": wf_id,
+        "date": date,
+        "edition": edition,
+        "overall": overall,
+        "fixed": fixed,
+        "still_red": [s["id"] for s in still_red],
+        "steps": final["steps"],
+        "actions": actions,
+        "report_md": report,
+    }
 
 
 def _report_md(wf, vars, final, actions, diagnoses, overall) -> str:
     icon = {"GREEN": "✅", "input-RED": "⛔(input)", "output-RED": "⛔(output)"}
-    lines = [f"## Workflow: {loc(wf['title'])} — {vars.get('date')} {vars.get('edition')}  [{overall}]",
-             "", "**Steps:**"]
+    lines = [
+        f"## Workflow: {loc(wf['title'])} — {vars.get('date')} {vars.get('edition')}  [{overall}]",
+        "",
+        "**Steps:**",
+    ]
     sbyid = {s["id"]: s for s in wf["steps"]}
     for s in final["steps"]:
         desc = loc(sbyid[s["id"]].get("description", ""))
@@ -146,14 +166,31 @@ def publish_inspection(result: dict, *, org: str | None = None, ws: str | None =
     outcome is never silent. Memory-key fallback when no workspace is wired."""
     date, wf = result["date"], result["workflow"]
     run_key = f"workflows.{wf}.runs.{date}"
-    _aimeat_call(AGENT, "aimeat_memory_write",
-                 {"key": run_key, "visibility": "owner",
-                  "value": {"workflow": wf, "date": date, "overall": result["overall"],
-                            "steps": result["steps"], "fixed": result["fixed"],
-                            "still_red": result["still_red"]}})
+    _aimeat_call(
+        AGENT,
+        "aimeat_memory_write",
+        {
+            "key": run_key,
+            "visibility": "owner",
+            "value": {
+                "workflow": wf,
+                "date": date,
+                "overall": result["overall"],
+                "steps": result["steps"],
+                "fixed": result["fixed"],
+                "still_red": result["still_red"],
+            },
+        },
+    )
     now = datetime.datetime.now(_TZ).isoformat()
     title = f"Workflow watch · {wf} · {result['overall']}"
-    _aimeat_call(AGENT, "aimeat_memory_write",
-                 {"key": "mail.morning.sections.workflow-inspector", "visibility": "owner",
-                  "value": {"title": title, "markdown": result["report_md"], "updated_at": now}})
+    _aimeat_call(
+        AGENT,
+        "aimeat_memory_write",
+        {
+            "key": "mail.morning.sections.workflow-inspector",
+            "visibility": "owner",
+            "value": {"title": title, "markdown": result["report_md"], "updated_at": now},
+        },
+    )
     return {"run_key": run_key, "overall": result["overall"]}

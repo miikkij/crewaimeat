@@ -19,18 +19,14 @@ jobs:
       - name: Sync dependencies (incl. dev)
         run: uv sync --group dev
 
-      # Lint + format are ADVISORY until the one-time cleanup lands: ~108 files would be reformatted
-      # and ~150 lint findings exist (mostly import-order / unused-import) — all pre-existing, none
-      # behavioural. New/changed code is held to both via the pre-commit hook. Once
-      # `uv run ruff format src tests crews` and `uv run ruff check --fix src tests crews` have been
-      # applied across the tree, drop the two `continue-on-error` lines to make these hard gates.
+      # Format + lint are HARD gates: the tree was formatted and auto-fixed in the adoption commit,
+      # and the handful of grandfathered findings carry targeted `# noqa` or sit in the ignore list
+      # (see [tool.ruff.lint] in pyproject.toml). New/changed code is also held to these by pre-commit.
       - name: Ruff format (check)
         run: uv run ruff format --check src tests crews
-        continue-on-error: true
 
       - name: Ruff lint
         run: uv run ruff check src tests crews
-        continue-on-error: true
 
       # The deterministic test floor: no LLM, no network (see [tool.pytest.ini_options]).
       - name: Pytest

@@ -62,7 +62,10 @@ def write_space_weather(agent_name: str, date: str, edition: str) -> str:
         "magneettinen myrsky (Kp-indeksi), aurinkotuuli / koronaaliaukot / purkaukset. Selitä Kp ja "
         "koronaaliaukot kansantajuisesti, älä lietso. Toista FAKTAT omin suomalaisin sanoin (älä kopioi "
         "lähdetekstiä). Aloita otsikolla, lopeta omalle rivilleen '— Tähti Sointu'."
-        + FINNISH_NATIVE_STYLE + "\n\nLÄHTEET:\n" + sources)
+        + FINNISH_NATIVE_STYLE
+        + "\n\nLÄHTEET:\n"
+        + sources
+    )
     art = llm.call([{"role": "user", "content": prompt}])
     art = art if isinstance(art, str) else str(art)
     if len(art.strip()) < 200:  # grok hiccup → one retry

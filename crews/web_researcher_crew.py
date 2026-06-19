@@ -12,19 +12,19 @@ from __future__ import annotations
 
 from crewai import Agent, Task
 
-from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
+from crewaimeat.aimeat_crew import CrewSpec, run_crew
 from crewaimeat.contract_adopt import build_adopt_domain, is_adopt_task
 from crewaimeat.crew import _web_tools  # free SearXNG web search by default (USE_TAVILY=1 for Tavily)
 from crewaimeat.research_contract import CONTRACT
 
 AGENT_NAME = "web-researcher"
 
-README = '''[[FIGLET:slant]["Web Researcher"]]
+README = """[[FIGLET:slant]["Web Researcher"]]
 
 Performs live web searches to find recent articles, reports, and news on a given topic, producing sourced summaries with proper citations (publication name, URL, date). Claims without sources are flagged as "not verified".
 
 **How to task me:** Give me a topic or question and I'll research it live, returning a concise summary with citations.
-'''
+"""
 
 
 def build_domain(ctx):
@@ -132,15 +132,22 @@ def run() -> None:
         if scans.get("processed") or scans.get("failed"):
             print(f"[{AGENT_NAME}] market-scan poll: {scans}")
         from crewaimeat.company_contract import process_company_research
+
         cos = process_company_research(max_items=3)  # THIRD contract: company-research (YTJ + web)
         if cos.get("processed") or cos.get("failed"):
             print(f"[{AGENT_NAME}] company-research poll: {cos}")
 
-    run_crew(CrewSpec(
-        agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README,
-        adapt_to_task=True, score_to_stats=True,
-        idle_hook=_contract_poll, idle_hook_seconds=60,
-    ))
+    run_crew(
+        CrewSpec(
+            agent_name=AGENT_NAME,
+            build_domain=build_domain,
+            readme_md=README,
+            adapt_to_task=True,
+            score_to_stats=True,
+            idle_hook=_contract_poll,
+            idle_hook_seconds=60,
+        )
+    )
 
 
 if __name__ == "__main__":

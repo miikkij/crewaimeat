@@ -9,7 +9,6 @@ or no internet must not break the TUI.
 
 from __future__ import annotations
 
-import os
 import re
 import subprocess
 
@@ -17,6 +16,7 @@ import subprocess
 def installed_pypi(pkg: str = "aimeat-crewai") -> str | None:
     try:
         from importlib.metadata import version
+
         return version(pkg)
     except Exception:  # noqa: BLE001
         return None
@@ -25,6 +25,7 @@ def installed_pypi(pkg: str = "aimeat-crewai") -> str | None:
 def latest_pypi(pkg: str = "aimeat-crewai") -> str | None:
     try:
         import requests
+
         r = requests.get(f"https://pypi.org/pypi/{pkg}/json", timeout=8)
         return r.json()["info"]["version"] if r.status_code == 200 else None
     except Exception:  # noqa: BLE001
@@ -34,8 +35,7 @@ def latest_pypi(pkg: str = "aimeat-crewai") -> str | None:
 def cli_version() -> str | None:
     """Installed `aimeat` CLI version via `aimeat --version` (shell on Windows so .cmd resolves)."""
     try:
-        out = subprocess.run("aimeat --version", shell=True, capture_output=True, text=True,
-                             timeout=15).stdout
+        out = subprocess.run("aimeat --version", shell=True, capture_output=True, text=True, timeout=15).stdout
         m = re.search(r"\d+\.\d+\.\d+", out)
         return m.group(0) if m else None
     except Exception:  # noqa: BLE001
@@ -45,6 +45,7 @@ def cli_version() -> str | None:
 def latest_npm(pkg: str = "aimeat") -> str | None:
     try:
         import requests
+
         r = requests.get(f"https://registry.npmjs.org/{pkg}/latest", timeout=8)
         return r.json().get("version") if r.status_code == 200 else None
     except Exception:  # noqa: BLE001
@@ -57,6 +58,7 @@ def is_update(installed: str | None, latest: str | None) -> bool:
         return False
     try:
         from packaging.version import parse
+
         return parse(latest) > parse(installed)
     except Exception:  # noqa: BLE001
         return installed != latest

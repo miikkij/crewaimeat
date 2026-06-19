@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from crewai import Agent, Task
 
-from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
+from crewaimeat.aimeat_crew import CrewSpec, run_crew
 from crewaimeat.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is set, else []
 
 AGENT_NAME = "idea-feasibility-rater"
@@ -53,7 +53,7 @@ def build_domain(ctx):
 
     task_1 = Task(
         description=(
-            f"Given the idea analysis from the previous task, conduct a thorough reality check. "
+            "Given the idea analysis from the previous task, conduct a thorough reality check. "
             "Use web search to find: "
             "1. Existing competitors or similar solutions. "
             "2. Current market trends that support or contradict the idea. "
@@ -67,7 +67,7 @@ def build_domain(ctx):
 
     task_2 = Task(
         description=(
-            f"Synthesize the idea analysis and the reality check into a final, brutally honest feasibility assessment. "
+            "Synthesize the idea analysis and the reality check into a final, brutally honest feasibility assessment. "
             "Your output MUST follow this exact structure:\n\n"
             "### Feasibility Score: [Score]/10\n"
             "(A single number representing the overall feasibility)\n\n"

@@ -5,6 +5,7 @@ The conductor calls `verify_app(project_id)` AFTER a build; on FAIL it routes a 
 This is the deterministic "catch" that the autonomous path lacked — the gates run as CODE, not LLM
 judgement, so a broken app never passes as 'done'.
 """
+
 from __future__ import annotations
 
 import json
@@ -45,8 +46,7 @@ def make_verify_tools(agent_name: str, owner: str | None = None) -> list:
         # checking them would false-flag (e.g. csm's `fleet.schema` is not a `<slug>.fleet.schema` value).
         mk = (bp.get("dataModel") or {}).get("memoryKeys") or {}
         id_type = {(c or {}).get("id"): (c or {}).get("type") for c in (bp.get("components") or [])}
-        memkeys = [k for k, v in mk.items()
-                   if id_type.get((v or {}).get("producedBy")) in ("memory", "translation")]
+        memkeys = [k for k, v in mk.items() if id_type.get((v or {}).get("producedBy")) in ("memory", "translation")]
         prefixes = sorted({str(k).split(".")[0] for k in memkeys})
         comps = d.get("components") or []
         if isinstance(comps, dict):
@@ -91,14 +91,18 @@ def make_verify_tools(agent_name: str, owner: str | None = None) -> list:
             url = f"{base}/v1/apps/{owner}/{appfn}?mode=inline"
             r = app_verify.app_renders(url, rewrite_node=("aimeat-local-001-dev", node_id))
             if r.get("ok") is False:
-                problems.append(f"render: console_errors={r.get('console_errors')} | "
-                                f"sample={(r.get('content_sample') or '')[:140]!r}")
+                problems.append(
+                    f"render: console_errors={r.get('console_errors')} | "
+                    f"sample={(r.get('content_sample') or '')[:140]!r}"
+                )
             elif r.get("ok") is None:
                 problems.append(f"render: not run ({r.get('skipped')})")
 
         if problems:
             return "VERIFY FAIL — fix these, then re-verify:\n- " + "\n- ".join(problems)
-        return (f"VERIFY PASS — all gates green. slug={slug}, app={appfn}, cortexes parse + read "
-                f"slug-prefixed keys, seeded data present, app renders with no console errors.")
+        return (
+            f"VERIFY PASS — all gates green. slug={slug}, app={appfn}, cortexes parse + read "
+            f"slug-prefixed keys, seeded data present, app renders with no console errors."
+        )
 
     return [verify_app]

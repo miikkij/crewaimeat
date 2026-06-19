@@ -13,7 +13,6 @@ Search. The registry is pruned to feeds verified to return items (see scripts/ch
 from __future__ import annotations
 
 import datetime
-from typing import Any
 
 import feedparser  # type: ignore
 
@@ -115,14 +114,20 @@ def _parse_feed(url: str, limit: int = 8) -> list[dict]:
         if not link or not title:
             continue
         summ = getattr(e, "summary", "") or getattr(e, "description", "")
-        out.append({"title": title.strip(), "url": link.strip(),
-                    "published": getattr(e, "published", "") or getattr(e, "updated", ""),
-                    "summary": _clean(summ)[:300]})
+        out.append(
+            {
+                "title": title.strip(),
+                "url": link.strip(),
+                "published": getattr(e, "published", "") or getattr(e, "updated", ""),
+                "summary": _clean(summ)[:300],
+            }
+        )
     return out
 
 
 def _clean(html: str) -> str:
     import re
+
     return re.sub(r"<[^>]+>", "", html or "").strip()
 
 
@@ -132,17 +137,19 @@ def _recent_seen_urls(agent_name: str, category: str, limit_keys: int = 3) -> se
     try:
         r = _aimeat_call(agent_name, "aimeat_memory_list", {"owner_scope": True, "prefix": "news."})
         rows = (r or {}).get("items") if isinstance(r, dict) else None
-        keys = sorted((it.get("key", "") for it in (rows or [])
-                       if it.get("key", "").endswith(".raw." + category)), reverse=True)[:limit_keys]
+        keys = sorted(
+            (it.get("key", "") for it in (rows or []) if it.get("key", "").endswith(".raw." + category)), reverse=True
+        )[:limit_keys]
         for k in keys:
             v = (_aimeat_call(agent_name, "aimeat_memory_read", {"key": k}) or {}).get("value")
             if isinstance(v, str) and v.strip()[:1] == "[":
                 import json
+
                 try:
                     v = json.loads(v)
                 except Exception:  # noqa: BLE001
                     v = []
-            for a in (v if isinstance(v, list) else []):
+            for a in v if isinstance(v, list) else []:
                 if isinstance(a, dict) and a.get("url"):
                     seen.add(a["url"])
     except Exception:  # noqa: BLE001
@@ -177,11 +184,16 @@ def make_feed_tools(agent_name: str) -> list:
                 urls.add(it["url"])
                 items.append(it)
         if not items:
-            return (f"[feed] '{category}': feeds returned no NEW items (all recently used or feeds down). "
-                    "Use the Web Search tool instead.")
+            return (
+                f"[feed] '{category}': feeds returned no NEW items (all recently used or feeds down). "
+                "Use the Web Search tool instead."
+            )
         items = items[:max_items]
-        lines = [f"Fresh curated items for '{category}' from {len(chosen)} feed(s) "
-                 f"(rotated by date, {len(seen)} recent URLs excluded):", ""]
+        lines = [
+            f"Fresh curated items for '{category}' from {len(chosen)} feed(s) "
+            f"(rotated by date, {len(seen)} recent URLs excluded):",
+            "",
+        ]
         for i, it in enumerate(items, 1):
             lines.append(f"{i}. {it['title']}\n   URL: {it['url']}\n   {it['summary'] or '(no summary)'}")
         return "\n".join(lines)

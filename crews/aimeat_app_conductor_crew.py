@@ -54,16 +54,28 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     tid = (ctx.task or {}).get("id") or "manual"
     # The conductor verifies (it does not build): take only the authed render gate + the URL helper.
     author_tools, _state = make_author_tools(AGENT_NAME, task_id=tid)
-    verify_tools = [t for t in author_tools if getattr(t, "name", "") in ("verify_render", "verify_anon_render", "verify_interaction", "app_inline_url")]
+    verify_tools = [
+        t
+        for t in author_tools
+        if getattr(t, "name", "") in ("verify_render", "verify_anon_render", "verify_interaction", "app_inline_url")
+    ]
     # timeout=7200 (2h): the wait must exceed the worst-case specs-designer interview (its ask_owner can
     # block on an absent owner), so a slow human answering the interview never orphans the Phase-0 wait.
     wf_tools = make_workflow_tools(
-        coordinator_name=AGENT_NAME, run_id=tid, task_id=tid, tag="workflow", timeout=7200,
+        coordinator_name=AGENT_NAME,
+        run_id=tid,
+        task_id=tid,
+        tag="workflow",
+        timeout=7200,
         max_subtasks=10,  # spec + (forge + forged-builder) + 3 fix rounds can exceed the default cap of 6
     )
     # cancel_pending lets the conductor stop an orphaned delegatee on timeout (a builder/fixer that exceeds
     # the wait keeps running and could republish after the conductor moved on — cancel it before proceeding).
-    deleg = [t for t in wf_tools if getattr(t, "name", "") in ("discover_crews", "delegate_and_wait", "rate_delegated_work", "cancel_pending")]
+    deleg = [
+        t
+        for t in wf_tools
+        if getattr(t, "name", "") in ("discover_crews", "delegate_and_wait", "rate_delegated_work", "cancel_pending")
+    ]
     # Scheduler: set up AIMEAT server-run schedules (the node owns the cron clock; fires offline; owner
     # controls them in Profile -> Scheduler). For recurring/automated deliverables (daily pipelines, etc.).
     sched_tools = make_schedule_tools(AGENT_NAME)
@@ -113,8 +125,8 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             f"<<APP IDEA>>\n{ctx.prompt}\n<</APP IDEA>>\n\n"
             "Delegate to the requirements specialist, which interviews the owner and returns a precise, "
             "AIMEAT-correct technical spec:\n"
-            "  delegate_and_wait(\"aimeat-app-specs-designer\", \"Spec: <short idea>\", \"<the full app idea "
-            "above as ONE self-contained string>\")  — exactly three positional string args.\n"
+            '  delegate_and_wait("aimeat-app-specs-designer", "Spec: <short idea>", "<the full app idea '
+            'above as ONE self-contained string>")  — exactly three positional string args.\n'
             "It asks the owner a few short questions (the owner answers them in the dashboard Messages tab), "
             "then returns the spec: the DATA LAYER, who reads/writes, the auth model, the data model "
             "(keys/namespaces/visibility), image handling, a build checklist, and a verify plan.\n"
@@ -151,16 +163,16 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "better.\n"
             "   - ONLY IF the idea needs a genuinely NEW kind of building that NO existing crew can do (a "
             "new DOMAIN/capability, not merely a new app), ORDER one from the forge: "
-            "delegate_and_wait(\"aimeat-crew-forge\", \"Forge <kind> specialist\", \"<ONE string describing "
+            'delegate_and_wait("aimeat-crew-forge", "Forge <kind> specialist", "<ONE string describing '
             "the specialist to create: its domain, the kind of stack it authors, and that it must use "
-            "make_author_tools + start apps from read_app_template() and end in a verify_render gate>\"). "
+            'make_author_tools + start apps from read_app_template() and end in a verify_render gate>"). '
             "The forge designs, writes, validates, registers, and launches the new crew and reports its "
             "agent name + the ONE owner-approval step. A freshly-forged agent must be APPROVED by the owner "
             "(device flow) before it can run tasks — so after forging, TRY delegate_and_wait to the new "
             "agent; if it is not yet reachable/approved, STOP and report: the new specialist was forged, the "
             "exact approve step, and that the build will run once approved. Do NOT forge when "
             "aimeat-app-builder can do it — forging is for new domains only.\n"
-            "3. delegate_and_wait(\"<chosen specialist>\", \"<short title>\", \"<instruction>\") — the "
+            '3. delegate_and_wait("<chosen specialist>", "<short title>", "<instruction>") — the '
             "instruction is ONE self-contained string: the FULL TECHNICAL SPEC from Phase 0 (verbatim — the "
             "data layer, data model, auth, image handling, build checklist), plus: 'Build to THIS SPEC, the direct "
             "AIMEAT-native way — ONE cortex + ONE app HTML (start the app from read_app_template()), no "
@@ -172,11 +184,11 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "   PUBLIC / ANON-READABLE apps (the idea says readable WITHOUT logging in — a public "
             "newspaper, directory, noticeboard, gallery, or a viewer over a content pipeline's public "
             "memory): the build instruction MUST additionally say: 'This must render for ANYONE with NO "
-            "account. Start from read_app_template(\"public_viewer\") — startApp() runs UNCONDITIONALLY "
+            'account. Start from read_app_template("public_viewer") — startApp() runs UNCONDITIONALLY '
             "(call startApp() unconditionally so anonymous visitors render), read shown content with "
             "getPublic(gaii,key) ONLY. The "
-            "content lives behind ONE public index key: call find_public_index(\"<the index key, e.g. "
-            "newspaper.frontpage>\") to get the PUBLISHER gaii, set `const PUBLISHER` to it and "
+            'content lives behind ONE public index key: call find_public_index("<the index key, e.g. '
+            'newspaper.frontpage>") to get the PUBLISHER gaii, set `const PUBLISHER` to it and '
             "`const INDEX_KEY` to that key, read the index, then fan out getPublic(item.gaii, item.key) per "
             "item. Confirm it with verify_anon_render (no-login), not just verify_render.' Also report a "
             "couple of strings that should appear in the PUBLIC view (e.g. a category name or article "
@@ -230,8 +242,8 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "3. If VERIFY FAIL: route the fix. (ORPHAN GUARD: if any delegate_and_wait — build or fix — "
             "returns a '[no result ... within the timeout]' string, call cancel_pending() to stop the "
             "still-running delegatee before you retry or rate, so it cannot republish the app after you "
-            "have moved on.) delegate_and_wait(\"aimeat-cortex-fixer\", \"<title>\", "
-            "\"<instruction>\") where the instruction is ONE self-contained string containing: the app "
+            'have moved on.) delegate_and_wait("aimeat-cortex-fixer", "<title>", '
+            '"<instruction>") where the instruction is ONE self-contained string containing: the app '
             "FILENAME, the app INLINE URL, the cortex name, the FULL TECHNICAL SPEC from Phase 0 (so the "
             "fixer knows the COMPLETE feature set and PRESERVES it — fixing only the failure without dropping "
             "any spec'd feature like a working create/post form), and the EXACT FAIL text (verify_render "

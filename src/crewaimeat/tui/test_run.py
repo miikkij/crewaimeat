@@ -67,9 +67,16 @@ def _read_deliverable(call, agent: str, short: str):
     return None, None
 
 
-def run_agent_test(target: str, prompt: str, *, creator: str | None = None,
-                   on_update: Callable[[str], None] | None = None,
-                   timeout_s: int = 180, poll_s: int = 5, call=None) -> dict:
+def run_agent_test(
+    target: str,
+    prompt: str,
+    *,
+    creator: str | None = None,
+    on_update: Callable[[str], None] | None = None,
+    timeout_s: int = 180,
+    poll_s: int = 5,
+    call=None,
+) -> dict:
     """Create a live task for `target` with `prompt` and poll until its deliverable lands.
 
     Returns {ok, task_id, key, result, error, elapsed_s}. `creator` defaults to the target itself
@@ -86,17 +93,26 @@ def run_agent_test(target: str, prompt: str, *, creator: str | None = None,
             on_update(msg)
 
     emit(f"creating task for {target}…")
-    resp = call(creator, "aimeat_task_create", {
-        "target_agent": target,
-        "title": f"TUI test: {prompt[:48]}",
-        "description": prompt,
-        "status": "queued",
-    })
+    resp = call(
+        creator,
+        "aimeat_task_create",
+        {
+            "target_agent": target,
+            "title": f"TUI test: {prompt[:48]}",
+            "description": prompt,
+            "status": "queued",
+        },
+    )
     tid = _find_id(resp)
     if not tid:
-        return {"ok": False, "task_id": None, "key": None, "result": None,
-                "error": "task_create returned no task id (is the creator agent authorized?)",
-                "elapsed_s": 0}
+        return {
+            "ok": False,
+            "task_id": None,
+            "key": None,
+            "result": None,
+            "error": "task_create returned no task id (is the creator agent authorized?)",
+            "elapsed_s": 0,
+        }
     short = tid.split("-", 1)[0]
     emit(f"task {tid} queued; waiting for {target} (timeout {timeout_s}s)…")
 
@@ -104,10 +120,15 @@ def run_agent_test(target: str, prompt: str, *, creator: str | None = None,
     while waited < timeout_s:
         key, val = _read_deliverable(call, target, short)
         if val:
-            return {"ok": True, "task_id": tid, "key": key, "result": str(val),
-                    "error": None, "elapsed_s": waited}
+            return {"ok": True, "task_id": tid, "key": key, "result": str(val), "error": None, "elapsed_s": waited}
         time.sleep(poll_s)
         waited += poll_s
         emit(f"waiting on {target}… {waited}s")
-    return {"ok": False, "task_id": tid, "key": None, "result": None,
-            "error": f"timeout after {timeout_s}s — no deliverable from {target}", "elapsed_s": waited}
+    return {
+        "ok": False,
+        "task_id": tid,
+        "key": None,
+        "result": None,
+        "error": f"timeout after {timeout_s}s — no deliverable from {target}",
+        "elapsed_s": waited,
+    }

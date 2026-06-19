@@ -24,7 +24,7 @@ AGENT_NAME = "joker-v2"
 # leaks it into the deliverable ("Let me work through these… Final lineup:"). The prompt can't fully
 # guarantee it, so we ENFORCE it in code (deterministic, model-whim-proof) — same idea as the
 # coordinator's _strip_leaked_directives. Passed to CrewSpec.clean_deliverable; runs just before publish.
-_LINEUP_RE = re.compile(r"(?im)^\s*\**\s*final\s+lineup\b.*$")          # "**Final lineup: 2 jokes.**"
+_LINEUP_RE = re.compile(r"(?im)^\s*\**\s*final\s+lineup\b.*$")  # "**Final lineup: 2 jokes.**"
 # Decision labels use a DASH ("**Punslinger — CUT.**" / "Observational — KEPT & SHARPENED"); joke labels
 # use a COLON ("**Roast:**"), so keying on the dash + CUT/KEPT never eats a real joke (e.g. a "director's cut").
 _DECISION_RE = re.compile(
@@ -45,7 +45,7 @@ def _strip_editor_meta(text: str) -> str:
     markers = list(_LINEUP_RE.finditer(text))
     if markers:
         m = markers[-1]
-        after, before = text[m.end():].strip(), text[:m.start()].strip()
+        after, before = text[m.end() :].strip(), text[: m.start()].strip()
         # "Final lineup:" can be a HEADER (jokes follow — keep `after`) or a TRAILING summary (jokes are
         # above — keep `before`). Substantial content after the marker means it's a header.
         text = after if len(after) > 80 else (before or after)
@@ -53,7 +53,8 @@ def _strip_editor_meta(text: str) -> str:
     text = re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
     return text or original
 
-README = '''[[FIGLET:slant]["JOKER v2"]]
+
+README = """[[FIGLET:slant]["JOKER v2"]]
 
 # joker-v2 — four comedians and a ruthless editor (evolved variant)
 
@@ -66,7 +67,7 @@ Queue a task with whatever you want jokes about:
 - `dad jokes about Mondays`
 - `roast my over-engineered side project`
 - `a short funny story about a cat who refuses to use the litter box`
-'''
+"""
 
 # The actual craft. Generic one-shot jokes are the groaners; these are the levers that make jokes land.
 CRAFT = (
@@ -182,12 +183,16 @@ def run() -> None:
     # Comedy is a creative service — enforce a warm temperature directly (same 0.7 as v1 now, so the two
     # jokers differ in DESIGN only, not temperature). No per-task classification needed for a single-purpose
     # creative crew.
-    run_crew(CrewSpec(
-        agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README,
-        temperature=0.7,
-        clean_deliverable=_strip_editor_meta,  # enforce: no leaked KEPT/CUT scaffolding in the deliverable
-        self_monitor=True,  # propose an evolution if own reputation shows a WEAK/SPLIT signal (doc 20)
-    ))
+    run_crew(
+        CrewSpec(
+            agent_name=AGENT_NAME,
+            build_domain=build_domain,
+            readme_md=README,
+            temperature=0.7,
+            clean_deliverable=_strip_editor_meta,  # enforce: no leaked KEPT/CUT scaffolding in the deliverable
+            self_monitor=True,  # propose an evolution if own reputation shows a WEAK/SPLIT signal (doc 20)
+        )
+    )
 
 
 if __name__ == "__main__":

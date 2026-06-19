@@ -113,10 +113,22 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     wf = make_workflow_tools(coordinator_name=AGENT_NAME, run_id=tid, task_id=tid, tag="workflow", timeout=1800)
     ask = [t for t in wf if getattr(t, "name", "") == "ask_owner"]
     author_tools, _state = make_author_tools(AGENT_NAME, task_id=tid)
-    edit_tools = [t for t in author_tools if getattr(t, "name", "") in (
-        "read_app_stack", "read_app_source", "read_app_template", "read_lib_api",
-        "publish_app", "verify_render", "verify_anon_render", "verify_interaction", "app_inline_url",
-    )]
+    edit_tools = [
+        t
+        for t in author_tools
+        if getattr(t, "name", "")
+        in (
+            "read_app_stack",
+            "read_app_source",
+            "read_app_template",
+            "read_lib_api",
+            "publish_app",
+            "verify_render",
+            "verify_anon_render",
+            "verify_interaction",
+            "app_inline_url",
+        )
+    ]
 
     designer = Agent(
         role="AIMEAT Web Designer",

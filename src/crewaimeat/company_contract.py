@@ -39,13 +39,24 @@ _PROCESSED: set[str] = set()  # per-run runaway guard (canon rule 5)
 CONTRACT = {
     "id": "company-research",
     "spaces": [
-        {"space": IN_SPACE, "namespace": IN_NS, "mode": "records",
-         "schema": {"type": "object", "required": ["id", "company", "status"],
-                    "properties": {"id": {"type": "string"}, "company": {"type": "string"},
-                                   "business_id": {"type": "string"}, "requested_by": {"type": "string"},
-                                   "result_ref": {"type": "string"}, "error": {"type": "string"},
-                                   "status": {"type": "string",
-                                              "enum": ["requested", "in-progress", "done", "failed"]}}}},
+        {
+            "space": IN_SPACE,
+            "namespace": IN_NS,
+            "mode": "records",
+            "schema": {
+                "type": "object",
+                "required": ["id", "company", "status"],
+                "properties": {
+                    "id": {"type": "string"},
+                    "company": {"type": "string"},
+                    "business_id": {"type": "string"},
+                    "requested_by": {"type": "string"},
+                    "result_ref": {"type": "string"},
+                    "error": {"type": "string"},
+                    "status": {"type": "string", "enum": ["requested", "in-progress", "done", "failed"]},
+                },
+            },
+        },
         {"space": OUT_SPACE, "namespace": OUT_NS, "mode": "document"},
     ],
 }
@@ -59,31 +70,48 @@ def _ytj_lookup(company: str, business_id: str = "") -> dict | None:
     """PRH/YTJ open-data API: registry facts as a dict (best name match), or None."""
     try:
         params = {"businessId": business_id} if business_id else {"name": company, "maxResults": 10}
-        r = requests.get("https://avoindata.prh.fi/opendata-ytj-api/v3/companies",
-                         params=params, timeout=20)
+        r = requests.get("https://avoindata.prh.fi/opendata-ytj-api/v3/companies", params=params, timeout=20)
         companies = (r.json() or {}).get("companies") or []
         if not companies:
             return None
         want = company.lower()
-        best = next((c for c in companies
-                     for n in (c.get("names") or [])
-                     if want in (n.get("name") or "").lower()), companies[0])
+        best = next(
+            (c for c in companies for n in (c.get("names") or []) if want in (n.get("name") or "").lower()),
+            companies[0],
+        )
         names = [n.get("name") for n in (best.get("names") or []) if n.get("name")]
-        line = next((d.get("description") for d in ((best.get("mainBusinessLine") or {}).get("descriptions") or [])
-                     if d.get("languageCode") == "1"), None)
-        form = next((d.get("description") for f in (best.get("companyForms") or [])
-                     for d in (f.get("descriptions") or []) if d.get("languageCode") == "1"), None)
+        line = next(
+            (
+                d.get("description")
+                for d in ((best.get("mainBusinessLine") or {}).get("descriptions") or [])
+                if d.get("languageCode") == "1"
+            ),
+            None,
+        )
+        form = next(
+            (
+                d.get("description")
+                for f in (best.get("companyForms") or [])
+                for d in (f.get("descriptions") or [])
+                if d.get("languageCode") == "1"
+            ),
+            None,
+        )
         addr = ""
-        for a in (best.get("addresses") or []):
+        for a in best.get("addresses") or []:
             city = a.get("postOffices") or []
             city_name = next((p.get("city") for p in city if p.get("languageCode") == "1"), "") if city else ""
             addr = ", ".join(x for x in (a.get("street") or "", a.get("postCode") or "", city_name) if x)
             if addr:
                 break
-        return {"business_id": (best.get("businessId") or {}).get("value"),
-                "registered": (best.get("businessId") or {}).get("registrationDate"),
-                "name": names[0] if names else company, "industry": line, "form": form,
-                "address": addr}
+        return {
+            "business_id": (best.get("businessId") or {}).get("value"),
+            "registered": (best.get("businessId") or {}).get("registrationDate"),
+            "name": names[0] if names else company,
+            "industry": line,
+            "form": form,
+            "address": addr,
+        }
     except Exception as exc:  # noqa: BLE001
         print(f"[{AGENT}] YTJ lookup failed for {company}: {exc!r}", file=sys.stderr)
         return None
@@ -97,9 +125,11 @@ def _xbrl_financials(business_id: str) -> str:
     authoritative source when present and silently absent otherwise; finder-style pages remain
     the fallback. Returns a compact JSON string for the analyst, or ''."""
     import json as _json
+
     try:
-        r = requests.get("https://avoindata.prh.fi/opendata-xbrl-api/v3/financials",
-                         params={"businessId": business_id}, timeout=20)
+        r = requests.get(
+            "https://avoindata.prh.fi/opendata-xbrl-api/v3/financials", params={"businessId": business_id}, timeout=20
+        )
         d = r.json() or {}
         if d.get("totalResults"):
             return _json.dumps(d.get("financials") or [], ensure_ascii=False)[:4000]
@@ -117,6 +147,7 @@ def _finder_vision(company: str) -> str:
 
     from crewaimeat.browser_tool import _describe_image
     from crewaimeat.fetch_pipeline import _searxng_urls
+
     urls = [u for u in _searxng_urls(f"site:finder.fi {company}", "fi", "", n=6) if "finder.fi" in u]
     if not urls:
         return ""
@@ -124,12 +155,12 @@ def _finder_vision(company: str) -> str:
     path = os.path.join(tempfile.gettempdir(), f"finder_{slugify(company)}.png")
     try:
         from playwright.sync_api import sync_playwright
+
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             page = browser.new_page(viewport={"width": 1400, "height": 2400})
             page.goto(url, timeout=30000, wait_until="domcontentloaded")
-            for sel in ("button:has-text('Hyväksy')", "button:has-text('Salli kaikki')",
-                        "button:has-text('OK')"):
+            for sel in ("button:has-text('Hyväksy')", "button:has-text('Salli kaikki')", "button:has-text('OK')"):
                 try:
                     page.locator(sel).first.click(timeout=2000)
                     break
@@ -141,13 +172,17 @@ def _finder_vision(company: str) -> str:
     except Exception as exc:  # noqa: BLE001 — vision leg is best-effort; sources still work
         print(f"[{AGENT}] finder screenshot failed for {company}: {exc!r}", file=sys.stderr)
         return ""
-    desc = _describe_image(path, (
-        "Tämä on finder.fi-yrityssivu. Lue ja listaa TARKASTI pelkkinä riveinä:\n"
-        "- yrityksen nimi, y-tunnus, toimiala, osoite\n"
-        "- 'Liikevaihto'-pylväskaavio (tuhatta euroa): jokainen vuosi ja arvo\n"
-        "- 'Tilikauden tulos' -pylväskaavio (tuhatta euroa): jokainen vuosi ja arvo\n"
-        "- henkilöstömäärä jos näkyy\n"
-        "Jos jokin arvo ei ole luettavissa, sano se suoraan. Älä arvaa lukuja."))
+    desc = _describe_image(
+        path,
+        (
+            "Tämä on finder.fi-yrityssivu. Lue ja listaa TARKASTI pelkkinä riveinä:\n"
+            "- yrityksen nimi, y-tunnus, toimiala, osoite\n"
+            "- 'Liikevaihto'-pylväskaavio (tuhatta euroa): jokainen vuosi ja arvo\n"
+            "- 'Tilikauden tulos' -pylväskaavio (tuhatta euroa): jokainen vuosi ja arvo\n"
+            "- henkilöstömäärä jos näkyy\n"
+            "Jos jokin arvo ei ole luettavissa, sano se suoraan. Älä arvaa lukuja."
+        ),
+    )
     if desc.startswith("(describe failed"):
         return ""
     return f"[{url} — finder-sivun kuvaluenta (vision)]\n{desc}"
@@ -156,11 +191,15 @@ def _finder_vision(company: str) -> str:
 def _financial_sources(company: str) -> list[str]:
     """finder/asiakastieto-style pages for the company via SearXNG + trafilatura (up to 5)."""
     from crewaimeat.fetch_pipeline import _searxng_urls
+
     docs: list[str] = []
     seen: set[str] = set()
-    for q in (f"site:finder.fi {company}", f"{company} liikevaihto finder",
-              f"{company} taloustiedot asiakastieto",
-              f"{company} liikevaihto tulos henkilöstö"):
+    for q in (
+        f"site:finder.fi {company}",
+        f"{company} liikevaihto finder",
+        f"{company} taloustiedot asiakastieto",
+        f"{company} liikevaihto tulos henkilöstö",
+    ):
         for u in _searxng_urls(q, "fi", "", n=4):
             if u in seen or len(docs) >= 5:
                 continue
@@ -184,20 +223,29 @@ def run_company_research(company: str, business_id: str = "") -> tuple[str | Non
         return None, "neither the YTJ registry nor any financial source found this company"
     facts = ""
     if ytj:
-        facts = ("REKISTERIFAKTAT (PRH/YTJ avoin data — nämä ovat varmoja):\n"
-                 + "\n".join(f"- {k}: {v}" for k, v in ytj.items() if v) + "\n\n")
+        facts = (
+            "REKISTERIFAKTAT (PRH/YTJ avoin data — nämä ovat varmoja):\n"
+            + "\n".join(f"- {k}: {v}" for k, v in ytj.items() if v)
+            + "\n\n"
+        )
         xbrl = _xbrl_financials(ytj.get("business_id") or business_id or "")
         if xbrl:
-            facts += ("VIRALLISET DIGITAALISET TILINPÄÄTÖSTIEDOT (PRH XBRL — ensisijainen lähde "
-                      "talousluvuille):\n" + xbrl + "\n\n")
+            facts += (
+                "VIRALLISET DIGITAALISET TILINPÄÄTÖSTIEDOT (PRH XBRL — ensisijainen lähde "
+                "talousluvuille):\n" + xbrl + "\n\n"
+            )
     vision = _finder_vision(company)
     if vision:
         facts += "FINDER-SIVU KUVASTA LUETTUNA (vision-malli; chartit joita tekstihaku ei näe):\n" + vision + "\n\n"
     prompt = (
-        f"Olet yritystutkija. Kohde: {company}.\n\n" + facts +
-        ("LÄHTEET (talousluvut VAIN näistä):\n\n" + "\n\n".join(docs) + "\n\n" if docs else
-         "(Talouslähteitä ei löytynyt — kirjoita profiili rekisterifaktoista ja sano se suoraan.)\n\n") +
-        "Kirjoita suomeksi markdown-yritysprofiili TÄSMÄLLEEN näillä osioilla:\n"
+        f"Olet yritystutkija. Kohde: {company}.\n\n"
+        + facts
+        + (
+            "LÄHTEET (talousluvut VAIN näistä):\n\n" + "\n\n".join(docs) + "\n\n"
+            if docs
+            else "(Talouslähteitä ei löytynyt — kirjoita profiili rekisterifaktoista ja sano se suoraan.)\n\n"
+        )
+        + "Kirjoita suomeksi markdown-yritysprofiili TÄSMÄLLEEN näillä osioilla:\n"
         "## Perustiedot\n(virallinen nimi, y-tunnus, yhtiömuoto, toimiala, kotipaikka/osoite, perustettu — "
         "rekisterifaktoista + lähteistä)\n\n"
         "## Talousluvut\n(markdown-taulukko vuosittain: | vuosi | liikevaihto | tulos | henkilöstö | — VAIN "
@@ -216,7 +264,9 @@ def run_company_research(company: str, business_id: str = "") -> tuple[str | Non
 
 def _advance(oid: str, wid: str, req: dict, **changes) -> None:
     rec = {k: v for k, v in {**req, **changes}.items() if not k.startswith("_")}
-    if _call("aimeat_workspace_write", {"organism_id": oid, "ws": wid, "space": IN_SPACE, "id": rec["id"], "value": rec}):
+    if _call(
+        "aimeat_workspace_write", {"organism_id": oid, "ws": wid, "space": IN_SPACE, "id": rec["id"], "value": rec}
+    ):
         _call("aimeat_workspace_publish", {"organism_id": oid, "ws": wid, "namespace": IN_NS, "id": rec["id"]})
 
 
@@ -254,12 +304,22 @@ def process_company_research(max_items: int = 3, targets: list[tuple[str, str]] 
                 print(f"[{AGENT}] company-research FAILED for {rid}: {err}", file=sys.stderr)
                 continue
             out_id = f"co-{rid}"
-            footer = f"\n\n*Company research: {req.get('company','')} · {today} · PRH/YTJ open data + web sources*"
-            wrote = _call("aimeat_workspace_write",
-                          {"organism_id": oid, "ws": wid, "space": OUT_SPACE, "id": out_id,
-                           "value": {"title": f"Company · {req.get('company','')[:70]}", "markdown": md + footer}})
-            pub = _call("aimeat_workspace_publish",
-                        {"organism_id": oid, "ws": wid, "namespace": OUT_NS, "id": out_id}) if wrote else None
+            footer = f"\n\n*Company research: {req.get('company', '')} · {today} · PRH/YTJ open data + web sources*"
+            wrote = _call(
+                "aimeat_workspace_write",
+                {
+                    "organism_id": oid,
+                    "ws": wid,
+                    "space": OUT_SPACE,
+                    "id": out_id,
+                    "value": {"title": f"Company · {req.get('company', '')[:70]}", "markdown": md + footer},
+                },
+            )
+            pub = (
+                _call("aimeat_workspace_publish", {"organism_id": oid, "ws": wid, "namespace": OUT_NS, "id": out_id})
+                if wrote
+                else None
+            )
             if wrote and pub:
                 _advance(oid, wid, req, status="done", result_ref=out_id)
                 processed += 1

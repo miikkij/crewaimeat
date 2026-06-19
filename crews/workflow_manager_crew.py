@@ -26,7 +26,7 @@ AGENT_NAME = "workflow-manager"
 # Infrastructure crews that are not content producers — hidden from delegation.
 _NOT_DELEGABLE = ["crew-forge"]
 
-README = '''[[FIGLET:slant]["WORKFLOW"]]
+README = """[[FIGLET:slant]["WORKFLOW"]]
 
 # workflow-manager — fan out, gather, synthesize
 
@@ -37,7 +37,7 @@ the pieces to them, wait for their results, and assemble one finished deliverabl
 Queue a goal, for example:
 - `A one-page brief on idea X: rate its feasibility and list 5 ways it could play out`
 - `A short fun bulletin about Tapiola, Espoo next week`
-'''
+"""
 
 
 def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
@@ -45,12 +45,16 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     # tag (Data Access -> Shared tags) to this agent AND every worker it delegates to.
     run_id = (ctx.task.get("id") or "manual").split("-", 1)[0]
     tools = make_workflow_tools(
-        AGENT_NAME, run_id=run_id, task_id=ctx.task.get("id"), tag="workflow", exclude=_NOT_DELEGABLE,
+        AGENT_NAME,
+        run_id=run_id,
+        task_id=ctx.task.get("id"),
+        tag="workflow",
+        exclude=_NOT_DELEGABLE,
         timeout=3600,  # 60 min: the coordinator waits for slow workers (commissioned crews, deep
         #              multi-search research) — its budget must exceed any single worker's runtime.
         directives=ctx.directives,  # so leaked owner-directive markers get stripped from delegated work
-        llm=ctx.llm,         # the grounded judge that rates each worker's deliverable
-        rate_workers=True,   # coordinator -> worker reputation rating (AIMEAT POST /tasks/:id/rate)
+        llm=ctx.llm,  # the grounded judge that rates each worker's deliverable
+        rate_workers=True,  # coordinator -> worker reputation rating (AIMEAT POST /tasks/:id/rate)
     )
     # Scheduler: for RECURRING goals (daily pipelines), set up AIMEAT server-run schedules (the node
     # owns the cron clock; fires offline; owner controls them in Profile -> Scheduler).
@@ -149,10 +153,16 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
 def run() -> None:
     # adapt_to_task: classify each goal (fact/creative/mixed) -> cool+grounded+faithfulness-verified for
     # fact work, warm+free for creative. verify="on" is the fallback when the gate is inactive.
-    run_crew(CrewSpec(
-        agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README,
-        adapt_to_task=True, verify="on", score_to_stats=True,
-    ))
+    run_crew(
+        CrewSpec(
+            agent_name=AGENT_NAME,
+            build_domain=build_domain,
+            readme_md=README,
+            adapt_to_task=True,
+            verify="on",
+            score_to_stats=True,
+        )
+    )
 
 
 if __name__ == "__main__":

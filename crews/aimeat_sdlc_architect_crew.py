@@ -10,17 +10,15 @@ Run: uv run python crews/aimeat_sdlc_architect_crew.py
 
 from __future__ import annotations
 
+from crewai import Agent, Task
+
+from crewaimeat.aimeat_crew import CrewSpec, run_crew
 from crewaimeat.author_tool import make_author_tools
 from crewaimeat.workflow import make_workflow_tools
 
-from crewai import Agent, Task
-
-from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
-from crewaimeat.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is set, else []
-
 AGENT_NAME = "aimeat-sdlc-architect"
 
-README = '''```
+README = """```
  █████╗ ██╗███╗   ███╗███████╗ █████╗ ████████╗
 ██╔══██╗██║████╗ ████║██╔════╝██╔══██╗╚══██╔══╝
 ███████║██║██╔████╔██║█████╗  ███████║   ██║
@@ -42,7 +40,7 @@ README = '''```
 ```
 AIMEAT SDLC Crew Architect — designs focused AIMEAT app/extension builder crews for any requested domain.
 How to task me: "Design a new AIMEAT-SDLC specialist crew for the domain: <your domain description>"
-'''
+"""
 
 
 def build_domain(ctx):
@@ -54,7 +52,12 @@ def build_domain(ctx):
         role="AIMEAT SDLC Crew Architect",
         goal="Design focused AIMEAT app/extension builder crews for any requested domain, using the direct-build toolkit (make_author_tools). Each designed crew must author, install, publish, and VERIFY real AIMEAT apps — never generate placeholder code. Every app starts from read_app_template() for correct auth wiring, uses read_lib_api to discover real APIs/events, and gates completion on verify_render PASS.",
         backstory="You are an expert AIMEAT SDLC architect who specializes in designing builder crews that produce working AIMEAT applications. You know the platform cold: every app STARTS from read_app_template() (it wires auth correctly — loads aimeat-auth.js + aimeat-data.js, mounts the login bar, and runs startApp(session) ONLY after `await AIMEAT.auth.login()`, so there is no boot-order race). Inside boot() you add a loadScript for the cortex + every AIMEAT.<lib> it uses. Server-side logic is an extension (one top-level `export default async function (ctx, input)`). You AUTHOR STRICTLY AGAINST read_lib_api — it covers /v1/libs AND /lib libs and reports each lib's methods AND emitted EVENT names — you never GUESS an API or event name. The build is not done until verify_render returns VERIFY PASS. You adapt the proven Design→Build→Verify structure to whatever domain the user requests, changing roles, goals, and prompts while keeping the make_author_tools wiring and the final verify_render gate.",
-        tools=[*author_tools, *deleg], llm=ctx.llm, max_iter=60, allow_delegation=False, verbose=True)
+        tools=[*author_tools, *deleg],
+        llm=ctx.llm,
+        max_iter=60,
+        allow_delegation=False,
+        verbose=True,
+    )
     design = Task(
         description=(
             f"{ctx.today}\n\n"
@@ -77,7 +80,8 @@ def build_domain(ctx):
             "6. The verification strategy (verify_render + verify_interaction if interactive)"
         ),
         expected_output="A compact design document for the new AIMEAT-SDLC specialist crew, covering agent name, role, goal, backstory, 3-task pipeline, required libraries, cortex/extension needs, and verification strategy.",
-        agent=specialist)
+        agent=specialist,
+    )
     build = Task(
         description=(
             "BUILD. Using the design from the previous task, author the complete crew Python file.\n\n"
@@ -100,7 +104,9 @@ def build_domain(ctx):
             "Write the complete crew file content."
         ),
         expected_output="The complete AIMEAT-SDLC specialist crew Python file content, ready to be saved and executed.",
-        agent=specialist, context=[design])
+        agent=specialist,
+        context=[design],
+    )
     verify = Task(
         description=(
             "VERIFY. Confirm the crew file is structurally correct and complete.\n\n"
@@ -116,7 +122,9 @@ def build_domain(ctx):
             "Output the final verified crew file content."
         ),
         expected_output="A verified, complete AIMEAT-SDLC specialist crew file with all 5 sections, correct build_domain structure, and verify_render gate.",
-        agent=specialist, context=[build])
+        agent=specialist,
+        context=[build],
+    )
     return [specialist], [design, build, verify]
 
 

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from crewai import Agent, Task
 
-from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
+from crewaimeat.aimeat_crew import CrewSpec, run_crew
 from crewaimeat.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is set, else []
 
 AGENT_NAME = "tagline-translator"

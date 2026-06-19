@@ -12,17 +12,17 @@ from __future__ import annotations
 
 from crewai import Agent, Task
 
-from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
+from crewaimeat.aimeat_crew import CrewSpec, run_crew
 from crewaimeat.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is set, else []
 
 AGENT_NAME = "finnish-corporate-researcher"
 
-README = '''[[FIGLET:slant]["Finnish Corporate Researcher"]]
+README = """[[FIGLET:slant]["Finnish Corporate Researcher"]]
 
 Deep-dive public-source research on Finnish companies — extracts data from asiakastieto.fi, kauppalehti.fi/yritykset, finder.fi, ytj.fi, prh.fi, vainu.io, proff.fi, LinkedIn, Glassdoor, Indeed, Duunitori, Crunchbase, company blogs, Finnish media (Kauppalehti, Talouselämä, Tivi, HS, Yle), Reddit/r/Suomi, and Suomi24. Returns structured findings with source URLs for every fact. Handles Y-tunnus-based lookups, financials, management, employee sentiment, funding rounds, and synthesis.
 
 **How to task me:** Provide a company name, Y-tunnus (e.g. 1234567-8), or a research question about a Finnish company. I'll return a structured report with sourced facts.
-'''
+"""
 
 
 def build_domain(ctx):
@@ -134,9 +134,7 @@ def build_domain(ctx):
             "Format as a structured list. Every fact MUST have a source URL on the same line."
         ),
         agent=agent_registry_lookup,
-        expected_output=(
-            "A structured list of company identity and registry fields, each with a source URL."
-        ),
+        expected_output=("A structured list of company identity and registry fields, each with a source URL."),
     )
 
     task_financials = Task(
@@ -157,9 +155,7 @@ def build_domain(ctx):
         ),
         agent=agent_financials,
         context=[task_registry],
-        expected_output=(
-            "A structured list of financial figures and funding events, each with a source URL and date."
-        ),
+        expected_output=("A structured list of financial figures and funding events, each with a source URL and date."),
     )
 
     task_people_sentiment = Task(

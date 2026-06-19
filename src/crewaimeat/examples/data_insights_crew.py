@@ -43,7 +43,8 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     )
 
     analyze = Task(
-        description="Carefully examine the data, metrics, or findings contained in the user's request below. Identify the most important patterns, trends, comparisons, outliers, and relationships. Work only from the information provided; do not fabricate numbers or assume data that is not present. If the data is incomplete or ambiguous, note what is missing or uncertain." + f"\n\nRequest:\n{ctx.prompt}",
+        description="Carefully examine the data, metrics, or findings contained in the user's request below. Identify the most important patterns, trends, comparisons, outliers, and relationships. Work only from the information provided; do not fabricate numbers or assume data that is not present. If the data is incomplete or ambiguous, note what is missing or uncertain."
+        + f"\n\nRequest:\n{ctx.prompt}",
         expected_output="A structured set of analytical observations: the key patterns, trends, notable figures, anomalies, and any data gaps or caveats.",
         agent=analyst,
     )
@@ -53,7 +54,8 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
         agent=strategist,
     )
     summarize = Task(
-        description="Write the final insights summary based on the analysis and conclusions. Structure it as: a short title; an executive summary (2-4 sentences); a 'Key Findings' section; a 'Conclusions' section; and a 'Recommended Actions' section with concrete next steps. Keep it concise and decision-focused. Follow any explicit instructions in the original request below regarding language, format, or audience; otherwise choose what fits best." + f"\n\nRequest:\n{ctx.prompt}",
+        description="Write the final insights summary based on the analysis and conclusions. Structure it as: a short title; an executive summary (2-4 sentences); a 'Key Findings' section; a 'Conclusions' section; and a 'Recommended Actions' section with concrete next steps. Keep it concise and decision-focused. Follow any explicit instructions in the original request below regarding language, format, or audience; otherwise choose what fits best."
+        + f"\n\nRequest:\n{ctx.prompt}",
         expected_output="A structured insights summary with a title, executive summary, key findings, conclusions, and recommended actions.",
         agent=writer,
     )

@@ -25,9 +25,18 @@ from crewaimeat.aimeat_crew import _aimeat_call
 
 # Topics that signal a genuine fit for AIMEAT (agent substrate / shared memory / multi-agent).
 KEYWORDS = [
-    "agent memory", "shared memory agents", "multi-agent", "agent orchestration",
-    "autonomous agents", "agent framework", "CrewAI", "agent backend",
-    "stateful agents", "long-running agents", "MCP agents", "agent infrastructure",
+    "agent memory",
+    "shared memory agents",
+    "multi-agent",
+    "agent orchestration",
+    "autonomous agents",
+    "agent framework",
+    "CrewAI",
+    "agent backend",
+    "stateful agents",
+    "long-running agents",
+    "MCP agents",
+    "agent infrastructure",
 ]
 
 # Down-rank obvious off-topic uses of the word "agent".
@@ -49,8 +58,12 @@ def _hn(query: str, since_ts: int, n: int = 20) -> list[dict]:
     try:
         r = requests.get(
             _HN,
-            params={"query": query, "tags": "(story,comment)",
-                    "numericFilters": f"created_at_i>{since_ts}", "hitsPerPage": n},
+            params={
+                "query": query,
+                "tags": "(story,comment)",
+                "numericFilters": f"created_at_i>{since_ts}",
+                "hitsPerPage": n,
+            },
             timeout=20,
         )
         return (r.json() or {}).get("hits") or []
@@ -97,8 +110,11 @@ def _sync_to_radar(ranked: list[dict], date: str) -> dict:
     if not data or data.get("manifest") is None:
         # Same-owner sub-agents currently can't access the owner's organism workspaces via the connector
         # (list=[], read manifest=null, write=NO_SPACE) even as org members — a known platform gap.
-        print("[some-listener] Social Radar not accessible to this agent yet — skipping workspace sync "
-              "(radar still written to log + memory).", file=sys.stderr)
+        print(
+            "[some-listener] Social Radar not accessible to this agent yet — skipping workspace sync "
+            "(radar still written to log + memory).",
+            file=sys.stderr,
+        )
         return {"added": 0, "skipped": 0, "failed": 0, "no_access": True}
     existing = {o["id"] for o in data.get("objects", {}).get("opportunity", []) if o.get("id")}
     added = skipped = failed = 0
@@ -108,18 +124,28 @@ def _sync_to_radar(ranked: list[dict], date: str) -> dict:
             skipped += 1
             continue
         rec = _opportunity_record(hit, date)
-        wrote = _aimeat_call("some-listener", "aimeat_workspace_write",
-                             {"organism_id": _ORG_ID, "ws": _RADAR_WS, "space": "opportunity",
-                              "id": oid, "value": rec})
-        pub = _aimeat_call("some-listener", "aimeat_workspace_publish",
-                           {"organism_id": _ORG_ID, "ws": _RADAR_WS,
-                            "namespace": "shared.opportunities", "id": oid}) if wrote else None
+        wrote = _aimeat_call(
+            "some-listener",
+            "aimeat_workspace_write",
+            {"organism_id": _ORG_ID, "ws": _RADAR_WS, "space": "opportunity", "id": oid, "value": rec},
+        )
+        pub = (
+            _aimeat_call(
+                "some-listener",
+                "aimeat_workspace_publish",
+                {"organism_id": _ORG_ID, "ws": _RADAR_WS, "namespace": "shared.opportunities", "id": oid},
+            )
+            if wrote
+            else None
+        )
         if wrote and pub:
             added += 1
         else:
             failed += 1
-            print(f"[some-listener] Social Radar sync FAILED for {oid} "
-                  f"(write={bool(wrote)}, publish={bool(pub)})", file=sys.stderr)
+            print(
+                f"[some-listener] Social Radar sync FAILED for {oid} (write={bool(wrote)}, publish={bool(pub)})",
+                file=sys.stderr,
+            )
     return {"added": added, "skipped": skipped, "failed": failed}
 
 
@@ -141,7 +167,7 @@ def scan_hn(hours: int = 48, limit: int = 12) -> dict:
                 continue
             row = seen.get(oid)
             if row:
-                row["score"] += 1                      # bonus for matching multiple keywords
+                row["score"] += 1  # bonus for matching multiple keywords
                 row["matched"].append(kw)
                 continue
             title = h.get("title") or h.get("story_title") or "(comment)"
@@ -199,9 +225,11 @@ def make_listener_tools(agent_name: str) -> list:
         SCANNING ONLY — this never posts, replies, or contacts anyone."""
         res = scan_hn(hours=hours, limit=limit)
         rad = res.get("radar", {})
-        head = (f"Scanned HN (last {hours}h): {res['count']} hits -> {res['log']} + some.radar.latest. "
-                f"Social Radar: +{rad.get('added', 0)} new ({rad.get('skipped', 0)} present, "
-                f"{rad.get('failed', 0)} failed).\n")
+        head = (
+            f"Scanned HN (last {hours}h): {res['count']} hits -> {res['log']} + some.radar.latest. "
+            f"Social Radar: +{rad.get('added', 0)} new ({rad.get('skipped', 0)} present, "
+            f"{rad.get('failed', 0)} failed).\n"
+        )
         return head + json.dumps(res["top"], ensure_ascii=False, indent=2)[:3500]
 
     return [_scan]

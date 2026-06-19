@@ -50,9 +50,11 @@ ALL_CATEGORIES = list(CATEGORY_QUERY.keys())
 def _searxng_urls(query: str, language: str, time_range: str, n: int = 12) -> list[str]:
     base = os.getenv("SEARXNG_URL", "http://localhost:21333").rstrip("/")
     try:
-        r = requests.get(base + "/search",
-                         params={"q": query, "format": "json", "language": language, "time_range": time_range},
-                         timeout=15)
+        r = requests.get(
+            base + "/search",
+            params={"q": query, "format": "json", "language": language, "time_range": time_range},
+            timeout=15,
+        )
         return [it.get("url") for it in (r.json().get("results") or []) if it.get("url")][:n]
     except Exception:  # noqa: BLE001
         return []
@@ -106,10 +108,14 @@ def build_category_raw(agent_name: str, category: str, date: str, edition: str, 
         content = body if body.strip() else (c.get("summary") or "")
         if not content.strip():
             continue
-        raw.append({"title": c.get("title") or content.split("\n", 1)[0][:80],
-                    "url": c["url"], "content": content[:6000]})
-    _aimeat_call(agent_name, "aimeat_memory_write",
-                 {"key": f"news.{date}.{edition}.raw.{category}", "value": raw, "visibility": "owner"})
+        raw.append(
+            {"title": c.get("title") or content.split("\n", 1)[0][:80], "url": c["url"], "content": content[:6000]}
+        )
+    _aimeat_call(
+        agent_name,
+        "aimeat_memory_write",
+        {"key": f"news.{date}.{edition}.raw.{category}", "value": raw, "visibility": "owner"},
+    )
     return len(raw), sum(len(r["content"]) for r in raw)
 
 

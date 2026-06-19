@@ -39,9 +39,11 @@ def _acquire_singleton_lock(path: Path):
     try:
         if os.name == "nt":
             import msvcrt
+
             msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
         else:
             import fcntl
+
             fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
         return fh
     except OSError:
@@ -64,17 +66,24 @@ def run() -> None:
                 doc = ensure_single_serve()  # idempotent: returns live, spawns only if dead, reaps duplicates
                 pid = doc.get("pid")
                 if doc.get("_reaped_duplicates"):
-                    print(f"[serve-watchdog] reaped {doc['_reaped_duplicates']} duplicate serve daemon(s) "
-                          f"— enforcing single instance (kept pid {pid})", flush=True)
+                    print(
+                        f"[serve-watchdog] reaped {doc['_reaped_duplicates']} duplicate serve daemon(s) "
+                        f"— enforcing single instance (kept pid {pid})",
+                        flush=True,
+                    )
                 if pid != last_pid:
                     n = len(doc.get("agents") or [])
                     if last_pid is not None:
-                        print(f"[serve-watchdog] RESTARTED the shared tunnel — it had died "
-                              f"(was pid {last_pid}); now pid {pid}, port {doc.get('port')}, {n} agents",
-                              flush=True)
+                        print(
+                            f"[serve-watchdog] RESTARTED the shared tunnel — it had died "
+                            f"(was pid {last_pid}); now pid {pid}, port {doc.get('port')}, {n} agents",
+                            flush=True,
+                        )
                     else:
-                        print(f"[serve-watchdog] serve daemon live: pid {pid}, port {doc.get('port')}, "
-                              f"{n} agents", flush=True)
+                        print(
+                            f"[serve-watchdog] serve daemon live: pid {pid}, port {doc.get('port')}, {n} agents",
+                            flush=True,
+                        )
                     last_pid = pid
             except Exception as exc:  # noqa: BLE001 — a transient discover/spawn error must not kill the supervisor
                 print(f"[serve-watchdog] ensure_serve failed (will retry): {exc!r}", file=sys.stderr, flush=True)

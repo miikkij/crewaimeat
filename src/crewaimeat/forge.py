@@ -93,8 +93,12 @@ def _rel(path: Path) -> str:
 
 
 def write_crew_file(
-    agent_name: str, build_domain_code: str, extra_imports: str = "", readme_md: str = "",
-    temperature: float | None = None, subdir: str | None = None,
+    agent_name: str,
+    build_domain_code: str,
+    extra_imports: str = "",
+    readme_md: str = "",
+    temperature: float | None = None,
+    subdir: str | None = None,
 ) -> Path:
     """Assemble crews/<name>_crew.py from the scaffold template + generated build_domain.
 
@@ -162,8 +166,18 @@ def register_agent(agent_name: str, owner: str, url: str = "https://aimeat.io") 
     Non-blocking: returns in ~seconds, not after the full poll.
     """
     base = [
-        "npx", "aimeat@latest", "connect", "add",
-        "--agent", agent_name, "--mode", "task-runner", "--url", url, "--owner", owner,
+        "npx",
+        "aimeat@latest",
+        "connect",
+        "add",
+        "--agent",
+        agent_name,
+        "--mode",
+        "task-runner",
+        "--url",
+        url,
+        "--owner",
+        owner,
     ]
     cmd = ["cmd", "/c", *base] if os.name == "nt" else base
     logs = _project_root() / "logs"
@@ -173,13 +187,21 @@ def register_agent(agent_name: str, owner: str, url: str = "https://aimeat.io") 
         outf = open(out_path, "w+b")
         if os.name == "nt":
             proc = subprocess.Popen(
-                cmd, stdout=outf, stderr=outf, stdin=subprocess.DEVNULL,
-                creationflags=0x08000000, close_fds=True,  # CREATE_NO_WINDOW
+                cmd,
+                stdout=outf,
+                stderr=outf,
+                stdin=subprocess.DEVNULL,
+                creationflags=0x08000000,
+                close_fds=True,  # CREATE_NO_WINDOW
             )
         else:
             proc = subprocess.Popen(
-                cmd, stdout=outf, stderr=outf, stdin=subprocess.DEVNULL,
-                start_new_session=True, close_fds=True,
+                cmd,
+                stdout=outf,
+                stderr=outf,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+                close_fds=True,
             )
     except Exception as exc:  # noqa: BLE001
         return False, f"could not start connect add: {exc}"
@@ -201,7 +223,10 @@ def register_agent(agent_name: str, owner: str, url: str = "https://aimeat.io") 
             break
 
     if code and verify_url:
-        return True, f"APPROVE to activate: open {verify_url} and enter code {code} (it registers automatically once approved)."
+        return (
+            True,
+            f"APPROVE to activate: open {verify_url} and enter code {code} (it registers automatically once approved).",
+        )
     if proc.poll() is not None:
         return True, "connect add finished (the agent may already be registered)."
     return True, f"Registration started for '{agent_name}'; approve it in the dashboard (Profile -> Agents)."
@@ -221,7 +246,9 @@ def _is_running_file(fname: str) -> bool:
             )
             proc = subprocess.run(
                 ["powershell", "-NoProfile", "-Command", ps],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
             return bool((proc.stdout or "").strip())
         proc = subprocess.run(["pgrep", "-f", fname], capture_output=True, text=True, timeout=30)
@@ -253,22 +280,39 @@ def launch_crew(rel_path: str) -> tuple[int | None, str]:
         if os.name == "nt":
             script = root / "scripts" / "watchdog.ps1"
             cmd = [
-                "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                "-File", str(script), rel_path,
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(script),
+                rel_path,
             ]
             # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP: runs hidden and outlives the parent.
             # NOT DETACHED_PROCESS — with that flag PowerShell never executes the script and the
             # log stays empty (verified); CREATE_NO_WINDOW runs it and captures its output.
             flags = 0x08000000 | 0x00000200
             proc = subprocess.Popen(
-                cmd, cwd=str(root), env=env, stdout=logf, stderr=logf,
-                stdin=subprocess.DEVNULL, creationflags=flags, close_fds=True,
+                cmd,
+                cwd=str(root),
+                env=env,
+                stdout=logf,
+                stderr=logf,
+                stdin=subprocess.DEVNULL,
+                creationflags=flags,
+                close_fds=True,
             )
         else:
             script = root / "scripts" / "watchdog.sh"
             proc = subprocess.Popen(
-                ["bash", str(script), rel_path], cwd=str(root), env=env, stdout=logf,
-                stderr=logf, stdin=subprocess.DEVNULL, start_new_session=True, close_fds=True,
+                ["bash", str(script), rel_path],
+                cwd=str(root),
+                env=env,
+                stdout=logf,
+                stderr=logf,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+                close_fds=True,
             )
         return proc.pid, _rel(log_path)
     except Exception as exc:  # noqa: BLE001
@@ -355,7 +399,10 @@ def reconcile_fleet() -> str:
 # --------------------------------------------------------------------------- #
 @tool("write_and_validate_crew")
 def write_and_validate_crew(
-    agent_name: str, build_domain_code: str, extra_imports: str = "", readme_md: str = "",
+    agent_name: str,
+    build_domain_code: str,
+    extra_imports: str = "",
+    readme_md: str = "",
     temperature: float | None = None,
 ) -> str:
     """Write crews/<agent_name>_crew.py on the locked AIMEAT scaffold and validate it.
@@ -385,10 +432,7 @@ def write_and_validate_crew(
     rel = _rel(path)
     if ok:
         return f"VALID: wrote {rel}. {detail}"
-    return (
-        f"INVALID ({rel}): {detail}\n"
-        "Fix the build_domain code and call write_and_validate_crew again."
-    )
+    return f"INVALID ({rel}): {detail}\nFix the build_domain code and call write_and_validate_crew again."
 
 
 @tool("register_and_launch_crew")
@@ -464,11 +508,12 @@ def _crew_proc_entries(fname: str) -> list[tuple[int, str]]:
     out: list[tuple[int, str]] = []
     try:
         if os.name == "nt":
-            ps = ("Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and "
-                  "$_.CommandLine -like '*FNAME*' } | "
-                  "ForEach-Object { \"$($_.ProcessId)|$($_.CommandLine)\" }").replace("FNAME", fname)
-            r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
-                               capture_output=True, text=True, timeout=30)
+            ps = (
+                "Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and "
+                "$_.CommandLine -like '*FNAME*' } | "
+                'ForEach-Object { "$($_.ProcessId)|$($_.CommandLine)" }'
+            ).replace("FNAME", fname)
+            r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=30)
             for ln in (r.stdout or "").splitlines():
                 if "|" in ln:
                     pid_s, cl = ln.split("|", 1)

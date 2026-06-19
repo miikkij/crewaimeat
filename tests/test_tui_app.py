@@ -12,19 +12,39 @@ from crewaimeat.tui.fleet_state import AgentRow, FleetSnapshot
 
 def _snap():
     rows = [
-        AgentRow("news-fetcher", "news_fetcher_crew.py", 1, 1, True, True,
-                 "2026-06-15T17:59:00Z", 60.0, "task-runner", "running"),
-        AgentRow("image-maker", "image_maker_crew.py", 1, 1, False, True,
-                 "2026-06-13T22:59:00Z", 154000.0, "task-runner", "stale-heartbeat"),
+        AgentRow(
+            "news-fetcher",
+            "news_fetcher_crew.py",
+            1,
+            1,
+            True,
+            True,
+            "2026-06-15T17:59:00Z",
+            60.0,
+            "task-runner",
+            "running",
+        ),
+        AgentRow(
+            "image-maker",
+            "image_maker_crew.py",
+            1,
+            1,
+            False,
+            True,
+            "2026-06-13T22:59:00Z",
+            154000.0,
+            "task-runner",
+            "stale-heartbeat",
+        ),
     ]
-    return FleetSnapshot(serve_pid=99648, serve_port=52813, n_watchdogs=2, n_connectors=1,
-                         n_locks=1, zombies=[], rows=rows)
+    return FleetSnapshot(
+        serve_pid=99648, serve_port=52813, n_watchdogs=2, n_connectors=1, n_locks=1, zombies=[], rows=rows
+    )
 
 
 def test_app_renders_injected_snapshot():
     async def go():
-        app = FleetApp(auto_node=False, snapshot_fn=lambda ni: _snap(),
-                       node_index_fn=lambda c: {})
+        app = FleetApp(auto_node=False, snapshot_fn=lambda ni: _snap(), node_index_fn=lambda c: {})
         async with app.run_test() as pilot:
             await pilot.pause()
             table = app.query_one("#agents", DataTable)
@@ -45,6 +65,7 @@ def test_app_renders_injected_snapshot():
 
 def test_test_tab_exists_after_overview():
     """The Test tab is present and ordered right after Overview."""
+
     async def go():
         app = FleetApp(auto_node=False, snapshot_fn=lambda ni: _snap(), node_index_fn=lambda c: {})
         async with app.run_test() as pilot:
@@ -62,20 +83,28 @@ def test_live_test_run_shows_result(monkeypatch):
 
     from crewaimeat.tui import test_run
 
-    monkeypatch.setattr(test_run, "run_agent_test",
-                        lambda agent, prompt, **kw: {"ok": True, "task_id": "abc12345-x", "key": "k",
-                                                     "result": "PONG from " + agent, "error": None,
-                                                     "elapsed_s": 3})
+    monkeypatch.setattr(
+        test_run,
+        "run_agent_test",
+        lambda agent, prompt, **kw: {
+            "ok": True,
+            "task_id": "abc12345-x",
+            "key": "k",
+            "result": "PONG from " + agent,
+            "error": None,
+            "elapsed_s": 3,
+        },
+    )
 
     async def go():
         app = FleetApp(auto_node=False, snapshot_fn=lambda ni: _snap(), node_index_fn=lambda c: {})
         async with app.run_test() as pilot:
             await pilot.pause()
-            await pilot.press("t")                       # switch to Test tab + focus input
+            await pilot.press("t")  # switch to Test tab + focus input
             await pilot.pause()
             app.query_one("#test-input", Input).value = "ping"
             await pilot.press("enter")
-            for _ in range(5):                           # let the thread worker post back
+            for _ in range(5):  # let the thread worker post back
                 await pilot.pause()
             out = str(app.query_one("#test-out", Static).render())
             assert "PONG from news-fetcher" in out
@@ -86,15 +115,16 @@ def test_live_test_run_shows_result(monkeypatch):
 
 def test_test_run_guards_non_running_agent():
     """A test against a non-running agent is refused (no runner call)."""
+
     async def go():
         app = FleetApp(auto_node=False, snapshot_fn=lambda ni: _snap(), node_index_fn=lambda c: {})
         async with app.run_test() as pilot:
             await pilot.pause()
-            app.query_one("#agents", DataTable).move_cursor(row=1)   # image-maker = stale-heartbeat
+            app.query_one("#agents", DataTable).move_cursor(row=1)  # image-maker = stale-heartbeat
             await pilot.pause()
             app._start_test("hi")
             await pilot.pause()
-            assert app._test_busy is False               # refused; nothing started
+            assert app._test_busy is False  # refused; nothing started
 
     asyncio.run(go())
 
@@ -104,11 +134,21 @@ def test_model_picker_opens_and_cancels(monkeypatch):
     from crewaimeat.tui import agent_meta
     from crewaimeat.tui.app import ModelPickScreen
 
-    monkeypatch.setattr(agent_meta, "model_catalogue",
-                        lambda: [{"label": "openrouter:foo", "type": "openrouter", "id": "foo",
-                                  "context": 131072, "base_url": None, "api_key_env": None,
-                                  "provider": {"type": "openrouter", "name": "openrouter",
-                                               "models": [{"id": "foo", "context": 131072}]}}])
+    monkeypatch.setattr(
+        agent_meta,
+        "model_catalogue",
+        lambda: [
+            {
+                "label": "openrouter:foo",
+                "type": "openrouter",
+                "id": "foo",
+                "context": 131072,
+                "base_url": None,
+                "api_key_env": None,
+                "provider": {"type": "openrouter", "name": "openrouter", "models": [{"id": "foo", "context": 131072}]},
+            }
+        ],
+    )
     monkeypatch.setattr(agent_meta, "current_override", lambda a: None)
 
     async def go():
@@ -127,11 +167,23 @@ def test_model_picker_opens_and_cancels(monkeypatch):
 
 def test_config_pane_shows_offers_and_contracts():
     """The Config pane surfaces the agent's offer titles and contract schemas."""
+
     async def go():
-        rows = [AgentRow("web-researcher", "web_researcher_crew.py", 1, 1, False, True,
-                         "2026-06-15T17:59:00Z", 60.0, "task-runner", "running")]
-        snap = FleetSnapshot(serve_pid=1, serve_port=2, n_watchdogs=1, n_connectors=1,
-                             n_locks=0, zombies=[], rows=rows)
+        rows = [
+            AgentRow(
+                "web-researcher",
+                "web_researcher_crew.py",
+                1,
+                1,
+                False,
+                True,
+                "2026-06-15T17:59:00Z",
+                60.0,
+                "task-runner",
+                "running",
+            )
+        ]
+        snap = FleetSnapshot(serve_pid=1, serve_port=2, n_watchdogs=1, n_connectors=1, n_locks=0, zombies=[], rows=rows)
         app = FleetApp(auto_node=False, snapshot_fn=lambda ni: snap, node_index_fn=lambda c: {})
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -150,10 +202,10 @@ def test_restart_key_opens_confirm_modal_and_cancels():
         app = FleetApp(auto_node=False, snapshot_fn=lambda ni: _snap(), node_index_fn=lambda c: {})
         async with app.run_test() as pilot:
             await pilot.pause()
-            await pilot.press("r")          # selected row 0 = news-fetcher (has a crew file)
+            await pilot.press("r")  # selected row 0 = news-fetcher (has a crew file)
             await pilot.pause()
             assert isinstance(app.screen, ConfirmScreen)
-            await pilot.press("n")          # cancel
+            await pilot.press("n")  # cancel
             await pilot.pause()
             assert not isinstance(app.screen, ConfirmScreen)
 

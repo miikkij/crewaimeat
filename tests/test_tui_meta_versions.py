@@ -2,30 +2,31 @@
 agent_meta reads the repo's real llm_providers.json + offers (deterministic). versions has all its
 network/subprocess probes monkeypatched."""
 
-from crewaimeat.tui import agent_meta, versions, render
+from crewaimeat.tui import agent_meta, render, versions
 
 
 # ── agent_meta (B) — local, from llm_providers.json + offers ────────────────────
 def test_model_chain_routes_news_fetcher_to_content_xai_first():
     profile, labels = agent_meta.model_chain("news-fetcher")
     assert profile == "content"
-    assert labels and labels[0] == "xai:grok-4.3"          # content desk → grok first
+    assert labels and labels[0] == "xai:grok-4.3"  # content desk → grok first
     assert any(l.startswith("openrouter:") for l in labels)  # then the OpenRouter fallbacks
 
 
 def test_model_chain_coding_profile_is_openrouter_first():
     profile, labels = agent_meta.model_chain("crew-forge")
     assert profile == "coding"
-    assert labels[0].startswith("openrouter:")              # code crews → owl/gpt-oss first, not xai
+    assert labels[0].startswith("openrouter:")  # code crews → owl/gpt-oss first, not xai
 
 
 def test_model_chain_unknown_agent_uses_default_profile():
     profile, labels = agent_meta.model_chain("totally-unknown-agent")
-    assert profile == "content-free" and labels            # default profile, non-empty chain
+    assert profile == "content-free" and labels  # default profile, non-empty chain
 
 
 def test_offer_summary_returns_counts():
     from crewaimeat.offers import CREW_AGENTS
+
     n, wf = agent_meta.offer_summary(CREW_AGENTS[0])
     assert n >= 1 and 0 <= wf <= n
     assert agent_meta.offer_summary("not-an-offering-agent") == (0, 0)
@@ -33,8 +34,8 @@ def test_offer_summary_returns_counts():
 
 def test_read_readme_extracts_and_strips_figlet():
     txt = agent_meta.read_readme("news-writer")
-    assert txt and "Core-news desk" in txt    # the real README body
-    assert "[[FIGLET" not in txt               # banner directive reduced to plain text
+    assert txt and "Core-news desk" in txt  # the real README body
+    assert "[[FIGLET" not in txt  # banner directive reduced to plain text
     assert agent_meta.read_readme("totally-unknown-agent") is None
 
 

@@ -18,12 +18,12 @@ from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 from crewaimeat.editorial_pipeline import make_editorial_tools
 
 AGENT_NAME = "editorial-writer"
-README = '''[[FIGLET:slant]["Editorial"]]
+README = """[[FIGLET:slant]["Editorial"]]
 
 Writes the daily **gonzo S.J. editorial** (savage, provocative, Spider Jerusalem) from the day's articles and
 rebuilds the public front-page index (with source counts). Deterministic: grok writes the prose, the column is
 stored verbatim, the index is built in code.
-'''
+"""
 
 
 def build_domain(ctx: BuildContext):
@@ -31,8 +31,8 @@ def build_domain(ctx: BuildContext):
         role="Editorial Runner",
         goal="Resolve the target date + edition and trigger the deterministic gonzo editorial + index build.",
         backstory="You do not write or rewrite the editorial by hand. You read the request, work out the target "
-                  "date and edition, and call write_editorial_and_index ONCE — the tool writes the savage S.J. "
-                  "column and rebuilds the public index. You then report what it did.",
+        "date and edition, and call write_editorial_and_index ONCE — the tool writes the savage S.J. "
+        "column and rebuilds the public index. You then report what it did.",
         llm=ctx.llm,
         tools=[*make_editorial_tools(AGENT_NAME)],
     )
@@ -72,20 +72,43 @@ def run() -> None:
         date = now.date().isoformat()
         if _aimeat_call(AGENT_NAME, "aimeat_memory_read", {"key": f"news.{date}.evening.editorial"}):
             return
-        arts = _aimeat_call(AGENT_NAME, "aimeat_memory_list",
-                            {"owner_scope": True, "prefix": f"news.{date}.evening.article.",
-                             "limit": 5, "response_format": "concise"}) or {}
+        arts = (
+            _aimeat_call(
+                AGENT_NAME,
+                "aimeat_memory_list",
+                {
+                    "owner_scope": True,
+                    "prefix": f"news.{date}.evening.article.",
+                    "limit": 5,
+                    "response_format": "concise",
+                },
+            )
+            or {}
+        )
         n = len(arts.get("items") or [])
         if n < 3:
-            print(f"[{AGENT_NAME}] self-heal: editorial missing but only {n} articles — "
-                  f"writers' stage incomplete, not fabricating from nothing", flush=True)
+            print(
+                f"[{AGENT_NAME}] self-heal: editorial missing but only {n} articles — "
+                f"writers' stage incomplete, not fabricating from nothing",
+                flush=True,
+            )
             return
-        print(f"[{AGENT_NAME}] self-heal: news.{date}.evening.editorial missing after 18:15 "
-              f"-> running the stage", flush=True)
+        print(
+            f"[{AGENT_NAME}] self-heal: news.{date}.evening.editorial missing after 18:15 -> running the stage",
+            flush=True,
+        )
         print(build_editorial_and_index(AGENT_NAME, date, "evening"), flush=True)
 
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README,
-                      temperature=0.2, idle_hook=_ensure_today, idle_hook_seconds=300))
+    run_crew(
+        CrewSpec(
+            agent_name=AGENT_NAME,
+            build_domain=build_domain,
+            readme_md=README,
+            temperature=0.2,
+            idle_hook=_ensure_today,
+            idle_hook_seconds=300,
+        )
+    )
 
 
 if __name__ == "__main__":

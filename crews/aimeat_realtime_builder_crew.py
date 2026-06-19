@@ -10,17 +10,15 @@ Run: uv run python crews/aimeat_realtime_builder_crew.py
 
 from __future__ import annotations
 
+from crewai import Agent, Task
+
+from crewaimeat.aimeat_crew import CrewSpec, run_crew
 from crewaimeat.author_tool import make_author_tools
 from crewaimeat.workflow import make_workflow_tools
 
-from crewai import Agent, Task
-
-from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
-from crewaimeat.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is set, else []
-
 AGENT_NAME = "aimeat-realtime-builder"
 
-README = '''```
+README = """```
  █████╗ ██╗███╗   ███╗███████╗ █████╗ ████████╗
 ██╔══██╗██║████╗ ████║██╔════╝██╔══██╗╚══██╔══╝
 ███████║██║██╔████╔██║█████╗  ███████║   ██║
@@ -43,7 +41,7 @@ README = '''```
 **aimeat-realtime-builder** — AIMEAT SDLC specialist crew for authoring, installing, publishing, and verifying real-time multiplayer apps using AimeatRealtime (rooms, presence, live broadcast, throttled high-frequency events).
 
 **How to task me:** "Build a real-time multiplayer [app idea] with rooms, presence, and live message broadcast using AimeatRealtime."
-'''
+"""
 
 
 def build_domain(ctx):
@@ -55,146 +53,163 @@ def build_domain(ctx):
         role="AIMEAT Realtime Multiplayer Specialist",
         goal="Author + install + publish + verify a real-time multiplayer AIMEAT app using AimeatRealtime — rooms, presence, live message broadcast, rt.on(...) handlers registered BEFORE rt.connect(), high-frequency event throttling — for the user's idea",
         backstory="Expert AIMEAT real-time engineer. Uses make_author_tools to author production-grade realtime apps. "
-                  "ALWAYS starts the app HTML from read_app_template() (correct auth wiring: loads aimeat-auth.js + "
-                  "aimeat-data.js, mounts the login bar, runs startApp(session) ONLY after await AIMEAT.auth.login() "
-                  "— no boot-order race). Inside boot() adds loadScript('/lib/realtime.js') + every AIMEAT.<lib> the "
-                  "app uses. Registers all rt.on(...) handlers BEFORE calling rt.connect(). Implements high-frequency "
-                  "event throttling (e.g. position updates) via client-side debounce/batch before broadcast. For server-"
-                  "side logic (room validation, presence persistence, rate limiting) authors an extension "
-                  "(export default async function(ctx, input)). Installs cortex via install_cortex, extension via "
-                  "install_extension, publishes via publish_app, and does NOT consider the build done until "
-                  "verify_render returns VERIFY PASS.",
-        tools=[*author_tools, *deleg], llm=ctx.llm, max_iter=60, allow_delegation=False, verbose=True)
+        "ALWAYS starts the app HTML from read_app_template() (correct auth wiring: loads aimeat-auth.js + "
+        "aimeat-data.js, mounts the login bar, runs startApp(session) ONLY after await AIMEAT.auth.login() "
+        "— no boot-order race). Inside boot() adds loadScript('/lib/realtime.js') + every AIMEAT.<lib> the "
+        "app uses. Registers all rt.on(...) handlers BEFORE calling rt.connect(). Implements high-frequency "
+        "event throttling (e.g. position updates) via client-side debounce/batch before broadcast. For server-"
+        "side logic (room validation, presence persistence, rate limiting) authors an extension "
+        "(export default async function(ctx, input)). Installs cortex via install_cortex, extension via "
+        "install_extension, publishes via publish_app, and does NOT consider the build done until "
+        "verify_render returns VERIFY PASS.",
+        tools=[*author_tools, *deleg],
+        llm=ctx.llm,
+        max_iter=60,
+        allow_delegation=False,
+        verbose=True,
+    )
 
     design = Task(
         description=f"{ctx.today}\n\nDESIGN. <<IDEA>>\n{ctx.prompt}\n<</IDEA>>\n"
-                    "FIRST call read_lib_api('realtime') to confirm the REAL AimeatRealtime API, then design to the "
-                    "CANONICAL REALTIME RECIPE below — these 3 things are what make a realtime app actually work; "
-                    "skipping any one of them produces a dead board (presence stuck at 0, messages never cross between "
-                    "users). Do NOT guess or shortcut them.\n"
-                    "  (1) TOKEN — the WS authenticates with a token; an EMPTY token = dead socket. Get one that works "
-                    "for BOTH logged-in AND anonymous visitors: `const s = AIMEAT.auth.getSession(); let rtToken = s && "
-                    "s.jwt; if (!rtToken) { const r = await fetch(location.origin + '/v1/auth/anonymous', "
-                    "{method:'POST'}); rtToken = (await r.json()).data.token; }`. NEVER pass '' to AimeatRealtime.\n"
-                    "  (2) ROOM — connect() needs a REAL room id, never a hardcoded name. For ONE shared board everyone "
-                    "must join the SAME room, so FIND-OR-CREATE it: `const rt = new AimeatRealtime(location.origin, "
-                    "rtToken); const found = await rt.listRooms({app_type:'<slug>'}); const room = (found && found[0]) "
-                    "|| await rt.createRoom({app_type:'<slug>', name:'<name>', is_public:true}); rt.connect(room.id, "
-                    "nick);`.\n"
-                    "  (3) EVENTS — the event that drives PRESENCE is 'joined', NOT 'open'. Register ALL on() handlers "
-                    "BEFORE connect(): on('joined', m => {{ myPeerId = m.peerId; build the online list from m.peers (the "
-                    "current roster) + yourself }}); on('peer-joined', m => add m.peerId/m.nick/m.state); on('peer-left', "
-                    "m => remove m.peerId); on('peer-presence', m => update m.peerId's m.state); on('broadcast', m => "
-                    "render m.payload). 'open' only means the socket opened (NO peer data) — never use it to populate "
-                    "presence. After 'joined', call rt.presence({{nick, ...}}) to announce yourself.\n"
-                    "REUSE EXISTING AIMEAT LIBS — do NOT reimplement what the platform already ships; loadScript the "
-                    "lib and call it. Read the library table in read_app_template/llms.txt for the live catalog. Beyond "
-                    "auth/data/realtime it includes: aimeat-audio ('/v1/libs/aimeat-audio.js' — instruments, synth, "
-                    "soundboard, samples: use for game SOUNDS like fire/hit/miss/win), aimeat-speech (TTS/STT), "
-                    "aimeat-storage (files), aimeat-social (boards), aimeat-wallet (morsels), aimeat-ai (LLM via the "
-                    "user's own key), plus UI cortex bundles aimeat-ui-dialogs/forms/layout/nav/viewers, aimeat-canvas, "
-                    "aimeat-charts. Prefer an existing lib over hand-rolling sounds/UI/realtime.\n"
-                    "CORTEX DECISION (you do NOT always need a custom cortex — pick the lightest that fits):\n"
-                    "  • NO custom cortex — THE DEFAULT, including for SELF-CONTAINED games/tools (even rich ones). The "
-                    "realtime + audio libs already do the heavy lifting; your game rules (board, ships, fire, win) live "
-                    "fine in the app's own <script>. Pure HTML+CSS+JS is a complete, first-class AIMEAT app — this is how "
-                    "the reference deep-six.html does Battleship (~42KB, beautiful, fully working realtime, ZERO cortex). "
-                    "A one-off game/tool/viewer should be pure HTML+libs: no install, no quota slot, no version-sync.\n"
-                    "  • ONE app-domain cortex composing the libs into a clean API (AIMEAT.<app>.{...} driving "
-                    "AimeatRealtime + aimeat-audio + your rules) — choose this ONLY when it genuinely EARNS its keep: "
-                    "the SAME domain API is REUSED across multiple apps, or the app is large/complex enough that "
-                    "splitting the API from the UI clearly aids maintenance. It does NOT earn its keep for a "
-                    "self-contained one-off game (no reuse — it just adds an install, a quota slot, and cortex-app "
-                    "version-sync); prefer NO cortex there.\n"
-                    "  • An EXTENSION — only for SERVER-only work (authoritative move validation to stop cheating, "
-                    "persistence across sessions, rate limiting, secrets). A demo realtime game needs none.\n"
-                    "Whichever you pick, the HTML still loadScripts every lib it uses (realtime.js, aimeat-audio.js, "
-                    "your cortex). Use read_node_api for extension needs, read_cortex_example for the cortex schema. "
-                    "Output a compact design covering: the chosen architecture (no-cortex / app-domain-cortex / "
-                    "+extension) and WHICH existing libs you reuse, the token step, find-or-create-room step, the "
-                    "on() handler map (joined/peer-joined/peer-left/peer-presence/broadcast) and registration-before-"
-                    "connect order, presence model, message-type map, and throttling for high-frequency events.",
+        "FIRST call read_lib_api('realtime') to confirm the REAL AimeatRealtime API, then design to the "
+        "CANONICAL REALTIME RECIPE below — these 3 things are what make a realtime app actually work; "
+        "skipping any one of them produces a dead board (presence stuck at 0, messages never cross between "
+        "users). Do NOT guess or shortcut them.\n"
+        "  (1) TOKEN — the WS authenticates with a token; an EMPTY token = dead socket. Get one that works "
+        "for BOTH logged-in AND anonymous visitors: `const s = AIMEAT.auth.getSession(); let rtToken = s && "
+        "s.jwt; if (!rtToken) { const r = await fetch(location.origin + '/v1/auth/anonymous', "
+        "{method:'POST'}); rtToken = (await r.json()).data.token; }`. NEVER pass '' to AimeatRealtime.\n"
+        "  (2) ROOM — connect() needs a REAL room id, never a hardcoded name. For ONE shared board everyone "
+        "must join the SAME room, so FIND-OR-CREATE it: `const rt = new AimeatRealtime(location.origin, "
+        "rtToken); const found = await rt.listRooms({app_type:'<slug>'}); const room = (found && found[0]) "
+        "|| await rt.createRoom({app_type:'<slug>', name:'<name>', is_public:true}); rt.connect(room.id, "
+        "nick);`.\n"
+        "  (3) EVENTS — the event that drives PRESENCE is 'joined', NOT 'open'. Register ALL on() handlers "
+        "BEFORE connect(): on('joined', m => {{ myPeerId = m.peerId; build the online list from m.peers (the "
+        "current roster) + yourself }}); on('peer-joined', m => add m.peerId/m.nick/m.state); on('peer-left', "
+        "m => remove m.peerId); on('peer-presence', m => update m.peerId's m.state); on('broadcast', m => "
+        "render m.payload). 'open' only means the socket opened (NO peer data) — never use it to populate "
+        "presence. After 'joined', call rt.presence({{nick, ...}}) to announce yourself.\n"
+        "REUSE EXISTING AIMEAT LIBS — do NOT reimplement what the platform already ships; loadScript the "
+        "lib and call it. Read the library table in read_app_template/llms.txt for the live catalog. Beyond "
+        "auth/data/realtime it includes: aimeat-audio ('/v1/libs/aimeat-audio.js' — instruments, synth, "
+        "soundboard, samples: use for game SOUNDS like fire/hit/miss/win), aimeat-speech (TTS/STT), "
+        "aimeat-storage (files), aimeat-social (boards), aimeat-wallet (morsels), aimeat-ai (LLM via the "
+        "user's own key), plus UI cortex bundles aimeat-ui-dialogs/forms/layout/nav/viewers, aimeat-canvas, "
+        "aimeat-charts. Prefer an existing lib over hand-rolling sounds/UI/realtime.\n"
+        "CORTEX DECISION (you do NOT always need a custom cortex — pick the lightest that fits):\n"
+        "  • NO custom cortex — THE DEFAULT, including for SELF-CONTAINED games/tools (even rich ones). The "
+        "realtime + audio libs already do the heavy lifting; your game rules (board, ships, fire, win) live "
+        "fine in the app's own <script>. Pure HTML+CSS+JS is a complete, first-class AIMEAT app — this is how "
+        "the reference deep-six.html does Battleship (~42KB, beautiful, fully working realtime, ZERO cortex). "
+        "A one-off game/tool/viewer should be pure HTML+libs: no install, no quota slot, no version-sync.\n"
+        "  • ONE app-domain cortex composing the libs into a clean API (AIMEAT.<app>.{...} driving "
+        "AimeatRealtime + aimeat-audio + your rules) — choose this ONLY when it genuinely EARNS its keep: "
+        "the SAME domain API is REUSED across multiple apps, or the app is large/complex enough that "
+        "splitting the API from the UI clearly aids maintenance. It does NOT earn its keep for a "
+        "self-contained one-off game (no reuse — it just adds an install, a quota slot, and cortex-app "
+        "version-sync); prefer NO cortex there.\n"
+        "  • An EXTENSION — only for SERVER-only work (authoritative move validation to stop cheating, "
+        "persistence across sessions, rate limiting, secrets). A demo realtime game needs none.\n"
+        "Whichever you pick, the HTML still loadScripts every lib it uses (realtime.js, aimeat-audio.js, "
+        "your cortex). Use read_node_api for extension needs, read_cortex_example for the cortex schema. "
+        "Output a compact design covering: the chosen architecture (no-cortex / app-domain-cortex / "
+        "+extension) and WHICH existing libs you reuse, the token step, find-or-create-room step, the "
+        "on() handler map (joined/peer-joined/peer-left/peer-presence/broadcast) and registration-before-"
+        "connect order, presence model, message-type map, and throttling for high-frequency events.",
         expected_output="A compact design: room model, presence model, message type map, handler registration order, "
-                        "throttling strategy, cortex + extension responsibilities, key map.",
-        agent=specialist)
+        "throttling strategy, cortex + extension responsibilities, key map.",
+        agent=specialist,
+    )
 
     build = Task(
         description="BUILD. Author ONE cortex (+ extension ONLY if server logic — room validation / persistence / "
-                    "rate limiting — is truly needed) + ONE app STARTED from read_app_template() (keep its await-login/"
-                    "startApp boot order). Inside boot() add loadScript('/lib/realtime.js') + every needed AIMEAT.<lib>. "
-                    "Implement the CANONICAL REALTIME RECIPE EXACTLY (all 3 steps — omitting any one yields a dead "
-                    "board that ships looking 'fine'):\n"
-                    "  1) TOKEN: `const s = AIMEAT.auth.getSession(); let rtToken = s && s.jwt; if (!rtToken) { const r "
-                    "= await fetch(location.origin + '/v1/auth/anonymous', {method:'POST'}); rtToken = (await "
-                    "r.json()).data.token; }` — NEVER pass '' to AimeatRealtime (empty token = the socket never "
-                    "authenticates; presence stays 0, nothing crosses). This also lets ANONYMOUS visitors view a "
-                    "public board (they get an anon token).\n"
-                    "  2) FIND-OR-CREATE the shared room, then connect to its real id: `const rt = new "
-                    "AimeatRealtime(location.origin, rtToken); const found = await rt.listRooms({app_type:'<slug>'}); "
-                    "const room = (found && found[0]) || await rt.createRoom({app_type:'<slug>', name:'<name>', "
-                    "is_public:true});` then (after registering handlers) `rt.connect(room.id, nick)`. NEVER connect to "
-                    "a made-up room name string — connect() needs a real id from createRoom/listRooms.\n"
-                    "  3) Register ALL rt.on(...) handlers BEFORE rt.connect(), with the REAL event names + payloads:\n"
-                    "     • 'joined'(m): YOU are in — m.peerId is your id, m.peers is the CURRENT roster. Build the "
-                    "online/presence list from m.peers + yourself. THIS populates presence (NOT 'open').\n"
-                    "     • 'peer-joined'(m): add m.peerId / m.nick / m.state.   • 'peer-left'(m): remove m.peerId.\n"
-                    "     • 'peer-presence'(m): update m.peerId's m.state.   • 'broadcast'(m): incoming message — the "
-                    "sender's object is under m.payload (NOT top level).   • 'open' = socket opened only (no peer "
-                    "data; fine for enabling the input, but it does NOT give you presence).   • 'close'/'error'.\n"
-                    "     Do NOT use 'connected'/'disconnected'/'message' (they don't exist). After 'joined', call "
-                    "rt.presence({nick, ...}) to announce yourself; update peers on 'peer-presence'.\n"
-                    "  SEND with rt.broadcast(obj); the server does NOT echo your own broadcast, so ALSO render your "
-                    "own outgoing message/state locally (optimistic). Throttle high-frequency events (debounce/batch) "
-                    "before broadcasting. install_cortex (install_extension only for server logic). publish_app. Report "
-                    "the live URL.",
+        "rate limiting — is truly needed) + ONE app STARTED from read_app_template() (keep its await-login/"
+        "startApp boot order). Inside boot() add loadScript('/lib/realtime.js') + every needed AIMEAT.<lib>. "
+        "Implement the CANONICAL REALTIME RECIPE EXACTLY (all 3 steps — omitting any one yields a dead "
+        "board that ships looking 'fine'):\n"
+        "  1) TOKEN: `const s = AIMEAT.auth.getSession(); let rtToken = s && s.jwt; if (!rtToken) { const r "
+        "= await fetch(location.origin + '/v1/auth/anonymous', {method:'POST'}); rtToken = (await "
+        "r.json()).data.token; }` — NEVER pass '' to AimeatRealtime (empty token = the socket never "
+        "authenticates; presence stays 0, nothing crosses). This also lets ANONYMOUS visitors view a "
+        "public board (they get an anon token).\n"
+        "  2) FIND-OR-CREATE the shared room, then connect to its real id: `const rt = new "
+        "AimeatRealtime(location.origin, rtToken); const found = await rt.listRooms({app_type:'<slug>'}); "
+        "const room = (found && found[0]) || await rt.createRoom({app_type:'<slug>', name:'<name>', "
+        "is_public:true});` then (after registering handlers) `rt.connect(room.id, nick)`. NEVER connect to "
+        "a made-up room name string — connect() needs a real id from createRoom/listRooms.\n"
+        "  3) Register ALL rt.on(...) handlers BEFORE rt.connect(), with the REAL event names + payloads:\n"
+        "     • 'joined'(m): YOU are in — m.peerId is your id, m.peers is the CURRENT roster. Build the "
+        "online/presence list from m.peers + yourself. THIS populates presence (NOT 'open').\n"
+        "     • 'peer-joined'(m): add m.peerId / m.nick / m.state.   • 'peer-left'(m): remove m.peerId.\n"
+        "     • 'peer-presence'(m): update m.peerId's m.state.   • 'broadcast'(m): incoming message — the "
+        "sender's object is under m.payload (NOT top level).   • 'open' = socket opened only (no peer "
+        "data; fine for enabling the input, but it does NOT give you presence).   • 'close'/'error'.\n"
+        "     Do NOT use 'connected'/'disconnected'/'message' (they don't exist). After 'joined', call "
+        "rt.presence({nick, ...}) to announce yourself; update peers on 'peer-presence'.\n"
+        "  SEND with rt.broadcast(obj); the server does NOT echo your own broadcast, so ALSO render your "
+        "own outgoing message/state locally (optimistic). Throttle high-frequency events (debounce/batch) "
+        "before broadcasting. install_cortex (install_extension only for server logic). publish_app. Report "
+        "the live URL.",
         expected_output="Cortex (+ extension only if needed) installed + app published with the live URL. The app: gets "
-                        "a token (session jwt or POST /v1/auth/anonymous, never empty), FIND-OR-CREATES the shared room "
-                        "and connects to room.id (never a hardcoded name), registers handlers BEFORE connect, and "
-                        "populates presence from the 'joined' event's m.peers; incoming messages read m.payload; own "
-                        "messages rendered optimistically.",
-        agent=specialist, context=[design])
+        "a token (session jwt or POST /v1/auth/anonymous, never empty), FIND-OR-CREATES the shared room "
+        "and connects to room.id (never a hardcoded name), registers handlers BEFORE connect, and "
+        "populates presence from the 'joined' event's m.peers; incoming messages read m.payload; own "
+        "messages rendered optimistically.",
+        agent=specialist,
+        context=[design],
+    )
 
     verify = Task(
         description="VERIFY with BOTH gates — render THEN interaction (render alone CANNOT catch a broken "
-                    "realtime app; it once PASSed a chat where you could not send a message).\n"
-                    "Step 1: verify_render(filename, expect_csv) until VERIFY PASS. If VERIFY FAIL, diagnose "
-                    "(auth boot order, missing loadScript for realtime.js, handler registration order, throttling, "
-                    "extension errors), fix, re-publish, re-run. Up to 3 tries.\n"
-                    "Step 2 (REQUIRED): verify_interaction(filename, steps_json) — DRIVE the real feature and assert it "
-                    "works. CRUCIAL: assert something that only succeeds if the WS actually CONNECTED, so a dead socket "
-                    "(empty token / no room / wrong event) fails the gate instead of false-passing on optimistic local "
-                    "render. The strongest single-client signal is PRESENCE: after entering, the online/presence list "
-                    "must show at least YOURSELF — that text only appears if the 'joined' event fired (i.e. token + room "
-                    "+ connect all worked). Then also send a message and assert it appears. Example: "
-                    "[{\"do\":\"wait_enabled\",\"selector\":\"#msg-input\"},"
-                    "{\"do\":\"expect_text\",\"selector\":\"#presence-list\",\"text\":\"1\"},"
-                    "{\"do\":\"fill\",\"selector\":\"#msg-input\",\"value\":\"hi\"},{\"do\":\"click\",\"selector\":\"#btn-send\"},"
-                    "{\"do\":\"expect_text\",\"selector\":\"#messages\",\"text\":\"hi\"}] (use YOUR real selectors; assert "
-                    "the presence count/your-nick shows). If INTERACTION FAIL, the realtime wiring is wrong — the usual "
-                    "causes are: empty token (pass session jwt or POST /v1/auth/anonymous), connecting to a non-existent "
-                    "room (find-or-create then connect to room.id), or populating presence from 'open' instead of the "
-                    "'joined' event's m.peers. Fix, re-publish, re-run BOTH gates.\n"
-                    "NOTE (gate limitation): a single headless browser proves the socket connects + presence shows self, "
-                    "but it CANNOT prove two users see each other. State in your report that true multi-user cross-talk "
-                    "(peer A's message/presence appearing for peer B) should be confirmed by opening the live URL in two "
-                    "windows — and design so that path works (shared room id, presence from 'joined'/'peer-joined').\n"
-                    "ROLLBACK SAFETY (never leave the live app worse than you found it): at the START of any "
-                    "fix loop, call list_app_versions(filename) and note the current top version_number as your "
-                    "BASELINE. STOP the instant the gates PASS — a passing app is DONE; do NOT keep re-authoring "
-                    "it (re-authoring a WORKING app is how you regress it into a dead socket). If you EXHAUST 3 "
-                    "rounds WITHOUT reaching green, call revert_app(filename, <baseline>) to restore the last-good "
-                    "version, then report the blocker — do NOT leave a broken version live.\n"
-                    "NOT done until verify_render AND verify_interaction BOTH PASS.",
+        "realtime app; it once PASSed a chat where you could not send a message).\n"
+        "Step 1: verify_render(filename, expect_csv) until VERIFY PASS. If VERIFY FAIL, diagnose "
+        "(auth boot order, missing loadScript for realtime.js, handler registration order, throttling, "
+        "extension errors), fix, re-publish, re-run. Up to 3 tries.\n"
+        "Step 2 (REQUIRED): verify_interaction(filename, steps_json) — DRIVE the real feature and assert it "
+        "works. CRUCIAL: assert something that only succeeds if the WS actually CONNECTED, so a dead socket "
+        "(empty token / no room / wrong event) fails the gate instead of false-passing on optimistic local "
+        "render. The strongest single-client signal is PRESENCE: after entering, the online/presence list "
+        "must show at least YOURSELF — that text only appears if the 'joined' event fired (i.e. token + room "
+        "+ connect all worked). Then also send a message and assert it appears. Example: "
+        '[{"do":"wait_enabled","selector":"#msg-input"},'
+        '{"do":"expect_text","selector":"#presence-list","text":"1"},'
+        '{"do":"fill","selector":"#msg-input","value":"hi"},{"do":"click","selector":"#btn-send"},'
+        '{"do":"expect_text","selector":"#messages","text":"hi"}] (use YOUR real selectors; assert '
+        "the presence count/your-nick shows). If INTERACTION FAIL, the realtime wiring is wrong — the usual "
+        "causes are: empty token (pass session jwt or POST /v1/auth/anonymous), connecting to a non-existent "
+        "room (find-or-create then connect to room.id), or populating presence from 'open' instead of the "
+        "'joined' event's m.peers. Fix, re-publish, re-run BOTH gates.\n"
+        "NOTE (gate limitation): a single headless browser proves the socket connects + presence shows self, "
+        "but it CANNOT prove two users see each other. State in your report that true multi-user cross-talk "
+        "(peer A's message/presence appearing for peer B) should be confirmed by opening the live URL in two "
+        "windows — and design so that path works (shared room id, presence from 'joined'/'peer-joined').\n"
+        "ROLLBACK SAFETY (never leave the live app worse than you found it): at the START of any "
+        "fix loop, call list_app_versions(filename) and note the current top version_number as your "
+        "BASELINE. STOP the instant the gates PASS — a passing app is DONE; do NOT keep re-authoring "
+        "it (re-authoring a WORKING app is how you regress it into a dead socket). If you EXHAUST 3 "
+        "rounds WITHOUT reaching green, call revert_app(filename, <baseline>) to restore the last-good "
+        "version, then report the blocker — do NOT leave a broken version live.\n"
+        "NOT done until verify_render AND verify_interaction BOTH PASS.",
         expected_output="verify_render PASS AND verify_interaction PASS + live URL confirmed actually working "
-                        "(message sent and rendered).",
-        agent=specialist, context=[build])
+        "(message sent and rendered).",
+        agent=specialist,
+        context=[build],
+    )
 
     return [specialist], [design, build, verify]
 
 
 def run() -> None:
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README, temperature=0.4,
-                      require_verify_pass=True))  # SYS-1 pilot: don't ship a build whose verify gates FAILED
+    run_crew(
+        CrewSpec(
+            agent_name=AGENT_NAME,
+            build_domain=build_domain,
+            readme_md=README,
+            temperature=0.4,
+            require_verify_pass=True,
+        )
+    )  # SYS-1 pilot: don't ship a build whose verify gates FAILED
 
 
 if __name__ == "__main__":

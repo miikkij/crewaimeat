@@ -26,7 +26,7 @@ from crewaimeat.image_contract import CONTRACT, make_image_tools, process_moodbo
 
 AGENT_NAME = "image-scout"
 
-README = '''[[FIGLET:slant]["Image Scout"]]
+README = """[[FIGLET:slant]["Image Scout"]]
 
 Turns an image **brief** into a curated **moodboard**: searches the open web (SearXNG images),
 looks at every candidate with a **vision model** (subject, style, colors, tags, relevance),
@@ -36,7 +36,7 @@ document and just stores the images. Deterministic loop; **internal reference us
 posts nothing external.**
 
 **How to task me:** "scout" — I run process_moodboards ONCE and fulfil any pending requests.
-'''
+"""
 
 
 def build_domain(ctx: BuildContext):
@@ -46,9 +46,9 @@ def build_domain(ctx: BuildContext):
         role="Image Scout",
         goal="Turn pending moodboard-requests into moodboard documents — searched, vision-curated, sourced.",
         backstory="You fulfil image briefs: search the web for candidate images, analyse each with "
-                  "a vision model, keep the most relevant, store them and write a moodboard document "
-                  "with metadata and source links. You call process_moodboards ONCE and report. "
-                  "Everything is internal reference material; you never post anywhere external.",
+        "a vision model, keep the most relevant, store them and write a moodboard document "
+        "with metadata and source links. You call process_moodboards ONCE and report. "
+        "Everything is internal reference material; you never post anywhere external.",
         llm=ctx.llm,
         tools=[*make_image_tools(AGENT_NAME)],
     )
@@ -75,10 +75,16 @@ def run() -> None:
         if res.get("processed") or res.get("failed"):
             print(f"[{AGENT_NAME}] moodboard poll: {res}")
 
-    run_crew(CrewSpec(
-        agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README,
-        temperature=0.4, idle_hook=_poll, idle_hook_seconds=300,
-    ))
+    run_crew(
+        CrewSpec(
+            agent_name=AGENT_NAME,
+            build_domain=build_domain,
+            readme_md=README,
+            temperature=0.4,
+            idle_hook=_poll,
+            idle_hook_seconds=300,
+        )
+    )
 
 
 if __name__ == "__main__":

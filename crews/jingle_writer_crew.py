@@ -12,21 +12,20 @@ from __future__ import annotations
 
 from crewai import Agent, Task
 
-from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
+from crewaimeat.aimeat_crew import CrewSpec, run_crew
 from crewaimeat.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is set, else []
 
 AGENT_NAME = "jingle-writer"
 
-README = '''[[FIGLET:slant]["Jingle Writer"]]
+README = """[[FIGLET:slant]["Jingle Writer"]]
 
 Writes short, catchy rhyming jingles (4–6 lines) for marketing videos.
 
 **How to task me:** Describe your product, brand, or campaign and I'll craft a memorable, rhyming jingle ready for your video ad.
-'''
+"""
 
 
 def build_domain(ctx):
-    from crewai import Agent, Task
 
     # ── Agents ──────────────────────────────────────────────────────
 

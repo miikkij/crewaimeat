@@ -89,7 +89,7 @@ class ModelPickScreen(ModalScreen[dict | None]):
             opts = [Option(self._t("mp.clear"), id="__clear__")]
             for m in self._catalogue:
                 mark = "● " if (cur_label and m["label"] == cur_label) else "  "
-                opts.append(Option(f"{mark}{m['label']}  [dim]({m['context']//1000}k ctx)[/]", id=m["label"]))
+                opts.append(Option(f"{mark}{m['label']}  [dim]({m['context'] // 1000}k ctx)[/]", id=m["label"]))
             yield OptionList(*opts, id="mp-list")
             yield Static(self._t("mp.hint"))
 
@@ -144,8 +144,15 @@ class FleetApp(App):
     TEST_TIMEOUT_S = 180
     TEST_POLL_S = 5
 
-    def __init__(self, *, caller_agent: str = "news-fetcher", node_index_fn=None,
-                 snapshot_fn=None, auto_node: bool = True, lang: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        caller_agent: str = "news-fetcher",
+        node_index_fn=None,
+        snapshot_fn=None,
+        auto_node: bool = True,
+        lang: str | None = None,
+    ) -> None:
         super().__init__()
         self.caller_agent = caller_agent
         self._node_index_fn = node_index_fn or _default_node_index
@@ -154,8 +161,8 @@ class FleetApp(App):
         self._node_index: dict = {}
         self._snap = None
         self._test_busy = False
-        self._test_result_shown = False   # a finished result is on screen — don't overwrite with guidance
-        self._test_result_agent = None    # …for this agent (cleared when the selection moves)
+        self._test_result_shown = False  # a finished result is on screen — don't overwrite with guidance
+        self._test_result_agent = None  # …for this agent (cleared when the selection moves)
         self.lang = lang or i18n.default_lang()
 
     def _t(self, key: str) -> str:
@@ -182,8 +189,8 @@ class FleetApp(App):
     def on_mount(self) -> None:
         self.query_one("#agents", DataTable).add_columns(*render.columns(self.lang))
         if self._auto_node:
-            self.refresh_node()                       # initial node fetch (worker)
-            self.refresh_versions()                   # version check (worker; cached, infrequent)
+            self.refresh_node()  # initial node fetch (worker)
+            self.refresh_versions()  # version check (worker; cached, infrequent)
             self.set_interval(2.0, self.refresh_local)
             self.set_interval(13.0, self.refresh_node)
         else:
@@ -209,8 +216,7 @@ class FleetApp(App):
     @work(thread=True, exclusive=True, group="versions")
     def refresh_versions(self) -> None:
         vr = versions.version_report()
-        self.call_from_thread(
-            lambda: self.query_one("#versions", Static).update(render.versions_line(vr, self.lang)))
+        self.call_from_thread(lambda: self.query_one("#versions", Static).update(render.versions_line(vr, self.lang)))
 
     # ── language ──────────────────────────────────────────────────────────────
     def action_toggle_lang(self) -> None:
@@ -219,8 +225,12 @@ class FleetApp(App):
         table.clear(columns=True)
         table.add_columns(*render.columns(self.lang))
         tc = self.query_one("#detail", TabbedContent)
-        for pid, key in (("tab-overview", "tab.overview"), ("tab-test", "tab.test"),
-                         ("tab-config", "tab.config"), ("tab-logs", "tab.logs")):
+        for pid, key in (
+            ("tab-overview", "tab.overview"),
+            ("tab-test", "tab.test"),
+            ("tab-config", "tab.config"),
+            ("tab-logs", "tab.logs"),
+        ):
             try:
                 tc.get_tab(pid).label = self._t(key)
             except Exception:  # noqa: BLE001 — relabel is cosmetic; never crash the toggle
@@ -252,6 +262,7 @@ class FleetApp(App):
             if yes:
                 self.notify(f"{label}…")
                 self._do_action(label, fn)
+
         self.push_screen(ConfirmScreen(question, self._t("cf.yes_no")), _cb)
 
     def _crew_action(self, label: str, q_key: str, fn) -> None:
@@ -332,11 +343,11 @@ class FleetApp(App):
         try:
             from crewaimeat import llm
             from crewaimeat.forge import recycle_crew
+
             if model is None:
                 llm.clear_override(agent)
             else:
-                llm.save_override(agent, {"kind": "model", "label": model["label"],
-                                          "provider": model["provider"]})
+                llm.save_override(agent, {"kind": "model", "label": model["label"], "provider": model["provider"]})
             msg = recycle_crew(agent)
         except Exception as exc:  # noqa: BLE001 — surface, never crash
             msg = f"model change failed: {exc!r}"
@@ -372,11 +383,11 @@ class FleetApp(App):
         head = [f"▶ {agent}: {prompt}", ""]
 
         def _on_update(msg: str) -> None:
-            self.call_from_thread(
-                lambda: self.query_one("#test-out", Static).update("\n".join(head + [msg])))
+            self.call_from_thread(lambda: self.query_one("#test-out", Static).update("\n".join(head + [msg])))
 
-        res = test_run.run_agent_test(agent, prompt, on_update=_on_update,
-                                      timeout_s=self.TEST_TIMEOUT_S, poll_s=self.TEST_POLL_S)
+        res = test_run.run_agent_test(
+            agent, prompt, on_update=_on_update, timeout_s=self.TEST_TIMEOUT_S, poll_s=self.TEST_POLL_S
+        )
         self.call_from_thread(self._test_done, agent, res)
 
     def _test_done(self, agent: str, res: dict) -> None:
@@ -385,8 +396,7 @@ class FleetApp(App):
         self._test_result_agent = agent
         out = self.query_one("#test-out", Static)
         if res.get("ok"):
-            head = self._t("test.done").format(agent=agent, secs=res.get("elapsed_s"),
-                                               tid=res.get("task_id"))
+            head = self._t("test.done").format(agent=agent, secs=res.get("elapsed_s"), tid=res.get("task_id"))
             out.update(f"{head}\n\n{res.get('result') or ''}")
             self.notify(head, timeout=8)
         else:
@@ -451,9 +461,23 @@ class FleetApp(App):
         except Exception:  # noqa: BLE001
             pass
         ov.update("\n".join(render.overview_lines(row, readme, self.lang)))
-        cfg.update("\n".join(render.meta_lines(
-            profile, chain, n_off, n_wf, self.lang, override=override, offers=offers,
-            contracts=contracts, tags=tags, capabilities=caps, workflows=workflows)))
+        cfg.update(
+            "\n".join(
+                render.meta_lines(
+                    profile,
+                    chain,
+                    n_off,
+                    n_wf,
+                    self.lang,
+                    override=override,
+                    offers=offers,
+                    contracts=contracts,
+                    tags=tags,
+                    capabilities=caps,
+                    workflows=workflows,
+                )
+            )
+        )
         logs.update("\n".join(self._log_tail(row.agent, n=30)))
         # Test pane: per-agent "how to task me" guidance — but never clobber a running test or a
         # finished result that still belongs to the highlighted agent.

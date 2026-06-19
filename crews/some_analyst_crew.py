@@ -23,7 +23,7 @@ from crewaimeat.some_analyst import make_analyst_tools
 
 AGENT_NAME = "some-analyst"
 
-README = '''[[FIGLET:slant]["Some Analyst"]]
+README = """[[FIGLET:slant]["Some Analyst"]]
 
 Drafts **value-first reply suggestions** for Social Radar opportunities. Reads the `opportunity` records
 (some-listener + Grok scout wrote them) and writes a `reply-draft` (status=draft) for each fresh, worth-it
@@ -31,7 +31,7 @@ one — following the playbook (value first, disclose builder, mention AIMEAT on
 astroturf). **A HUMAN reviews, approves, and posts — this crew never posts or contacts anyone.**
 
 **How to task me:** "draft" — I run draft_opportunities ONCE and report how many reply-drafts I wrote.
-'''
+"""
 
 
 def build_domain(ctx: BuildContext):
@@ -39,9 +39,9 @@ def build_domain(ctx: BuildContext):
         role="Engagement Drafter",
         goal="Draft genuine, value-first reply suggestions for fresh Social Radar opportunities — drafts only.",
         backstory="You read the fresh opportunities in the Social Radar workspace and draft a helpful reply "
-                  "for each worth-it one, following the playbook. You call draft_opportunities ONCE and "
-                  "report. You never post, reply, vote, or contact anyone — a human reviews your drafts, "
-                  "approves, and posts. You never fabricate.",
+        "for each worth-it one, following the playbook. You call draft_opportunities ONCE and "
+        "report. You never post, reply, vote, or contact anyone — a human reviews your drafts, "
+        "approves, and posts. You never fabricate.",
         llm=ctx.llm,
         tools=[*make_analyst_tools(AGENT_NAME)],
     )

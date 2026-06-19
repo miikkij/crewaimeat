@@ -18,12 +18,12 @@ from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 from crewaimeat.write_pipeline import make_write_tools
 
 AGENT_NAME = "news-writer-b"
-README = '''[[FIGLET:slant]["News Writer B"]]
+README = """[[FIGLET:slant]["News Writer B"]]
 
 Tech/lifestyle/feature desk (tekoäly, pelit, pelinkehitys, startup, huhut, yliluonnolliset, ruoka, luonto,
 mieli, filosofia). Full Finnish article per category from the scraped raw — deterministic loop, grok prose,
 named personas. Runs in parallel with news-writer.
-'''
+"""
 
 
 def build_domain(ctx: BuildContext):
@@ -31,8 +31,8 @@ def build_domain(ctx: BuildContext):
         role="Desk-B Write Runner",
         goal="Resolve the target date + edition from the request and trigger the deterministic desk-B write.",
         backstory="You do not write articles by hand or choose which to write. You read the request, work out "
-                  "the target date and edition, and call write_edition_articles ONCE — the tool writes a full "
-                  "article for every desk-B category that has raw. You then report what it wrote.",
+        "the target date and edition, and call write_edition_articles ONCE — the tool writes a full "
+        "article for every desk-B category that has raw. You then report what it wrote.",
         llm=ctx.llm,
         tools=[*make_write_tools(AGENT_NAME, "B")],
     )

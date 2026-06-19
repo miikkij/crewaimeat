@@ -47,18 +47,30 @@ HELP = (
 # Published to memory key agents.crew-forge.commands (owner) at startup so the Messages UI shows
 # this command palette. Uses the {name, description, category} shape AIMEAT expects.
 COMMANDS = [
-    {"name": "/build", "description": "Design, register, and launch a new AIMEAT agent from a description", "category": "fleet"},
+    {
+        "name": "/build",
+        "description": "Design, register, and launch a new AIMEAT agent from a description",
+        "category": "fleet",
+    },
     {"name": "/restart", "description": "Bring a stopped crew back online: /restart <agent>", "category": "fleet"},
-    {"name": "/reauth", "description": "Re-run authorization so you can approve an agent again: /reauth <agent>", "category": "fleet"},
+    {
+        "name": "/reauth",
+        "description": "Re-run authorization so you can approve an agent again: /reauth <agent>",
+        "category": "fleet",
+    },
     {"name": "/list", "description": "Show your crews and which are running", "category": "fleet"},
     {"name": "/status", "description": "Alias of /list: crews and their running state", "category": "fleet"},
-    {"name": "/startall", "description": "Launch any stopped crews; skip running ones (also after a reboot)", "category": "fleet"},
+    {
+        "name": "/startall",
+        "description": "Launch any stopped crews; skip running ones (also after a reboot)",
+        "category": "fleet",
+    },
     {"name": "/help", "description": "List crew-forge's slash commands", "category": "meta"},
 ]
 
 # Published to the README tab (agents.crew-forge.readme). The [[LLM][...]] directive is
 # expanded once by an LLM at publish time (re-run only when this text changes).
-README = '''[[FIGLET:slant]["CREW FORGE"]]
+README = """[[FIGLET:slant]["CREW FORGE"]]
 
 # crew-forge — the agent that makes agents
 
@@ -72,7 +84,7 @@ Send me a **task** with one of these commands:
 
 Plain text with no leading `/` is treated as a `/build` request.
 Example: `/build an agent that drafts release notes from a changelog`
-'''
+"""
 
 _BUILD_CMDS = {"build", "new", "make", "create"}
 _RESTART_CMDS = {"restart", "relaunch", "reboot", "start"}
@@ -87,7 +99,10 @@ COMMAND_SERVICES = [
     {"name": "restart-agent", "description": "/restart <agent> — bring a stopped crew back online"},
     {"name": "reauth-agent", "description": "/reauth <agent> — re-run authorization so the owner can approve it again"},
     {"name": "list-agents", "description": "/list (or /status) — show the crews and which are running"},
-    {"name": "start-all-agents", "description": "/startall — launch any stopped crews (skip running ones; good after a reboot)"},
+    {
+        "name": "start-all-agents",
+        "description": "/startall — launch any stopped crews (skip running ones; good after a reboot)",
+    },
     {"name": "help", "description": "/help — show crew-forge's command list"},
 ]
 
@@ -147,9 +162,7 @@ def _command_domain(ctx: BuildContext, cmd: str, arg: str) -> tuple[list[Agent],
         instr = f"There is no '/{cmd}' command. Report exactly this text as the final answer:\n{HELP}"
 
     task = Task(
-        description=(
-            "You operate a fleet of AIMEAT crews. Do exactly this, one tool call at a time:\n" + instr
-        ),
+        description=("You operate a fleet of AIMEAT crews. Do exactly this, one tool call at a time:\n" + instr),
         expected_output="A short report of the action taken, or the requested information.",
         agent=operator,
     )

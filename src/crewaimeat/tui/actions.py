@@ -19,33 +19,39 @@ import subprocess
 # ── single crew ───────────────────────────────────────────────────────────────
 def start_crew(agent: str) -> str:
     from crewaimeat.forge import start_crew as _start  # plain fn (not the @tool wrapper)
+
     return _start(agent)
 
 
 def stop_crew(agent: str) -> str:
     from crewaimeat.forge import stop_crew as _stop
+
     return _stop(agent)
 
 
 def restart_crew(agent: str) -> str:
     from crewaimeat.forge import recycle_crew  # true restart: stop → relaunch
+
     return recycle_crew(agent)
 
 
 def reauth_crew(agent: str) -> str:
     from crewaimeat.forge import reauth as _reauth  # plain fn (not the @tool wrapper)
+
     return _reauth(agent)
 
 
 # ── whole fleet ─────────────────────────────────────────────────────────────────
 def reconcile_fleet() -> str:
     from crewaimeat.forge import reconcile_fleet as _reconcile
+
     return _reconcile()
 
 
 def start_fleet() -> str:
     """Bring the fleet up: ensure exactly one serve daemon, then launch every approved crew."""
     from crewaimeat.serve_guard import ensure_single_serve
+
     doc = ensure_single_serve()
     recon = reconcile_fleet()
     return f"serve daemon pid {doc.get('pid')} port {doc.get('port')}. {recon}"
@@ -56,10 +62,15 @@ def stop_fleet() -> str:
     serve-watchdog → connectors → crews). Elsewhere: best-effort pkill of watchdog/crews/serve."""
     if os.name == "nt":
         from crewaimeat.forge import _project_root
+
         script = _project_root() / "scripts" / "terminate_fleet.ps1"
         try:
-            r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                                "-File", str(script)], capture_output=True, text=True, timeout=120)
+            r = subprocess.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
             tail = (r.stdout or "").strip().splitlines()[-1:] or [""]
             return f"terminate_fleet.ps1 ran. {tail[0]}"
         except Exception as exc:  # noqa: BLE001
@@ -81,8 +92,9 @@ def restart_fleet() -> str:
 def reap_serve_daemons() -> str:
     """Enforce exactly one serve daemon (lock + dedup). Returns what it found/reaped."""
     from crewaimeat.serve_guard import ensure_single_serve
+
     doc = ensure_single_serve()
     reaped = doc.get("_reaped_duplicates", 0)
-    return (f"serve daemon: pid {doc.get('pid')} port {doc.get('port')}, "
-            f"{len(doc.get('agents') or [])} agents"
-            + (f" — reaped {reaped} duplicate(s)" if reaped else " — already single"))
+    return f"serve daemon: pid {doc.get('pid')} port {doc.get('port')}, {len(doc.get('agents') or [])} agents" + (
+        f" — reaped {reaped} duplicate(s)" if reaped else " — already single"
+    )

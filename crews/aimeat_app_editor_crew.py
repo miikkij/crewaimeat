@@ -10,19 +10,18 @@ Run: uv run python crews/aimeat_app_editor_crew.py
 
 from __future__ import annotations
 
-from crewaimeat.author_tool import make_author_tools
-
 from crewai import Agent, Task
 
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
+from crewaimeat.author_tool import make_author_tools
 
 AGENT_NAME = "aimeat-app-editor"
 
-README = '''[[FIGLET:slant]["aimeat app editor"]]
+README = """[[FIGLET:slant]["aimeat app editor"]]
 
 Edit any existing AIMEAT app safely — in place, surgically, verified.
 How to task me: Give me the app's inline URL + the change you want. I investigate the stack, modify only what's needed, re-install/publish, and verify until the applicable gates PASS.
-'''
+"""
 
 
 def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
@@ -55,7 +54,7 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
         llm=ctx.llm,
         max_iter=60,  # investigate + edit + up to 3 verify-fix rounds (re-author/re-install/re-publish/re-verify)
         allow_delegation=False,
-        verbose=True
+        verbose=True,
     )
 
     investigate = Task(
@@ -103,7 +102,7 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "(app, cortex(es), extension(es), memory hints), (3) exact change identified with target artifact(s) "
             "specified, (4) current source of to-be-modified artifacts read and summarized."
         ),
-        agent=specialist
+        agent=specialist,
     )
 
     edit = Task(
@@ -144,7 +143,7 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "(3) live app URL."
         ),
         agent=specialist,
-        context=[investigate]
+        context=[investigate],
     )
 
     verify = Task(
@@ -190,14 +189,16 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "+ diagnosis."
         ),
         agent=specialist,
-        context=[edit]
+        context=[edit],
     )
 
     return [specialist], [investigate, edit, verify]
 
 
 def run() -> None:
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README, temperature=0.4, poll_seconds=30))
+    run_crew(
+        CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README, temperature=0.4, poll_seconds=30)
+    )
 
 
 if __name__ == "__main__":

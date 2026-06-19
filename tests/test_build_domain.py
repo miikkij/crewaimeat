@@ -11,7 +11,6 @@ from __future__ import annotations
 import importlib
 
 import pytest
-
 from crew_fixtures import CREW_MODULES, SENTINEL, make_ctx
 
 

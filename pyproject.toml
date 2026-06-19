@@ -54,6 +54,13 @@ ignore = [
     "E501",    # line length is enforced by the formatter, not the linter (avoids churn on long comments)
     "B008",    # CrewAI/Typer patterns call functions in argument defaults by design
     "SIM105",  # `contextlib.suppress` over try/except-pass — the explicit form reads clearer here
+    # House idioms kept after the initial Ruff adoption — tighten later if desired:
+    "E741",    # short names (l/I/O) appear in a few tight comprehensions/loops
+    "SIM115",  # `open(p).read()` one-liners are the established pattern for tiny config reads
+    "C408",    # `dict(...)` calls are used deliberately for kwargs-style construction
+    "W291",    # trailing whitespace inside multi-line string literals (intentional spacing)
+    "B905",    # `zip()` without strict= — the lengths are known-equal at the call sites
+    "SIM118",  # `key in dict.keys()` reads clearer in the one spot it occurs
 ]
 
 [tool.ruff.lint.per-file-ignores]

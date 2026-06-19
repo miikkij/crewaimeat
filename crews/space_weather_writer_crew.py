@@ -23,13 +23,13 @@ from crewaimeat.space_weather_pipeline import make_space_weather_tools
 
 AGENT_NAME = "space-weather-writer"
 
-README = '''[[FIGLET:slant]["Space Weather"]]
+README = """[[FIGLET:slant]["Space Weather"]]
 
 Reads NOAA SWPC + spaceweather.com and writes one Finnish "Avaruussää tänään" article (revontulet,
 auringon aktiivisuus) into the newspaper — deterministic fetch+write loop, grok prose, in Tähti Sointu's voice.
 
 **How to task me:** "Kirjoita tämän illan avaruussää-artikkeli editioon <morning/evening>."
-'''
+"""
 
 
 def build_domain(ctx: BuildContext):
@@ -37,8 +37,8 @@ def build_domain(ctx: BuildContext):
         role="Space-Weather Write Runner",
         goal="Resolve the target date + edition from the request and trigger the deterministic avaruussää write.",
         backstory="You do not write the article by hand. You read the request, work out the target date and "
-                  "edition, and call write_space_weather ONCE — the tool fetches NOAA/spaceweather.com and grok "
-                  "writes one Finnish 'Avaruussää tänään' article in Tähti Sointu's voice. You then report the key.",
+        "edition, and call write_space_weather ONCE — the tool fetches NOAA/spaceweather.com and grok "
+        "writes one Finnish 'Avaruussää tänään' article in Tähti Sointu's voice. You then report the key.",
         llm=ctx.llm,
         tools=[*make_space_weather_tools(AGENT_NAME)],
     )

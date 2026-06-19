@@ -52,7 +52,9 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     )
 
     research = Task(
-        description=f"{ctx.today}\n\n" + "Research the market and/or named competitors described in the request below. Use web search to gather current facts: who the major players are, their products and services, pricing, positioning, recent news (launches, funding, partnerships, leadership changes), approximate market share or scale, and observable customer sentiment. If the request names specific competitors, focus on them; if it names only a market, identify and profile the leading players. Collect concrete facts with their sources and dates." + f"\n\nRequest:\n{ctx.prompt}",
+        description=f"{ctx.today}\n\n"
+        + "Research the market and/or named competitors described in the request below. Use web search to gather current facts: who the major players are, their products and services, pricing, positioning, recent news (launches, funding, partnerships, leadership changes), approximate market share or scale, and observable customer sentiment. If the request names specific competitors, focus on them; if it names only a market, identify and profile the leading players. Collect concrete facts with their sources and dates."
+        + f"\n\nRequest:\n{ctx.prompt}",
         expected_output="A structured set of findings organized per competitor and for the overall market, each fact attributed to a source with its date where available.",
         agent=market_researcher,
     )
@@ -67,12 +69,19 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
         agent=strategy_advisor,
     )
     write_brief = Task(
-        description=f"{ctx.today}\n\n" + "Write the final competitive intelligence brief based on the research, competitor analysis, and opportunities. Use a clear structure: title, executive summary, market landscape overview, a competitor comparison (use a table where it helps), strengths and weaknesses by player, and prioritized opportunities with recommendations. Keep it concise and decision-ready. If the result mentions a date, use the current time given above. Follow any explicit instructions in the original request below (e.g. requested language, format, audience, named competitors); otherwise choose what fits best." + f"\n\nRequest:\n{ctx.prompt}",
+        description=f"{ctx.today}\n\n"
+        + "Write the final competitive intelligence brief based on the research, competitor analysis, and opportunities. Use a clear structure: title, executive summary, market landscape overview, a competitor comparison (use a table where it helps), strengths and weaknesses by player, and prioritized opportunities with recommendations. Keep it concise and decision-ready. If the result mentions a date, use the current time given above. Follow any explicit instructions in the original request below (e.g. requested language, format, audience, named competitors); otherwise choose what fits best."
+        + f"\n\nRequest:\n{ctx.prompt}",
         expected_output="A complete, well-structured competitive intelligence brief covering landscape, strengths/weaknesses, and prioritized opportunities.",
         agent=brief_writer,
     )
 
-    return [market_researcher, competitor_analyst, strategy_advisor, brief_writer], [research, analyze, opportunities, write_brief]
+    return [market_researcher, competitor_analyst, strategy_advisor, brief_writer], [
+        research,
+        analyze,
+        opportunities,
+        write_brief,
+    ]
 
 
 def run() -> None:

@@ -50,9 +50,11 @@ def _providers_file() -> str | None:
 # The override is self-contained (the model entry carries its own provider/base_url/api_key_env/
 # context) so resolving it needs no cross-reference to llm_providers.json.
 
+
 def _overrides_file() -> str:
     """Path of the per-agent override store (<AIMEAT_HOME>/llm_overrides.json)."""
     from crewaimeat._home import aimeat_home
+
     return str(aimeat_home() / "llm_overrides.json")
 
 
@@ -140,9 +142,18 @@ def available_models(cfg: dict | None = None) -> list[dict]:
                     single["base_url"] = base_url
                 if keyenv:
                     single["api_key_env"] = keyenv
-                out.append({"label": f"{name}:{mid}", "type": ptype, "name": name, "id": mid,
-                            "context": int(ctx), "base_url": base_url, "api_key_env": keyenv,
-                            "provider": single})
+                out.append(
+                    {
+                        "label": f"{name}:{mid}",
+                        "type": ptype,
+                        "name": name,
+                        "id": mid,
+                        "context": int(ctx),
+                        "base_url": base_url,
+                        "api_key_env": keyenv,
+                        "provider": single,
+                    }
+                )
     return out
 
 
@@ -211,11 +222,16 @@ def _flatten_endpoints(providers: list, for_tool_use: bool) -> list[dict]:
             ap: dict = {}
             if for_tool_use and ptype != "ollama":
                 ap["parallel_tool_calls"] = False  # AIMEAT task writes race if batched in one turn
-            eps.append({
-                "label": f"{prov.get('name', ptype)}:{mid}",
-                "model": lm, "base_url": base_url, "api_key": api_key,
-                "context": int(ctx), "additional_params": ap,
-            })
+            eps.append(
+                {
+                    "label": f"{prov.get('name', ptype)}:{mid}",
+                    "model": lm,
+                    "base_url": base_url,
+                    "api_key": api_key,
+                    "context": int(ctx),
+                    "additional_params": ap,
+                }
+            )
     return eps
 
 
@@ -261,8 +277,11 @@ class MultiProviderLLM(BaseLLM):
             except Exception as e:  # fall through to the next endpoint
                 last = e
                 more = i + 1 < len(self._llms)
-                print(f"[llm] endpoint '{label}' failed ({type(e).__name__}); "
-                      f"{'falling back to next' if more else 'no more endpoints'}", file=sys.stderr)
+                print(
+                    f"[llm] endpoint '{label}' failed ({type(e).__name__}); "
+                    f"{'falling back to next' if more else 'no more endpoints'}",
+                    file=sys.stderr,
+                )
         assert last is not None
         raise last
 
@@ -282,8 +301,7 @@ class MultiProviderLLM(BaseLLM):
             return True
 
 
-def get_llm(for_tool_use: bool = True, temperature: float | None = None,
-            agent_name: str | None = None) -> BaseLLM:
+def get_llm(for_tool_use: bool = True, temperature: float | None = None, agent_name: str | None = None) -> BaseLLM:
     """Build an LLM instance.
 
     for_tool_use=True (default) adds parallel_tool_calls=False for the tool-calling crews. Pass False for a

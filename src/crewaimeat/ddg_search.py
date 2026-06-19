@@ -13,9 +13,6 @@ Selection is automatic via ``crewaimeat.crew._web_tools()``; you rarely instanti
 
 from __future__ import annotations
 
-import os
-from typing import Type
-
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 
@@ -46,7 +43,7 @@ class DdgSearchTool(BaseTool):
         "ranked list of results, each with a title, a URL you can cite, and a content snippet. Use it "
         "to find recent, sourced facts."
     )
-    args_schema: Type[BaseModel] = DdgSearchInput
+    args_schema: type[BaseModel] = DdgSearchInput
 
     # SearXNG recency words → DuckDuckGo single-letter timelimit codes.
     _TIMELIMIT = {"day": "d", "week": "w", "month": "m", "year": "y"}
@@ -81,11 +78,13 @@ class DdgSearchTool(BaseTool):
             title = item.get("title")
             if not url or not title:
                 continue
-            results.append({
-                "title": title.strip(),
-                "url": url,
-                "content": (item.get("body") or item.get("excerpt") or "").strip(),
-            })
+            results.append(
+                {
+                    "title": title.strip(),
+                    "url": url,
+                    "content": (item.get("body") or item.get("excerpt") or "").strip(),
+                }
+            )
             if len(results) >= max_results:
                 break
 

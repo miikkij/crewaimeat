@@ -44,10 +44,11 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any
 from zoneinfo import ZoneInfo
 
 for _s in (sys.stdout, sys.stderr):
@@ -56,8 +57,6 @@ for _s in (sys.stdout, sys.stderr):
         _r(encoding="utf-8")
 
 import requests  # noqa: E402 — ships with aimeat-crewai
-
-from crewai import Agent, Crew, Process, Task  # noqa: E402
 from aimeat_crewai import (  # noqa: E402
     create_liaison_agent,
     ensure_serve,
@@ -66,6 +65,7 @@ from aimeat_crewai import (  # noqa: E402
     stdio_params,
 )
 from aimeat_crewai.daemon import DAEMON_DEFAULT_TOOL_FILTER  # noqa: E402
+from crewai import Agent, Crew, Process, Task  # noqa: E402
 
 try:  # private helper; degrade gracefully if a future version moves it
     from aimeat_crewai.daemon import _read_token as _aimeat_read_token  # noqa: E402
@@ -127,10 +127,10 @@ def _acquire_single_instance(agent_name: str) -> bool:
 class BuildContext:
     """Passed to your build_domain(ctx). Everything you need to define agents/tasks."""
 
-    task: dict          # the raw AIMEAT task (id, title, description, ...)
-    prompt: str         # task.description or task.title — the user's actual request
-    llm: Any            # the shared LLM (crewaimeat.llm.get_llm); pass to your Agents
-    today: str          # current-time context string — prepend to time-sensitive tasks
+    task: dict  # the raw AIMEAT task (id, title, description, ...)
+    prompt: str  # task.description or task.title — the user's actual request
+    llm: Any  # the shared LLM (crewaimeat.llm.get_llm); pass to your Agents
+    today: str  # current-time context string — prepend to time-sensitive tasks
     directives: str = ""  # owner-set behavioral directives (GET /v1/agents/me/directives),
     #   already formatted. The scaffold also prepends these to every domain task, so they bind
     #   behavior automatically; reference ctx.directives only if you want finer placement.
@@ -149,79 +149,79 @@ BuildDomain = Callable[[BuildContext], "tuple[list[Agent], list[Task]]"]
 class CrewSpec:
     """Declares one AIMEAT-connected crew. Only `agent_name` + `build_domain` are required."""
 
-    agent_name: str                       # the AIMEAT agent identity (from `aimeat connect add`)
-    build_domain: BuildDomain             # returns (domain_agents, domain_tasks)
-    process: Any = Process.sequential     # sequential is the validated path; hierarchical is advanced
-    poll_seconds: int = 30                # daemon poll interval
+    agent_name: str  # the AIMEAT agent identity (from `aimeat connect add`)
+    build_domain: BuildDomain  # returns (domain_agents, domain_tasks)
+    process: Any = Process.sequential  # sequential is the validated path; hierarchical is advanced
+    poll_seconds: int = 30  # daemon poll interval
     max_concurrent_tasks: int | None = None  # how many EXECUTE tasks this ONE daemon runs at once.
     #   None (default) = read the owner-set value from AIMEAT (Tasks tab -> "max concurrent", needs
     #   AIMEAT >= 1.16.2 + aimeat-crewai >= 0.3.8); 1 = serial (unchanged); >1 = a bounded thread pool
     #   with a SEPARATE liaison+MCP per task (a shared stdio MCP can't run parallel kickoffs). Best for
     #   I/O-bound crews (mostly waiting on the LLM). PROPOSE + inbox stay serial on the shared liaison.
     memory_key_prefix: str | None = None  # default: crews.<agent_name>
-    manager_agent: Any = None             # only for Process.hierarchical
-    owner: str | None = None              # AIMEAT owner; set only if the agent name is ambiguous
-    max_idle_auth_failures: int = 10      # idle cycles with a rejected token before exiting for re-auth
-    idle_hook: Any = None                 # optional DETERMINISTIC callable run on idle cycles (throttled to
+    manager_agent: Any = None  # only for Process.hierarchical
+    owner: str | None = None  # AIMEAT owner; set only if the agent name is ambiguous
+    max_idle_auth_failures: int = 10  # idle cycles with a rejected token before exiting for re-auth
+    idle_hook: Any = None  # optional DETERMINISTIC callable run on idle cycles (throttled to
     #   idle_hook_seconds) while the token is alive — e.g. a workspace-contract poll. The call itself uses
     #   NO LLM (any LLM is in the work it triggers, only when there's something to do); exceptions are
     #   logged, never fatal.
-    idle_hook_seconds: int = 60           # minimum seconds between idle_hook runs
+    idle_hook_seconds: int = 60  # minimum seconds between idle_hook runs
     listen_for: Iterable[str] = ("tasks",)  # add "messages" to also act on inbox messages
     wait_for_approval_seconds: int | None = 1800  # wait this long (30 min) for the token to be approved
     #   before onboarding, then exit for re-auth (None = wait indefinitely)
-    services: list[dict] | None = None    # {name, description} capabilities to declare at
+    services: list[dict] | None = None  # {name, description} capabilities to declare at
     #   onboarding via aimeat_onboarding_declare_services
-    commands: list[dict] | None = None    # slash-command palette [{name, description, category}, ...]
+    commands: list[dict] | None = None  # slash-command palette [{name, description, category}, ...]
     #   published to memory key agents.<agent>.commands (owner) so the Messages UI surfaces it
-    tags: list[str] | None = None         # capability TAGS set on the agent via aimeat_agent_tags_set
+    tags: list[str] | None = None  # capability TAGS set on the agent via aimeat_agent_tags_set
     #   on every start (idempotent, so they survive re-onboarding). The ecosystem-app agent picker
     #   matches on these (+ capabilities/domain), so e.g. tags=["feedback-analysis"] makes the agent the
     #   RECOMMENDED pick for a recipe by TAG, not only by exact name. Charset: lowercase alnum + . _ -
     #   (no ':' or '@' — versioned ids like consumes:feedback-stats@1 belong in `capabilities`).
-    capabilities: dict | None = None      # {technical:[{name,type}], domain:[...], languages:[...]}
+    capabilities: dict | None = None  # {technical:[{name,type}], domain:[...], languages:[...]}
     #   self-reported via aimeat_agent_capabilities_report on every start (OVERWRITES the set). Advertise
     #   SPECIFIC capabilities (what this agent actually does — e.g. domain "consumes:feedback-stats@1")
     #   over the liaison's generic onboarding defaults; the picker's matcher reads technical + domain.
-    temperature: float | None = None      # ENFORCE a fixed LLM temperature for this crew, regardless of
+    temperature: float | None = None  # ENFORCE a fixed LLM temperature for this crew, regardless of
     #   the .env LLM_TEMPERATURE default and without per-task classification. Use it for single-purpose
     #   crews whose nature is fixed: a creative service (jokes, jingles, taglines) should declare
     #   temperature=0.7 once instead of relying on adapt_to_task to re-discover "this is creative" every
     #   task. Takes precedence over adapt_to_task for the temperature knob (adapt_to_task still selects
     #   verify mode if both are set). None = fall back to adapt_to_task, else the .env default.
-    adapt_to_task: bool = False           # when True, classify each task (fact/creative/mixed) and
+    adapt_to_task: bool = False  # when True, classify each task (fact/creative/mixed) and
     #   adapt: temperature (cool for fact ~0.15, warm for creative ~0.7), inject a grounding rule for
     #   factual work, and pick the verify mode (factcheck for fact, off for creative). Spreads like verify.
-    score_to_stats: bool = False          # when True (with verify="factcheck"), the Reviewer's
+    score_to_stats: bool = False  # when True (with verify="factcheck"), the Reviewer's
     #   faithfulness score is parsed and written to agents.stats.<agent>.review.<task>.verify (the
     #   reputation convention). Source-grounded judging — validated by POC v2. Spreads like verify.
-    self_monitor: bool = False            # when True, after each task the crew reads its OWN reputation
+    self_monitor: bool = False  # when True, after each task the crew reads its OWN reputation
     #   rollup and, if a gated signal fires (WEAK avg<2.5, or a bimodal SPLIT) with enough data
     #   (n>=10 — the n=3 lesson) and not recently proposed, sends the owner a clickable "explore an
     #   evolution?" prompt (metadata.prompt). Notice+propose only; building/A/B/promote are human-gated
     #   /evolve steps (doc 20). Spreads like verify — opt-in per crew.
-    contribute_to_library: bool = False   # when True, after each task the deliverable is classified
+    contribute_to_library: bool = False  # when True, after each task the deliverable is classified
     #   (topic + shelf-life, junk dropped) and a compact pointer-entry is appended to
     #   agents.<agent>.library for the librarian to index. Spreads like `verify` — opt-in per crew.
-    verify: str = "off"                   # "on" appends a Reviewer pass that checks the deliverable
+    verify: str = "off"  # "on" appends a Reviewer pass that checks the deliverable
     #   against the goal and FIXES gaps before publish (one pass, no loop). Per-task <<VERIFY>> /
     #   <<NOVERIFY>> in the task description overrides this. "feeling lucky" (off) vs "serious" (on).
-    require_verify_pass: bool = False     # SYS-1: gate task COMPLETION on the app verify gates'
+    require_verify_pass: bool = False  # SYS-1: gate task COMPLETION on the app verify gates'
     #   DETERMINISTIC outcome (verify_render/verify_anon_render/verify_interaction, via author_tool's
     #   recorded {ok} — not the agent's self-report). When True, a direct (non-conductor) build that
     #   FAILED a gate, or never ran one, is FAILED (aimeat_task_fail) instead of completing 'green'. This
     #   only changes the TASK STATUS — it never touches the live app. Off by default; opt-in for build/fix
     #   crews that run the app gates. (The conductor already withholds completion until green.)
-    auto_revert_on_fail: bool = False     # When True AND require_verify_pass fails a build, ALSO restore
+    auto_revert_on_fail: bool = False  # When True AND require_verify_pass fails a build, ALSO restore
     #   each app this run published to its pre-run last-good version (revert_apps_to_baseline) — so the
     #   LIVE app is rolled back, not just left un-'done'. This re-publishes the previous version (an
     #   outward-facing change), so it is a SEPARATE opt-in from the (safe, status-only) gate above; off by
     #   default so the gate can be watched before live rollback is enabled.
-    readme_md: str | None = None          # markdown for the agent's README tab; may contain
+    readme_md: str | None = None  # markdown for the agent's README tab; may contain
     #   [[FIGLET[:font]]["text"]] (deterministic ASCII-art) and [[LLM]["prompt"]] (LLM output)
     #   directives expanded at publish time. Written to agents.<agent>.readme (owner).
     #   Expanded only when the text changes (cached).
-    clean_deliverable: "Callable[[str], str] | None" = None  # optional deterministic post-processor run
+    clean_deliverable: Callable[[str], str] | None = None  # optional deterministic post-processor run
     #   on the final deliverable TEXT just before it is published (primary + shared writes). Use it to
     #   strip model scaffolding the prompt couldn't fully suppress (e.g. an editor leaking its KEPT/CUT
     #   notes). Deterministic = enforced in code, not left to the model. Must never raise; on any error
@@ -253,7 +253,7 @@ def _now_context() -> str:
     )
 
 
-def _runtime_max_execution_time() -> "int | None":
+def _runtime_max_execution_time() -> int | None:
     """Optional fleet-wide wall-clock bound (seconds) for each agent's task, from
     AIMEAT_AGENT_MAX_EXECUTION_TIME. A wall-clock bound stops a STUCK run while letting a
     progressing-but-long build finish — which a raw max_iter cap cannot distinguish (field finding
@@ -328,10 +328,7 @@ def _format_directives(data: dict | None) -> str:
     if not isinstance(data, dict):
         return ""
     purpose = (data.get("purpose") or "").strip()
-    rules = [
-        r for r in (data.get("rules") or [])
-        if isinstance(r, dict) and (r.get("description") or "").strip()
-    ]
+    rules = [r for r in (data.get("rules") or []) if isinstance(r, dict) and (r.get("description") or "").strip()]
     if not purpose and not rules:
         return ""
     lines = [
@@ -347,7 +344,9 @@ def _format_directives(data: dict | None) -> str:
     return "\n".join(lines)
 
 
-def _rate_task(rater_agent: str, ratee_agent: str, task_id: str, body: dict, owner: str | None = None) -> "tuple[bool, int | None, str]":
+def _rate_task(
+    rater_agent: str, ratee_agent: str, task_id: str, body: dict, owner: str | None = None
+) -> tuple[bool, int | None, str]:
     """POST a reputation rating for ratee_agent's task using rater_agent's token (REST).
 
     The AIMEAT Quality-tab rate endpoint: a coordinator rates a worker it consumed
@@ -439,7 +438,7 @@ _SERVE_STATE: dict[str, Any] = {"base": None, "session": None, "warned": False}
 _SERVE_LOCK = threading.Lock()
 
 
-def _serve_api() -> "tuple[str, requests.Session] | None":
+def _serve_api() -> tuple[str, requests.Session] | None:
     """(base_url, shared Session) for the loopback serve daemon. DISCOVERY ONLY — never spawns.
 
     The daemon is started in exactly ONE place: start_fleet.ps1 (ensure_serve with auto-start),
@@ -486,18 +485,18 @@ def _aimeat_call(agent_name: str, tool: str, payload: dict) -> dict | None:
     try:
         r = session.post(
             f"{base}/local/call/{tool}",
-            json=payload, headers={"X-Aimeat-Agent": agent_name}, timeout=90,
+            json=payload,
+            headers={"X-Aimeat-Agent": agent_name},
+            timeout=90,
         )
     except requests.RequestException as exc:
         _serve_reset()  # daemon gone mid-flight -> next call re-discovers / auto-restarts it
-        print(f"[{agent_name}] {tool} loopback POST failed ({exc}); serve will be re-discovered",
-              file=sys.stderr)
+        print(f"[{agent_name}] {tool} loopback POST failed ({exc}); serve will be re-discovered", file=sys.stderr)
         return None
     try:
         body = r.json()
     except ValueError:
-        print(f"[{agent_name}] {tool} returned non-JSON (HTTP {r.status_code}): {r.text[:120]}",
-              file=sys.stderr)
+        print(f"[{agent_name}] {tool} returned non-JSON (HTTP {r.status_code}): {r.text[:120]}", file=sys.stderr)
         return None
     if not isinstance(body, dict) or not body.get("ok"):
         err = (body or {}).get("error") if isinstance(body, dict) else None
@@ -515,8 +514,13 @@ def _aimeat_call_subprocess(agent_name: str, tool: str, payload: dict) -> dict |
     cmd = ["cmd", "/c", *base] if os.name == "nt" else base
     try:
         proc = subprocess.run(
-            cmd, input=json.dumps(payload), capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=90,
+            cmd,
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=90,
         )
     except Exception as exc:  # noqa: BLE001
         print(f"[{agent_name}] {tool} failed: {exc}", file=sys.stderr)
@@ -531,7 +535,7 @@ def _aimeat_call_subprocess(agent_name: str, tool: str, payload: dict) -> dict |
         return None
 
 
-def member_workspaces(agent_name: str) -> "list[tuple[str, str]]":
+def member_workspaces(agent_name: str) -> list[tuple[str, str]]:
     """(organism_id, ws_id) pairs a contract agent should serve: every organism from
     organism_list PLUS the ids in AIMEAT_CONTRACT_ORGS (comma-separated env).
 
@@ -570,8 +574,7 @@ def _memory_key(agent_name: str, prefix: str | None, task: dict) -> str:
 def _run_onboarding_only(agent_name: str, services: list[dict] | None = None) -> None:
     """One-shot Hello Integration (liaison alone, no domain work)."""
     print(
-        f"[{agent_name}] Hello Integration not done -> running ONBOARDING ONLY "
-        "(liaison alone, no domain work).",
+        f"[{agent_name}] Hello Integration not done -> running ONBOARDING ONLY (liaison alone, no domain work).",
         file=sys.stderr,
     )
     if services:
@@ -612,9 +615,7 @@ def _run_onboarding_only(agent_name: str, services: list[dict] | None = None) ->
             expected_output="All onboarding steps passed; test task completed.",
             agent=liaison,
         )
-        Crew(
-            agents=[liaison], tasks=[task], process=Process.sequential, verbose=True, cache=False
-        ).kickoff()
+        Crew(agents=[liaison], tasks=[task], process=Process.sequential, verbose=True, cache=False).kickoff()
         print(f"\n=== {agent_name}: ONBOARDING-ONLY done ===", file=sys.stderr)
 
 
@@ -646,19 +647,19 @@ def _finalize_task(agent_name: str, tid: str, mem_key: str, liaison: Agent) -> T
 _PUBLISH_DIRECTIVE = re.compile(r'<<AIMEAT_PUBLISH\s+key="([^"]+)"(?:\s+tag="([^"]*)")?\s*>>')
 
 
-def _parse_publish_directive(text: str) -> "tuple[str | None, str | None, str]":
+def _parse_publish_directive(text: str) -> tuple[str | None, str | None, str]:
     """Return (shared_key, tag, cleaned_text) from a task description carrying a publish marker."""
     m = _PUBLISH_DIRECTIVE.search(text or "")
     if not m:
         return None, None, text
-    cleaned = (text[: m.start()] + text[m.end():]).strip()
+    cleaned = (text[: m.start()] + text[m.end() :]).strip()
     return m.group(1), (m.group(2) or None), cleaned
 
 
 _VERIFY_DIRECTIVE = re.compile(r"<<\s*(NO)?VERIFY\s*>>", re.I)
 
 
-def _parse_verify_directive(text: str) -> "tuple[str | None, str]":
+def _parse_verify_directive(text: str) -> tuple[str | None, str]:
     """Return (override, cleaned_text) from a task description: <<VERIFY>> -> 'on', <<NOVERIFY>> ->
     'off', neither -> None (use the CrewSpec default). Lets the owner flip the verification pass per
     task from the dashboard without touching code."""
@@ -697,13 +698,21 @@ def _write_verify_stat(agent_name: str, tid: str | None, output_text: str, dimen
         {
             "key": f"agents.{agent_name}.statistics.custom.self_verify",
             "value": {
-                "score": score, "by": agent_name, "role": "self-verify", "dimension": dimension,
-                "unsupported": unsupported, "task": short, "ts": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                "score": score,
+                "by": agent_name,
+                "role": "self-verify",
+                "dimension": dimension,
+                "unsupported": unsupported,
+                "task": short,
+                "ts": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             },
             "visibility": "public",  # like other statistics.* keys, so the Quality "Custom Metrics" tab renders it
         },
     )
-    print(f"[{agent_name}] self-verify score {score}/5 (unsupported={unsupported}, dim={dimension}) -> statistics.custom.self_verify: {bool(res)}", file=sys.stderr)
+    print(
+        f"[{agent_name}] self-verify score {score}/5 (unsupported={unsupported}, dim={dimension}) -> statistics.custom.self_verify: {bool(res)}",
+        file=sys.stderr,
+    )
 
 
 def _publish_selection_rollup(agent_name: str, owner: str | None = None) -> None:
@@ -720,8 +729,11 @@ def _publish_selection_rollup(agent_name: str, owner: str | None = None) -> None
         return
     try:
         token, node_url = _aimeat_read_token(agent_name, owner=owner)
-        r = requests.get(f"{node_url.rstrip('/')}/v1/agents/{agent_name}/statistics",
-                         headers={"Authorization": f"Bearer {token}"}, timeout=20)
+        r = requests.get(
+            f"{node_url.rstrip('/')}/v1/agents/{agent_name}/statistics",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=20,
+        )
         if r.status_code != 200:
             return
         reviews = ((r.json() or {}).get("data") or {}).get("reviews") or {}
@@ -741,9 +753,11 @@ def _publish_selection_rollup(agent_name: str, owner: str | None = None) -> None
             "avg_stars": avg,
             "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
-        _aimeat_call(agent_name, "aimeat_memory_write",
-                     {"key": f"agents.{agent_name}.statistics.custom.selection",
-                      "value": value, "visibility": "public"})
+        _aimeat_call(
+            agent_name,
+            "aimeat_memory_write",
+            {"key": f"agents.{agent_name}.statistics.custom.selection", "value": value, "visibility": "public"},
+        )
         print(f"[{agent_name}] published field-reputation rollup -> selection {value}", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001 — reputation publish is best-effort; never break the daemon
         print(f"[{agent_name}] selection-rollup publish skipped: {exc}", file=sys.stderr)
@@ -779,16 +793,27 @@ def _eval_ctx(eval_info: dict | None) -> dict:
         except Exception:  # noqa: BLE001
             um = getattr(crew, "usage_metrics", None)
     if um is not None:
-        for src, dst in (("prompt_tokens", "tokens_in"), ("completion_tokens", "tokens_out"), ("total_tokens", "tokens_total")):
+        for src, dst in (
+            ("prompt_tokens", "tokens_in"),
+            ("completion_tokens", "tokens_out"),
+            ("total_tokens", "tokens_total"),
+        ):
             v = getattr(um, src, None)
             if v:  # skip None/0 — a real run has nonzero tokens by publish time
                 ctx[dst] = v
     return ctx
 
 
-def _make_publish_cb(agent_name: str, primary_key: str, shared_key: str | None = None, tag: str | None = None,
-                     eval_info: dict | None = None, task_id: str | None = None,
-                     clean: "Callable[[str], str] | None" = None, offer_id: str | None = None):
+def _make_publish_cb(
+    agent_name: str,
+    primary_key: str,
+    shared_key: str | None = None,
+    tag: str | None = None,
+    eval_info: dict | None = None,
+    task_id: str | None = None,
+    clean: Callable[[str], str] | None = None,
+    offer_id: str | None = None,
+):
     """Task callback: write the task output to AIMEAT memory deterministically (no LLM).
 
     Attached to the last DOMAIN task so the deliverable always lands, even if the liaison's
@@ -820,22 +845,27 @@ def _make_publish_cb(agent_name: str, primary_key: str, shared_key: str | None =
             except Exception as exc:  # noqa: BLE001 — cleaning is best-effort, must not block publish
                 print(f"[{agent_name}] clean_deliverable skipped: {exc}", file=sys.stderr)
         r1 = _aimeat_call(
-            agent_name, "aimeat_memory_write",
-            {"key": primary_key, "value": text, "visibility": "owner",
-             "tags": list(_per_task_tags)},
+            agent_name,
+            "aimeat_memory_write",
+            {"key": primary_key, "value": text, "visibility": "owner", "tags": list(_per_task_tags)},
         )
-        print(f"[{agent_name}] deliverable published -> {primary_key} (tags {_per_task_tags}): {bool(r1)}", file=sys.stderr)
+        print(
+            f"[{agent_name}] deliverable published -> {primary_key} (tags {_per_task_tags}): {bool(r1)}",
+            file=sys.stderr,
+        )
         ectx = _eval_ctx(eval_info)
         if ectx and eval_info and eval_info.get("custom_key"):
             _aimeat_call(  # own performance introspection; public so the Quality Custom Metrics tab renders it
-                agent_name, "aimeat_memory_write",
+                agent_name,
+                "aimeat_memory_write",
                 {"key": eval_info["custom_key"], "value": ectx, "visibility": "public"},
             )
         if shared_key:
             shared_tags = [t for t in (tag, task_tag, offer_tag) if t]  # delegation + per-task + per-offer (additive)
             if ectx:  # write evalctx FIRST so it is present when the coordinator sees the deliverable
                 _aimeat_call(
-                    agent_name, "aimeat_memory_write",
+                    agent_name,
+                    "aimeat_memory_write",
                     {"key": f"{shared_key}.evalctx", "value": ectx, "visibility": "owner", "tags": shared_tags},
                 )
             r2 = _aimeat_call(
@@ -848,7 +878,7 @@ def _make_publish_cb(agent_name: str, primary_key: str, shared_key: str | None =
     return _cb
 
 
-def _resolve_offer(agent_name: str, task: dict) -> "dict | None":
+def _resolve_offer(agent_name: str, task: dict) -> dict | None:
     """OFFER TASK SHAPE (Offers handover v3): a task ordered from the Offers surface carries
     ONLY the user's request in title/description; the offer travels structurally in scope
     (kind='offer', offer_id, offer_title). Resolve the agent's OWN offer descriptor from its
@@ -868,14 +898,21 @@ def _resolve_offer(agent_name: str, task: dict) -> "dict | None":
         if o.get("id") == oid:
             print(f"[{agent_name}] offer task: fulfilling offer '{oid}'", file=sys.stderr)
             return o
-    print(f"[{agent_name}] offer task: offer_id {oid!r} not found in published offers — "
-          "running on the raw request", file=sys.stderr)
+    print(
+        f"[{agent_name}] offer task: offer_id {oid!r} not found in published offers — running on the raw request",
+        file=sys.stderr,
+    )
     return {"id": oid, "title": str(scope.get("offer_title") or oid)}
 
 
-def _make_complete_cb(agent_name: str, tid: str, mem_key: str | None = None,
-                      require_verify: bool = False, owner: str | None = None,
-                      auto_revert: bool = False):
+def _make_complete_cb(
+    agent_name: str,
+    tid: str,
+    mem_key: str | None = None,
+    require_verify: bool = False,
+    owner: str | None = None,
+    auto_revert: bool = False,
+):
     """Task callback: close the AIMEAT task deterministically (no LLM). Attached to the finalize
     task so the task is completed even if the liaison never calls aimeat_task_complete.
 
@@ -888,10 +925,12 @@ def _make_complete_cb(agent_name: str, tid: str, mem_key: str | None = None,
     When auto_revert is True (CrewSpec.auto_revert_on_fail), a gate-fail ALSO restores each app this run
     published to its pre-run last-good version (revert_apps_to_baseline) — an outward-facing live rollback,
     kept a SEPARATE opt-in from the safe status gate."""
+
     def _cb(_task_output) -> None:
         if require_verify:
             try:
                 from crewaimeat.author_tool import get_verify_verdicts
+
                 verdicts = get_verify_verdicts(tid)
             except Exception as exc:  # noqa: BLE001 — never break finalize on the lookup
                 print(f"[{agent_name}] verify-gate lookup failed ({exc}); completing without gating", file=sys.stderr)
@@ -901,11 +940,15 @@ def _make_complete_cb(agent_name: str, tid: str, mem_key: str | None = None,
                 passed = [g for g, v in verdicts.items() if v.get("ok") is True]
                 reason = None
                 if failed:
-                    reason = (f"Not shipping a broken build: verify gate(s) FAILED — {', '.join(failed)}. "
-                              "Fix the app and re-queue.")
+                    reason = (
+                        f"Not shipping a broken build: verify gate(s) FAILED — {', '.join(failed)}. "
+                        "Fix the app and re-queue."
+                    )
                 elif not passed:
-                    reason = ("Not shipping unverified: no verify gate produced a PASS. A build must prove "
-                              "itself with verify_render / verify_interaction before it can complete.")
+                    reason = (
+                        "Not shipping unverified: no verify gate produced a PASS. A build must prove "
+                        "itself with verify_render / verify_interaction before it can complete."
+                    )
                 if reason:
                     # The gate itself only fails the task (status-only). Optional, separate opt-in:
                     if auto_revert:
@@ -914,6 +957,7 @@ def _make_complete_cb(agent_name: str, tid: str, mem_key: str | None = None,
                         restored = []
                         try:
                             from crewaimeat.author_tool import revert_apps_to_baseline
+
                             restored = [r for r in revert_apps_to_baseline(agent_name, tid, owner) if r.get("ok")]
                         except Exception as exc:  # noqa: BLE001 — revert is best-effort; still fail the task
                             print(f"[{agent_name}] auto-revert skipped ({exc})", file=sys.stderr)
@@ -921,7 +965,10 @@ def _make_complete_cb(agent_name: str, tid: str, mem_key: str | None = None,
                             names = ", ".join(f"{r['filename']}->v{r['to_version']}" for r in restored)
                             reason += f" Auto-restored {len(restored)} app(s) to last-good: {names}."
                     fr = _aimeat_call(agent_name, "aimeat_task_fail", {"task_id": tid, "message": reason})
-                    print(f"[{agent_name}] require_verify_pass GATE -> task_fail {tid}: {reason[:90]} ({bool(fr)})", file=sys.stderr)
+                    print(
+                        f"[{agent_name}] require_verify_pass GATE -> task_fail {tid}: {reason[:90]} ({bool(fr)})",
+                        file=sys.stderr,
+                    )
                     return
         payload = {"task_id": tid, "message": "Crew finished; deliverable published to memory."}
         if mem_key:
@@ -930,8 +977,10 @@ def _make_complete_cb(agent_name: str, tid: str, mem_key: str | None = None,
             payload["deliverableKey"] = mem_key
             payload["message"] = f"Crew finished; deliverable published to memory at {mem_key}."
         res = _aimeat_call(agent_name, "aimeat_task_complete", payload)
-        print(f"[{agent_name}] task completed deterministically {tid} "
-              f"(deliverableKey={mem_key or '-'}): {bool(res)}", file=sys.stderr)
+        print(
+            f"[{agent_name}] task completed deterministically {tid} (deliverableKey={mem_key or '-'}): {bool(res)}",
+            file=sys.stderr,
+        )
 
     return _cb
 
@@ -958,7 +1007,8 @@ def _finalize_message_task(agent_name: str, mem_key: str, sender: str | None, li
             f"{reply_step}\n"
             "Do NOT call aimeat_task_complete or aimeat_task_todo — this was a message, not a task."
         ),
-        expected_output=f"Result written to memory '{mem_key}'" + (f" and a reply sent to '{sender}'." if sender else "."),
+        expected_output=f"Result written to memory '{mem_key}'"
+        + (f" and a reply sent to '{sender}'." if sender else "."),
         agent=liaison,
     )
 
@@ -980,9 +1030,7 @@ def _render_commands(commands: list[dict] | None) -> str:
     """Render the commands list as a markdown table for the README."""
     if not commands:
         return "_No commands declared._"
-    rows = "\n".join(
-        f"| `{c.get('name', '')}` | {c.get('description', '')} |" for c in commands
-    )
+    rows = "\n".join(f"| `{c.get('name', '')}` | {c.get('description', '')} |" for c in commands)
     return "| Command | Description |\n| --- | --- |\n" + rows
 
 
@@ -1012,7 +1060,7 @@ def _default_readme(agent_name: str) -> str:
     )
 
 
-def _figlet_repl(m: "re.Match[str]") -> str:
+def _figlet_repl(m: re.Match[str]) -> str:
     """Render [[FIGLET[:font]]["text"]] to ASCII-art wrapped in a code fence (monospace)."""
     font = m.group(1) or "standard"
     text = _unquote(m.group(2))
@@ -1037,21 +1085,23 @@ def _expand_readme(text: str, llm: Any, commands: list[dict] | None = None) -> s
     text = _FIGLET_DIRECTIVE.sub(_figlet_repl, text)
     text = _AVAILABLE_COMMANDS_DIRECTIVE.sub(lambda _m: _render_commands(commands), text)
 
-    def _repl(m: "re.Match[str]") -> str:
+    def _repl(m: re.Match[str]) -> str:
         prompt = _unquote(m.group(1))
         if not prompt:
             return ""
         try:
-            out = llm.call([
-                {
-                    "role": "system",
-                    "content": (
-                        "Output ONLY the requested content (e.g. the raw ASCII art or text). "
-                        "No explanation, no preamble, no surrounding code fences unless asked."
-                    ),
-                },
-                {"role": "user", "content": prompt},
-            ])
+            out = llm.call(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Output ONLY the requested content (e.g. the raw ASCII art or text). "
+                            "No explanation, no preamble, no surrounding code fences unless asked."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ]
+            )
             return (out or "").strip("\n")
         except Exception as exc:  # noqa: BLE001
             return f"[[LLM directive failed: {exc}]]"
@@ -1062,8 +1112,20 @@ def _expand_readme(text: str, llm: Any, commands: list[dict] | None = None) -> s
 # Task-nature gate: classify fact vs creative -> cooler/hotter temperature + grounding + verify mode.
 _NATURE_TEMP = {"fact": 0.15, "creative": 0.7, "mixed": 0.4}
 _NATURE_CREATIVE_HINTS = (
-    "joke", "jingle", "poem", "story", "funny", "slogan", "tagline", "brainstorm", "song",
-    "vitsi", "runo", "laulu", "hauska", "tarina",
+    "joke",
+    "jingle",
+    "poem",
+    "story",
+    "funny",
+    "slogan",
+    "tagline",
+    "brainstorm",
+    "song",
+    "vitsi",
+    "runo",
+    "laulu",
+    "hauska",
+    "tarina",
 )
 _GROUNDING_RULE = (
     "GROUNDING (this work involves factual claims): state only what your sources/inputs actually support. If you "
@@ -1080,11 +1142,25 @@ def _classify_task_nature(prompt: str, llm: Any) -> dict:
     text = (prompt or "").lower()
     nature = "creative" if any(k in text for k in _NATURE_CREATIVE_HINTS) else "fact"
     try:
-        reply = (llm.call([{"role": "user", "content": (
-            "Classify this task as exactly ONE word — 'fact' (needs verifiable facts, real entities, "
-            "data, sources), 'creative' (invent/entertain, nothing to fact-check), or 'mixed'. Reply "
-            "with ONLY the one word.\n\nTask:\n" + (prompt or "")[:1500]
-        )}]) or "").strip().lower()
+        reply = (
+            (
+                llm.call(
+                    [
+                        {
+                            "role": "user",
+                            "content": (
+                                "Classify this task as exactly ONE word — 'fact' (needs verifiable facts, real entities, "
+                                "data, sources), 'creative' (invent/entertain, nothing to fact-check), or 'mixed'. Reply "
+                                "with ONLY the one word.\n\nTask:\n" + (prompt or "")[:1500]
+                            ),
+                        }
+                    ]
+                )
+                or ""
+            )
+            .strip()
+            .lower()
+        )
         for n in ("mixed", "creative", "fact"):
             if n in reply:
                 nature = n
@@ -1144,6 +1220,7 @@ def run_crew(spec: CrewSpec) -> None:
     # diagnosable instead of a silent exit code; harmless when nothing crashes.
     try:
         import faulthandler
+
         faulthandler.enable()
     except Exception:  # noqa: BLE001 — never let diagnostics break startup
         pass
@@ -1188,6 +1265,7 @@ def run_crew(spec: CrewSpec) -> None:
     # Resolve the agent's tags + capabilities: the crew's own CrewSpec wins; otherwise fall back to
     # the curated fleet registry (so SPECIFIC identity is set fleet-wide without editing every crew).
     from crewaimeat.fleet_identity import identity_for
+
     _ident = identity_for(spec.agent_name)
     _tags = spec.tags if spec.tags is not None else _ident.get("tags")
     _caps = spec.capabilities if spec.capabilities is not None else _ident.get("capabilities")
@@ -1230,6 +1308,7 @@ def run_crew(spec: CrewSpec) -> None:
     #      logged loud but never blocks the daemon start. Lazy import avoids an import cycle with offers.
     try:
         from crewaimeat.offers import CREW_AGENTS, PILOT_AGENTS, publish_offers_any
+
         if spec.agent_name in CREW_AGENTS or spec.agent_name in PILOT_AGENTS:
             publish_offers_any(spec.agent_name, with_samples=True)
     except Exception as exc:  # noqa: BLE001
@@ -1255,6 +1334,7 @@ def run_crew(spec: CrewSpec) -> None:
         # completes the message; handle_evolve_answer already sent the staged reply.
         if spec.self_monitor:
             from crewaimeat.evolve import handle_evolve_answer, is_evolve_answer
+
             _pa = is_evolve_answer(task, raw_prompt)
             if _pa is not None:
                 print(f"[{spec.agent_name}] handling own evolution answer: {_pa.get('choice')!r}", file=sys.stderr)
@@ -1262,9 +1342,13 @@ def run_crew(spec: CrewSpec) -> None:
                     handle_evolve_answer(spec.agent_name, _pa, spec.owner)
                 except Exception as exc:  # noqa: BLE001 — never break the daemon
                     print(f"[{spec.agent_name}] evolve-answer handling failed: {exc}", file=sys.stderr)
-                _ack = Agent(role="Self-monitor", goal="Acknowledge a handled control message tersely",
-                             backstory="You quietly acknowledge internal control messages.",
-                             llm=get_llm(for_tool_use=False), verbose=False)
+                _ack = Agent(
+                    role="Self-monitor",
+                    goal="Acknowledge a handled control message tersely",
+                    backstory="You quietly acknowledge internal control messages.",
+                    llm=get_llm(for_tool_use=False),
+                    verbose=False,
+                )
                 _at = Task(description="Output exactly: ok", expected_output="ok", agent=_ack)
                 return Crew(agents=[_ack], tasks=[_at], process=Process.sequential, verbose=False, cache=False)
 
@@ -1274,16 +1358,24 @@ def run_crew(spec: CrewSpec) -> None:
         # Task-nature gate: fact work runs cool + grounded + faithfulness-verified; creative runs warm.
         gate = _classify_task_nature(prompt, get_llm(for_tool_use=False)) if spec.adapt_to_task else None
         if gate:
-            print(f"[{spec.agent_name}] task nature={gate['nature']} temp={gate['temperature']} verify={gate['verify']}", file=sys.stderr)
+            print(
+                f"[{spec.agent_name}] task nature={gate['nature']} temp={gate['temperature']} verify={gate['verify']}",
+                file=sys.stderr,
+            )
         # A crew-level enforced temperature wins over the per-task gate (a creative service declares its
         # warmth once); otherwise use the gate's temp, otherwise the .env default.
         _temp = spec.temperature if spec.temperature is not None else (gate["temperature"] if gate else None)
         if spec.temperature is not None:
-            print(f"[{spec.agent_name}] enforced temperature={spec.temperature} (creative-nature crew)", file=sys.stderr)
+            print(
+                f"[{spec.agent_name}] enforced temperature={spec.temperature} (creative-nature crew)", file=sys.stderr
+            )
         # Per-crew provider routing: the domain agents (ctx.llm) use this crew's profile in llm_providers.json
         # (e.g. content crews -> grok, code crews -> a real coder).
-        llm = get_llm(temperature=_temp, agent_name=spec.agent_name) if _temp is not None \
+        llm = (
+            get_llm(temperature=_temp, agent_name=spec.agent_name)
+            if _temp is not None
             else get_llm(agent_name=spec.agent_name)
+        )
         verify_mode = verify_override or (gate["verify"] if gate else None) or spec.verify
         mem_key = _memory_key(spec.agent_name, spec.memory_key_prefix, {"id": tid, "description": prompt})
         print(
@@ -1299,13 +1391,21 @@ def run_crew(spec: CrewSpec) -> None:
         # task so an owner edit takes effect on the next task with no restart.
         directives = _format_directives(_fetch_directives(spec.agent_name, spec.owner))
         if directives:
-            print(f"[{spec.agent_name}] applying owner directives ({directives.count(chr(10))} line(s))", file=sys.stderr)
+            print(
+                f"[{spec.agent_name}] applying owner directives ({directives.count(chr(10))} line(s))", file=sys.stderr
+            )
         # Factual work also gets the grounding rule (no invented specifics, honest gaps) prepended.
         if gate and gate["ground"]:
             directives = _GROUNDING_RULE + ("\n\n" + directives if directives else "")
 
-        ctx = BuildContext(task=task, prompt=prompt, llm=llm, today=_now_context(), directives=directives,
-                           offer=_resolve_offer(spec.agent_name, task))
+        ctx = BuildContext(
+            task=task,
+            prompt=prompt,
+            llm=llm,
+            today=_now_context(),
+            directives=directives,
+            offer=_resolve_offer(spec.agent_name, task),
+        )
         agents, tasks = spec.build_domain(ctx)
 
         # Optional verification pass (MAST FM-3.2): a Reviewer checks the deliverable against the goal
@@ -1387,9 +1487,16 @@ def run_crew(spec: CrewSpec) -> None:
         # author-set callback still runs).
         if tasks:
             _author_cb = getattr(tasks[-1], "callback", None)
-            _publish = _make_publish_cb(spec.agent_name, mem_key, shared_key, shared_tag, eval_info,
-                                        task_id=tid, clean=spec.clean_deliverable,
-                                        offer_id=(ctx.offer or {}).get("id"))
+            _publish = _make_publish_cb(
+                spec.agent_name,
+                mem_key,
+                shared_key,
+                shared_tag,
+                eval_info,
+                task_id=tid,
+                clean=spec.clean_deliverable,
+                offer_id=(ctx.offer or {}).get("id"),
+            )
 
             def _last_cb(out, _pub=_publish, _prev=_author_cb):
                 _pub(out)
@@ -1451,9 +1558,14 @@ def run_crew(spec: CrewSpec) -> None:
             finalize = _finalize_task(spec.agent_name, tid, mem_key, liaison)
             # Guarantee the task is closed even if the liaison never calls aimeat_task_complete; when
             # require_verify_pass is set, the close is GATED on the app verify gates' outcome (SYS-1).
-            finalize.callback = _make_complete_cb(spec.agent_name, tid, mem_key=mem_key,
-                                                  require_verify=spec.require_verify_pass,
-                                                  owner=spec.owner, auto_revert=spec.auto_revert_on_fail)
+            finalize.callback = _make_complete_cb(
+                spec.agent_name,
+                tid,
+                mem_key=mem_key,
+                require_verify=spec.require_verify_pass,
+                owner=spec.owner,
+                auto_revert=spec.auto_revert_on_fail,
+            )
 
         # Self-evolution monitor (doc 20 P1): after the task, read own reputation and, if a gated
         # signal fires, propose an evolution to the owner. Chained after finalize; best-effort.

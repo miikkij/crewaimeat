@@ -43,17 +43,30 @@ _PROCESSED: set[str] = set()  # per-run runaway guard (canon rule 5; output-dedu
 CONTRACT = {
     "id": "market-scan",
     "spaces": [
-        {"space": IN_SPACE, "namespace": IN_NS, "mode": "records",
-         "schema": {"type": "object", "required": ["id", "segment", "status"],
-                    "properties": {"id": {"type": "string"}, "segment": {"type": "string"},
-                                   "area": {"type": "string"}, "our_offer": {"type": "string"},
-                                   "queries": {"type": "array"}, "lang": {"type": "string"},
-                                   "period_hours": {"type": "integer"}, "email": {"type": "boolean"},
-                                   "last_run": {"type": "string"},
-                                   "requested_by": {"type": "string"}, "result_ref": {"type": "string"},
-                                   "error": {"type": "string"},
-                                   "status": {"type": "string",
-                                              "enum": ["requested", "active", "in-progress", "done", "failed"]}}}},
+        {
+            "space": IN_SPACE,
+            "namespace": IN_NS,
+            "mode": "records",
+            "schema": {
+                "type": "object",
+                "required": ["id", "segment", "status"],
+                "properties": {
+                    "id": {"type": "string"},
+                    "segment": {"type": "string"},
+                    "area": {"type": "string"},
+                    "our_offer": {"type": "string"},
+                    "queries": {"type": "array"},
+                    "lang": {"type": "string"},
+                    "period_hours": {"type": "integer"},
+                    "email": {"type": "boolean"},
+                    "last_run": {"type": "string"},
+                    "requested_by": {"type": "string"},
+                    "result_ref": {"type": "string"},
+                    "error": {"type": "string"},
+                    "status": {"type": "string", "enum": ["requested", "active", "in-progress", "done", "failed"]},
+                },
+            },
+        },
         {"space": OUT_SPACE, "namespace": OUT_NS, "mode": "document"},
     ],
 }
@@ -70,8 +83,8 @@ def _build_queries(segment: str, area: str) -> list[str]:
         f"{segment}{a}",
         f"{segment}{a} hinnat hinnasto pricing",
         f"{segment}{a} yritykset palvelut",
-        f"{segment} yritys liikevaihto henkilöstö",   # financials (finder/asiakastieto often rank)
-        f"{segment}{a} toimisto yhteystiedot",        # offices + how to reach them = the sales motion
+        f"{segment} yritys liikevaihto henkilöstö",  # financials (finder/asiakastieto often rank)
+        f"{segment}{a} toimisto yhteystiedot",  # offices + how to reach them = the sales motion
         f"{segment} news launch",
     ]
 
@@ -79,6 +92,7 @@ def _build_queries(segment: str, area: str) -> list[str]:
 def _sweep(queries: list[str], lang: str) -> list[str]:
     """SearXNG (general + week-news) -> trafilatura -> up to 8 source docs."""
     from crewaimeat.fetch_pipeline import _searxng_urls
+
     docs: list[str] = []
     seen: set[str] = set()
     for q in queries:
@@ -98,8 +112,9 @@ def _sweep(queries: list[str], lang: str) -> list[str]:
     return docs
 
 
-def run_market_scan(segment: str, area: str = "", our_offer: str = "",
-                    queries: list[str] | None = None, lang: str = "fi") -> tuple[str | None, str]:
+def run_market_scan(
+    segment: str, area: str = "", our_offer: str = "", queries: list[str] | None = None, lang: str = "fi"
+) -> tuple[str | None, str]:
     """One parameterized scan -> (markdown analysis | None, error)."""
     qs = [q for q in (queries or []) if isinstance(q, str) and q.strip()] or _build_queries(segment, area)
     docs = _sweep(qs, lang)
@@ -109,9 +124,11 @@ def run_market_scan(segment: str, area: str = "", our_offer: str = "",
     out_lang = "suomeksi" if lang == "fi" else "in English"
     prompt = (
         f"Olet tarkka markkina-analyytikko. Segmentti: {segment}."
-        + (f" Alue: {area}." if area else "") + offer_block +
-        "\n\nLÄHTEET:\n\n" + "\n\n".join(docs) +
-        f"\n\nKirjoita {out_lang} markdown-analyysi TÄSMÄLLEEN näillä osioilla:\n"
+        + (f" Alue: {area}." if area else "")
+        + offer_block
+        + "\n\nLÄHTEET:\n\n"
+        + "\n\n".join(docs)
+        + f"\n\nKirjoita {out_lang} markdown-analyysi TÄSMÄLLEEN näillä osioilla:\n"
         "## Ketkä täällä pelaavat\n(per toimija: kuka, mitä myy, MITEN MYY — inbound-yhteydenotto / "
         "self-serve / myyntitapaamiset / kumppanit, TOIMIPISTEET/sijainti, ja TALOUSLUVUT jos lähteissä "
         "näkyy: liikevaihto, henkilöstö, rahoitus; lähde-URL suluissa)\n\n"
@@ -121,7 +138,9 @@ def run_market_scan(segment: str, area: str = "", our_offer: str = "",
         "## Mitä ne mainostavat ja missä\n(viestit, kanavat, some-näkyvyys — vain lähteistä ilmenevä)\n\n"
         "## Miten me myydään tätä vasten\n(konkreettinen suositus: mihin aukkoon iskemme, MILLÄ HINNOILLA "
         "kannattaa myydä suhteessa kentän haitareihin, MITÄ tuotteistettua kannattaa kaupata ensin ja "
-        "kenelle, ja millä myyntitavalla" + (" — peilaa meidän tarjoomaan ja sen hinnoitteluun" if our_offer else "") + ")\n\n"
+        "kenelle, ja millä myyntitavalla"
+        + (" — peilaa meidän tarjoomaan ja sen hinnoitteluun" if our_offer else "")
+        + ")\n\n"
         "## Puuttuvat kyvykkyydet\n(lista: jos lähteistä ilmenee ostajien odotuksia tai kilpailijoiden "
         "ominaisuuksia joita meidän tarjoomamme ei kata — | kyvykkyys | mitä se enabloisi bisneksessä | "
         "karkea toteutusarvio: päiviä / viikkoja / kuukausia |. Arvio on sinun harkintaasi — merkitse se arvioksi)\n\n"
@@ -148,7 +167,10 @@ def _split_companies(md: str) -> tuple[str, list[str]]:
 
 def _spawn_company_requests(oid: str, wid: str, companies: list[str], scan_rid: str) -> int:
     """Queue a company-research-request for every NEW company a scan named (the chain)."""
-    from crewaimeat.company_contract import IN_NS as CO_NS, IN_SPACE as CO_SPACE, slugify
+    from crewaimeat.company_contract import IN_NS as CO_NS
+    from crewaimeat.company_contract import IN_SPACE as CO_SPACE
+    from crewaimeat.company_contract import slugify
+
     data = _call("aimeat_workspace_read", {"organism_id": oid, "ws": wid}) or {}
     if not any(t.get("name") == CO_SPACE for t in ((data.get("manifest") or {}).get("objectTypes") or [])):
         return 0  # this workspace hasn't adopted the company-research contract — skip quietly
@@ -168,19 +190,22 @@ def _spawn_company_requests(oid: str, wid: str, companies: list[str], scan_rid: 
 
 def _advance(oid: str, wid: str, req: dict, **changes) -> None:
     rec = {k: v for k, v in {**req, **changes}.items() if not k.startswith("_")}
-    if _call("aimeat_workspace_write", {"organism_id": oid, "ws": wid, "space": IN_SPACE, "id": rec["id"], "value": rec}):
+    if _call(
+        "aimeat_workspace_write", {"organism_id": oid, "ws": wid, "space": IN_SPACE, "id": rec["id"], "value": rec}
+    ):
         _call("aimeat_workspace_publish", {"organism_id": oid, "ws": wid, "namespace": IN_NS, "id": rec["id"]})
 
 
 def _mail_out(oid: str, wid: str, out_id: str, title: str, md: str) -> None:
     """Write the finished scan as a mail-request record — postman's contract then sends it."""
     mid = f"mail-{out_id}"
-    rec = {"id": mid, "subject": title, "body_md": md[:6000],
-           "requested_by": "market-scan", "status": "requested"}
-    if _call("aimeat_workspace_write", {"organism_id": oid, "ws": wid, "space": "mail-request",
-                                        "id": mid, "value": rec}):
-        _call("aimeat_workspace_publish", {"organism_id": oid, "ws": wid,
-                                           "namespace": "shared.mail_requests", "id": mid})
+    rec = {"id": mid, "subject": title, "body_md": md[:6000], "requested_by": "market-scan", "status": "requested"}
+    if _call(
+        "aimeat_workspace_write", {"organism_id": oid, "ws": wid, "space": "mail-request", "id": mid, "value": rec}
+    ):
+        _call(
+            "aimeat_workspace_publish", {"organism_id": oid, "ws": wid, "namespace": "shared.mail_requests", "id": mid}
+        )
 
 
 def process_market_scans(max_items: int = 2, targets: list[tuple[str, str]] | None = None) -> dict:
@@ -218,6 +243,7 @@ def process_market_scans(max_items: int = 2, targets: list[tuple[str, str]] | No
                 # restart made every scan look due again (6 mails in a day). The marker is
                 # this machine's own truth about what it already ran.
                 from crewaimeat.local_marks import last_local_run, ran_within
+
                 if recurring and ran_within("market_scan", rid, max(1.0, period_h * 0.9)):
                     due = False
                 elif not recurring and last_local_run("market_scan", rid) is not None:
@@ -235,23 +261,47 @@ def process_market_scans(max_items: int = 2, targets: list[tuple[str, str]] | No
                 break
             _PROCESSED.add(rid)
             _advance(oid, wid, req, status="in-progress")
-            md, err = run_market_scan(req.get("segment", ""), req.get("area", ""),
-                                      req.get("our_offer", ""), req.get("queries"),
-                                      req.get("lang") or "fi")
+            md, err = run_market_scan(
+                req.get("segment", ""),
+                req.get("area", ""),
+                req.get("our_offer", ""),
+                req.get("queries"),
+                req.get("lang") or "fi",
+            )
             if not md:
-                _advance(oid, wid, req, status="failed" if not recurring else "active",
-                         error=err[:300], **({"last_run": now.isoformat()} if recurring else {}))
+                _advance(
+                    oid,
+                    wid,
+                    req,
+                    status="failed" if not recurring else "active",
+                    error=err[:300],
+                    **({"last_run": now.isoformat()} if recurring else {}),
+                )
                 failed += 1
                 print(f"[{AGENT}] market-scan FAILED for {rid}: {err}", file=sys.stderr)
                 continue
             md, companies = _split_companies(md)
-            title = f"Market scan · {req.get('segment','')[:50]}" + (f" · {req.get('area','')[:30]}" if req.get("area") else "")
-            footer = f"\n\n*Scan: {req.get('segment','')} · {req.get('area','') or '-'} · {today} · sources via SearXNG*"
-            wrote = _call("aimeat_workspace_write",
-                          {"organism_id": oid, "ws": wid, "space": OUT_SPACE, "id": out_id,
-                           "value": {"title": title + (f" · {today}" if recurring else ""), "markdown": md + footer}})
-            pub = _call("aimeat_workspace_publish",
-                        {"organism_id": oid, "ws": wid, "namespace": OUT_NS, "id": out_id}) if wrote else None
+            title = f"Market scan · {req.get('segment', '')[:50]}" + (
+                f" · {req.get('area', '')[:30]}" if req.get("area") else ""
+            )
+            footer = (
+                f"\n\n*Scan: {req.get('segment', '')} · {req.get('area', '') or '-'} · {today} · sources via SearXNG*"
+            )
+            wrote = _call(
+                "aimeat_workspace_write",
+                {
+                    "organism_id": oid,
+                    "ws": wid,
+                    "space": OUT_SPACE,
+                    "id": out_id,
+                    "value": {"title": title + (f" · {today}" if recurring else ""), "markdown": md + footer},
+                },
+            )
+            pub = (
+                _call("aimeat_workspace_publish", {"organism_id": oid, "ws": wid, "namespace": OUT_NS, "id": out_id})
+                if wrote
+                else None
+            )
             if wrote and pub:
                 if companies:  # the chain: every named company -> a company-research-request
                     n = _spawn_company_requests(oid, wid, companies, rid)
@@ -259,15 +309,27 @@ def process_market_scans(max_items: int = 2, targets: list[tuple[str, str]] | No
                         print(f"[{AGENT}] scan {rid} queued {n} company-research request(s)", file=sys.stderr)
                 if req.get("email"):
                     _mail_out(oid, wid, out_id, title + f" · {today}", md + footer)
-                _advance(oid, wid, req,
-                         status="active" if recurring else "done",
-                         result_ref=out_id, **({"last_run": now.isoformat(), "error": ""} if recurring else {}))
+                _advance(
+                    oid,
+                    wid,
+                    req,
+                    status="active" if recurring else "done",
+                    result_ref=out_id,
+                    **({"last_run": now.isoformat(), "error": ""} if recurring else {}),
+                )
                 from crewaimeat.local_marks import mark_local_run
+
                 mark_local_run("market_scan", rid)
                 processed += 1
             else:
-                _advance(oid, wid, req, status="failed" if not recurring else "active",
-                         error="scan write failed", **({"last_run": now.isoformat()} if recurring else {}))
+                _advance(
+                    oid,
+                    wid,
+                    req,
+                    status="failed" if not recurring else "active",
+                    error="scan write failed",
+                    **({"last_run": now.isoformat()} if recurring else {}),
+                )
                 failed += 1
     return {"processed": processed, "failed": failed}
 

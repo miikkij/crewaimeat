@@ -132,8 +132,7 @@ class _CrossProcessLock:
                 return self
             except OSError:
                 if time.time() > deadline:
-                    print("[serve-guard] lock wait timed out — proceeding (dedup will enforce one)",
-                          file=sys.stderr)
+                    print("[serve-guard] lock wait timed out — proceeding (dedup will enforce one)", file=sys.stderr)
                     return self
                 time.sleep(0.3)
 
@@ -161,16 +160,18 @@ def _serve_pids() -> list[int]:
     """PIDs of every live `aimeat connect serve` process (matches the daemon's command line)."""
     if os.name != "nt":
         try:
-            out = subprocess.run(["pgrep", "-f", "connect.*serve"], capture_output=True, text=True,
-                                 timeout=15).stdout
+            out = subprocess.run(["pgrep", "-f", "connect.*serve"], capture_output=True, text=True, timeout=15).stdout
             return [int(x) for x in out.split()]
         except Exception:  # noqa: BLE001
             return []
-    ps = ("Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'connect.*serve' "
-          "-and $_.Name -notmatch 'pwsh|powershell' } | ForEach-Object { $_.ProcessId }")
+    ps = (
+        "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'connect.*serve' "
+        "-and $_.Name -notmatch 'pwsh|powershell' } | ForEach-Object { $_.ProcessId }"
+    )
     try:
-        out = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
-                             capture_output=True, text=True, timeout=20).stdout
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=20
+        ).stdout
         return [int(x) for x in out.split() if x.strip().isdigit()]
     except Exception as exc:  # noqa: BLE001
         print(f"[serve-guard] could not enumerate serve daemons: {exc}", file=sys.stderr)
@@ -205,7 +206,9 @@ def _reap_duplicates(keep_pid: int | None) -> int:
         if pid != keep_pid:
             _kill(pid)
             reaped += 1
-            print(f"[serve-guard] reaped duplicate serve daemon pid {pid} (kept {keep_pid}, home {our_home})", flush=True)
+            print(
+                f"[serve-guard] reaped duplicate serve daemon pid {pid} (kept {keep_pid}, home {our_home})", flush=True
+            )
     return reaped
 
 
@@ -234,6 +237,8 @@ def ensure_single_serve(timeout: float = 60.0) -> dict:
 
 if __name__ == "__main__":
     d = ensure_single_serve()
-    print(f"[serve-guard] single serve daemon for home {_norm(_aimeat_home())}: "
-          f"pid {d.get('pid')} port {d.get('port')} agents {len(d.get('agents') or [])}"
-          + (f" (reaped {d['_reaped_duplicates']} duplicate(s))" if d.get("_reaped_duplicates") else ""))
+    print(
+        f"[serve-guard] single serve daemon for home {_norm(_aimeat_home())}: "
+        f"pid {d.get('pid')} port {d.get('port')} agents {len(d.get('agents') or [])}"
+        + (f" (reaped {d['_reaped_duplicates']} duplicate(s))" if d.get("_reaped_duplicates") else "")
+    )

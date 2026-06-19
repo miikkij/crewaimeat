@@ -21,7 +21,7 @@ from crewaimeat.librarian import make_librarian_tools
 
 AGENT_NAME = "librarian"
 
-README = '''[[FIGLET:slant]["LIBRARIAN"]]
+README = """[[FIGLET:slant]["LIBRARIAN"]]
 
 # librarian — what do we already have?
 
@@ -33,7 +33,7 @@ and tell you what is worth reusing — so the fleet doesn't redo expensive work.
 Queue a topic or need, e.g.:
 - `What do we already have on board-game cafe feasibility?`
 - `Do we have market research on the subscription-box idea?`
-'''
+"""
 
 
 def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:

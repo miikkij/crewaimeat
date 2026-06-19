@@ -27,7 +27,7 @@ from crewaimeat.mail_contract import CONTRACT, idle_pass, make_mail_tools
 
 AGENT_NAME = "postman"
 
-README = '''[[FIGLET:slant]["Postman"]]
+README = """[[FIGLET:slant]["Postman"]]
 
 Email-out as a **workspace contract**: write a `mail-request` record ({subject, body_md, image_key?})
 and I send it over SMTP — with a **recipient allowlist enforced on every send** (anything off-list is
@@ -36,7 +36,7 @@ report**: yesterday's organism activity (distilled), the SOME radar's fresh find
 day-brightening image picked by a vision model. Once per day, restart-safe.
 
 **How to task me:** "send" — I run process_mail ONCE and send any pending mail-requests.
-'''
+"""
 
 
 def build_domain(ctx: BuildContext):
@@ -46,15 +46,17 @@ def build_domain(ctx: BuildContext):
         role="Mail Courier",
         goal="Send pending mail-request records over SMTP, allowlist-enforced.",
         backstory="You deliver workspace mail: you call process_mail EXACTLY ONCE and report its "
-                  "result. The tool enforces the recipient allowlist; you never compose recipients "
-                  "yourself and never send anything outside the records.",
+        "result. The tool enforces the recipient allowlist; you never compose recipients "
+        "yourself and never send anything outside the records.",
         llm=ctx.llm,
         tools=[*make_mail_tools(AGENT_NAME)],
     )
     send_task = Task(
-        description=(f"Today is {ctx.today}. Request: '{ctx.prompt}'\n\n"
-                     "Call process_mail() EXACTLY ONCE. It deterministically sends any pending "
-                     "mail-request records (allowlist-enforced). Report the counts."),
+        description=(
+            f"Today is {ctx.today}. Request: '{ctx.prompt}'\n\n"
+            "Call process_mail() EXACTLY ONCE. It deterministically sends any pending "
+            "mail-request records (allowlist-enforced). Report the counts."
+        ),
         agent=courier,
         expected_output="The process_mail report: how many mails were sent.",
     )
@@ -69,10 +71,16 @@ def run() -> None:
         if res.get("sent") or res.get("failed"):
             print(f"[{AGENT_NAME}] mail poll: {res}")
 
-    run_crew(CrewSpec(
-        agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README,
-        temperature=0.3, idle_hook=_poll, idle_hook_seconds=120,
-    ))
+    run_crew(
+        CrewSpec(
+            agent_name=AGENT_NAME,
+            build_domain=build_domain,
+            readme_md=README,
+            temperature=0.3,
+            idle_hook=_poll,
+            idle_hook_seconds=120,
+        )
+    )
 
 
 if __name__ == "__main__":

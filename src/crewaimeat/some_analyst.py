@@ -79,7 +79,8 @@ def draft_opportunities(limit: int = 5) -> dict:
         return {"drafted": 0, "failed": 0, "candidates": 0, "no_access": True}
     existing = {d.get("id") for d in (_read("reply-draft") or [])}
     candidates = [
-        o for o in opps
+        o
+        for o in opps
         if o.get("status") == "new"
         and o.get("spam_risk") != "no"
         and int(o.get("fit_score") or 0) >= _MIN_FIT
@@ -101,20 +102,36 @@ def draft_opportunities(limit: int = 5) -> dict:
             failed += 1
             print(f"[some-analyst] draft FAILED for {oid}: {exc!r}", file=sys.stderr)
             continue
-        rec = {"id": did, "opportunity_ref": oid, "platform": opp.get("source", ""),
-               "draft": text, "angle": approach, "status": "draft"}
-        wrote = _aimeat_call("some-analyst", "aimeat_workspace_write",
-                             {"organism_id": _ORG_ID, "ws": _RADAR_WS, "space": "reply-draft",
-                              "id": did, "value": rec})
-        pub = _aimeat_call("some-analyst", "aimeat_workspace_publish",
-                           {"organism_id": _ORG_ID, "ws": _RADAR_WS,
-                            "namespace": "shared.drafts", "id": did}) if wrote else None
+        rec = {
+            "id": did,
+            "opportunity_ref": oid,
+            "platform": opp.get("source", ""),
+            "draft": text,
+            "angle": approach,
+            "status": "draft",
+        }
+        wrote = _aimeat_call(
+            "some-analyst",
+            "aimeat_workspace_write",
+            {"organism_id": _ORG_ID, "ws": _RADAR_WS, "space": "reply-draft", "id": did, "value": rec},
+        )
+        pub = (
+            _aimeat_call(
+                "some-analyst",
+                "aimeat_workspace_publish",
+                {"organism_id": _ORG_ID, "ws": _RADAR_WS, "namespace": "shared.drafts", "id": did},
+            )
+            if wrote
+            else None
+        )
         if wrote and pub:
             drafted += 1
         else:
             failed += 1
-            print(f"[some-analyst] reply-draft write FAILED for {did} "
-                  f"(write={bool(wrote)}, publish={bool(pub)})", file=sys.stderr)
+            print(
+                f"[some-analyst] reply-draft write FAILED for {did} (write={bool(wrote)}, publish={bool(pub)})",
+                file=sys.stderr,
+            )
     return {"drafted": drafted, "failed": failed, "candidates": len(candidates)}
 
 
@@ -129,8 +146,10 @@ def make_analyst_tools(agent_name: str) -> list:
         res = draft_opportunities(limit=limit)
         if res.get("no_access"):
             return "Social Radar not accessible to this agent yet — drafted nothing."
-        return (f"some-analyst: drafted {res.get('drafted', 0)} reply-drafts "
-                f"({res.get('failed', 0)} failed, {res.get('candidates', 0)} candidates). "
-                "Review + approve + post in the Social Radar workspace.")
+        return (
+            f"some-analyst: drafted {res.get('drafted', 0)} reply-drafts "
+            f"({res.get('failed', 0)} failed, {res.get('candidates', 0)} candidates). "
+            "Review + approve + post in the Social Radar workspace."
+        )
 
     return [_draft]

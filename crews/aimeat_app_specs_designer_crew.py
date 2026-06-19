@@ -106,8 +106,11 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     # Read-only discovery tools so the architect can GROUND the spec in the LIVE node (current template/lib
     # surface + a real PUBLISHER gaii) rather than only the static PLAYBOOK. No install/publish power.
     author_tools, _ = make_author_tools(AGENT_NAME, task_id=tid)
-    discovery = [t for t in author_tools if getattr(t, "name", "") in
-                 ("read_app_template", "read_lib_api", "read_node_api", "find_public_index")]
+    discovery = [
+        t
+        for t in author_tools
+        if getattr(t, "name", "") in ("read_app_template", "read_lib_api", "read_node_api", "find_public_index")
+    ]
 
     architect = Agent(
         role="AIMEAT Solutions Architect",

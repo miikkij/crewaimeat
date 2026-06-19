@@ -12,33 +12,32 @@ metadata.prompt ("Explore an evolution? [Explore] [Not now]").
 Phase 1 only NOTICES and PROPOSES. Designing candidates, A/B-testing them, and promoting are later
 phases (P3/P4) and stay human-gated — the owner clicks /evolve to start any of that.
 """
+
 from __future__ import annotations
-
-import sys
-from datetime import datetime, timezone
-
-import requests
 
 import importlib.util
 import math
 import os
 import re
 import subprocess
+import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from statistics import mean, pstdev
 from types import SimpleNamespace
 
+import requests
 from crewai import Crew, Process
 
 from crewaimeat.aimeat_crew import _aimeat_call, _aimeat_read_token
 from crewaimeat.llm import get_llm
 
-MIN_N = 10            # never propose on thin data (the n=3 lesson — see doc 20)
-WEAK_FLOOR = 2.5      # avgStars below this (with enough n) = consistently weak
-COOLDOWN_DAYS = 3     # don't re-propose the same (context, signal) within this window
-_PROPOSED_KEY = "agents.{agent}.statistics.custom.evolve_proposed"   # time-based dedup (anti-spam)
-_LINEAGE_KEY = "agents.{agent}.statistics.custom.evolve_lineage"     # PERMANENT: a variant was built
+MIN_N = 10  # never propose on thin data (the n=3 lesson — see doc 20)
+WEAK_FLOOR = 2.5  # avgStars below this (with enough n) = consistently weak
+COOLDOWN_DAYS = 3  # don't re-propose the same (context, signal) within this window
+_PROPOSED_KEY = "agents.{agent}.statistics.custom.evolve_proposed"  # time-based dedup (anti-spam)
+_LINEAGE_KEY = "agents.{agent}.statistics.custom.evolve_lineage"  # PERMANENT: a variant was built
 
 
 def _has_variant(agent: str, ctx: str, signal: str) -> bool:
@@ -61,7 +60,9 @@ def record_evolution(parent: str, ctx: str, signal: str, variant: str, mode: str
     rec = (_aimeat_call(parent, "aimeat_memory_read", {"key": key}) or {}).get("value")
     rec = rec if isinstance(rec, dict) else {}
     rec.setdefault(ctx, {})[signal] = {
-        "variant": variant, "mode": mode, "ts": datetime.now(timezone.utc).isoformat(),
+        "variant": variant,
+        "mode": mode,
+        "ts": datetime.now(timezone.utc).isoformat(),
     }
     res = _aimeat_call(parent, "aimeat_memory_write", {"key": key, "value": rec, "visibility": "owner"})
     print(f"[{parent}] evolution recorded: {ctx}/{signal} -> {variant} ({mode}): {bool(res)}", file=sys.stderr)
@@ -74,8 +75,9 @@ def _read_reviews(agent: str, owner: str | None) -> dict:
         return {}
     try:
         tok, url = _aimeat_read_token(agent, owner=owner)
-        r = requests.get(f"{url.rstrip('/')}/v1/agents/{agent}/statistics",
-                         headers={"Authorization": f"Bearer {tok}"}, timeout=20)
+        r = requests.get(
+            f"{url.rstrip('/')}/v1/agents/{agent}/statistics", headers={"Authorization": f"Bearer {tok}"}, timeout=20
+        )
         return r.json().get("data", {}).get("reviews", {}) if r.status_code == 200 else {}
     except Exception:  # noqa: BLE001 — monitoring is best-effort, never break the task
         return {}
@@ -130,16 +132,22 @@ def _propose(agent: str, ctx: str, signal: str, detail: str) -> bool:
     (handle_evolve_answer). The conversation stays with the agent — the only thing delegated to
     crew-forge is the mechanical crew-file creation, and only after the owner approves."""
     pid = f"evolve-{agent}-{ctx}-explore"
-    question = (f"I'm inconsistent on '{ctx}' ({detail}) — strong on some inputs, weak on others. "
-                f"Explore an evolution of me?" if signal == "split"
-                else f"I'm scoring low on '{ctx}' ({detail}). Explore an evolution of me?")
+    question = (
+        f"I'm inconsistent on '{ctx}' ({detail}) — strong on some inputs, weak on others. Explore an evolution of me?"
+        if signal == "split"
+        else f"I'm scoring low on '{ctx}' ({detail}). Explore an evolution of me?"
+    )
     ok = _send(
         agent,
         f"**Self-monitor — {ctx}: {signal.upper()}**\n\n{detail}\n\nIf you say explore, I'll diagnose "
         f"exactly what I'm good and bad at, then design an evolved version of myself and A/B-test it "
         f"against my current self — and only bring it back if it's actually better.",
-        prompt={"prompt_id": pid, "question": question,
-                "options": ["Explore evolution", "Not now"], "allow_other": False},
+        prompt={
+            "prompt_id": pid,
+            "question": question,
+            "options": ["Explore evolution", "Not now"],
+            "allow_other": False,
+        },
     )
     print(f"[{agent}] self-monitor proposed evolution (own thread): {ctx}/{signal} -> {ok}", file=sys.stderr)
     return ok
@@ -148,8 +156,15 @@ def _propose(agent: str, ctx: str, signal: str, detail: str) -> bool:
 # The exact option texts we offer — used as a fallback when AIMEAT doesn't propagate prompt_answer
 # metadata into the delivered message (then the message CONTENT is just the chosen option text).
 # Friendly, non-technical labels (the A/B build happens under the hood).
-_EVOLVE_CHOICES = {"explore evolution", "evolve to the next level", "not now",
-                   "make it live", "add the specialist", "postpone", "cancel"}
+_EVOLVE_CHOICES = {
+    "explore evolution",
+    "evolve to the next level",
+    "not now",
+    "make it live",
+    "add the specialist",
+    "postpone",
+    "cancel",
+}
 
 
 def is_evolve_answer(task: dict, content: str = "") -> dict | None:
@@ -185,8 +200,11 @@ def handle_evolve_answer(agent: str, pa: dict, owner: str | None = None) -> None
     if cl.startswith("explore"):
         # Acknowledge immediately — the diagnosis below reads my rated tasks + an LLM call (~30-60s),
         # so tell the owner what's happening and that a follow-up is coming.
-        _send(agent, "On it — reading back through my rated jokes to pin down exactly where I'm strong "
-                     "and weak. Give me ~30–60 seconds and I'll follow up here with the diagnosis. 🔎")
+        _send(
+            agent,
+            "On it — reading back through my rated jokes to pin down exactly where I'm strong "
+            "and weak. Give me ~30–60 seconds and I'll follow up here with the diagnosis. 🔎",
+        )
         sig_ctx, sig, detail = latest_signal(agent, owner)
         if not sig:
             _send(agent, "The pattern has cleared since I flagged it — no evolution needed right now.")
@@ -205,48 +223,70 @@ def handle_evolve_answer(agent: str, pa: dict, owner: str | None = None) -> None
             f"Want me to grow into that next version? I'll build it, prove it against my current self on "
             f"my own past tasks, and only keep it if it's genuinely better."
         )
-        _send(agent, report, prompt={
-            "prompt_id": f"evolve-{agent}-{ctx}-build",
-            "question": "Ready for me to evolve to my next level?",
-            "options": ["Evolve to the next level", "Not now"], "allow_other": False,
-        })
+        _send(
+            agent,
+            report,
+            prompt={
+                "prompt_id": f"evolve-{agent}-{ctx}-build",
+                "question": "Ready for me to evolve to my next level?",
+                "options": ["Evolve to the next level", "Not now"],
+                "allow_other": False,
+            },
+        )
         return
 
     if "next level" in cl or cl.startswith("evolve to"):
         if _launch_evolve_run(agent, ctx):
-            _send(agent,
-                  "On it — I'm designing my evolved version and A/B-testing it against my current self on "
-                  "my own past tasks. This runs in the background and is slow on the current model "
-                  "(~10–20 min), so go do something else — **I'll message you here the moment the results "
-                  "are in.** If it wins and you approve, you'll then get a one-time connect-approval for "
-                  "the new agent. Nothing changes without your yes. 🛠️")
+            _send(
+                agent,
+                "On it — I'm designing my evolved version and A/B-testing it against my current self on "
+                "my own past tasks. This runs in the background and is slow on the current model "
+                "(~10–20 min), so go do something else — **I'll message you here the moment the results "
+                "are in.** If it wins and you approve, you'll then get a one-time connect-approval for "
+                "the new agent. Nothing changes without your yes. 🛠️",
+            )
         else:
-            _send(agent, "I tried to start the level-up but couldn't launch the background run — I've "
-                         "logged it; try again shortly.")
+            _send(
+                agent,
+                "I tried to start the level-up but couldn't launch the background run — I've "
+                "logged it; try again shortly.",
+            )
         return
 
     if cl.startswith("make it live") or cl.startswith("add the specialist"):
         mode = "replace" if cl.startswith("make it live") else "specialist"
-        vname = (pid.split("-live-")[-1] if "-live-" in pid
-                 else pid.split("-spec-")[-1] if "-spec-" in pid else f"{agent}-evolved")
+        vname = (
+            pid.split("-live-")[-1]
+            if "-live-" in pid
+            else pid.split("-spec-")[-1]
+            if "-spec-" in pid
+            else f"{agent}-evolved"
+        )
         _promote_candidate(agent, vname, ctx, mode, owner)
         return
 
     if cl.startswith("postpone"):
-        _send(agent, "Okay — I'll keep my evolved version on the shelf, ready. I'll re-offer it (or you can "
-                     "ask) when you want to revisit.")
+        _send(
+            agent,
+            "Okay — I'll keep my evolved version on the shelf, ready. I'll re-offer it (or you can "
+            "ask) when you want to revisit.",
+        )
         return
 
     if cl.startswith("cancel"):
         try:
             from crewaimeat.forge import _fname
+
             cand = Path.cwd() / "crews" / ".candidates" / _fname(f"{agent}-evolved")
             if cand.exists():
                 cand.unlink()
         except Exception:  # noqa: BLE001
             pass
-        _send(agent, "Scrapped it — the evolved version is discarded. I'll keep watching and propose a "
-                     "fresh angle if the pattern persists.")
+        _send(
+            agent,
+            "Scrapped it — the evolved version is discarded. I'll keep watching and propose a "
+            "fresh angle if the pattern persists.",
+        )
         return
 
     _send(agent, "Okay — no evolution for now. I'll flag it again if the pattern persists.")
@@ -282,7 +322,11 @@ def _strip_marker(text: str) -> str:
 def _rated_tasks(agent: str, ctx: str, owner: str | None = None, limit: int = 40) -> list[dict]:
     """The agent's done tasks carrying a rating in this context: [{title, instruction, stars}]."""
     listing = _aimeat_call(agent, "aimeat_task_list", {"status": "done", "per_page": 100}) or {}
-    tasks = listing.get("tasks") or (listing.get("data") or {}).get("tasks") or (listing if isinstance(listing, list) else [])
+    tasks = (
+        listing.get("tasks")
+        or (listing.get("data") or {}).get("tasks")
+        or (listing if isinstance(listing, list) else [])
+    )
     out: list[dict] = []
     for t in tasks[:limit]:
         tid = t.get("id") if isinstance(t, dict) else None
@@ -293,11 +337,13 @@ def _rated_tasks(agent: str, ctx: str, owner: str | None = None, limit: int = 40
         stars = rating.get("stars")
         if stars is None or (rating.get("context") and rating.get("context") != ctx):
             continue
-        out.append({
-            "title": full.get("title") or (t.get("title") if isinstance(t, dict) else "") or "",
-            "instruction": _strip_marker(full.get("description") or "")[:300],
-            "stars": stars,
-        })
+        out.append(
+            {
+                "title": full.get("title") or (t.get("title") if isinstance(t, dict) else "") or "",
+                "instruction": _strip_marker(full.get("description") or "")[:300],
+                "stars": stars,
+            }
+        )
     return out
 
 
@@ -317,14 +363,19 @@ def diagnose(agent: str, ctx: str, signal: str, owner: str | None = None) -> dic
     low = [t for t in tasks if t["stars"] <= 2]
     mid = [t for t in tasks if t["stars"] == 3]
     high = [t for t in tasks if t["stars"] >= 4]
-    prompt = _DIAGNOSE_PROMPT.format(agent=agent, ctx=ctx, signal=signal,
-                                     low=_fmt_cluster(low), mid=_fmt_cluster(mid), high=_fmt_cluster(high))
+    prompt = _DIAGNOSE_PROMPT.format(
+        agent=agent, ctx=ctx, signal=signal, low=_fmt_cluster(low), mid=_fmt_cluster(mid), high=_fmt_cluster(high)
+    )
     try:
         reply = str(get_llm(for_tool_use=False, temperature=0.2).call(prompt))
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "reason": f"diagnosis LLM call failed: {exc}"}
-    out = {"ok": True, "counts": {"low": len(low), "mid": len(mid), "high": len(high)},
-           "signal": signal, "context": ctx}
+    out = {
+        "ok": True,
+        "counts": {"low": len(low), "mid": len(mid), "high": len(high)},
+        "signal": signal,
+        "context": ctx,
+    }
     for k, rx in _DIAG_RE.items():
         m = rx.search(reply)
         out[k.lower()] = m.group(1).strip() if m else None
@@ -365,12 +416,18 @@ def _verdict(inc: list[float], cand: list[float]) -> dict:
         return {"n": 0}
     t, d = _welch(inc, cand)
     gap = round(mean(cand) - mean(inc), 3)
-    return {"n": min(len(inc), len(cand)), "inc_avg": round(mean(inc), 3), "cand_avg": round(mean(cand), 3),
-            "gap": gap, "welch_t": t, "cohen_d": d, "promote": bool(gap > 0 and abs(t) >= 2.0 and d >= 0.8)}
+    return {
+        "n": min(len(inc), len(cand)),
+        "inc_avg": round(mean(inc), 3),
+        "cand_avg": round(mean(cand), 3),
+        "gap": gap,
+        "welch_t": t,
+        "cohen_d": d,
+        "promote": bool(gap > 0 and abs(t) >= 2.0 and d >= 0.8),
+    }
 
 
-def evolve_ab(incumbent_fn, candidate_fn, eval_tasks: list[dict], temperature: float = 0.7,
-              repeats: int = 2) -> dict:
+def evolve_ab(incumbent_fn, candidate_fn, eval_tasks: list[dict], temperature: float = 0.7, repeats: int = 2) -> dict:
     """A/B incumbent vs candidate on the agent's OWN rated tasks (option B — re-run both, same judge).
 
     eval_tasks: [{instruction, stars}] from the agent's rated history (diagnose()/_rated_tasks).
@@ -389,9 +446,12 @@ def evolve_ab(incumbent_fn, candidate_fn, eval_tasks: list[dict], temperature: f
             ji = _judge_deliverable(judge, instr, _run_design(incumbent_fn, instr, runner))
             jc = _judge_deliverable(judge, instr, _run_design(candidate_fn, instr, runner))
             rows.append({"cluster": cluster, "inc": ji[1] if ji else None, "cand": jc[1] if jc else None})
-    out = {"overall": _verdict([r["inc"] for r in rows if r["inc"] is not None],
-                               [r["cand"] for r in rows if r["cand"] is not None]),
-           "by_cluster": {}}
+    out = {
+        "overall": _verdict(
+            [r["inc"] for r in rows if r["inc"] is not None], [r["cand"] for r in rows if r["cand"] is not None]
+        ),
+        "by_cluster": {},
+    }
     for cl in ("low", "high"):
         out["by_cluster"][cl] = _verdict(
             [r["inc"] for r in rows if r["cluster"] == cl and r["inc"] is not None],
@@ -421,6 +481,7 @@ def latest_signal(agent: str, owner: str | None = None) -> tuple[str | None, str
 # --------------------------------------------------------------------------- #
 def _crew_path(agent: str) -> Path:
     from crewaimeat.forge import _fname
+
     return Path.cwd() / "crews" / _fname(agent)
 
 
@@ -451,19 +512,23 @@ _DESIGN_PROMPT = (
 def design_candidate(agent: str, d: dict, llm) -> dict:
     """LLM-design an evolved build_domain from the agent's current crew + the diagnosis brief."""
     src = _crew_path(agent).read_text(encoding="utf-8")[:6000]
-    reply = str(llm.call(_DESIGN_PROMPT.format(src=src, weak=d.get("weak_at"), strong=d.get("strong_at"),
-                                               mode=d.get("mode"), brief=d.get("brief"))))
+    reply = str(
+        llm.call(
+            _DESIGN_PROMPT.format(
+                src=src, weak=d.get("weak_at"), strong=d.get("strong_at"), mode=d.get("mode"), brief=d.get("brief")
+            )
+        )
+    )
     ei = re.search(r"(?is)EXTRA_IMPORTS:\s*(.*?)\n\s*TEMPERATURE:", reply)
     tp = re.search(r"(?i)TEMPERATURE:\s*([0-9.]+)", reply)
     bd = re.search(r"(?is)BUILD_DOMAIN:\s*(.*)\Z", reply)
-    code = (bd.group(1).strip() if bd else "")
+    code = bd.group(1).strip() if bd else ""
     code = re.sub(r"^```[a-z]*\s*|\s*```$", "", code).strip()  # strip a code fence if the model added one
-    extra = (ei.group(1).strip() if ei else "")
+    extra = ei.group(1).strip() if ei else ""
     extra = re.sub(r"^```[a-z]*\s*|\s*```$", "", extra).strip()
     if extra.lower() in ("", "none", "(empty)"):
         extra = ""
-    return {"extra_imports": extra, "build_domain_code": code,
-            "temperature": float(tp.group(1)) if tp else 0.7}
+    return {"extra_imports": extra, "build_domain_code": code, "temperature": float(tp.group(1)) if tp else 0.7}
 
 
 def _eval_subset(tasks: list[dict], k: int = 6) -> list[dict]:
@@ -483,35 +548,56 @@ def _post_ab_result(agent: str, ctx: str, d: dict, result: dict, vname: str) -> 
     weak, strong = (d.get("weak_at") or "my weak cases"), (d.get("strong_at") or "my strong cases")
 
     def _cl(c: dict, label: str) -> str:
-        return (f"  • on {label}: evolved **{c.get('cand_avg')}★** vs me **{c.get('inc_avg')}★** "
-                f"(n={c.get('n')})") if c.get("n") else ""
+        return (
+            (f"  • on {label}: evolved **{c.get('cand_avg')}★** vs me **{c.get('inc_avg')}★** (n={c.get('n')})")
+            if c.get("n")
+            else ""
+        )
+
     breakdown = "\n".join(x for x in (_cl(low, weak), _cl(high, strong)) if x)
     head = f"overall **{o.get('cand_avg')}★ vs my {o.get('inc_avg')}★** on my own past tasks (n={o.get('n')})"
 
     if o.get("promote"):
-        _send(agent, f"**I built and tested an evolved version of myself — and it's genuinely better.** "
-                     f"{head}, t={o.get('welch_t')}, d={o.get('cohen_d')}.\n{breakdown}\n\nMake it my new self?",
-              prompt={"prompt_id": f"evolve-{agent}-{ctx}-live-{vname}",
-                      "question": "Make my evolved version live?",
-                      "options": ["Make it live", "Postpone", "Cancel"], "allow_other": False})
+        _send(
+            agent,
+            f"**I built and tested an evolved version of myself — and it's genuinely better.** "
+            f"{head}, t={o.get('welch_t')}, d={o.get('cohen_d')}.\n{breakdown}\n\nMake it my new self?",
+            prompt={
+                "prompt_id": f"evolve-{agent}-{ctx}-live-{vname}",
+                "question": "Make my evolved version live?",
+                "options": ["Make it live", "Postpone", "Cancel"],
+                "allow_other": False,
+            },
+        )
     elif low.get("promote"):
-        _send(agent, f"**I tested an evolved version.** It doesn't beat me overall, but it clearly wins on "
-                     f"**{weak}** ({low.get('cand_avg')}★ vs {low.get('inc_avg')}★) — so I'd keep it as a "
-                     f"**specialist alongside me** and route {weak} to it.\n{breakdown}\n\nAdd it?",
-              prompt={"prompt_id": f"evolve-{agent}-{ctx}-spec-{vname}",
-                      "question": "Add the specialist alongside me?",
-                      "options": ["Add the specialist", "Postpone", "Cancel"], "allow_other": False})
+        _send(
+            agent,
+            f"**I tested an evolved version.** It doesn't beat me overall, but it clearly wins on "
+            f"**{weak}** ({low.get('cand_avg')}★ vs {low.get('inc_avg')}★) — so I'd keep it as a "
+            f"**specialist alongside me** and route {weak} to it.\n{breakdown}\n\nAdd it?",
+            prompt={
+                "prompt_id": f"evolve-{agent}-{ctx}-spec-{vname}",
+                "question": "Add the specialist alongside me?",
+                "options": ["Add the specialist", "Postpone", "Cancel"],
+                "allow_other": False,
+            },
+        )
     else:
-        why = (f"the diagnosis was that I'm weak at **{weak}**, but the candidate narrowed into **{strong}** "
-               f"(something I was already good at) instead of fixing the weakness — so it lost ground on "
-               f"{weak} without gaining enough elsewhere"
-               if d.get("mode") == "specialist" else
-               f"the rebuild didn't actually move the needle on **{weak}**")
-        _send(agent, f"**FYI — no action needed.** I built and tested an evolution of myself, and it's **not "
-                     f"better**, so nothing changes. {head}.\n{breakdown}\n\n**Why it didn't help:** {why}. "
-                     f"Often my real issue is *variance* (I sometimes collapse) rather than a fixed gap, which "
-                     f"a narrower design can't fix. I'll keep watching and try a different angle next — likely "
-                     f"a **sibling specialist for {weak}** rather than narrowing myself.")
+        why = (
+            f"the diagnosis was that I'm weak at **{weak}**, but the candidate narrowed into **{strong}** "
+            f"(something I was already good at) instead of fixing the weakness — so it lost ground on "
+            f"{weak} without gaining enough elsewhere"
+            if d.get("mode") == "specialist"
+            else f"the rebuild didn't actually move the needle on **{weak}**"
+        )
+        _send(
+            agent,
+            f"**FYI — no action needed.** I built and tested an evolution of myself, and it's **not "
+            f"better**, so nothing changes. {head}.\n{breakdown}\n\n**Why it didn't help:** {why}. "
+            f"Often my real issue is *variance* (I sometimes collapse) rather than a fixed gap, which "
+            f"a narrower design can't fix. I'll keep watching and try a different angle next — likely "
+            f"a **sibling specialist for {weak}** rather than narrowing myself.",
+        )
 
 
 def run_evolution(agent: str, ctx: str, owner: str | None = None) -> None:
@@ -538,20 +624,35 @@ def run_evolution(agent: str, ctx: str, owner: str | None = None) -> None:
             _send(agent, "I couldn't design a clean evolved version this time — I'll try a different angle later.")
             return
         from crewaimeat.forge import validate_crew_file, write_crew_file
+
         vname = f"{agent}-evolved"
-        path = write_crew_file(vname, design["build_domain_code"], design["extra_imports"], readme_md="",
-                               temperature=design["temperature"], subdir=".candidates")
+        path = write_crew_file(
+            vname,
+            design["build_domain_code"],
+            design["extra_imports"],
+            readme_md="",
+            temperature=design["temperature"],
+            subdir=".candidates",
+        )
         ok, vdetail = validate_crew_file(path)
         if not ok:
-            _send(agent, f"I designed an evolved version but it didn't pass validation, so I'm skipping it. "
-                         f"(Reason: {vdetail[:160]})")
+            _send(
+                agent,
+                f"I designed an evolved version but it didn't pass validation, so I'm skipping it. "
+                f"(Reason: {vdetail[:160]})",
+            )
             return
         evalset = _eval_subset(_rated_tasks(agent, ctx, owner))
         if len(evalset) < 2:
             _send(agent, "Not enough of my own rated tasks to A/B-test fairly yet — I'll revisit when I have more.")
             return
-        result = evolve_ab(_load_build_domain(_crew_path(agent)), _load_build_domain(path),
-                           evalset, temperature=design["temperature"], repeats=1)
+        result = evolve_ab(
+            _load_build_domain(_crew_path(agent)),
+            _load_build_domain(path),
+            evalset,
+            temperature=design["temperature"],
+            repeats=1,
+        )
         _post_ab_result(agent, ctx, d, result, vname)
     except Exception as exc:  # noqa: BLE001
         print(f"[{agent}] run_evolution failed: {exc}", file=sys.stderr)
@@ -572,8 +673,7 @@ def _launch_evolve_run(agent: str, ctx: str) -> bool:
         env = os.environ.copy()
         env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
         cmd = [sys.executable, "-m", "crewaimeat.evolve_run", agent, ctx]
-        kwargs: dict = dict(cwd=str(root), env=env, stdout=logf, stderr=logf,
-                            stdin=subprocess.DEVNULL, close_fds=True)
+        kwargs: dict = dict(cwd=str(root), env=env, stdout=logf, stderr=logf, stdin=subprocess.DEVNULL, close_fds=True)
         if os.name == "nt":
             kwargs["creationflags"] = 0x08000000 | 0x00000200  # CREATE_NO_WINDOW | NEW_PROCESS_GROUP
         else:
@@ -589,6 +689,7 @@ def _promote_candidate(agent: str, vname: str, ctx: str, mode: str, owner: str |
     """Promote a staged candidate to a live agent: move into crews/, register (connect add) + launch.
     The new agent waits for the owner's one-time approval, then comes online. Records the lineage."""
     from crewaimeat.forge import _fname, launch_crew, register_agent
+
     staging = Path.cwd() / "crews" / ".candidates" / _fname(vname)
     if not staging.exists():
         _send(agent, "I couldn't find the prepared version to promote — re-run the level-up and I'll rebuild it.")
@@ -605,10 +706,13 @@ def _promote_candidate(agent: str, vname: str, ctx: str, mode: str, owner: str |
     pid, _log = launch_crew(f"crews/{_fname(vname)}")
     sig_ctx = latest_signal(agent, owner)[0] or ctx or "creative"
     record_evolution(agent, sig_ctx, "split", vname, mode)
-    _send(agent, f"**Created `{vname}`**{reg_note} — and it's waiting on you. **Approve its connection in "
-                 f"AIMEAT → Profile → Agents** (a one-time approval). The moment you do, it comes online "
-                 + ("as my stronger self." if mode == "replace" else "as a specialist alongside me.")
-                 + " Until then it sits patiently, nothing else changes.")
+    _send(
+        agent,
+        f"**Created `{vname}`**{reg_note} — and it's waiting on you. **Approve its connection in "
+        f"AIMEAT → Profile → Agents** (a one-time approval). The moment you do, it comes online "
+        + ("as my stronger self." if mode == "replace" else "as a specialist alongside me.")
+        + " Until then it sits patiently, nothing else changes.",
+    )
 
 
 def self_monitor_check(agent_name: str, owner: str | None = None) -> None:
@@ -628,10 +732,12 @@ def self_monitor_check(agent_name: str, owner: str | None = None) -> None:
             continue  # tested recently — anti-spam cooldown
         # Kick off the design + A/B in the BACKGROUND; come back only with a result the owner can act on.
         if _launch_evolve_run(agent_name, ctx):
-            _send(agent_name,
-                  f"Heads-up (no action needed): I noticed I'm inconsistent on '{ctx}' ({detail}). I'm "
-                  f"quietly building and testing an evolution of myself in the background — you don't need "
-                  f"to wait. I'll only come back with a proposal **if it actually proves better**; otherwise "
-                  f"I'll just let you know it didn't pan out and stay as I am.")
+            _send(
+                agent_name,
+                f"Heads-up (no action needed): I noticed I'm inconsistent on '{ctx}' ({detail}). I'm "
+                f"quietly building and testing an evolution of myself in the background — you don't need "
+                f"to wait. I'll only come back with a proposal **if it actually proves better**; otherwise "
+                f"I'll just let you know it didn't pan out and stay as I am.",
+            )
             _mark_proposed(agent_name, ctx, signal)
         return  # one signal at a time

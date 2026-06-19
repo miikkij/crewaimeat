@@ -21,10 +21,10 @@ def test_age_seconds_handles_z_offset_and_missing():
 # ── tally_processes ─────────────────────────────────────────────────────────────
 def test_tally_counts_watchdog_daemon_and_zombies():
     cmds = [
-        "pwsh -File scripts/watchdog.ps1 crews/news_fetcher_crew.py",      # watchdog
-        "python .venv/Scripts/... crews/news_fetcher_crew.py",            # daemon
-        "python crews/deleted_crew.py",                                    # zombie (no file)
-        "node aimeat.js connect serve --http",                             # serve (ignored here)
+        "pwsh -File scripts/watchdog.ps1 crews/news_fetcher_crew.py",  # watchdog
+        "python .venv/Scripts/... crews/news_fetcher_crew.py",  # daemon
+        "python crews/deleted_crew.py",  # zombie (no file)
+        "node aimeat.js connect serve --http",  # serve (ignored here)
     ]
     tally, zombies = fs.tally_processes(cmds, {"news_fetcher_crew.py"})
     assert tally["news_fetcher_crew.py"] == {"watchdog": 1, "daemon": 1}
@@ -52,20 +52,27 @@ def test_build_rows_running_stale_and_zombie():
         "ghost_crew.py": {"watchdog": 0, "daemon": 1},  # zombie: running, no crew file on disk
     }
     node_index = {
-        "news-fetcher": {"last_seen": "2026-06-15T17:59:00Z", "mode": "task-runner"},   # 1 min -> fresh
-        "image-maker": {"last_seen": "2026-06-13T22:59:00Z", "mode": "task-runner"},    # ~1.8 d -> stale
+        "news-fetcher": {"last_seen": "2026-06-15T17:59:00Z", "mode": "task-runner"},  # 1 min -> fresh
+        "image-maker": {"last_seen": "2026-06-13T22:59:00Z", "mode": "task-runner"},  # ~1.8 d -> stale
     }
-    rows = fs.build_rows(roster=roster, tally=tally, locks={"news-fetcher"},
-                         tunnel={"news-fetcher", "image-maker"}, node_index=node_index, now=NOW)
+    rows = fs.build_rows(
+        roster=roster,
+        tally=tally,
+        locks={"news-fetcher"},
+        tunnel={"news-fetcher", "image-maker"},
+        node_index=node_index,
+        now=NOW,
+    )
     by = {r.agent: r for r in rows}
     assert by["news-fetcher"].status == "running"
-    assert by["image-maker"].status == "stale-heartbeat"   # the "orange" case
+    assert by["image-maker"].status == "stale-heartbeat"  # the "orange" case
     assert by["ghost"].status == "zombie" and by["ghost"].crew_file is None
 
 
 def test_build_rows_down_when_no_process():
-    rows = fs.build_rows(roster={"sleepy": "sleepy_crew.py"}, tally={}, locks=set(),
-                         tunnel=set(), node_index={}, now=NOW)
+    rows = fs.build_rows(
+        roster={"sleepy": "sleepy_crew.py"}, tally={}, locks=set(), tunnel=set(), node_index={}, now=NOW
+    )
     assert rows[0].status == "down"
 
 
@@ -79,21 +86,29 @@ def test_serve_tunnel_agents_from_agents_and_principals():
 def test_build_snapshot_with_cached_node_index_skips_network(monkeypatch):
     """Exercises the real build_snapshot signature the TUI uses (node_index=...). Monkeypatches the
     OS collectors; a non-None node_index must be used WITHOUT calling collect_node_index."""
-    monkeypatch.setattr(fs, "collect_cmdlines", lambda: [
-        "pwsh scripts/watchdog.ps1 crews/news_fetcher_crew.py",
-        "python crews/news_fetcher_crew.py",
-        "node aimeat.js connect serve --http",
-    ])
+    monkeypatch.setattr(
+        fs,
+        "collect_cmdlines",
+        lambda: [
+            "pwsh scripts/watchdog.ps1 crews/news_fetcher_crew.py",
+            "python crews/news_fetcher_crew.py",
+            "node aimeat.js connect serve --http",
+        ],
+    )
     monkeypatch.setattr(fs, "collect_roster", lambda: {"news-fetcher": "news_fetcher_crew.py"})
     monkeypatch.setattr(fs, "collect_locks", lambda: {"news-fetcher"})
-    monkeypatch.setattr(fs, "collect_serve", lambda: {"pid": 99648, "port": 52813,
-                                                      "agents": [{"agent": "news-fetcher"}]})
+    monkeypatch.setattr(
+        fs, "collect_serve", lambda: {"pid": 99648, "port": 52813, "agents": [{"agent": "news-fetcher"}]}
+    )
+
     def _boom(_caller):  # must NOT be called when node_index is provided
         raise AssertionError("collect_node_index called despite cached node_index")
+
     monkeypatch.setattr(fs, "collect_node_index", _boom)
 
-    snap = fs.build_snapshot(now=NOW, node_index={"news-fetcher": {"last_seen": "2026-06-15T17:59:00Z",
-                                                                   "mode": "task-runner"}})
+    snap = fs.build_snapshot(
+        now=NOW, node_index={"news-fetcher": {"last_seen": "2026-06-15T17:59:00Z", "mode": "task-runner"}}
+    )
     assert snap.serve_pid == 99648 and snap.serve_port == 52813
     assert snap.n_connectors == 1 and snap.n_locks == 1
     assert len(snap.rows) == 1 and snap.rows[0].status == "running"

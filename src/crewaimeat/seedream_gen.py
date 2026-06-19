@@ -50,14 +50,14 @@ def _upload_public(agent: str, key: str, image: bytes, mime: str) -> bool:
         api = _serve_api()
         if api is not None:
             base, session = api
-            r = session.post(f"{base}/v1/storage", json=presign,
-                             headers={"X-Aimeat-Agent": agent}, timeout=60)
+            r = session.post(f"{base}/v1/storage", json=presign, headers={"X-Aimeat-Agent": agent}, timeout=60)
         else:
             tok, url = _token(agent, _discover_owner(agent))
             if not tok or not url:
                 return False
-            r = requests.post(f"{url.rstrip('/')}/v1/storage", json=presign,
-                              headers={"Authorization": f"Bearer {tok}"}, timeout=60)
+            r = requests.post(
+                f"{url.rstrip('/')}/v1/storage", json=presign, headers={"Authorization": f"Bearer {tok}"}, timeout=60
+            )
         upload_url = ((r.json() or {}).get("data") or {}).get("upload_url") if r.status_code == 200 else None
         if not upload_url:
             print(f"[seedream] presign {key} failed: HTTP {r.status_code} {r.text[:160]}", file=sys.stderr)
@@ -75,8 +75,7 @@ def _pub_url(agent: str, gaii: str, key: str) -> str:
     return f"{base}/v1/pub/{urllib.parse.quote(gaii, safe='')}/{key}"
 
 
-def generate_image(agent_name: str, prompt: str, *, size: str = "2K",
-                   aspect_ratio: str | None = None) -> dict:
+def generate_image(agent_name: str, prompt: str, *, size: str = "2K", aspect_ratio: str | None = None) -> dict:
     """Generate ONE image from `prompt` (Seedream 4.5), upload it public, and return
     {ok, url, mime, bytes} or {ok:False, error}. Fails soft (returns the error string) — never raises,
     so a crew tool can report it cleanly."""
@@ -89,14 +88,23 @@ def generate_image(agent_name: str, prompt: str, *, size: str = "2K",
     image_config: dict = {"size": size}
     if aspect_ratio:
         image_config["aspect_ratio"] = aspect_ratio
-    body = {"model": _MODEL, "messages": [{"role": "user", "content": prompt}],
-            "modalities": ["image"], "image_config": image_config}
+    body = {
+        "model": _MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "modalities": ["image"],
+        "image_config": image_config,
+    }
     try:
         r = requests.post(
             os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/") + "/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}",
-                     "HTTP-Referer": "https://crewaimeat.local", "X-Title": "crewaimeat image-maker"},
-            json=body, timeout=180)
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "HTTP-Referer": "https://crewaimeat.local",
+                "X-Title": "crewaimeat image-maker",
+            },
+            json=body,
+            timeout=180,
+        )
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"request failed: {exc!r}"}
     if r.status_code != 200:
@@ -122,10 +130,15 @@ def generate_image(agent_name: str, prompt: str, *, size: str = "2K",
         return {"ok": False, "error": "upload to public storage failed"}
     pub = _pub_url(agent_name, gaii, key)
     # Record the deliverable (task-runner convention) so the offer's sample + a history exist.
-    _aimeat_call(agent_name, "aimeat_memory_write",
-                 {"key": f"crews.{agent_name}.images.{stamp}-{h}",
-                  "value": {"prompt": prompt, "url": pub, "mime": mime, "bytes": len(data)},
-                  "visibility": "public"})
+    _aimeat_call(
+        agent_name,
+        "aimeat_memory_write",
+        {
+            "key": f"crews.{agent_name}.images.{stamp}-{h}",
+            "value": {"prompt": prompt, "url": pub, "mime": mime, "bytes": len(data)},
+            "visibility": "public",
+        },
+    )
     return {"ok": True, "url": pub, "mime": mime, "bytes": len(data)}
 
 

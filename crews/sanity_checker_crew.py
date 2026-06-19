@@ -16,7 +16,7 @@ from crewaimeat.crew import _web_tools
 
 AGENT_NAME = "sanity-checker"
 
-README = '''[[FIGLET:slant]["SANITY CHECK"]]
+README = """[[FIGLET:slant]["SANITY CHECK"]]
 
 # sanity-checker — stress-test an idea, then advise
 
@@ -29,7 +29,7 @@ Queue an idea to pressure-test:
 - `Launch a paid newsletter about local hiking trails`
 - `Replace our REST API with GraphQL next quarter`
 - `Open a board-game cafe in a small university town`
-'''
+"""
 
 
 def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
@@ -50,8 +50,7 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
         role="Pragmatist",
         goal="Judge feasibility: resources, cost, effort, prerequisites, and real-world precedents",
         backstory=(
-            "You ask whether this can actually be built and run. You look up comparable attempts "
-            "and what they needed."
+            "You ask whether this can actually be built and run. You look up comparable attempts and what they needed."
         ),
         tools=_web_tools(),
         llm=llm,

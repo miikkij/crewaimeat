@@ -16,7 +16,6 @@ default; set ``USE_TAVILY=1`` with ``TAVILY_API_KEY`` to fall back to Tavily).
 from __future__ import annotations
 
 import os
-from typing import Type
 
 import requests
 from crewai.tools import BaseTool
@@ -40,7 +39,7 @@ class SearxngSearchTool(BaseTool):
         "ranked list of results, each with a title, a URL you can cite, and a content snippet. Use it "
         "to find recent, sourced facts."
     )
-    args_schema: Type[BaseModel] = SearxngSearchInput
+    args_schema: type[BaseModel] = SearxngSearchInput
 
     def _run(
         self,
@@ -68,12 +67,14 @@ class SearxngSearchTool(BaseTool):
             url, title = item.get("url"), item.get("title")
             if not url or not title:
                 continue
-            results.append({
-                "title": title.strip(),
-                "url": url,
-                "content": (item.get("content") or "").strip(),
-                "score": item.get("score"),
-            })
+            results.append(
+                {
+                    "title": title.strip(),
+                    "url": url,
+                    "content": (item.get("content") or "").strip(),
+                    "score": item.get("score"),
+                }
+            )
             if len(results) >= max_results:
                 break
 

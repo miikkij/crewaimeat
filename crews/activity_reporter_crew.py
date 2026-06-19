@@ -21,13 +21,13 @@ from __future__ import annotations
 
 from crewai import Agent, Task
 
-from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 from crewaimeat.activity_contract import CONTRACT, make_activity_tools, process_activity_reports
+from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 from crewaimeat.contract_adopt import build_adopt_domain, is_adopt_task
 
 AGENT_NAME = "activity-reporter"
 
-README = '''[[FIGLET:slant]["Activity Reporter"]]
+README = """[[FIGLET:slant]["Activity Reporter"]]
 
 Turns the workspace / organism **activity feed** into per-period **reports** — a digest + changelog +
 attribution + the **story of what happened, narrated by a character**. Reads `activity-tracking` config
@@ -36,7 +36,7 @@ records (which workspace, or `*` for the whole organism; period; narrator), gath
 writes the prose. **It posts nothing external.** Reusable as standup, changelog, build-in-public, credit.
 
 **How to task me:** "report" — I run process_activity_reports ONCE and write any due reports.
-'''
+"""
 
 
 def build_domain(ctx: BuildContext):
@@ -46,9 +46,9 @@ def build_domain(ctx: BuildContext):
         role="Activity Chronicler",
         goal="Turn DUE activity-tracking configs into activity-report documents — digest, changelog, story.",
         backstory="You read the activity feed (who did what, when) for the configured workspace or the whole "
-                  "organism, and write a report document with a digest, a changelog, attribution, and a short "
-                  "in-character story. You call process_activity_reports ONCE and report. You never post "
-                  "anywhere external; you never fabricate — only the real activity events.",
+        "organism, and write a report document with a digest, a changelog, attribution, and a short "
+        "in-character story. You call process_activity_reports ONCE and report. You never post "
+        "anywhere external; you never fabricate — only the real activity events.",
         llm=ctx.llm,
         tools=[*make_activity_tools(AGENT_NAME)],
     )
@@ -75,10 +75,16 @@ def run() -> None:
         if res.get("reports") or res.get("failed"):
             print(f"[{AGENT_NAME}] activity-report poll: {res}")
 
-    run_crew(CrewSpec(
-        agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README,
-        temperature=0.5, idle_hook=_poll, idle_hook_seconds=300,
-    ))
+    run_crew(
+        CrewSpec(
+            agent_name=AGENT_NAME,
+            build_domain=build_domain,
+            readme_md=README,
+            temperature=0.5,
+            idle_hook=_poll,
+            idle_hook_seconds=300,
+        )
+    )
 
 
 if __name__ == "__main__":

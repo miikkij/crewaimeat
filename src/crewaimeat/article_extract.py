@@ -25,9 +25,14 @@ def _isolated_extract(args: list[str], stdin_text: str | None = None, timeout: i
     non-zero exit) or a hang (timeout) just returns "" and the daemon survives to fetch the next
     URL. This is why the daemon itself never imports trafilatura/lxml for parsing."""
     try:
-        r = subprocess.run([sys.executable, "-m", "crewaimeat._extract_worker", *args],
-                           input=stdin_text, capture_output=True, text=True,
-                           encoding="utf-8", timeout=timeout)
+        r = subprocess.run(
+            [sys.executable, "-m", "crewaimeat._extract_worker", *args],
+            input=stdin_text,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=timeout,
+        )
     except (subprocess.TimeoutExpired, OSError):
         return ""
     # Prefer the worker's OUTPUT over its exit code: lxml/libxml2 can fast-fail (0xC0000409) or
@@ -77,6 +82,7 @@ def _playwright_text(url: str) -> str:
     the trafilatura.extract of the rendered HTML in the isolated worker (the lxml crash point)."""
     try:
         from playwright.sync_api import sync_playwright
+
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             page = browser.new_page()

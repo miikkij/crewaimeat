@@ -29,12 +29,37 @@ _DELIVERABLE_KEY = re.compile(r"^(?:crews|research)\.([^.]+)\.(.+)\.latest_outpu
 
 # Deterministic junk pre-filter — drop before spending an LLM call.
 _JUNK_MARKERS = (
-    "no results", "not found", "ei tuloksia", "ei julkista tietoa", "ei löytynyt",
-    "no public information", "(empty)", "n/a",
+    "no results",
+    "not found",
+    "ei tuloksia",
+    "ei julkista tietoa",
+    "ei löytynyt",
+    "no public information",
+    "(empty)",
+    "n/a",
 )
 _STOPWORDS = {
-    "the", "a", "an", "of", "for", "and", "or", "to", "in", "on", "is", "it", "this", "that",
-    "ja", "tai", "on", "se", "joka", "mitä", "miten", "kuinka",
+    "the",
+    "a",
+    "an",
+    "of",
+    "for",
+    "and",
+    "or",
+    "to",
+    "in",
+    "on",
+    "is",
+    "it",
+    "this",
+    "that",
+    "ja",
+    "tai",
+    "se",
+    "joka",
+    "mitä",
+    "miten",
+    "kuinka",
 }
 
 # Shelf-life in days per durability class (None = never decays).
@@ -106,13 +131,17 @@ def classify_entry(content: str, llm=None, need: str | None = None) -> dict:
     Returns {keep, topic, durability, ttl_days, confidence, summary, relevant?}. Junk is pre-filtered
     deterministically (keep=false) so it never costs an LLM call or enters the index."""
     if _looks_like_junk(content):
-        return {"keep": False, "topic": "", "durability": "ephemeral", "ttl_days": 0,
-                "confidence": 0.0, "summary": "", "relevant": "no"}
+        return {
+            "keep": False,
+            "topic": "",
+            "durability": "ephemeral",
+            "ttl_days": 0,
+            "confidence": 0.0,
+            "summary": "",
+            "relevant": "no",
+        }
     llm = llm or get_llm(for_tool_use=False)
-    fit_line = (
-        f'Also judge relevance to this need: "{need}". Add "relevant": "yes"|"partial"|"no".\n'
-        if need else ""
-    )
+    fit_line = f'Also judge relevance to this need: "{need}". Add "relevant": "yes"|"partial"|"no".\n' if need else ""
     prompt = (
         "Classify this deliverable for a knowledge index. Reply with ONLY a JSON object:\n"
         '{"keep": bool, "topic": "<short kebab topic>", "durability": "permanent|slow|fast|ephemeral", '
@@ -120,8 +149,9 @@ def classify_entry(content: str, llm=None, need: str | None = None) -> dict:
         "durability: permanent = a lasting fact (founding year, who won X in YEAR); slow = changes over "
         "months (board, headcount, current CEO); fast = stale in days (prices, latest news/funding); "
         "ephemeral = noise/'not found'/off-topic/made-up -> keep=false. ttl_days null for permanent.\n"
-        + fit_line +
-        "Content:\n" + content[:4000]
+        + fit_line
+        + "Content:\n"
+        + content[:4000]
     )
     out = _parse_json(_safe_llm(llm, prompt)) or {}
     return {
@@ -162,11 +192,17 @@ def search_index(agent_name: str, need: str, top_k: int = 5, prefix: str | None 
         meta = classify_entry(c.get("value") or _slug_to_text(c["slug"]), need=need)
         if not meta["keep"] or meta.get("relevant") == "no":
             continue
-        results.append({
-            "key": c["key"], "agent": c["agent"], "topic": meta["topic"],
-            "durability": meta["durability"], "confidence": meta["confidence"],
-            "relevant": meta["relevant"], "summary": meta["summary"],
-        })
+        results.append(
+            {
+                "key": c["key"],
+                "agent": c["agent"],
+                "topic": meta["topic"],
+                "durability": meta["durability"],
+                "confidence": meta["confidence"],
+                "relevant": meta["relevant"],
+                "summary": meta["summary"],
+            }
+        )
         if len(results) >= top_k:
             break
     rank = {"yes": 0, "partial": 1, "no": 2}
@@ -187,9 +223,13 @@ def contribute_deliverable(agent_name: str, deliverable_key: str, content: str, 
     if not meta.get("keep"):
         return False
     entry = {
-        "key": deliverable_key, "topic": meta["topic"], "sum": meta["summary"],
-        "durability": meta["durability"], "ttl_days": meta["ttl_days"],
-        "confidence": meta["confidence"], "ts": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "key": deliverable_key,
+        "topic": meta["topic"],
+        "sum": meta["summary"],
+        "durability": meta["durability"],
+        "ttl_days": meta["ttl_days"],
+        "confidence": meta["confidence"],
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
     }
     lib_key = LIBRARY_KEY.format(agent=agent_name)
     r = _aimeat_call(agent_name, "aimeat_memory_read", {"key": lib_key})

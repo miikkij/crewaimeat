@@ -26,5 +26,5 @@ def test_corrupt_marker_file_fails_open(tmp_path, monkeypatch):
     monkeypatch.setattr(local_marks, "_path", lambda name: tmp_path / f".{name}_runs.json")
     (tmp_path / ".x_runs.json").write_text("EI JSONIA", encoding="utf-8")
     assert not local_marks.ran_within("x", "r1", 24)  # unreadable -> don't block work
-    local_marks.mark_local_run("x", "r1")             # and writing repairs the file
+    local_marks.mark_local_run("x", "r1")  # and writing repairs the file
     assert local_marks.ran_within("x", "r1", 24)

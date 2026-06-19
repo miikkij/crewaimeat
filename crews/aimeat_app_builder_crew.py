@@ -178,7 +178,7 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "Read EVERY key with the SAME prefix you write — never a bare key. Then write the k8s-style "
             "manifest YAML (use the read_cortex_example schema; one `lib` component whose `filename` "
             "matches your libs key).\n"
-            "2. install_cortex(name, manifest_yaml, libs_json) — libs_json is '{\"<name>.js\":\"<code>\"}'. "
+            '2. install_cortex(name, manifest_yaml, libs_json) — libs_json is \'{"<name>.js":"<code>"}\'. '
             "The tool syntax-checks the lib first; if it returns PRE-INSTALL BLOCKED, fix the JS and "
             "retry. If it returns INSTALL DENIED (403), report it — the owner's node still needs the "
             "agent cortex-install grant deployed.\n"
@@ -204,7 +204,7 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "   PUBLIC IMAGES (storage): if the app shows images to ANON or OTHER users (a public gallery, a "
             "marketplace, any anon-readable app), upload them with AIMEAT.storage.upload(file, "
             "{visibility:'public'}) AND display them via the PUBLIC route directly: "
-            "<img src=\"/v1/pub/<uploader-gaii>/<key>\"> (this is the storage equivalent of memory's "
+            '<img src="/v1/pub/<uploader-gaii>/<key>"> (this is the storage equivalent of memory\'s '
             "getPublic(gaii,key), served by optionalAuth — anyone, no token). Do NOT use "
             "AIMEAT.storage.download(key) or AIMEAT.storage.publicUrl(key) for cross-user/anon images: both "
             "hit /v1/storage/<key> with the CALLER's OWN token (auth-only + caller-scoped), so an anonymous or "

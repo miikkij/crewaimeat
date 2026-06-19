@@ -16,10 +16,14 @@ def test_classify_crew_pids_splits_watchdog_and_daemon():
 
 def test_stop_crew_kills_watchdog_before_daemon(monkeypatch):
     order = []
-    monkeypatch.setattr(forge, "_crew_proc_entries", lambda fname: [
-        (202, "python crews/news_fetcher_crew.py"),
-        (101, "pwsh scripts/watchdog.ps1 crews/news_fetcher_crew.py"),
-    ])
+    monkeypatch.setattr(
+        forge,
+        "_crew_proc_entries",
+        lambda fname: [
+            (202, "python crews/news_fetcher_crew.py"),
+            (101, "pwsh scripts/watchdog.ps1 crews/news_fetcher_crew.py"),
+        ],
+    )
     monkeypatch.setattr(forge, "_kill_pid_tree", lambda pid: order.append(pid))
     msg = forge.stop_crew("news-fetcher")
     assert order == [101, 202]  # watchdog (101) killed FIRST, then daemon (202)
@@ -36,6 +40,13 @@ def test_action_targets_are_plain_callables():
     object is not callable ('Tool' object is not callable at runtime). This catches the regression
     where start/reauth pointed at the @tool wrappers instead of their plain twins."""
     import crewaimeat.serve_guard as sg
-    for fn in (forge.start_crew, forge.stop_crew, forge.recycle_crew, forge.reauth,
-               forge.reconcile_fleet, sg.ensure_single_serve):
+
+    for fn in (
+        forge.start_crew,
+        forge.stop_crew,
+        forge.recycle_crew,
+        forge.reauth,
+        forge.reconcile_fleet,
+        sg.ensure_single_serve,
+    ):
         assert callable(fn), f"{fn!r} is not callable (a @tool object leaked into the action path?)"

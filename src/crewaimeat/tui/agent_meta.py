@@ -25,6 +25,7 @@ _FIGLET_RE = re.compile(r'\[\[FIGLET:[^\]]*\]\[\s*"?([^"\]]*?)"?\s*\]\]')
 
 def _load_cfg() -> dict:
     from crewaimeat.llm import _providers_file
+
     p = _providers_file()
     if not p or not os.path.exists(p):
         return {}
@@ -38,13 +39,14 @@ def _load_cfg() -> dict:
 def model_chain(agent: str) -> tuple[str, list[str]]:
     """(profile_label, ['xai:grok-4.3', 'openrouter:gpt-oss-120b:free', ...]) in priority order."""
     from crewaimeat.llm import _select_chain
+
     cfg = _load_cfg()
     if not cfg:
         return ("(no llm_providers.json)", [])
     providers, profile = _select_chain(cfg, agent)
     labels: list[str] = []
     for prov in providers or []:
-        ptype = (prov.get("type") or prov.get("name") or "?")
+        ptype = prov.get("type") or prov.get("name") or "?"
         for m in prov.get("models") or []:
             mid = m.get("id") if isinstance(m, dict) else m
             if mid:
@@ -56,6 +58,7 @@ def read_readme(agent: str) -> str | None:
     """The crew file's README constant (FIGLET banner reduced to plain text), or None if absent."""
     try:
         from crewaimeat.forge import _fname, _project_root
+
         p = _project_root() / "crews" / _fname(agent)
         text = p.read_text(encoding="utf-8")
     except Exception:  # noqa: BLE001
@@ -107,12 +110,14 @@ def offers_detail(agent: str) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     try:
         from crewaimeat.offers import _CREW_OFFERS
+
         for meta in _CREW_OFFERS.get(agent) or []:
             out.append((meta.get("id") or "?", meta.get("title") or meta.get("id") or "?"))
     except Exception:  # noqa: BLE001
         pass
     try:
         from crewaimeat.offers import _OFFER_META, _contracts
+
         for c in _contracts():
             cid = c.get("id")
             meta = _OFFER_META.get(cid) or {}
@@ -139,8 +144,13 @@ def contracts_for(agent: str) -> list[dict]:
         for sp in c.get("spaces") or []:
             schema = sp.get("schema") or {}
             fields = list((schema.get("properties") or {}).keys()) if isinstance(schema, dict) else []
-            spaces.append({"space": sp.get("space") or sp.get("namespace") or "?",
-                           "mode": sp.get("mode") or "?", "fields": fields})
+            spaces.append(
+                {
+                    "space": sp.get("space") or sp.get("namespace") or "?",
+                    "mode": sp.get("mode") or "?",
+                    "fields": fields,
+                }
+            )
         out.append({"id": cid or "?", "spaces": spaces})
     return out
 
@@ -149,6 +159,7 @@ def identity(agent: str) -> tuple[list[str], dict]:
     """(tags, capabilities) the agent advertises, from the curated fleet registry (or ([], {}))."""
     try:
         from crewaimeat.fleet_identity import identity_for
+
         ident = identity_for(agent) or {}
         return (list(ident.get("tags") or []), ident.get("capabilities") or {})
     except Exception:  # noqa: BLE001
@@ -173,6 +184,7 @@ def current_override(agent: str) -> dict | None:
     """The agent's pinned model/profile override, or None (revert = llm_providers.json routing)."""
     try:
         from crewaimeat.llm import agent_override
+
         return agent_override(agent)
     except Exception:  # noqa: BLE001
         return None
@@ -182,6 +194,7 @@ def model_catalogue() -> list[dict]:
     """Every selectable (provider, model) from llm_providers.json — feeds the picker. See llm.available_models."""
     try:
         from crewaimeat.llm import available_models
+
         return available_models()
     except Exception:  # noqa: BLE001
         return []

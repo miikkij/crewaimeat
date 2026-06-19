@@ -23,10 +23,9 @@ from __future__ import annotations
 
 import json
 
-from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
-from crewaimeat.contract_adopt import (
-    build_adopt_domain, ensure_routed_workspaces, is_adopt_task, merge_targets)
 from crewaimeat import feedback_wisdom_contract as fw
+from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
+from crewaimeat.contract_adopt import build_adopt_domain, ensure_routed_workspaces, is_adopt_task, merge_targets
 
 AGENT_NAME = "feedback-wisdom"
 
@@ -35,8 +34,12 @@ AGENT_NAME = "feedback-wisdom"
 # on `feedback-analysis` (a charset-safe tag) and `consumes:feedback-stats@1` / `produces:support-advisory@1`
 # — the versioned ids carry ':'/'@' which tags reject, so they ride the DOMAIN capabilities (the matcher
 # reads technical + domain). We report specific capabilities over the liaison's generic defaults.
-CAPABILITY_TAGS = ["feedback-analysis", "role.workspace-contract",
-                   "consumes.feedback-stats", "produces.support-advisory"]
+CAPABILITY_TAGS = [
+    "feedback-analysis",
+    "role.workspace-contract",
+    "consumes.feedback-stats",
+    "produces.support-advisory",
+]
 CAPABILITIES = {
     "technical": [
         {"name": "workspace-contract", "type": "skill"},
@@ -51,7 +54,7 @@ CAPABILITIES = {
     "languages": ["en"],
 }
 
-README = '''[[FIGLET:slant]["Feedback Wisdom"]]
+README = """[[FIGLET:slant]["Feedback Wisdom"]]
 
 Closes the **Feedback Desk** loop: reads the desk's refined statistics (`feedback-stats@1`), reasons
 over them, and writes operational guidance (`support-advisory@1`) back — so support staff get advance
@@ -66,10 +69,10 @@ over the published aggregates — I don't read raw feedback and I don't deliver 
 **Or adopt my contract:** add the `feedback-stats` + `support-advisory` spaces to a workspace (e.g.
 `support-ops/wisdom`) and I mirror the whole chain there — the stats I ingested next to the advisories
 I derived — so you can see input→output at a glance.
-'''
+"""
 
 
-def _make_tools(routed_targets: "list[tuple[str, str]] | None" = None):
+def _make_tools(routed_targets: list[tuple[str, str]] | None = None):
     """LLM-facing tools: read the produced stats + the deterministic CANDIDATE advisories (so the
     agent only PHRASES, never invents structure/ids), then publish the final set idempotently.
 
@@ -90,23 +93,32 @@ def _make_tools(routed_targets: "list[tuple[str, str]] | None" = None):
         cache.clear()
         snaps = fw.discover_stats()
         if not snaps:
-            return ("NO STATS: no feedback.stats.<org>.latest snapshot is in memory yet. The Feedback "
-                    "Desk must publish stats first (POST /api/stats/publish or its publish-stats "
-                    "capability). Do not fabricate advisories — stop and report this.")
+            return (
+                "NO STATS: no feedback.stats.<org>.latest snapshot is in memory yet. The Feedback "
+                "Desk must publish stats first (POST /api/stats/publish or its publish-stats "
+                "capability). Do not fabricate advisories — stop and report this."
+            )
         out = []
-        for org, env, stats in snaps:
+        for org, _env, stats in snaps:
             rng = stats.get("range") or {}
             window = f"{rng.get('from')}..{rng.get('to')}"
             cands = fw.derive_advisories(org, stats, prior=fw._prior_stats(org, window))
             for c in cands:
                 cache[c["id"]] = c
-            out.append({
-                "org": org, "window": window,
-                "headline": {"total": stats.get("total"), "open": stats.get("open"),
-                             "resolved": stats.get("resolved"),
-                             "avg_days_to_resolve": fw._round(stats.get("avg_days_to_resolve")),
-                             "pct_tagged": fw._round((stats.get("tag_coverage") or {}).get("pct_tagged"), 1)},
-                "candidates": cands})
+            out.append(
+                {
+                    "org": org,
+                    "window": window,
+                    "headline": {
+                        "total": stats.get("total"),
+                        "open": stats.get("open"),
+                        "resolved": stats.get("resolved"),
+                        "avg_days_to_resolve": fw._round(stats.get("avg_days_to_resolve")),
+                        "pct_tagged": fw._round((stats.get("tag_coverage") or {}).get("pct_tagged"), 1),
+                    },
+                    "candidates": cands,
+                }
+            )
         return json.dumps(out, ensure_ascii=False, indent=2)
 
     @tool("publish_advisories")
@@ -125,6 +137,7 @@ def _make_tools(routed_targets: "list[tuple[str, str]] | None" = None):
             return f"FAILED: advisories_json is not valid JSON: {e}"
         if not isinstance(items, list) or not items:
             return "FAILED: pass a non-empty JSON array of {id, title, body, rationale}."
+
         def _org_of(adv: dict) -> str:
             return next((t.split(":", 1)[1] for t in (adv.get("tags") or []) if t.startswith("org:")), "?")
 
@@ -151,8 +164,9 @@ def _make_tools(routed_targets: "list[tuple[str, str]] | None" = None):
             for org, env, stats in fw.discover_stats():
                 if org in by_org:
                     ws_records += fw.mirror_chain(org, env, stats, by_org[org], targets)
-        return json.dumps({"published": results, "ws_records": ws_records,
-                           "mirror_targets": len(targets)}, ensure_ascii=False)
+        return json.dumps(
+            {"published": results, "ws_records": ws_records, "mirror_targets": len(targets)}, ensure_ascii=False
+        )
 
     tools = [analyze_feedback_stats, publish_advisories]
     for t in tools:  # side-effecting / live-state — never serve a cached result
@@ -173,11 +187,15 @@ def build_domain(ctx: BuildContext):
 
     analyst = Agent(
         role="Support Wisdom Analyst",
-        goal=("Turn the Feedback Desk's refined statistics into clear, grounded operational guidance "
-              "for support staff — each advisory citing the exact stat movement behind it."),
-        backstory=("You are a customer-support operations analyst. You reason over AGGREGATE statistics "
-                   "(never raw tickets), trust explainable rules over hunches, and write briefings a "
-                   "support agent can act on today. You never invent a trend the numbers don't show."),
+        goal=(
+            "Turn the Feedback Desk's refined statistics into clear, grounded operational guidance "
+            "for support staff — each advisory citing the exact stat movement behind it."
+        ),
+        backstory=(
+            "You are a customer-support operations analyst. You reason over AGGREGATE statistics "
+            "(never raw tickets), trust explainable rules over hunches, and write briefings a "
+            "support agent can act on today. You never invent a trend the numbers don't show."
+        ),
         llm=ctx.llm,
         tools=_make_tools(routed_targets),
     )
@@ -199,8 +217,10 @@ def build_domain(ctx: BuildContext):
             "where it landed (outbox + workspace), noting any skipped/failed."
         ),
         agent=analyst,
-        expected_output=("The advisories published with their rationales, the outbox keys, and the "
-                         "workspace mirror result (or a clear 'no stats yet' report)."),
+        expected_output=(
+            "The advisories published with their rationales, the outbox keys, and the "
+            "workspace mirror result (or a clear 'no stats yet' report)."
+        ),
     )
 
     return ([analyst], [task])
@@ -215,9 +235,18 @@ def run() -> None:
         if res.get("advisories_written") or res.get("failed"):
             print(f"[{AGENT_NAME}] feedback-stats poll: {res}")
 
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README,
-                      temperature=0.3, idle_hook=_poll, idle_hook_seconds=300,
-                      tags=CAPABILITY_TAGS, capabilities=CAPABILITIES))
+    run_crew(
+        CrewSpec(
+            agent_name=AGENT_NAME,
+            build_domain=build_domain,
+            readme_md=README,
+            temperature=0.3,
+            idle_hook=_poll,
+            idle_hook_seconds=300,
+            tags=CAPABILITY_TAGS,
+            capabilities=CAPABILITIES,
+        )
+    )
 
 
 if __name__ == "__main__":

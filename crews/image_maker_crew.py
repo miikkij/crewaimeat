@@ -18,7 +18,7 @@ from crewaimeat.seedream_gen import make_image_tools
 
 AGENT_NAME = "image-maker"
 
-README = '''[[FIGLET:slant]["Image Maker"]]
+README = """[[FIGLET:slant]["Image Maker"]]
 
 Generates an image from your description (ByteDance Seedream 4.5) and gives you a public URL.
 
@@ -29,7 +29,7 @@ the link. ~$0.04 per image. I make images; I don't edit your existing files or p
 **Or adopt my contract:** add the `image-request` + `image-gallery` spaces to a workspace and write an
 `image-request` record (`{prompt, size?, aspect_ratio?, status: "requested"}`) — I generate it on my
 idle poll and write the image into an `image-gallery` document. No task or chat needed.
-'''
+"""
 
 
 def build_domain(ctx: BuildContext):
@@ -39,11 +39,15 @@ def build_domain(ctx: BuildContext):
 
     director = Agent(
         role="Image Director",
-        goal=("Turn the user's request into ONE vivid, specific image-generation prompt, generate the "
-              "image, and return its public URL."),
-        backstory=("You are an art director who writes precise, evocative image prompts — naming the "
-                   "subject, style, lighting, composition and mood — and produces a single strong image "
-                   "per request rather than many rough ones."),
+        goal=(
+            "Turn the user's request into ONE vivid, specific image-generation prompt, generate the "
+            "image, and return its public URL."
+        ),
+        backstory=(
+            "You are an art director who writes precise, evocative image prompts — naming the "
+            "subject, style, lighting, composition and mood — and produces a single strong image "
+            "per request rather than many rough ones."
+        ),
         llm=ctx.llm,
         tools=make_image_tools(AGENT_NAME),
     )
@@ -77,8 +81,16 @@ def run() -> None:
             print(f"[{AGENT_NAME}] image-request poll: {res}")
 
     # A creative service — a mild temperature for prompt-crafting; the image call itself is deterministic.
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README,
-                      temperature=0.6, idle_hook=_poll, idle_hook_seconds=300))
+    run_crew(
+        CrewSpec(
+            agent_name=AGENT_NAME,
+            build_domain=build_domain,
+            readme_md=README,
+            temperature=0.6,
+            idle_hook=_poll,
+            idle_hook_seconds=300,
+        )
+    )
 
 
 if __name__ == "__main__":

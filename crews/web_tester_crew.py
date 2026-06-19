@@ -9,6 +9,7 @@ Needs a browser binary: `uv run playwright install chromium`.
 
 Run: uv run python crews/web_tester_crew.py
 """
+
 from __future__ import annotations
 
 from crewai import Agent, Task
@@ -18,7 +19,7 @@ from crewaimeat.crew import _browser_tools
 
 AGENT_NAME = "web-tester"
 
-README = '''[[FIGLET:slant]["Web Tester"]]
+README = """[[FIGLET:slant]["Web Tester"]]
 
 Drives a real headless browser to test web-app flows — navigate, fill forms, click, log in, and
 verify results (reading page content or describing a screenshot with a vision model). Give it a
@@ -27,7 +28,7 @@ passed/failed.
 
 **How to task me:** Give me a URL and the flow to verify (e.g. "log in with X/Y and confirm the
 dashboard loads"). I plan the browser actions, run them, and report each step ✓/✗ with evidence.
-'''
+"""
 
 
 def build_domain(ctx: BuildContext):

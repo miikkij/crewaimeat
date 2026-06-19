@@ -33,7 +33,7 @@ from crewaimeat.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is
 # === CUSTOMIZE 1: your AIMEAT agent identity =============================== #
 AGENT_NAME = "probability-creator"  # must match `aimeat connect add --agent ...`
 
-README = '''[[FIGLET:slant]["PROBABILITY"]]
+README = """[[FIGLET:slant]["PROBABILITY"]]
 
 # probability-creator — one question, a spectrum of answers
 
@@ -46,7 +46,7 @@ Queue any question; optionally ask for a count:
 - `What killed the dinosaurs? give me 7 answers`
 - `Where should we hold the team offsite?`
 - `Why is our build flaky?`
-'''
+"""
 
 
 # === CUSTOMIZE 2: your domain agents + tasks ============================== #

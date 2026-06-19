@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 from typing import Any
 
 import requests
@@ -41,7 +40,7 @@ GEN_TIMEOUT = 90  # generator prompts/artifacts can be large; give the node room
 # Deterministic pre-submit quality gates — the "catch" a human gave the UI flow, automated. A cortex
 # that fails these (syntax error, or memory reads missing the service_slug prefix) must be fixed
 # BEFORE it registers, never shipped "green". See app_verify.py.
-from crewaimeat.app_verify import cortex_syntax_ok, cortex_uses_slug
+from crewaimeat.app_verify import cortex_syntax_ok, cortex_uses_slug  # noqa: E402  (after the gate doc)
 
 
 # --------------------------------------------------------------------------- #
@@ -153,7 +152,7 @@ def make_generator_tools(agent_name: str, owner: str | None = None, task_id: str
             for k in mk.keys():
                 ks = str(k)
                 if slug and ks.startswith(f"{slug}."):
-                    ks = ks[len(slug) + 1:]
+                    ks = ks[len(slug) + 1 :]
                 first = ks.split(".")[0]
                 if first and first != slug:
                     pfxset.add(first)
@@ -166,8 +165,13 @@ def make_generator_tools(agent_name: str, owner: str | None = None, task_id: str
         if not task_id:
             return
         try:
-            _call(agent_name, owner, "POST", f"/v1/agents/me/tasks/{task_id}/event",
-                  {"type": "progress", "message": message})
+            _call(
+                agent_name,
+                owner,
+                "POST",
+                f"/v1/agents/me/tasks/{task_id}/event",
+                {"type": "progress", "message": message},
+            )
         except Exception:  # noqa: BLE001 — progress is best-effort, never break the build
             pass
 
@@ -176,8 +180,7 @@ def make_generator_tools(agent_name: str, owner: str | None = None, task_id: str
         """Create a new generator project for the app you are about to build. `name` = a short
         human name; `description` = one paragraph of what the app does. The returned projectId is
         stored automatically — every later gen_* tool uses it. Call this FIRST."""
-        env = _call(agent_name, owner, "POST", "/v1/generator/projects",
-                    {"name": name, "description": description})
+        env = _call(agent_name, owner, "POST", "/v1/generator/projects", {"name": name, "description": description})
         if not _ok(env):
             return f"FAILED to create project: {_err(env)}"
         pid = (env.get("data") or {}).get("projectId")
@@ -193,7 +196,7 @@ def make_generator_tools(agent_name: str, owner: str | None = None, task_id: str
             return f"FAILED to open project {project_id}: {_err(env)}"
         state["pid"] = project_id
         state["_bp_meta"] = None  # recompute slug/key-prefixes for the opened project
-        proj = ((env.get("data") or {}).get("project") or {})
+        proj = (env.get("data") or {}).get("project") or {}
         return f"Opened project {project_id} (name={proj.get('name')}, status={proj.get('status')}). The gen_* tools now act on it."
 
     @tool("gen_get_interview_prompt")
@@ -253,8 +256,7 @@ def make_generator_tools(agent_name: str, owner: str | None = None, task_id: str
         pid = _need_pid()
         if not pid:
             return "No project yet — call gen_create_project first."
-        env = _call(agent_name, owner, "POST", f"/v1/generator/{pid}/steps/blueprint",
-                    {"blueprint": blueprint_json})
+        env = _call(agent_name, owner, "POST", f"/v1/generator/{pid}/steps/blueprint", {"blueprint": blueprint_json})
         if not _ok(env):
             return f"BLUEPRINT REJECTED: {_err(env)}"
         d = env.get("data") or {}
@@ -277,8 +279,10 @@ def make_generator_tools(agent_name: str, owner: str | None = None, task_id: str
         env = _call(agent_name, owner, "POST", f"/v1/generator/{pid}/settings", {"values": values})
         if not _ok(env):
             if env.get("_status") == 403:
-                return ("Settings are owner-managed (403 owner-only) — the agent cannot set them. "
-                        "Fine for an app with no external-service secrets; proceed to gen_list_components.")
+                return (
+                    "Settings are owner-managed (403 owner-only) — the agent cannot set them. "
+                    "Fine for an app with no external-service secrets; proceed to gen_list_components."
+                )
             return f"FAILED to save settings: {_err(env)}"
         return f"Settings stored ({(env.get('data') or {}).get('stored', 0)} keys)."
 
@@ -319,7 +323,7 @@ def make_generator_tools(agent_name: str, owner: str | None = None, task_id: str
                 state.setdefault("types", {})[_c["id"]] = (_c.get("type"), _c.get("subtype"))
         ordered_ids: list = []
         for ph in phases:
-            for cid in (ph.get("componentIds") or []):
+            for cid in ph.get("componentIds") or []:
                 if cid not in ordered_ids:
                     ordered_ids.append(cid)
         for c in comps:  # any not covered by phases, appended at the end
@@ -356,15 +360,17 @@ def make_generator_tools(agent_name: str, owner: str | None = None, task_id: str
                         _bp = json.loads(_bp)
                     except Exception:  # noqa: BLE001
                         _bp = {}
-                for _c in (_bp.get("components") or []):
+                for _c in _bp.get("components") or []:
                     if isinstance(_c, dict) and _c.get("id"):
                         state.setdefault("types", {})[_c["id"]] = (_c.get("type"), _c.get("subtype"))
                 ctype = (state.get("types") or {}).get(component_id, (None, None))[0]
             if ctype in ("extension", "cortex", "app") and component_id not in state.get("specs", set()):
-                return (f"SPEC REQUIRED FIRST — '{component_id}' is a {ctype} and MUST be built spec-first. "
-                        f"Do NOT request its code yet. Steps: (1) gen_component_prompt('{component_id}', 'spec') "
-                        f"(2) produce the spec JSON (3) gen_submit_spec('{component_id}', spec_json) "
-                        f"(4) THEN gen_component_prompt('{component_id}', 'code'). This is mandatory.")
+                return (
+                    f"SPEC REQUIRED FIRST — '{component_id}' is a {ctype} and MUST be built spec-first. "
+                    f"Do NOT request its code yet. Steps: (1) gen_component_prompt('{component_id}', 'spec') "
+                    f"(2) produce the spec JSON (3) gen_submit_spec('{component_id}', spec_json) "
+                    f"(4) THEN gen_component_prompt('{component_id}', 'code'). This is mandatory."
+                )
         _event(("Writing spec for " if ptype == "spec" else "Generating code for ") + component_id)
         q = f"?type={ptype}" if ptype and ptype != "code" else ""
         env = _call(agent_name, owner, "GET", f"/v1/generator/{pid}/prompts/{component_id}{q}")
@@ -386,14 +392,15 @@ def make_generator_tools(agent_name: str, owner: str | None = None, task_id: str
             spec = json.loads(spec_json)
         except Exception as e:  # noqa: BLE001
             return f"spec_json is not valid JSON: {e}. Fix and resend the full object."
-        env = _call(agent_name, owner, "POST",
-                    f"/v1/generator/{pid}/components/{component_id}/spec", {"spec": spec})
+        env = _call(agent_name, owner, "POST", f"/v1/generator/{pid}/components/{component_id}/spec", {"spec": spec})
         if not _ok(env):
             return f"SPEC STORE FAILED ({component_id}): {_err(env)}"
         state.setdefault("specs", set()).add(component_id)
         _event("Spec stored: " + component_id)
-        return (f"Spec stored for {component_id}. Next: gen_component_prompt('{component_id}', 'code') "
-                "— the code prompt now includes this spec.")
+        return (
+            f"Spec stored for {component_id}. Next: gen_component_prompt('{component_id}', 'code') "
+            "— the code prompt now includes this spec."
+        )
 
     @tool("gen_submit_component")
     def gen_submit_component(component_id: str, ctype: str, content: str) -> str:
@@ -410,24 +417,34 @@ def make_generator_tools(agent_name: str, owner: str | None = None, task_id: str
         #   service_slug prefix (→ 404 → raw i18n keys / empty data). The agent fixes, then resubmits.
         if ctype == "cortex":
             import re as _re
+
             jsm = _re.search(r"```(?:javascript|js)\s*\n([\s\S]*?)```", content)
             js = jsm.group(1) if jsm else ""
             if js:
                 ok_syntax, syn_err = cortex_syntax_ok(js)
                 if not ok_syntax:
-                    return (f"PRE-SUBMIT BLOCKED ({component_id}): the cortex JavaScript has a SYNTAX "
-                            f"ERROR — {syn_err}. Fix the JS and resubmit; do NOT register broken code.")
+                    return (
+                        f"PRE-SUBMIT BLOCKED ({component_id}): the cortex JavaScript has a SYNTAX "
+                        f"ERROR — {syn_err}. Fix the JS and resubmit; do NOT register broken code."
+                    )
                 slug, prefixes = _blueprint_meta()
                 if slug and prefixes:
                     ok_slug, offenders = cortex_uses_slug(js, slug, prefixes)
                     if not ok_slug:
                         eg = offenders[0]
-                        return (f"PRE-SUBMIT BLOCKED ({component_id}): the cortex reads memory key(s) "
-                                f"WITHOUT the service_slug prefix: {offenders}. Seeded data is stored "
-                                f"namespaced as '{slug}.<key>'. Read every seeded key slug-prefixed, e.g. "
-                                f"AIMEAT.data.get('{slug}.{eg}...'), then resubmit.")
-        env = _call(agent_name, owner, "POST", f"/v1/generator/{pid}/components/{component_id}/submit",
-                    {"type": ctype, "content": content})
+                        return (
+                            f"PRE-SUBMIT BLOCKED ({component_id}): the cortex reads memory key(s) "
+                            f"WITHOUT the service_slug prefix: {offenders}. Seeded data is stored "
+                            f"namespaced as '{slug}.<key>'. Read every seeded key slug-prefixed, e.g. "
+                            f"AIMEAT.data.get('{slug}.{eg}...'), then resubmit."
+                        )
+        env = _call(
+            agent_name,
+            owner,
+            "POST",
+            f"/v1/generator/{pid}/components/{component_id}/submit",
+            {"type": ctype, "content": content},
+        )
         if not _ok(env):
             return f"SUBMIT REJECTED ({component_id}): {_err(env)}"
         d = env.get("data") or {}
@@ -486,10 +503,21 @@ def make_generator_tools(agent_name: str, owner: str | None = None, task_id: str
         return f"{base}/v1/apps/{own}/{filename}?mode=inline"
 
     tools = [
-        gen_create_project, gen_open_project, gen_get_interview_prompt, gen_import_spec,
-        gen_get_blueprint_prompt, gen_import_blueprint, gen_save_settings,
-        gen_list_components, gen_component_prompt, gen_submit_spec, gen_submit_component,
-        gen_register_component, gen_activate_extension, gen_complete, gen_app_inline_url,
+        gen_create_project,
+        gen_open_project,
+        gen_get_interview_prompt,
+        gen_import_spec,
+        gen_get_blueprint_prompt,
+        gen_import_blueprint,
+        gen_save_settings,
+        gen_list_components,
+        gen_component_prompt,
+        gen_submit_spec,
+        gen_submit_component,
+        gen_register_component,
+        gen_activate_extension,
+        gen_complete,
+        gen_app_inline_url,
     ]
     # These tools carry mutable state / live server responses — never serve a cached result.
     for _t in tools:

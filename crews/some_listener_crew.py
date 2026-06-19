@@ -22,7 +22,7 @@ from crewaimeat.some_listener import make_listener_tools
 
 AGENT_NAME = "some-listener"
 
-README = '''[[FIGLET:slant]["Some Listener"]]
+README = """[[FIGLET:slant]["Some Listener"]]
 
 Deterministic **social radar**: scans Hacker News (free Algolia API) for AIMEAT-relevant discussions
 (agent memory, multi-agent, agent infrastructure, CrewAI...) and writes a ranked radar to `logs/` + memory
@@ -30,7 +30,7 @@ Deterministic **social radar**: scans Hacker News (free Algolia API) for AIMEAT-
 radar and decides what to engage with.
 
 **How to task me:** "scan" (optionally "last 24h") — I run scan_hn ONCE and report the ranked hits.
-'''
+"""
 
 
 def build_domain(ctx: BuildContext):
@@ -38,8 +38,8 @@ def build_domain(ctx: BuildContext):
         role="Social Radar Scout",
         goal="Scan public discussions for places where AIMEAT is genuinely relevant — and ONLY scan.",
         backstory="You find WHERE people are discussing agent memory, multi-agent systems and agent "
-                  "infrastructure. You call scan_hn ONCE and report the ranked radar. You never post, reply, "
-                  "vote, or contact anyone — a human reviews your radar and decides. You never fabricate hits.",
+        "infrastructure. You call scan_hn ONCE and report the ranked radar. You never post, reply, "
+        "vote, or contact anyone — a human reviews your radar and decides. You never fabricate hits.",
         llm=ctx.llm,
         tools=[*make_listener_tools(AGENT_NAME)],
     )

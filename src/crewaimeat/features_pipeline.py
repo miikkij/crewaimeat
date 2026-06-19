@@ -14,14 +14,20 @@ from crewaimeat.llm import get_llm
 from crewaimeat.prose_style import FINNISH_NATIVE_STYLE
 
 _TIDBITS = {
-    "koodaus": ("PÄIVÄN KOODAUSOSIO — yksi näppärä, itsenäinen ohjelmointivinkki (kikka, kuvio tai sudenkuoppa) "
-                "lyhyellä oikealla ```koodi```-lohkolla ja 2-4 lauseen suomenkielisellä selityksellä. "
-                "Allekirjoita '— Koodi-Kalle'."),
-    "prompt-niksi": ("PROMPT-NIKSINURKKA — yksi käytännön prompt-engineering-vinkki jonka lukija voi käyttää "
-                     "tänään, 3-5 lausetta suomeksi + lyhyt esimerkkikehote. Allekirjoita '— Prompt-Pia'."),
-    "matikka": ("MATEMATIIKKAHETKI — yksi ihastuttava matemaattinen uteliaisuus, pulma tai elegantti fakta, "
-                "selkeä suomenkielinen selitys JA vastaus (piilota vastaus loppuun riville 'Vastaus:'). "
-                "Allekirjoita '— Matikka-Make'."),
+    "koodaus": (
+        "PÄIVÄN KOODAUSOSIO — yksi näppärä, itsenäinen ohjelmointivinkki (kikka, kuvio tai sudenkuoppa) "
+        "lyhyellä oikealla ```koodi```-lohkolla ja 2-4 lauseen suomenkielisellä selityksellä. "
+        "Allekirjoita '— Koodi-Kalle'."
+    ),
+    "prompt-niksi": (
+        "PROMPT-NIKSINURKKA — yksi käytännön prompt-engineering-vinkki jonka lukija voi käyttää "
+        "tänään, 3-5 lausetta suomeksi + lyhyt esimerkkikehote. Allekirjoita '— Prompt-Pia'."
+    ),
+    "matikka": (
+        "MATEMATIIKKAHETKI — yksi ihastuttava matemaattinen uteliaisuus, pulma tai elegantti fakta, "
+        "selkeä suomenkielinen selitys JA vastaus (piilota vastaus loppuun riville 'Vastaus:'). "
+        "Allekirjoita '— Matikka-Make'."
+    ),
 }
 _QUIZ_EXCL = {"koodaus", "prompt-niksi", "matikka"}
 
@@ -36,8 +42,11 @@ def build_features(agent_name: str, date: str, edition: str) -> str:
         if len(out.strip()) < 80:  # hiccup → retry once
             out = llm.call([{"role": "user", "content": content}])
             out = out if isinstance(out, str) else str(out)
-        _aimeat_call(agent_name, "aimeat_memory_write",
-                     {"key": f"news.{date}.{edition}.article.{cat}", "value": out, "visibility": "public"})
+        _aimeat_call(
+            agent_name,
+            "aimeat_memory_write",
+            {"key": f"news.{date}.{edition}.article.{cat}", "value": out, "visibility": "public"},
+        )
         lines.append(f"{cat}={len(out)}c")
 
     lines.append(build_quiz(agent_name, date, edition))
@@ -61,8 +70,7 @@ def _valid_quiz(quiz: dict) -> str | None:
             return f"question {i + 1} is placeholder/too short: {text[:40]!r}"
         if not isinstance(opts, list) or len(opts) != 5 or [str(o).strip().lower() for o in opts] == _TEMPLATE_OPTIONS:
             return f"question {i + 1} has invalid/template options"
-        if not isinstance(correct, list) or not correct or not all(
-                isinstance(c, int) and 0 <= c < 5 for c in correct):
+        if not isinstance(correct, list) or not correct or not all(isinstance(c, int) and 0 <= c < 5 for c in correct):
             return f"question {i + 1} has invalid correct indices"
     return None
 
@@ -72,19 +80,26 @@ def build_quiz(agent_name: str, date: str, edition: str) -> str:
     (the 17:45 schedule can race the 17:25 writers); a retry guard re-calls this until they are.
     A failed/skipped build never writes, so an existing good quiz is never clobbered."""
     arts = []
-    r = _aimeat_call(agent_name, "aimeat_memory_list",
-                     {"owner_scope": True, "prefix": f"news.{date}.{edition}.article."})
+    r = _aimeat_call(
+        agent_name, "aimeat_memory_list", {"owner_scope": True, "prefix": f"news.{date}.{edition}.article."}
+    )
     for it in (r or {}).get("items") or []:
         cat = it.get("key", "").rsplit(".", 1)[-1]
         if cat in _QUIZ_EXCL:
             continue
-        v = it.get("value") or (_aimeat_call(agent_name, "aimeat_memory_read", {"key": it.get("key")}) or {}).get("value")
+        v = it.get("value") or (_aimeat_call(agent_name, "aimeat_memory_read", {"key": it.get("key")}) or {}).get(
+            "value"
+        )
         if isinstance(v, str) and v.strip():
             arts.append(f"[{cat}] {v[:500]}")
     if len(arts) < _MIN_QUIZ_ARTICLES:
         import sys
-        print(f"[{agent_name}] quiz SKIPPED: only {len(arts)} readable articles for {date} {edition} "
-              f"(writers still running or read lag) — will not fabricate", file=sys.stderr)
+
+        print(
+            f"[{agent_name}] quiz SKIPPED: only {len(arts)} readable articles for {date} {edition} "
+            f"(writers still running or read lag) — will not fabricate",
+            file=sys.stderr,
+        )
         return f"quiz=SKIPPED({len(arts)} articles)"
     llm = get_llm(for_tool_use=False, temperature=0.7, agent_name=agent_name)
     quiz_prompt = (
@@ -93,7 +108,8 @@ def build_quiz(agent_name: str, date: str, edition: str) -> str:
         f'{{"title":"Päivän uutisvisa","date":"{date}","edition":"{edition}","questions":'
         '[{"q":"...","options":["a","b","c","d","e"],"correct":[0,2],"explain":"..."}]}\n'
         "questions-listassa TASAN 5 alkiota. correct = 0-pohjaiset numeeriset indeksit. options = OIKEAT "
-        "vastausvaihtoehdot tekstinä (esimerkin a-e ovat vain paikanvaraajia).\n\nUUTISET:\n" + "\n\n".join(arts))
+        "vastausvaihtoehdot tekstinä (esimerkin a-e ovat vain paikanvaraajia).\n\nUUTISET:\n" + "\n\n".join(arts)
+    )
     for attempt in (1, 2):
         out = llm.call([{"role": "user", "content": quiz_prompt}])
         out = out if isinstance(out, str) else str(out)
@@ -106,8 +122,11 @@ def build_quiz(agent_name: str, date: str, edition: str) -> str:
             continue
         err = _valid_quiz(quiz)
         if err is None:
-            _aimeat_call(agent_name, "aimeat_memory_write",
-                         {"key": f"news.{date}.{edition}.quiz", "value": quiz, "visibility": "public"})
+            _aimeat_call(
+                agent_name,
+                "aimeat_memory_write",
+                {"key": f"news.{date}.{edition}.quiz", "value": quiz, "visibility": "public"},
+            )
             return f"quiz={len(quiz['questions'])}Q"
         if attempt == 2:
             return f"quiz=FAILED({err})"

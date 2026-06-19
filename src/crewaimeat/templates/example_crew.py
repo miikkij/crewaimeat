@@ -45,10 +45,10 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     """
     # Example: a single worker. Replace with your real roster (2–4 agents is typical).
     worker = Agent(
-        role="Worker",                      # e.g. "Market Researcher"
+        role="Worker",  # e.g. "Market Researcher"
         goal="Do the core work for the task",
         backstory="You are an expert at this domain and produce concrete, useful output.",
-        tools=_web_tools(),                 # drop if this agent needs no web search
+        tools=_web_tools(),  # drop if this agent needs no web search
         llm=ctx.llm,
         verbose=True,
     )

@@ -6,14 +6,14 @@ from crewaimeat.tui import i18n
 def test_t_returns_lang_and_falls_back():
     assert i18n.t("sb.running", "en") == "running"
     assert i18n.t("sb.running", "fi") == "ajossa"
-    assert i18n.t("sb.running", "de") == "running"        # unknown lang -> en
-    assert i18n.t("no.such.key", "fi") == "no.such.key"   # unknown key -> the key itself
+    assert i18n.t("sb.running", "de") == "running"  # unknown lang -> en
+    assert i18n.t("no.such.key", "fi") == "no.such.key"  # unknown key -> the key itself
 
 
 def test_next_lang_cycles():
     assert i18n.next_lang("en") == "fi"
     assert i18n.next_lang("fi") == "en"
-    assert i18n.next_lang("xx") == "fi"                   # unknown -> start of cycle, then next
+    assert i18n.next_lang("xx") == "fi"  # unknown -> start of cycle, then next
 
 
 def test_default_lang_from_env(monkeypatch):

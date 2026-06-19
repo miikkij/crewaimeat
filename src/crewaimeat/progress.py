@@ -69,9 +69,7 @@ def _aimeat_fire(tool: str, payload: dict, agent: str) -> None:
     base = ["aimeat", "connect", "call", tool, "--agent", agent, "--stdin"]
     cmd = ["cmd", "/c", *base] if os.name == "nt" else base
     try:
-        subprocess.run(
-            cmd, input=json.dumps(payload), capture_output=True, text=True, timeout=20
-        )
+        subprocess.run(cmd, input=json.dumps(payload), capture_output=True, text=True, timeout=20)
     except Exception as exc:  # noqa: BLE001
         print(f"[progress] {tool} failed: {exc}", file=sys.stderr)
 
@@ -87,8 +85,8 @@ class ProgressReporter:
     def __init__(self, agent_name: str) -> None:
         self.agent_name = agent_name
         self._lock = threading.Lock()
-        self._by_thread: dict[int, str] = {}   # worker thread ident -> task_id
-        self._tasks: dict[str, dict] = {}      # task_id -> {title, status, t0, beat_stop}
+        self._by_thread: dict[int, str] = {}  # worker thread ident -> task_id
+        self._tasks: dict[str, dict] = {}  # task_id -> {title, status, t0, beat_stop}
 
     # --- small internal helpers ----------------------------------------- #
     def _live_key(self, task_id: str) -> str:
@@ -130,8 +128,12 @@ class ProgressReporter:
             return  # task already finished/cleaned up -> stop writing
         _aimeat_fire(
             "aimeat_memory_write",
-            {"key": self._live_key(task_id), "value": snap, "visibility": "owner",
-             "tags": ["live-status", f"task:{task_id}"]},  # per-task tag so AIMEAT lists it under the task
+            {
+                "key": self._live_key(task_id),
+                "value": snap,
+                "visibility": "owner",
+                "tags": ["live-status", f"task:{task_id}"],
+            },  # per-task tag so AIMEAT lists it under the task
             self.agent_name,
         )
 
@@ -192,7 +194,7 @@ class ProgressReporter:
             self.set(state="failed", activity=f"aborted: {error[:200]}", tool=None)
             self._milestone("progress", f"CrewAI crew aborted: {error[:200]}")
         self._write_live(task_id)  # last state stays in memory (also if incomplete)
-        with self._lock:           # prevent stray writes after the task ends
+        with self._lock:  # prevent stray writes after the task ends
             self._tasks.pop(task_id, None)
             self._by_thread.pop(threading.get_ident(), None)
 

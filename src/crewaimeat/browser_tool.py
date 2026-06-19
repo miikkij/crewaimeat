@@ -13,17 +13,18 @@ The ``screenshot`` action can optionally ``describe`` the image with a vision-la
 (qwen-vl by default) via OpenRouter — far more useful than OCR for "what is on this page" questions:
 it reads layout, buttons, error banners, and rendered state, not just literal text.
 """
+
 from __future__ import annotations
 
 import base64
 import os
 from pathlib import Path
-from typing import List, Optional, Literal
+from typing import Literal
 from urllib.parse import urlparse
 
 import requests
-from pydantic import BaseModel, Field
 from crewai.tools import BaseTool
+from pydantic import BaseModel, Field
 
 # Safe-to-retry (idempotent reads/waits); stateful actions must NOT be blindly retried.
 _RETRYABLE = {"navigate", "get_content", "wait"}
@@ -47,18 +48,20 @@ def _describe_image(path: str, prompt: str) -> str:
     # VISION_MODEL is the OpenRouter REST id ("provider/model"); strip a litellm-style "openrouter/" prefix.
     model = os.getenv("VISION_MODEL", _DEFAULT_VISION_MODEL)
     if model.startswith("openrouter/"):
-        model = model[len("openrouter/"):]
+        model = model[len("openrouter/") :]
     try:
         data_uri = "data:image/png;base64," + base64.b64encode(Path(path).read_bytes()).decode()
         body = {
             "model": model,
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": data_uri}},
-                ],
-            }],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": data_uri}},
+                    ],
+                }
+            ],
         }
         r = requests.post(
             f"{base}/chat/completions",
@@ -82,19 +85,22 @@ def _describe_image(path: str, prompt: str) -> str:
 
 class BrowserAction(BaseModel):
     action: Literal["navigate", "get_content", "click", "fill", "wait", "screenshot"]
-    url: Optional[str] = Field(None, description="URL for navigate / optional pre-nav for get_content")
-    selector: Optional[str] = Field(None, description="CSS selector for click / fill")
-    value: Optional[str] = Field(None, description="Value to type for fill")
+    url: str | None = Field(None, description="URL for navigate / optional pre-nav for get_content")
+    selector: str | None = Field(None, description="CSS selector for click / fill")
+    value: str | None = Field(None, description="Value to type for fill")
     timeout_ms: int = Field(15000, description="Per-action timeout in milliseconds")
     describe: bool = Field(False, description="screenshot only: also describe the image with a vision model (qwen-vl)")
-    describe_prompt: Optional[str] = Field(
+    describe_prompt: str | None = Field(
         None, description="screenshot+describe only: what to ask the vision model (default: describe the page)"
     )
 
 
 class BrowserPlanInput(BaseModel):
-    actions: List[BrowserAction] = Field(..., description="Ordered actions run in ONE browser session.")
-    profile: Optional[str] = Field(None, description="Named login profile to load+save (persists cookies across runs). Omit for a clean isolated session.")
+    actions: list[BrowserAction] = Field(..., description="Ordered actions run in ONE browser session.")
+    profile: str | None = Field(
+        None,
+        description="Named login profile to load+save (persists cookies across runs). Omit for a clean isolated session.",
+    )
     headed: bool = Field(False, description="Show a visible browser window (debug). Default headless.")
 
 
@@ -113,7 +119,7 @@ class PlaywrightBrowserTool(BaseTool):
 
     # Config — overridable when a crew constructs the tool.
     storage_dir: str = "logs/.browser"
-    allowed_domains: tuple[str, ...] = ()   # empty = allow all; else only these hosts may be navigated
+    allowed_domains: tuple[str, ...] = ()  # empty = allow all; else only these hosts may be navigated
 
     # --- helpers ---
     def _domain_ok(self, url: str) -> bool:
@@ -122,7 +128,7 @@ class PlaywrightBrowserTool(BaseTool):
         host = (urlparse(url).hostname or "").lower()
         return any(host == d or host.endswith("." + d) for d in self.allowed_domains)
 
-    def _storage_path(self, profile: Optional[str]) -> Optional[str]:
+    def _storage_path(self, profile: str | None) -> str | None:
         if not profile:
             return None
         safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in profile)
@@ -131,7 +137,9 @@ class PlaywrightBrowserTool(BaseTool):
         return str(d / f"{safe}.json")
 
     def _do(self, page, a: BrowserAction) -> str:
-        from playwright.sync_api import TimeoutError as PWTimeout, Error as PWError
+        from playwright.sync_api import Error as PWError
+        from playwright.sync_api import TimeoutError as PWTimeout
+
         attempts = 2 if a.action in _RETRYABLE else 1
         last = ""
         for _ in range(attempts):
@@ -184,17 +192,16 @@ class PlaywrightBrowserTool(BaseTool):
                 last = f"✗ error: {a.action}: {exc}"
         return last
 
-    def _run(self, actions: list, profile: Optional[str] = None, headed: bool = False) -> str:
+    def _run(self, actions: list, profile: str | None = None, headed: bool = False) -> str:
         from playwright.sync_api import sync_playwright
+
         acts = [a if isinstance(a, BrowserAction) else BrowserAction(**a) for a in actions]
         storage = self._storage_path(profile)
         results: list[str] = []
         try:
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=not headed)
-                ctx = browser.new_context(
-                    storage_state=storage if storage and os.path.exists(storage) else None
-                )
+                ctx = browser.new_context(storage_state=storage if storage and os.path.exists(storage) else None)
                 page = ctx.new_page()
                 try:
                     for a in acts:

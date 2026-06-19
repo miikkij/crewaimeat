@@ -27,7 +27,7 @@ def _validate(path: str) -> tuple[bool, str]:
 
     if not hasattr(module, "build_domain"):
         return False, "the file defines no build_domain(ctx) function"
-    if not hasattr(module, "AGENT_NAME") or not str(getattr(module, "AGENT_NAME")).strip():
+    if not hasattr(module, "AGENT_NAME") or not str(module.AGENT_NAME).strip():
         return False, "AGENT_NAME is missing or empty"
 
     from crewai import Agent, Task

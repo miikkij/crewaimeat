@@ -20,14 +20,14 @@ from crewaimeat.fetch_pipeline import make_fetch_tools
 
 AGENT_NAME = "news-fetcher"
 
-README = '''[[FIGLET:slant]["News Fetcher"]]
+README = """[[FIGLET:slant]["News Fetcher"]]
 
 Deterministic Finnish news fetch: curated RSS feeds + SearXNG search + **always-on trafilatura full-text
 scraping** per category, written to `news.<date>.<edition>.raw.<category>`. The scraping runs in code, not at
 the LLM's discretion, so the raw is real article bodies — never stubs.
 
 **How to task me:** "Hae <date> <edition> uutiset" — I resolve the date/edition and run the deterministic fetch.
-'''
+"""
 
 
 def build_domain(ctx: BuildContext):
@@ -35,9 +35,9 @@ def build_domain(ctx: BuildContext):
         role="News Fetch Runner",
         goal="Resolve the target date + edition from the request and trigger the deterministic fetch.",
         backstory="You do not scrape by hand or decide what to fetch. You read the request, work out the "
-                  "target date and edition, and call fetch_edition_raw ONCE — the tool deterministically pulls "
-                  "feeds, searches, and scrapes full article text for every category. You then report what it "
-                  "wrote. You never fabricate.",
+        "target date and edition, and call fetch_edition_raw ONCE — the tool deterministically pulls "
+        "feeds, searches, and scrapes full article text for every category. You then report what it "
+        "wrote. You never fabricate.",
         llm=ctx.llm,
         tools=[*make_fetch_tools(AGENT_NAME)],
     )

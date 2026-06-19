@@ -16,6 +16,7 @@ Gates:
                                           content rendered (no raw i18n keys, not empty). Reveals runtime
                                           breakage EARLY, the same way opening the URL in a browser would.
 """
+
 from __future__ import annotations
 
 import os
@@ -93,13 +94,15 @@ def app_data_present(agent: str, owner: str, slug: str, keys: list[str], node_id
     is publicly readable under the owner (which is exactly what the cortex reads at runtime). `keys`
     are the blueprint dataModel.memoryKeys (e.g. ['i18n.fi','i18n.en','settings.config','fleet.deliverables'])."""
     from crewaimeat.generator_tool import _call  # lazy — avoid circular import
+
     gaii = f"{owner}@{node_id}"
     results: dict[str, Any] = {}
     ok = True
     for key in keys:
         full = f"{slug}.{key}"
-        env = _call(agent, owner, "GET",
-                    f"/v1/memory/{urllib.parse.quote(gaii, safe='')}/{urllib.parse.quote(full, safe='')}")
+        env = _call(
+            agent, owner, "GET", f"/v1/memory/{urllib.parse.quote(gaii, safe='')}/{urllib.parse.quote(full, safe='')}"
+        )
         st = env.get("_status")
         has_value = (env.get("data") or {}).get("value") is not None
         # 200+value = public & present; 403 = exists but owner-private (the logged-in owner reads it
@@ -176,7 +179,7 @@ def app_renders(url: str, *, settle_ms: int = 4500, rewrite_node: tuple[str, str
 # --------------------------------------------------------------------------- #
 # 5. Authed render — log in as the owner, then verify the logged-in view
 # --------------------------------------------------------------------------- #
-def _split_failed_resources(failed: list[str]) -> "tuple[list[str], list[str]]":
+def _split_failed_resources(failed: list[str]) -> tuple[list[str], list[str]]:
     """Dedup failed HTTP responses ('<status> <url>') to distinct endpoints (strip query) and split
     them into (real_failures, benign_404s).
 
@@ -204,9 +207,15 @@ def _split_failed_resources(failed: list[str]) -> "tuple[list[str], list[str]]":
     return real[:8], benign[:8]
 
 
-def app_renders_authed(url: str, user: str, password: str, *, settle_ms: int = 4500,
-                       content_selectors: tuple[str, ...] = ("#cards", "#app", ".wrap", "body"),
-                       expect_any: list[str] | None = None) -> dict:
+def app_renders_authed(
+    url: str,
+    user: str,
+    password: str,
+    *,
+    settle_ms: int = 4500,
+    content_selectors: tuple[str, ...] = ("#cards", "#app", ".wrap", "body"),
+    expect_any: list[str] | None = None,
+) -> dict:
     """The real 'does the LOGGED-IN owner see content' check. Loads the app headless, calls
     AIMEAT.auth.loginWithPassword(user, password) IN THE PAGE (AIMEAT keeps its Ed25519 session in
     IndexedDB, which a saved Playwright profile cannot restore — so we log in fresh each run), reloads so
@@ -261,8 +270,9 @@ def app_renders_authed(url: str, user: str, password: str, *, settle_ms: int = 4
             errors.append(f"NAV: {e}")
         browser.close()
 
-    raw_keys = [k for k in re.findall(r"\b[a-z][a-z0-9]*\.[a-z][a-zA-Z0-9.]+", text)
-                if k.split(".")[0] in ("app", "i18n", "ui")][:8]
+    raw_keys = [
+        k for k in re.findall(r"\b[a-z][a-z0-9]*\.[a-z][a-zA-Z0-9.]+", text) if k.split(".")[0] in ("app", "i18n", "ui")
+    ][:8]
     # Dedup failed resources to the distinct endpoints (strip query) and split off BENIGN unset-key
     # memory reads (see _split_failed_resources).
     fr, benign_404s = _split_failed_resources(failed)
@@ -273,20 +283,32 @@ def app_renders_authed(url: str, user: str, password: str, *, settle_ms: int = 4
     errors = [e for e in errors if "Failed to load resource" not in e]
     # A JS error caught by the app and DISPLAYED as content (not thrown to the console) is still a
     # broken render — catch the common shapes so a no-expect verify doesn't pass on an error screen.
-    err_in_content = any(m in text for m in
-                         ("Cannot read properties of", "is not defined", "is not a function", "TypeError"))
+    err_in_content = any(
+        m in text for m in ("Cannot read properties of", "is not defined", "is not a function", "TypeError")
+    )
     ok = (login == "ok") and not errors and not fr and not err_in_content and len(text.strip()) > 40 and not raw_keys
     if expect_any:
         ok = ok and any(m in text for m in expect_any)
-    return {"ok": ok, "login": login, "console_errors": errors[:6], "failed_resources": fr,
-            "benign_404s": benign_404s, "error_in_content": err_in_content, "raw_i18n_keys": raw_keys,
-            "content_sample": text[:400]}
+    return {
+        "ok": ok,
+        "login": login,
+        "console_errors": errors[:6],
+        "failed_resources": fr,
+        "benign_404s": benign_404s,
+        "error_in_content": err_in_content,
+        "raw_i18n_keys": raw_keys,
+        "content_sample": text[:400],
+    }
 
 
-def app_renders_anon(url: str, *, settle_ms: int = 5000,
-                     content_selectors: tuple[str, ...] = ("#app", "#cards", ".wrap", "body"),
-                     expect_any: list[str] | None = None,
-                     loading_markers: tuple[str, ...] = ("Loading…", "Loading...", "Loading")) -> dict:
+def app_renders_anon(
+    url: str,
+    *,
+    settle_ms: int = 5000,
+    content_selectors: tuple[str, ...] = ("#app", "#cards", ".wrap", "body"),
+    expect_any: list[str] | None = None,
+    loading_markers: tuple[str, ...] = ("Loading…", "Loading...", "Loading"),
+) -> dict:
     """The PUBLIC / anonymous-view gate — does the app render real content for a visitor who is NOT logged
     in? app_renders_authed logs IN as the owner, so it cannot catch a public viewer that only renders for
     a session: the `if (session) startApp()` mistake leaves anonymous visitors stuck on 'Loading…' yet the
@@ -325,27 +347,37 @@ def app_renders_anon(url: str, *, settle_ms: int = 5000,
             errors.append(f"NAV: {e}")
         browser.close()
 
-    raw_keys = [k for k in re.findall(r"\b[a-z][a-z0-9]*\.[a-z][a-zA-Z0-9.]+", text)
-                if k.split(".")[0] in ("app", "i18n", "ui")][:8]
+    raw_keys = [
+        k for k in re.findall(r"\b[a-z][a-z0-9]*\.[a-z][a-zA-Z0-9.]+", text) if k.split(".")[0] in ("app", "i18n", "ui")
+    ][:8]
     fr, benign_404s = _split_failed_resources(failed)
     errors = [e for e in errors if "Failed to load resource" not in e]
-    err_in_content = any(m in text for m in
-                         ("Cannot read properties of", "is not defined", "is not a function", "TypeError"))
+    err_in_content = any(
+        m in text for m in ("Cannot read properties of", "is not defined", "is not a function", "TypeError")
+    )
     stripped = text.strip()
     # A short content that is still just the loading placeholder = the classic login-gated-startApp anon
     # failure (the app never reached startApp without a session). A fully-rendered page replaces it.
     still_loading = bool(stripped) and len(stripped) < 120 and any(m in stripped for m in loading_markers)
-    ok = (not errors and not fr and not err_in_content and not still_loading
-          and len(stripped) > 40 and not raw_keys)
+    ok = not errors and not fr and not err_in_content and not still_loading and len(stripped) > 40 and not raw_keys
     if expect_any:
         ok = ok and any(m in text for m in expect_any)
-    return {"ok": ok, "anon": True, "console_errors": errors[:6], "failed_resources": fr,
-            "benign_404s": benign_404s, "error_in_content": err_in_content, "still_loading": still_loading,
-            "raw_i18n_keys": raw_keys, "content_sample": text[:400]}
+    return {
+        "ok": ok,
+        "anon": True,
+        "console_errors": errors[:6],
+        "failed_resources": fr,
+        "benign_404s": benign_404s,
+        "error_in_content": err_in_content,
+        "still_loading": still_loading,
+        "raw_i18n_keys": raw_keys,
+        "content_sample": text[:400],
+    }
 
 
-def app_interaction_ok(url: str, user: str, password: str, steps: list, *, settle_ms: int = 3000,
-                       step_timeout_ms: int = 12000) -> dict:
+def app_interaction_ok(
+    url: str, user: str, password: str, steps: list, *, settle_ms: int = 3000, step_timeout_ms: int = 12000
+) -> dict:
     """DRIVE a real authed interaction through the app and assert outcomes — the test render-only checks
     cannot do (render != works). This is what would have caught the broken realtime chat: verify_render
     PASSed it, but you could not actually send a message.
@@ -388,12 +420,15 @@ def app_interaction_ok(url: str, user: str, password: str, steps: list, *, settl
                 page.wait_for_timeout(500)
             login = page.evaluate(
                 "async ([u, pw]) => { try { await AIMEAT.auth.loginWithPassword(u, pw); return 'ok'; }"
-                " catch (e) { return 'ERR: ' + (e && e.message || e); } }", [user, password])
+                " catch (e) { return 'ERR: ' + (e && e.message || e); } }",
+                [user, password],
+            )
             page.reload(wait_until="networkidle")
             page.wait_for_timeout(settle_ms)
             for i, step in enumerate(steps):
                 if not isinstance(step, dict):
-                    failed_step, detail = i, "step is not an object"; break
+                    failed_step, detail = i, "step is not an object"
+                    break
                 act = str(step.get("do", "")).lower()
                 sel = step.get("selector")
                 try:
@@ -408,28 +443,36 @@ def app_interaction_ok(url: str, user: str, password: str, steps: list, *, settl
                         while waited < step_timeout_ms:
                             try:
                                 if page.eval_on_selector(sel, "el => !el.disabled") is True:
-                                    en = True; break
+                                    en = True
+                                    break
                             except Exception:  # noqa: BLE001
                                 pass
-                            page.wait_for_timeout(500); waited += 500
+                            page.wait_for_timeout(500)
+                            waited += 500
                         if not en:
-                            failed_step, detail = i, f"{sel} not enabled within timeout"; break
+                            failed_step, detail = i, f"{sel} not enabled within timeout"
+                            break
                     elif act == "expect_text":
                         want, found, waited = str(step.get("text", "")), False, 0
                         while waited < step_timeout_ms:
                             try:
                                 t = page.locator(sel).first.inner_text()
                                 if want in (t or ""):
-                                    found = True; break
+                                    found = True
+                                    break
                             except Exception:  # noqa: BLE001
                                 pass
-                            page.wait_for_timeout(500); waited += 500
+                            page.wait_for_timeout(500)
+                            waited += 500
                         if not found:
-                            failed_step, detail = i, f"'{want}' not found in {sel}"; break
+                            failed_step, detail = i, f"'{want}' not found in {sel}"
+                            break
                     else:
-                        failed_step, detail = i, f"unknown action '{act}'"; break
+                        failed_step, detail = i, f"unknown action '{act}'"
+                        break
                 except Exception as e:  # noqa: BLE001
-                    failed_step, detail = i, f"{act} {sel} raised: {e}"; break
+                    failed_step, detail = i, f"{act} {sel} raised: {e}"
+                    break
         except Exception as e:  # noqa: BLE001
             failed_step, detail = -1, f"nav/login error: {e}"
         browser.close()
@@ -439,5 +482,11 @@ def app_interaction_ok(url: str, user: str, password: str, steps: list, *, settl
     # working interaction — real JS errors (TypeError / is not defined / PAGEERROR) are kept.
     real_errors = [e for e in errors if "Failed to load resource" not in e]
     ok = (login == "ok") and failed_step is None and not real_errors
-    return {"ok": ok, "login": login, "failed_step": failed_step, "detail": detail,
-            "console_errors": real_errors[:6], "steps_run": len(steps)}
+    return {
+        "ok": ok,
+        "login": login,
+        "failed_step": failed_step,
+        "detail": detail,
+        "console_errors": real_errors[:6],
+        "steps_run": len(steps),
+    }

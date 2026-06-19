@@ -27,8 +27,9 @@ def test_reauth_delegates_to_forge(monkeypatch):
 
 # ── whole fleet ─────────────────────────────────────────────────────────────────
 def test_start_fleet_ensures_daemon_then_reconciles(monkeypatch):
-    monkeypatch.setattr("crewaimeat.serve_guard.ensure_single_serve",
-                        lambda: {"pid": 99648, "port": 52813, "agents": [{}]})
+    monkeypatch.setattr(
+        "crewaimeat.serve_guard.ensure_single_serve", lambda: {"pid": 99648, "port": 52813, "agents": [{}]}
+    )
     monkeypatch.setattr("crewaimeat.forge.reconcile_fleet", lambda: "launched 3 crews")
     s = actions.start_fleet()
     assert "pid 99648 port 52813" in s and "launched 3 crews" in s
@@ -41,7 +42,9 @@ def test_restart_fleet_stops_then_starts(monkeypatch):
 
 
 def test_reap_formats_reaped(monkeypatch):
-    monkeypatch.setattr("crewaimeat.serve_guard.ensure_single_serve",
-                        lambda: {"pid": 1, "port": 2, "agents": [{}, {}], "_reaped_duplicates": 1})
+    monkeypatch.setattr(
+        "crewaimeat.serve_guard.ensure_single_serve",
+        lambda: {"pid": 1, "port": 2, "agents": [{}, {}], "_reaped_duplicates": 1},
+    )
     s = actions.reap_serve_daemons()
     assert "pid 1 port 2" in s and "2 agents" in s and "reaped 1 duplicate" in s
