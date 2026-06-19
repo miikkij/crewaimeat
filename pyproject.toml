@@ -38,7 +38,7 @@ build-backend = "hatchling.build"
 packages = ["src/crewaimeat"]
 
 [dependency-groups]
-dev = ["pytest>=8.0", "textual>=0.60", "ruff>=0.6"]  # textual: TUI tests; ruff: lint + format
+dev = ["pytest>=8.0", "textual>=0.60", "ruff>=0.6", "pre-commit>=3.5"]  # textual: TUI tests; ruff: lint+format; pre-commit: git hooks
 
 [tool.ruff]
 # Match the existing house style (wide lines, py310 floor). Generated/vendored trees are excluded.
