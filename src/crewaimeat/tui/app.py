@@ -18,11 +18,11 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import (DataTable, Footer, Header, Input, OptionList, Static,
-                             TabbedContent, TabPane)
+from textual.widgets import DataTable, Footer, Header, Input, OptionList, Static, TabbedContent, TabPane
 from textual.widgets.option_list import Option
 
-from crewaimeat.tui import actions, agent_meta, fleet_state as fs, i18n, render, test_run, versions
+from crewaimeat.tui import actions, agent_meta, i18n, render, test_run, versions
+from crewaimeat.tui import fleet_state as fs
 
 
 def _default_node_index(caller: str) -> dict:
@@ -154,6 +154,8 @@ class FleetApp(App):
         self._node_index: dict = {}
         self._snap = None
         self._test_busy = False
+        self._test_result_shown = False   # a finished result is on screen — don't overwrite with guidance
+        self._test_result_agent = None    # …for this agent (cleared when the selection moves)
         self.lang = lang or i18n.default_lang()
 
     def _t(self, key: str) -> str:
@@ -360,6 +362,7 @@ class FleetApp(App):
             self.notify(self._t("test.not_running").format(agent=row.agent), severity="warning")
             return
         self._test_busy = True
+        self._test_result_shown = False
         self.query_one("#test-input", Input).value = ""
         self.query_one("#test-out", Static).update(self._t("test.running").format(agent=row.agent))
         self._run_test_worker(row.agent, prompt)
@@ -378,6 +381,8 @@ class FleetApp(App):
 
     def _test_done(self, agent: str, res: dict) -> None:
         self._test_busy = False
+        self._test_result_shown = True
+        self._test_result_agent = agent
         out = self.query_one("#test-out", Static)
         if res.get("ok"):
             head = self._t("test.done").format(agent=agent, secs=res.get("elapsed_s"),
@@ -450,6 +455,21 @@ class FleetApp(App):
             profile, chain, n_off, n_wf, self.lang, override=override, offers=offers,
             contracts=contracts, tags=tags, capabilities=caps, workflows=workflows)))
         logs.update("\n".join(self._log_tail(row.agent, n=30)))
+        # Test pane: per-agent "how to task me" guidance — but never clobber a running test or a
+        # finished result that still belongs to the highlighted agent.
+        if not self._test_busy and not (self._test_result_shown and self._test_result_agent == row.agent):
+            self._test_result_shown = False
+            self.query_one("#test-out", Static).update(self._test_guidance(row.agent))
+
+    def _test_guidance(self, agent: str) -> str:
+        """Idle Test-pane text: the agent's own 'How to task me' hint (so a contract agent that wants
+        a request record, not a free-text brief, says so) plus the generic instructions."""
+        try:
+            how = agent_meta.how_to_task(agent)
+        except Exception:  # noqa: BLE001
+            how = None
+        head = f"[b]{agent}[/] — {how}\n\n" if how else ""
+        return head + self._t("test.idle")
 
     def _log_tail(self, agent: str, n: int = 12) -> list[str]:
         """Last n lines of the agent's watchdog log, if present (defensive — no log is normal)."""

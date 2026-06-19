@@ -38,7 +38,27 @@ build-backend = "hatchling.build"
 packages = ["src/crewaimeat"]
 
 [dependency-groups]
-dev = ["pytest>=8.0", "textual>=0.60"]  # textual: so the TUI render/app tests can run
+dev = ["pytest>=8.0", "textual>=0.60", "ruff>=0.6"]  # textual: TUI tests; ruff: lint + format
+
+[tool.ruff]
+# Match the existing house style (wide lines, py310 floor). Generated/vendored trees are excluded.
+line-length = 120
+target-version = "py310"
+extend-exclude = [".venv", ".aimeat", "logs", "docs"]
+
+[tool.ruff.lint]
+# A pragmatic, low-noise starter set: pyflakes (F) + pycodestyle (E/W) + import sorting (I) +
+# pyupgrade (UP) + bugbear (B) + comprehensions (C4) + a few simplifications (SIM). Tighten over time.
+select = ["E", "W", "F", "I", "UP", "B", "C4", "SIM"]
+ignore = [
+    "E501",    # line length is enforced by the formatter, not the linter (avoids churn on long comments)
+    "B008",    # CrewAI/Typer patterns call functions in argument defaults by design
+    "SIM105",  # `contextlib.suppress` over try/except-pass — the explicit form reads clearer here
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]   # tests set up sys.path / env before importing the package under test
+"crews/*" = ["E402"]   # a few crews import lazily inside build_domain after a guard
 
 [tool.pytest.ini_options]
 # The L1/L2 test floor: deterministic, no LLM, no network. See docs/aimeat-guides/nextgeneration/

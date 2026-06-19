@@ -1,0 +1,20 @@
+# Pre-commit hooks — fast, local quality gate. Install once with:  uv run pre-commit install
+# Runs only on the files you stage, so it never churns the whole tree on one commit.
+# Ruff is the single linter+formatter (see [tool.ruff] in pyproject.toml). The full pytest floor
+# runs in CI, not here, to keep commits quick.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.18
+    hooks:
+      - id: ruff            # lint, auto-fixing what it safely can
+        args: [--fix]
+      - id: ruff-format     # format (already a no-op on the current tree — line-length 120)
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-toml

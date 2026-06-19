@@ -4,9 +4,10 @@ render pipeline work end to end."""
 
 import asyncio
 
+from textual.widgets import DataTable, Static, TabPane
+
 from crewaimeat.tui.app import FleetApp
 from crewaimeat.tui.fleet_state import AgentRow, FleetSnapshot
-from textual.widgets import DataTable, Static, TabPane
 
 
 def _snap():
@@ -57,8 +58,9 @@ def test_test_tab_exists_after_overview():
 
 def test_live_test_run_shows_result(monkeypatch):
     """Submitting a prompt against a running agent calls the live runner and shows its deliverable."""
-    from crewaimeat.tui import test_run
     from textual.widgets import Input
+
+    from crewaimeat.tui import test_run
 
     monkeypatch.setattr(test_run, "run_agent_test",
                         lambda agent, prompt, **kw: {"ok": True, "task_id": "abc12345-x", "key": "k",

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Callable
+from collections.abc import Callable
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
 

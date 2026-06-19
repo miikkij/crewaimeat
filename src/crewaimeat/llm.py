@@ -102,13 +102,13 @@ def available_models(cfg: dict | None = None) -> list[dict]:
     dict ready to store as a `model` override. Pure data (reads cfg, not the network)."""
     if cfg is None:
         pf = _providers_file()
+        cfg = {}
         if pf and os.path.isfile(pf):
             try:
-                cfg = json.loads(open(pf, encoding="utf-8").read())
+                with open(pf, encoding="utf-8") as fh:
+                    cfg = json.load(fh)
             except (OSError, ValueError):
                 cfg = {}
-        else:
-            cfg = {}
     chains: list[list] = []
     profiles = cfg.get("profiles")
     if isinstance(profiles, dict):

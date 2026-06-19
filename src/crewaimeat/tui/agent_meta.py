@@ -67,10 +67,27 @@ def read_readme(agent: str) -> str | None:
     return body or None
 
 
+_HOWTO_RE = re.compile(r"How to task me:\**\s*(?P<body>.+?)(?:\n\s*\n|$)", re.DOTALL | re.IGNORECASE)
+
+
+def how_to_task(agent: str) -> str | None:
+    """The crew README's 'How to task me:' line — what to type to drive this agent — or None. This is
+    the honest per-agent hint: a task-runner says 'describe the image…', a contract agent says 'scout
+    — I run process_moodboards ONCE and fulfil pending requests' (so a free-text brief won't do much)."""
+    rm = read_readme(agent)
+    if not rm:
+        return None
+    m = _HOWTO_RE.search(rm)
+    if not m:
+        return None
+    return " ".join(m.group("body").split()) or None
+
+
 def offer_summary(agent: str) -> tuple[int, int]:
     """(n_offers, n_workflow_compatible) for the agent, from the local offer definitions."""
     try:
         from aimeat_crewai.workflow_spec import is_workflow_compatible
+
         from crewaimeat.offers import _CREW_OFFERS, crew_offer
     except Exception:  # noqa: BLE001
         return (0, 0)
