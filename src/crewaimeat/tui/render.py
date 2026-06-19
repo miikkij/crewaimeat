@@ -96,16 +96,59 @@ def overview_lines(r: AgentRow | None, readme: str | None, lang: str = "en") -> 
     return lines
 
 
-def meta_lines(profile: str, model_labels: list[str], n_offers: int, n_wf: int, lang: str = "en") -> list[str]:
-    """The Config tab: llm profile + ordered model chain + offer/workflow-compat counts."""
+def meta_lines(profile: str, model_labels: list[str], n_offers: int, n_wf: int, lang: str = "en",
+               *, override: dict | None = None, offers: list | None = None,
+               contracts: list | None = None, tags: list | None = None,
+               capabilities: dict | None = None, workflows: list | None = None) -> list[str]:
+    """The Config tab: llm profile + ordered model chain + offer/workflow-compat counts, and (when
+    supplied) the agent's pinned override, offer titles, contract schemas, capabilities and the
+    workflows it has a step in. The extra sections are keyword-only so the basic 5-arg call stays."""
     chain = "\n             ".join(model_labels) if model_labels else "—"
-    return [
+    lines = [
         "",
         f"── {t('sec.config', lang)} ──",
         f"{t('cfg.profile', lang)}: {profile}",
         f"{t('cfg.chain', lang)}: {chain}",
-        f"{t('cfg.offers', lang)}:      {n_offers}  ([green]{n_wf}[/] {t('cfg.wf_compat', lang)})",
     ]
+    if override:
+        if override.get("kind") == "model":
+            pin = override.get("label", "model")
+        elif override.get("kind") == "profile":
+            pin = f"{t('cfg.profile', lang)} → {override.get('profile')}"
+        else:
+            pin = str(override)
+        lines.append(f"{t('cfg.override', lang)}: [yellow]{pin}[/]  ({t('cfg.override_hint', lang)})")
+    lines.append(f"{t('cfg.offers', lang)}:      {n_offers}  ([green]{n_wf}[/] {t('cfg.wf_compat', lang)})")
+
+    if offers:
+        for oid, title in offers:
+            lines.append(f"  · [b]{oid}[/] — {title}")
+    if tags:
+        lines += ["", f"── {t('sec.identity', lang)} ──", f"{t('cfg.tags', lang)}: {', '.join(tags)}"]
+        for dim in ("technical", "domain", "languages"):
+            vals = (capabilities or {}).get(dim) or []
+            disp = [v.get("name") if isinstance(v, dict) else str(v) for v in vals]
+            if disp:
+                lines.append(f"{t('cfg.cap_' + dim, lang)}: {', '.join(disp)}")
+    elif capabilities:
+        lines += ["", f"── {t('sec.identity', lang)} ──"]
+        for dim in ("technical", "domain", "languages"):
+            vals = capabilities.get(dim) or []
+            disp = [v.get("name") if isinstance(v, dict) else str(v) for v in vals]
+            if disp:
+                lines.append(f"{t('cfg.cap_' + dim, lang)}: {', '.join(disp)}")
+    if contracts:
+        lines += ["", f"── {t('sec.contracts', lang)} ──"]
+        for c in contracts:
+            lines.append(f"  [b]{c['id']}[/]")
+            for sp in c.get("spaces") or []:
+                fields = ", ".join(sp.get("fields") or []) or "—"
+                lines.append(f"    {sp['space']} ({sp['mode']}): {fields}")
+    if workflows:
+        lines += ["", f"── {t('sec.workflows', lang)} ──"]
+        for wid, steps in workflows:
+            lines.append(f"  [b]{wid}[/]: {', '.join(steps)}")
+    return lines
 
 
 def versions_line(vr: dict, lang: str = "en") -> str:

@@ -40,6 +40,112 @@ def _providers_file() -> str | None:
     return p if os.path.isfile(p) else None
 
 
+# ── per-agent model override (runtime, set from the TUI; gitignored under AIMEAT_HOME) ──────────
+# A user can pin ONE agent to a specific model (or named profile) without editing the committed
+# llm_providers.json. The override lives in <AIMEAT_HOME>/llm_overrides.json so every process that
+# shares the home (the crew daemons + the TUI) reads the same file. Schema:
+#   {"<agent>": {"kind": "model",   "label": "openrouter:openai/gpt-oss-120b",
+#                "provider": {<one-model provider dict for _flatten_endpoints>}},
+#    "<agent>": {"kind": "profile", "profile": "coding"}}
+# The override is self-contained (the model entry carries its own provider/base_url/api_key_env/
+# context) so resolving it needs no cross-reference to llm_providers.json.
+
+def _overrides_file() -> str:
+    """Path of the per-agent override store (<AIMEAT_HOME>/llm_overrides.json)."""
+    from crewaimeat._home import aimeat_home
+    return str(aimeat_home() / "llm_overrides.json")
+
+
+def load_overrides() -> dict:
+    """All per-agent overrides ({} when the file is absent/unreadable — overrides are optional)."""
+    p = _overrides_file()
+    if not os.path.isfile(p):
+        return {}
+    try:
+        with open(p, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def agent_override(agent_name: str | None) -> dict | None:
+    """The override for one agent, or None."""
+    ov = load_overrides().get(agent_name or "")
+    return ov if isinstance(ov, dict) else None
+
+
+def save_override(agent_name: str, spec: dict) -> None:
+    """Pin `agent_name` to `spec` ({"kind": "model"|"profile", ...}) and persist. Creates the home dir."""
+    p = _overrides_file()
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    data = load_overrides()
+    data[agent_name] = spec
+    with open(p, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2, ensure_ascii=False)
+
+
+def clear_override(agent_name: str) -> bool:
+    """Remove `agent_name`'s override (revert to llm_providers.json routing). True if one was removed."""
+    data = load_overrides()
+    if agent_name not in data:
+        return False
+    del data[agent_name]
+    with open(_overrides_file(), "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2, ensure_ascii=False)
+    return True
+
+
+def available_models(cfg: dict | None = None) -> list[dict]:
+    """The catalogue a picker offers: every distinct (provider-type, model-id) across all profiles
+    (and a flat `providers` list), de-duplicated, each carrying a self-contained one-model provider
+    dict ready to store as a `model` override. Pure data (reads cfg, not the network)."""
+    if cfg is None:
+        pf = _providers_file()
+        if pf and os.path.isfile(pf):
+            try:
+                cfg = json.loads(open(pf, encoding="utf-8").read())
+            except (OSError, ValueError):
+                cfg = {}
+        else:
+            cfg = {}
+    chains: list[list] = []
+    profiles = cfg.get("profiles")
+    if isinstance(profiles, dict):
+        for prof in profiles.values():
+            if isinstance(prof, dict):
+                chains.append(prof.get("providers") or [])
+    if cfg.get("providers"):
+        chains.append(cfg.get("providers") or [])
+    out: list[dict] = []
+    seen: set = set()
+    for providers in chains:
+        for prov in providers or []:
+            ptype = (prov.get("type") or "openrouter").lower()
+            name = prov.get("name") or ptype
+            base_url = prov.get("base_url") or _DEFAULT_BASE.get(ptype)
+            keyenv = prov.get("api_key_env")
+            prov_ctx = prov.get("context")
+            for m in prov.get("models") or []:
+                mid = m.get("id") if isinstance(m, dict) else m
+                if not mid:
+                    continue
+                ctx = (m.get("context") if isinstance(m, dict) else None) or prov_ctx or _FALLBACK_CONTEXT
+                key = (ptype, mid)
+                if key in seen:
+                    continue
+                seen.add(key)
+                single = {"type": ptype, "name": name, "models": [{"id": mid, "context": int(ctx)}]}
+                if base_url:
+                    single["base_url"] = base_url
+                if keyenv:
+                    single["api_key_env"] = keyenv
+                out.append({"label": f"{name}:{mid}", "type": ptype, "name": name, "id": mid,
+                            "context": int(ctx), "base_url": base_url, "api_key_env": keyenv,
+                            "provider": single})
+    return out
+
+
 def _select_chain(cfg: dict, agent_name: str | None) -> tuple[list, str]:
     """Pick the provider chain for a crew.
 
@@ -51,8 +157,19 @@ def _select_chain(cfg: dict, agent_name: str | None) -> tuple[list, str]:
 
     OLD format — one flat chain for all crews: {"providers": [...]} (still supported).
 
+    A per-agent OVERRIDE (set from the TUI, stored under AIMEAT_HOME) wins over both formats — it
+    pins one agent to a specific model or a named profile. See load_overrides().
+
     Returns (providers_list, profile_label).
     """
+    ov = agent_override(agent_name)
+    if ov:
+        if ov.get("kind") == "model" and isinstance(ov.get("provider"), dict):
+            return ([ov["provider"]], f"override:{ov.get('label', 'model')}")
+        if ov.get("kind") == "profile":
+            prof = (cfg.get("profiles") or {}).get(ov.get("profile"))
+            if isinstance(prof, dict):
+                return ((prof.get("providers") or []), f"override-profile:{ov.get('profile')}")
     profiles = cfg.get("profiles")
     if isinstance(profiles, dict) and profiles:
         name = (cfg.get("crews") or {}).get(agent_name or "") or cfg.get("default") or next(iter(profiles))

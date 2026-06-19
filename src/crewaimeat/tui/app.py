@@ -18,9 +18,11 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, Footer, Header, Static, TabbedContent, TabPane
+from textual.widgets import (DataTable, Footer, Header, Input, OptionList, Static,
+                             TabbedContent, TabPane)
+from textual.widgets.option_list import Option
 
-from crewaimeat.tui import actions, agent_meta, fleet_state as fs, i18n, render, versions
+from crewaimeat.tui import actions, agent_meta, fleet_state as fs, i18n, render, test_run, versions
 
 
 def _default_node_index(caller: str) -> dict:
@@ -58,6 +60,57 @@ class ConfirmScreen(ModalScreen[bool]):
         self.dismiss(False)
 
 
+class ModelPickScreen(ModalScreen[dict | None]):
+    """Pick a model (or clear the override) for one agent. Dismisses with a payload describing the
+    choice: {"action": "clear"} or {"action": "set", "model": <catalogue entry>}; None on cancel."""
+
+    CSS = """
+    ModelPickScreen { align: center middle; }
+    #mp-box { width: 80; height: auto; max-height: 80%; border: thick $accent; background: $surface; padding: 1 2; }
+    #mp-q { padding-bottom: 1; }
+    #mp-list { height: auto; max-height: 20; }
+    """
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, agent: str, catalogue: list[dict], current: dict | None, lang: str) -> None:
+        super().__init__()
+        self._agent = agent
+        self._catalogue = catalogue
+        self._current = current
+        self._lang = lang
+
+    def _t(self, key: str) -> str:
+        return i18n.t(key, self._lang)
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="mp-box"):
+            yield Static(self._t("mp.title").format(agent=self._agent), id="mp-q")
+            cur_label = (self._current or {}).get("label") if self._current else None
+            opts = [Option(self._t("mp.clear"), id="__clear__")]
+            for m in self._catalogue:
+                mark = "● " if (cur_label and m["label"] == cur_label) else "  "
+                opts.append(Option(f"{mark}{m['label']}  [dim]({m['context']//1000}k ctx)[/]", id=m["label"]))
+            yield OptionList(*opts, id="mp-list")
+            yield Static(self._t("mp.hint"))
+
+    def on_mount(self) -> None:
+        self.query_one("#mp-list", OptionList).focus()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        oid = event.option.id
+        if oid == "__clear__":
+            self.dismiss({"action": "clear"})
+            return
+        for m in self._catalogue:
+            if m["label"] == oid:
+                self.dismiss({"action": "set", "model": m})
+                return
+        self.dismiss(None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class FleetApp(App):
     TITLE = "crewaimeat fleet"
     CSS = """
@@ -65,6 +118,8 @@ class FleetApp(App):
     #agents { width: 45%; }
     #detail { width: 55%; }
     #ov, #cfg, #logs { padding: 0 1; }
+    #test-out { padding: 0 1; height: 1fr; overflow-y: auto; }
+    #test-input { dock: bottom; height: 3; border: round $accent; }
     """
     BINDINGS = [
         ("q", "quit", "Quit"),
@@ -80,10 +135,14 @@ class FleetApp(App):
         ("X", "stop_fleet", "Stop fleet"),
         ("R", "restart_fleet", "Restart fleet"),
         ("d", "reap", "Reap daemons"),
+        ("m", "pick_model", "Model"),
         ("o", "show_overview", "Overview"),
+        ("t", "show_test", "Test"),
         ("c", "show_config", "Config"),
         ("l", "show_logs", "Logs"),
     ]
+    TEST_TIMEOUT_S = 180
+    TEST_POLL_S = 5
 
     def __init__(self, *, caller_agent: str = "news-fetcher", node_index_fn=None,
                  snapshot_fn=None, auto_node: bool = True, lang: str | None = None) -> None:
@@ -94,6 +153,7 @@ class FleetApp(App):
         self._auto_node = auto_node
         self._node_index: dict = {}
         self._snap = None
+        self._test_busy = False
         self.lang = lang or i18n.default_lang()
 
     def _t(self, key: str) -> str:
@@ -108,6 +168,9 @@ class FleetApp(App):
             with TabbedContent(id="detail"):
                 with TabPane(self._t("tab.overview"), id="tab-overview"):
                     yield Static(self._t("d.none_sel"), id="ov")
+                with TabPane(self._t("tab.test"), id="tab-test"):
+                    yield Static(self._t("test.idle"), id="test-out")
+                    yield Input(placeholder=self._t("test.placeholder"), id="test-input")
                 with TabPane(self._t("tab.config"), id="tab-config"):
                     yield Static("", id="cfg")
                 with TabPane(self._t("tab.logs"), id="tab-logs"):
@@ -154,12 +217,16 @@ class FleetApp(App):
         table.clear(columns=True)
         table.add_columns(*render.columns(self.lang))
         tc = self.query_one("#detail", TabbedContent)
-        for pid, key in (("tab-overview", "tab.overview"), ("tab-config", "tab.config"),
-                         ("tab-logs", "tab.logs")):
+        for pid, key in (("tab-overview", "tab.overview"), ("tab-test", "tab.test"),
+                         ("tab-config", "tab.config"), ("tab-logs", "tab.logs")):
             try:
                 tc.get_tab(pid).label = self._t(key)
             except Exception:  # noqa: BLE001 — relabel is cosmetic; never crash the toggle
                 pass
+        try:
+            self.query_one("#test-input", Input).placeholder = self._t("test.placeholder")
+        except Exception:  # noqa: BLE001
+            pass
         if self._snap is not None:
             self._apply(self._snap)  # re-render status bar + table + detail in the new language
 
@@ -221,11 +288,106 @@ class FleetApp(App):
     def action_show_overview(self) -> None:
         self.query_one("#detail", TabbedContent).active = "tab-overview"
 
+    def action_show_test(self) -> None:
+        self.query_one("#detail", TabbedContent).active = "tab-test"
+        self.query_one("#test-input", Input).focus()
+
     def action_show_config(self) -> None:
         self.query_one("#detail", TabbedContent).active = "tab-config"
 
     def action_show_logs(self) -> None:
         self.query_one("#detail", TabbedContent).active = "tab-logs"
+
+    # ── model override (pick a model for the selected crew, then restart it) ──
+    def action_pick_model(self) -> None:
+        row = self._selected_row()
+        if not row or not row.crew_file:
+            self.notify(self._t("warn.select").format(action="model"), severity="warning")
+            return
+        catalogue = agent_meta.model_catalogue()
+        if not catalogue:
+            self.notify(self._t("warn.no_models"), severity="warning")
+            return
+        current = agent_meta.current_override(row.agent)
+        agent = row.agent
+
+        def _cb(choice: dict | None) -> None:
+            if not choice:
+                return
+            if choice.get("action") == "clear":
+                self.notify(self._t("mp.cleared").format(agent=agent))
+                self._do_model_change(agent, None)
+            else:
+                model = choice["model"]
+                self.notify(self._t("mp.set").format(agent=agent, model=model["label"]))
+                self._do_model_change(agent, model)
+
+        self.push_screen(ModelPickScreen(agent, catalogue, current, self.lang), _cb)
+
+    @work(thread=True, group="action")
+    def _do_model_change(self, agent: str, model: dict | None) -> None:
+        """Persist the override (or clear it) then restart the crew so it rebuilds its LLM."""
+        try:
+            from crewaimeat import llm
+            from crewaimeat.forge import recycle_crew
+            if model is None:
+                llm.clear_override(agent)
+            else:
+                llm.save_override(agent, {"kind": "model", "label": model["label"],
+                                          "provider": model["provider"]})
+            msg = recycle_crew(agent)
+        except Exception as exc:  # noqa: BLE001 — surface, never crash
+            msg = f"model change failed: {exc!r}"
+        self.call_from_thread(self._after_action, str(msg))
+
+    # ── live agent test (create a real task, poll the deliverable) ────────────
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id != "test-input":
+            return
+        prompt = (event.value or "").strip()
+        if prompt:
+            self._start_test(prompt)
+
+    def _start_test(self, prompt: str) -> None:
+        if self._test_busy:
+            self.notify(self._t("test.busy"), severity="warning")
+            return
+        row = self._selected_row()
+        if not row:
+            self.notify(self._t("test.no_agent"), severity="warning")
+            return
+        if row.status != "running":
+            self.notify(self._t("test.not_running").format(agent=row.agent), severity="warning")
+            return
+        self._test_busy = True
+        self.query_one("#test-input", Input).value = ""
+        self.query_one("#test-out", Static).update(self._t("test.running").format(agent=row.agent))
+        self._run_test_worker(row.agent, prompt)
+
+    @work(thread=True, group="test")
+    def _run_test_worker(self, agent: str, prompt: str) -> None:
+        head = [f"▶ {agent}: {prompt}", ""]
+
+        def _on_update(msg: str) -> None:
+            self.call_from_thread(
+                lambda: self.query_one("#test-out", Static).update("\n".join(head + [msg])))
+
+        res = test_run.run_agent_test(agent, prompt, on_update=_on_update,
+                                      timeout_s=self.TEST_TIMEOUT_S, poll_s=self.TEST_POLL_S)
+        self.call_from_thread(self._test_done, agent, res)
+
+    def _test_done(self, agent: str, res: dict) -> None:
+        self._test_busy = False
+        out = self.query_one("#test-out", Static)
+        if res.get("ok"):
+            head = self._t("test.done").format(agent=agent, secs=res.get("elapsed_s"),
+                                               tid=res.get("task_id"))
+            out.update(f"{head}\n\n{res.get('result') or ''}")
+            self.notify(head, timeout=8)
+        else:
+            msg = self._t("test.failed").format(err=res.get("error"))
+            out.update(msg)
+            self.notify(msg, severity="warning", timeout=10)
 
     @work(thread=True, group="action")
     def _do_action(self, label: str, fn) -> None:
@@ -271,14 +433,22 @@ class FleetApp(App):
         row = self._snap.rows[idx]
         readme = None
         profile, chain, n_off, n_wf = "?", [], 0, 0
-        try:  # local enrichment (README + llm chain + offers); defensive — never break the panes
+        override = offers = contracts = tags = caps = workflows = None
+        try:  # local enrichment (README + llm chain + offers + identity); defensive — never break panes
             readme = agent_meta.read_readme(row.agent)
             profile, chain = agent_meta.model_chain(row.agent)
             n_off, n_wf = agent_meta.offer_summary(row.agent)
+            override = agent_meta.current_override(row.agent)
+            offers = agent_meta.offers_detail(row.agent)
+            contracts = agent_meta.contracts_for(row.agent)
+            tags, caps = agent_meta.identity(row.agent)
+            workflows = agent_meta.workflows_for(row.agent)
         except Exception:  # noqa: BLE001
             pass
         ov.update("\n".join(render.overview_lines(row, readme, self.lang)))
-        cfg.update("\n".join(render.meta_lines(profile, chain, n_off, n_wf, self.lang)))
+        cfg.update("\n".join(render.meta_lines(
+            profile, chain, n_off, n_wf, self.lang, override=override, offers=offers,
+            contracts=contracts, tags=tags, capabilities=caps, workflows=workflows)))
         logs.update("\n".join(self._log_tail(row.agent, n=30)))
 
     def _log_tail(self, agent: str, n: int = 12) -> list[str]:

@@ -83,3 +83,88 @@ def offer_summary(agent: str) -> tuple[int, int]:
         except Exception:  # noqa: BLE001 — a malformed offer must not break the panel
             pass
     return (len(metas), n_wf)
+
+
+def offers_detail(agent: str) -> list[tuple[str, str]]:
+    """[(offer_id, title), …] for the agent — its crew-task offers PLUS any contract-derived ones."""
+    out: list[tuple[str, str]] = []
+    try:
+        from crewaimeat.offers import _CREW_OFFERS
+        for meta in _CREW_OFFERS.get(agent) or []:
+            out.append((meta.get("id") or "?", meta.get("title") or meta.get("id") or "?"))
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from crewaimeat.offers import _OFFER_META, _contracts
+        for c in _contracts():
+            cid = c.get("id")
+            meta = _OFFER_META.get(cid) or {}
+            if meta.get("agent") == agent:
+                out.append((cid or "?", meta.get("title") or cid or "?"))
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def contracts_for(agent: str) -> list[dict]:
+    """[{id, spaces:[{space, mode, fields:[…]}]}] — contracts this agent serves, with each space's
+    schema field names (so the panel can show the input/output shape)."""
+    out: list[dict] = []
+    try:
+        from crewaimeat.offers import _OFFER_META, _contracts
+    except Exception:  # noqa: BLE001
+        return out
+    for c in _contracts():
+        cid = c.get("id")
+        if (_OFFER_META.get(cid) or {}).get("agent") != agent:
+            continue
+        spaces = []
+        for sp in c.get("spaces") or []:
+            schema = sp.get("schema") or {}
+            fields = list((schema.get("properties") or {}).keys()) if isinstance(schema, dict) else []
+            spaces.append({"space": sp.get("space") or sp.get("namespace") or "?",
+                           "mode": sp.get("mode") or "?", "fields": fields})
+        out.append({"id": cid or "?", "spaces": spaces})
+    return out
+
+
+def identity(agent: str) -> tuple[list[str], dict]:
+    """(tags, capabilities) the agent advertises, from the curated fleet registry (or ([], {}))."""
+    try:
+        from crewaimeat.fleet_identity import identity_for
+        ident = identity_for(agent) or {}
+        return (list(ident.get("tags") or []), ident.get("capabilities") or {})
+    except Exception:  # noqa: BLE001
+        return ([], {})
+
+
+def workflows_for(agent: str) -> list[tuple[str, list[str]]]:
+    """[(workflow_id, [step_id, …]), …] — workflows this agent has a step in (local WORKFLOWS)."""
+    out: list[tuple[str, list[str]]] = []
+    try:
+        from crewaimeat.workflow_spec import WORKFLOWS
+    except Exception:  # noqa: BLE001
+        return out
+    for wf in WORKFLOWS.values():
+        steps = [s.get("id") or "?" for s in wf.get("steps") or [] if s.get("agent") == agent]
+        if steps:
+            out.append((wf.get("id") or "?", steps))
+    return out
+
+
+def current_override(agent: str) -> dict | None:
+    """The agent's pinned model/profile override, or None (revert = llm_providers.json routing)."""
+    try:
+        from crewaimeat.llm import agent_override
+        return agent_override(agent)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def model_catalogue() -> list[dict]:
+    """Every selectable (provider, model) from llm_providers.json — feeds the picker. See llm.available_models."""
+    try:
+        from crewaimeat.llm import available_models
+        return available_models()
+    except Exception:  # noqa: BLE001
+        return []
