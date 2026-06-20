@@ -58,30 +58,81 @@ _NEEDS = {  # extra per-category steer
 }
 
 
-def _read_raw(agent_name: str, category: str, date: str, edition: str) -> list:
-    key = f"news.{date}.{edition}.raw.{category}"
-    r = _aimeat_call(agent_name, "aimeat_memory_read", {"key": key})  # own gaii first
-    v = r.get("value") if isinstance(r, dict) else None
-    if v is None:  # the raw is written by news-fetcher (a sibling) → owner-scope cross-agent read
-        lr = _aimeat_call(agent_name, "aimeat_memory_list", {"owner_scope": True, "prefix": key})
-        for it in ((lr or {}).get("items") if isinstance(lr, dict) else None) or []:
-            if it.get("key") == key and it.get("value") is not None:
-                v = it.get("value")
-                break
+class RawReadError(RuntimeError):
+    """The raw read FAILED at the transport level (tunnel/serve down) — distinct from raw that is
+    genuinely empty. We must not conflate the two: a failed read that looks 'empty' silently drops
+    the category (the 06-20 incident, where a tunnel nykäys lost 7 article categories)."""
+
+
+class WriteIncomplete(RuntimeError):
+    """One or more categories could not be read or published (transport/LLM failure). The desk write
+    is INCOMPLETE — raise so the step goes RED and the workflow retries it, never a silent partial."""
+
+    def __init__(self, report: str, failed: list[str]):
+        self.report = report
+        self.failed = list(failed)
+        super().__init__(
+            f"write incomplete — {len(self.failed)} categ. failed (transport/LLM): {', '.join(self.failed)}"
+        )
+
+
+def _coerce_list(v) -> list:
     if isinstance(v, str) and v.strip()[:1] == "[":
         try:
             v = json.loads(v)
         except Exception:  # noqa: BLE001
-            v = []
+            return []
     return v if isinstance(v, list) else []
 
 
+def _read_raw(agent_name: str, category: str, date: str, edition: str) -> list:
+    """The scraped raw for one category, or [] if it is genuinely empty/absent. Raises RawReadError
+    if the read FAILS at the transport level — so the caller fails loud instead of silently treating
+    a tunnel drop as 'no raw'. `_aimeat_call` already retries transient failures, so a None here means
+    the failure persisted."""
+    key = f"news.{date}.{edition}.raw.{category}"
+    # Fast path: own-gaii read (best-effort; the owner-scope list below is the authoritative source).
+    r = _aimeat_call(agent_name, "aimeat_memory_read", {"key": key})
+    if isinstance(r, dict) and r.get("value") is not None:
+        return _coerce_list(r.get("value"))
+    # Authoritative: news-fetcher (a sibling) wrote the raw with owner visibility → owner-scope list.
+    lr = _aimeat_call(agent_name, "aimeat_memory_list", {"owner_scope": True, "prefix": key})
+    if lr is None:
+        # Transport failure that survived the dispatcher's retries — do NOT pretend the raw is empty.
+        raise RawReadError(f"raw read failed for '{category}' ({key}) — tunnel/transport down")
+    for it in (lr.get("items") or []) if isinstance(lr, dict) else []:
+        if it.get("key") == key and it.get("value") is not None:
+            return _coerce_list(it.get("value"))
+    return []  # the list call SUCCEEDED but the key is genuinely absent/empty
+
+
+def _publish_article(agent_name: str, date: str, edition: str, category: str, article: str) -> bool:
+    """Publish one article; True on success. `_aimeat_call` retries transient transport failures, so
+    None back means the publish genuinely failed (tunnel down longer than the retries)."""
+    res = _aimeat_call(
+        agent_name,
+        "aimeat_memory_write",
+        {"key": f"news.{date}.{edition}.article.{category}", "value": article, "visibility": "public"},
+    )
+    return res is not None
+
+
 def write_edition_articles(agent_name: str, date: str, edition: str, categories: list[str]) -> str:
+    """Write a full article for every category with real raw. Resilient: a read/publish that fails
+    at the transport level, or an LLM error on one category, is recorded and the loop CONTINUES with
+    the rest — then, if anything failed, it raises WriteIncomplete so the step is honestly RED (and
+    retried) rather than a silent partial. Idempotent — re-running fills only the gaps."""
     llm = get_llm(for_tool_use=False, temperature=0.7, agent_name=agent_name)
     lines = [f"deterministic write — {date} {edition} ({agent_name})"]
+    failed: list[str] = []
     for cat in categories:
-        raw = _read_raw(agent_name, cat, date, edition)
-        # require real scraped substance (not just a stub)
+        try:
+            raw = _read_raw(agent_name, cat, date, edition)
+        except RawReadError as exc:
+            lines.append(f"  {cat:18s} READ FAILED — {exc}")
+            failed.append(cat)
+            continue
+        # require real scraped substance (not just a stub) — a genuinely-thin category is skipped, OK
         body_chars = sum(len(str((a or {}).get("content") or "")) for a in raw if isinstance(a, dict))
         if not raw or body_chars < 200:
             lines.append(f"  {cat:18s} skip (no/thin raw, {body_chars} chars)")
@@ -97,18 +148,25 @@ def write_edition_articles(agent_name: str, date: str, edition: str, categories:
             + FINNISH_NATIVE_STYLE
             + f"\n\nLÄHTEET (JSON):\n{src}"
         )
-        art = llm.call([{"role": "user", "content": prompt}])
-        art = art if isinstance(art, str) else str(art)
-        if len(art.strip()) < 200:  # grok hiccup → one retry
+        try:
             art = llm.call([{"role": "user", "content": prompt}])
             art = art if isinstance(art, str) else str(art)
-        _aimeat_call(
-            agent_name,
-            "aimeat_memory_write",
-            {"key": f"news.{date}.{edition}.article.{cat}", "value": art, "visibility": "public"},
-        )
+            if len(art.strip()) < 200:  # grok hiccup → one retry
+                art = llm.call([{"role": "user", "content": prompt}])
+                art = art if isinstance(art, str) else str(art)
+        except Exception as exc:  # noqa: BLE001 — one bad LLM call must not lose the rest of the desk
+            lines.append(f"  {cat:18s} WRITE FAILED — llm error: {exc}")
+            failed.append(cat)
+            continue
+        if not _publish_article(agent_name, date, edition, cat, art):
+            lines.append(f"  {cat:18s} {len(art)} chars — PUBLISH FAILED (tunnel/transport)")
+            failed.append(cat)
+            continue
         lines.append(f"  {cat:18s} {len(art)} chars")
-    return "\n".join(lines)
+    report = "\n".join(lines)
+    if failed:
+        raise WriteIncomplete(report, failed)
+    return report
 
 
 def make_write_tools(agent_name: str, desk: str) -> list:
@@ -121,7 +179,12 @@ def make_write_tools(agent_name: str, desk: str) -> list:
         """Deterministically write a full Finnish article for EVERY category in this desk that has non-empty
         raw. Call ONCE with the resolved date+edition; the loop runs in code (no category skipped) and grok
         writes each article from the scraped raw. Returns a per-category char-count report."""
-        return write_edition_articles(agent_name, (date or "").strip(), (edition or "").strip(), cats)
+        try:
+            return write_edition_articles(agent_name, (date or "").strip(), (edition or "").strip(), cats)
+        except WriteIncomplete as exc:
+            # Surface the partial report + the loud failure tail so the agent reports it; the workflow's
+            # article-count gate still flags the desk RED, and the step retry re-runs to fill the gaps.
+            return f"{exc.report}\n\nINCOMPLETE: {exc}"
 
     write_edition_articles_tool.cache_function = lambda *_a, **_k: False
     return [write_edition_articles_tool]

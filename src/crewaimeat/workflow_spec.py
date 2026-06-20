@@ -280,6 +280,7 @@ WORKFLOWS: dict[str, dict] = {
                 },
                 "stage": ("crewaimeat.write_pipeline", "write_edition_articles"),
                 "desk": "A",
+                "retry": {"max": 2, "backoff_min": 5},  # a transient tunnel drop → re-run, don't lose the desk
             },
             {
                 "id": "write-b",
@@ -292,6 +293,7 @@ WORKFLOWS: dict[str, dict] = {
                 },
                 "stage": ("crewaimeat.write_pipeline", "write_edition_articles"),
                 "desk": "B",
+                "retry": {"max": 2, "backoff_min": 5},  # a transient tunnel drop → re-run, don't lose the desk
             },
             # Independent: pulls NOAA/NASA itself, writes the avaruussaa article into the set.
             {

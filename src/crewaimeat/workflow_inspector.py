@@ -35,17 +35,26 @@ def _rerun_step(step_id: str, date: str, edition: str) -> str:
 
         return build_edition_raw("news-fetcher", date, edition)
     if step_id in ("write-a", "write"):  # "write" kept for older single-desk definitions
-        from crewaimeat.write_pipeline import DESK_A, DESK_B, write_edition_articles
+        from crewaimeat.write_pipeline import DESK_A, DESK_B, WriteIncomplete, write_edition_articles
 
-        a = write_edition_articles("news-writer", date, edition, DESK_A)
+        def _safe_write(ag, cats):  # a repair that is itself partial reports it, doesn't crash inspect
+            try:
+                return write_edition_articles(ag, date, edition, cats)
+            except WriteIncomplete as exc:
+                return f"{exc.report}\nINCOMPLETE: {exc}"
+
+        a = _safe_write("news-writer", DESK_A)
         if step_id == "write":
-            b = write_edition_articles("news-writer-b", date, edition, DESK_B)
+            b = _safe_write("news-writer-b", DESK_B)
             return f"A: {a} | B: {b}"
         return a
     if step_id == "write-b":
-        from crewaimeat.write_pipeline import DESK_B, write_edition_articles
+        from crewaimeat.write_pipeline import DESK_B, WriteIncomplete, write_edition_articles
 
-        return write_edition_articles("news-writer-b", date, edition, DESK_B)
+        try:
+            return write_edition_articles("news-writer-b", date, edition, DESK_B)
+        except WriteIncomplete as exc:
+            return f"{exc.report}\nINCOMPLETE: {exc}"
     if step_id == "space-weather":
         from crewaimeat.space_weather_pipeline import write_space_weather
 

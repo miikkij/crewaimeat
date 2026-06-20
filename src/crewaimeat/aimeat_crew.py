@@ -472,37 +472,91 @@ def _serve_reset() -> None:
         _SERVE_STATE["base"] = _SERVE_STATE["session"] = None
 
 
-def _aimeat_call(agent_name: str, tool: str, payload: dict) -> dict | None:
+# Transient TRANSPORT failures — the shared serve tunnel reconnecting, the daemon being recycled, a
+# dropped connection. These are worth RETRYING (the tunnel is usually back within seconds): a brief
+# nykäys must not lose a memory read/write (the 06-20 Sanomat incident — a tunnel drop mid-run silently
+# dropped 7 article categories). A tool-level error (a key that isn't there yet, a validation reject)
+# is NOT transient — it returns immediately, so legitimate "not found yet" polls stay fast.
+_TRANSIENT_ERR_MARKERS = (
+    "tunnel not connected",
+    "not connected",
+    "no tunnel",
+    "connection refused",
+    "econnrefused",
+    "connection reset",
+    "timeout",
+    "timed out",
+    "temporarily unavailable",
+    "502",
+    "503",
+    "504",
+    "bad gateway",
+    "service unavailable",
+)
+
+
+def _is_transient_error(err) -> bool:
+    """True if an error envelope looks like a transient TRANSPORT failure (retry-worthy) rather than
+    a tool-level error (a missing key, a validation reject) which should fail fast."""
+    if not err:
+        return False
+    s = (err if isinstance(err, str) else json.dumps(err, default=str)).lower()
+    return any(m in s for m in _TRANSIENT_ERR_MARKERS)
+
+
+def _aimeat_call(agent_name: str, tool: str, payload: dict, *, retries: int = 3, backoff: float = 1.5) -> dict | None:
     """Deterministic AIMEAT tool call (no LLM).
 
     Primary path: POST /local/call/<tool> on the shared loopback serve daemon (same tool name +
     JSON input as `connect call`; returns the envelope's data). Fallback when no daemon exists:
-    the legacy one-shot `aimeat connect call` subprocess."""
-    api = _serve_api()
-    if api is None:
-        return _aimeat_call_subprocess(agent_name, tool, payload)
-    base, session = api
-    try:
-        r = session.post(
-            f"{base}/local/call/{tool}",
-            json=payload,
-            headers={"X-Aimeat-Agent": agent_name},
-            timeout=90,
-        )
-    except requests.RequestException as exc:
-        _serve_reset()  # daemon gone mid-flight -> next call re-discovers / auto-restarts it
-        print(f"[{agent_name}] {tool} loopback POST failed ({exc}); serve will be re-discovered", file=sys.stderr)
-        return None
-    try:
-        body = r.json()
-    except ValueError:
-        print(f"[{agent_name}] {tool} returned non-JSON (HTTP {r.status_code}): {r.text[:120]}", file=sys.stderr)
-        return None
-    if not isinstance(body, dict) or not body.get("ok"):
-        err = (body or {}).get("error") if isinstance(body, dict) else None
-        print(f"[{agent_name}] {tool} failed: {err or f'HTTP {r.status_code}'}", file=sys.stderr)
-        return None
-    return body.get("data")
+    the legacy one-shot `aimeat connect call` subprocess.
+
+    RESILIENCE: a transient TRANSPORT failure (tunnel reconnecting, connection dropped, 5xx) is
+    RETRIED up to `retries` times with exponential backoff — the serve daemon is reset between tries
+    so the next attempt re-discovers/re-establishes it. Tool-level errors (e.g. a key that isn't
+    there yet) are NOT retried — they return None immediately so "not found yet" polls stay cheap."""
+    for attempt in range(retries):
+        api = _serve_api()
+        if api is None:
+            return _aimeat_call_subprocess(agent_name, tool, payload)
+        base, session = api
+        last = attempt + 1 >= retries
+        try:
+            r = session.post(
+                f"{base}/local/call/{tool}",
+                json=payload,
+                headers={"X-Aimeat-Agent": agent_name},
+                timeout=90,
+            )
+        except requests.RequestException as exc:
+            _serve_reset()  # daemon gone mid-flight -> re-discover / auto-restart it on the next try
+            if last:
+                print(
+                    f"[{agent_name}] {tool} loopback POST failed ({exc}); gave up after {retries} tries",
+                    file=sys.stderr,
+                )
+                return None
+            print(f"[{agent_name}] {tool} POST failed ({exc}); retry {attempt + 1}/{retries}", file=sys.stderr)
+            time.sleep(backoff * (2**attempt))
+            continue
+        try:
+            body = r.json()
+        except ValueError:
+            print(f"[{agent_name}] {tool} returned non-JSON (HTTP {r.status_code}): {r.text[:120]}", file=sys.stderr)
+            return None
+        if not isinstance(body, dict) or not body.get("ok"):
+            err = (body or {}).get("error") if isinstance(body, dict) else None
+            if _is_transient_error(err) and not last:
+                _serve_reset()
+                print(
+                    f"[{agent_name}] {tool} transient failure ({err}); retry {attempt + 1}/{retries}", file=sys.stderr
+                )
+                time.sleep(backoff * (2**attempt))
+                continue
+            print(f"[{agent_name}] {tool} failed: {err or f'HTTP {r.status_code}'}", file=sys.stderr)
+            return None
+        return body.get("data")
+    return None
 
 
 def _aimeat_call_subprocess(agent_name: str, tool: str, payload: dict) -> dict | None:
