@@ -156,6 +156,29 @@ _VERIFY_CODE_RE = re.compile(r"Verification code:\s*([A-Za-z0-9][A-Za-z0-9-]*)")
 _VERIFY_URL_RE = re.compile(r"(https?://\S*verif\S*)")
 
 
+def register_fleet(owner: str, url: str = "https://aimeat.io", agents: list[str] | None = None) -> str:
+    """Register every crew (or a given subset) as a task-runner against `url` under `owner`, surfacing
+    each agent's device-approval code/URL — the one-command way to stand the SAME fleet up on a SECOND
+    node (e.g. a local dev node ``http://localhost:40050``) without hand-editing each crew.
+
+    Run it from the home you want the dev tokens in: the connector writes tokens under AIMEAT_HOME
+    (env wins, else ``<cwd>/.aimeat``), so a separate dev clone keeps its tokens isolated from prod.
+    Approve each surfaced code in that node's dashboard (Profile -> Agents); each registers
+    automatically once approved. One bad registration is reported, not fatal — the rest continue.
+    """
+    names = agents if agents is not None else [a for a in (_agent_name_of(p) for p in _crew_files()) if a]
+    home = os.getenv("AIMEAT_HOME") or str(_project_root() / ".aimeat")
+    lines = [f"Registering {len(names)} agent(s) against {url} (owner={owner}, AIMEAT_HOME={home}):"]
+    for name in names:
+        try:
+            _ok, msg = register_agent(name, owner, url)
+        except Exception as exc:  # noqa: BLE001 — one bad registration must not abort the rest
+            msg = f"FAILED to start: {exc}"
+        lines.append(f"  {name:30s} {msg}")
+    lines.append("Approve each code in the node's dashboard (Profile -> Agents); each registers once approved.")
+    return "\n".join(lines)
+
+
 def register_agent(agent_name: str, owner: str, url: str = "https://aimeat.io") -> tuple[bool, str]:
     """Start `connect add` for a new task-runner agent and SURFACE its device verification code + URL.
 
