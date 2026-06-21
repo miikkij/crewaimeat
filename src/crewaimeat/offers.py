@@ -276,7 +276,12 @@ def fetch_sample(agent: str, out_space: dict | None) -> str:
     if not out_space:
         return "untested"
     try:
-        data = _aimeat_call(agent, "aimeat_workspace_read", {"organism_id": _SAMPLE_ORG, "ws": _SAMPLE_WS}) or {}
+        # quiet: the sample workspace may not exist on this node (e.g. a dev node) — that just means
+        # 'untested', handled below, not a failure worth logging on every agent start.
+        data = (
+            _aimeat_call(agent, "aimeat_workspace_read", {"organism_id": _SAMPLE_ORG, "ws": _SAMPLE_WS}, quiet=True)
+            or {}
+        )
         items = (data.get("objects", {}) or {}).get(out_space["space"]) or []
         if not items:
             return "untested"
