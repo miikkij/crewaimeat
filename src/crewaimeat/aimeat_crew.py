@@ -504,7 +504,9 @@ def _is_transient_error(err) -> bool:
     return any(m in s for m in _TRANSIENT_ERR_MARKERS)
 
 
-def _aimeat_call(agent_name: str, tool: str, payload: dict, *, retries: int = 3, backoff: float = 1.5) -> dict | None:
+def _aimeat_call(
+    agent_name: str, tool: str, payload: dict, *, retries: int = 3, backoff: float = 1.5, quiet: bool = False
+) -> dict | None:
     """Deterministic AIMEAT tool call (no LLM).
 
     Primary path: POST /local/call/<tool> on the shared loopback serve daemon (same tool name +
@@ -553,7 +555,8 @@ def _aimeat_call(agent_name: str, tool: str, payload: dict, *, retries: int = 3,
                 )
                 time.sleep(backoff * (2**attempt))
                 continue
-            print(f"[{agent_name}] {tool} failed: {err or f'HTTP {r.status_code}'}", file=sys.stderr)
+            if not quiet:  # quiet=True for EXPECTED probe failures (e.g. listing an org you don't serve)
+                print(f"[{agent_name}] {tool} failed: {err or f'HTTP {r.status_code}'}", file=sys.stderr)
             return None
         return body.get("data")
     return None
@@ -605,7 +608,10 @@ def member_workspaces(agent_name: str) -> list[tuple[str, str]]:
             org_ids.append(extra.strip())
     pairs: list[tuple[str, str]] = []
     for oid in org_ids:
-        wl = _aimeat_call(agent_name, "aimeat_workspace_list", {"organism_id": oid}) or {}
+        # quiet: probing an org the agent doesn't serve (or that doesn't exist on this node) returns
+        # "not an active member" / "organism not found" — an EXPECTED outcome of scanning, not a fault
+        # to spam every idle poll. A real problem still surfaces through the agent's own deliverable.
+        wl = _aimeat_call(agent_name, "aimeat_workspace_list", {"organism_id": oid}, quiet=True) or {}
         pairs.extend((oid, w["id"]) for w in (wl.get("workspaces") or []) if w.get("id"))
     return pairs
 
