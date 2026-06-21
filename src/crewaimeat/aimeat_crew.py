@@ -78,6 +78,11 @@ from crewaimeat.progress import install_progress  # noqa: E402
 # run_crew() exits with this code when the agent's token is no longer accepted by the
 # node (needs re-approval). The watchdog scripts treat it as "stop, don't restart".
 AUTH_EXIT_CODE = 78
+# How often to probe the node for token liveness on idle (a DIRECT node GET). The daemon idles every
+# ~poll_seconds (~30s), but a token is revoked rarely — probing every ~5 min detects it fine and cuts the
+# idle node traffic ~10x. Tasks themselves arrive by PUSH over the tunnel, so the daemon never polls the
+# node for those; this probe was the main constant idle call.
+_AUTH_PROBE_SECONDS = 300
 
 
 # Lock-file handles for the single-instance guard, kept alive for the whole process lifetime
@@ -775,7 +780,7 @@ def _write_verify_stat(agent_name: str, tid: str | None, output_text: str, dimen
     )
 
 
-def _publish_selection_rollup(agent_name: str, owner: str | None = None) -> None:
+def _publish_selection_rollup(agent_name: str, owner: str | None = None, _state: dict | None = None) -> None:
     """Publish the agent's OWN field-reputation rollup to its PUBLIC memory key
     agents.<agent>.statistics.custom.selection — the live-score key a coordinator's discover_crews reads.
 
@@ -813,6 +818,14 @@ def _publish_selection_rollup(agent_name: str, owner: str | None = None) -> None
             "avg_stars": avg,
             "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
+        # CONDITIONAL write: only publish when the SCORE actually moved. The ts always differs, so compare
+        # just the score fields against the last publish — an idle agent whose reputation hasn't changed
+        # skips the memory write entirely (the common case), so the only periodic cost is the stats GET.
+        sig = {k: value[k] for k in ("context", "normalized", "n", "confident", "avg_stars")}
+        if _state is not None and _state.get("sig") == sig:
+            return  # unchanged since last publish — skip the write
+        if _state is not None:
+            _state["sig"] = sig
         _aimeat_call(
             agent_name,
             "aimeat_memory_write",
@@ -1679,42 +1692,49 @@ def run_crew(spec: CrewSpec) -> None:
     #    agent on AIMEAT. (SystemExit escapes the daemon's `except Exception` on_idle
     #    guard, so this cleanly stops the loop.)
     auth = {"fails": 0}
-    pub = {"last": 0.0}
+    pub = {"last": 0.0, "sig": None}
     hook = {"last": 0.0}
+    authchk = {"last": 0.0}
 
     def _on_idle() -> None:
-        alive = _auth_alive(spec.agent_name, spec.owner)
-        if alive is True:
-            auth["fails"] = 0
-            # Self-publish this crew's field-reputation rollup so coordinators' discover_crews can see
-            # its live score. Throttled to ~10 min (an idle daemon polls far more often than that).
-            now = time.time()
-            if now - pub["last"] > 600:
-                pub["last"] = now
-                _publish_selection_rollup(spec.agent_name, spec.owner)
-            # Optional DETERMINISTIC per-crew idle work (e.g. a workspace-contract poll). The poll uses NO
-            # LLM (workspace read + filter); throttled so a fast-polling daemon doesn't hammer it.
-            if spec.idle_hook is not None and now - hook["last"] > spec.idle_hook_seconds:
-                hook["last"] = now
-                try:
-                    spec.idle_hook()
-                except Exception as exc:  # noqa: BLE001
-                    print(f"[{spec.agent_name}] idle_hook failed: {exc!r}", file=sys.stderr)
-        elif alive is False:
-            auth["fails"] += 1
-            print(
-                f"[{spec.agent_name}] token rejected by the node "
-                f"({auth['fails']}/{spec.max_idle_auth_failures} consecutive idle checks)",
-                file=sys.stderr,
-            )
-            if auth["fails"] >= spec.max_idle_auth_failures:
+        now = time.time()
+        # 1) Auth-liveness probe — a DIRECT node GET. THROTTLED to _AUTH_PROBE_SECONDS so an idle daemon
+        #    doesn't GET the node every ~poll_seconds (~30s) just to confirm a token that almost never dies.
+        #    Tasks arrive by PUSH over the tunnel; the daemon never polls the node for those.
+        if now - authchk["last"] >= _AUTH_PROBE_SECONDS:
+            authchk["last"] = now
+            alive = _auth_alive(spec.agent_name, spec.owner)
+            if alive is False:
+                auth["fails"] += 1
                 print(
-                    f"\n[{spec.agent_name}] The agent's token is no longer valid. Re-approve / "
-                    "re-authenticate it on AIMEAT (Profile -> Agents), then start the crew again.",
+                    f"[{spec.agent_name}] token rejected by the node "
+                    f"({auth['fails']}/{spec.max_idle_auth_failures} consecutive idle checks)",
                     file=sys.stderr,
                 )
-                raise SystemExit(AUTH_EXIT_CODE)
-        # alive is None -> unknown/transient; leave the counter unchanged.
+                if auth["fails"] >= spec.max_idle_auth_failures:
+                    print(
+                        f"\n[{spec.agent_name}] The agent's token is no longer valid. Re-approve / "
+                        "re-authenticate it on AIMEAT (Profile -> Agents), then start the crew again.",
+                        file=sys.stderr,
+                    )
+                    raise SystemExit(AUTH_EXIT_CODE)
+            elif alive is True:
+                auth["fails"] = 0
+            # alive is None -> unknown/transient; leave the counter unchanged.
+        if auth["fails"]:
+            return  # the last probe was rejected — do no idle work until the token is re-approved
+        # 2) Self-publish this crew's field-reputation rollup so coordinators' discover_crews see its live
+        #    score. Throttled to ~10 min AND conditional (writes only when the score actually moved).
+        if now - pub["last"] > 600:
+            pub["last"] = now
+            _publish_selection_rollup(spec.agent_name, spec.owner, _state=pub)
+        # 3) Optional DETERMINISTIC per-crew idle work (e.g. a workspace-contract poll). NO LLM; throttled.
+        if spec.idle_hook is not None and now - hook["last"] > spec.idle_hook_seconds:
+            hook["last"] = now
+            try:
+                spec.idle_hook()
+            except Exception as exc:  # noqa: BLE001
+                print(f"[{spec.agent_name}] idle_hook failed: {exc!r}", file=sys.stderr)
 
     # 4) Daemon: poll the queue, execute the per-task crew. llm=get_llm() keeps the
     #    daemon's liaison on the configured model (not CrewAI's OpenAI default).
