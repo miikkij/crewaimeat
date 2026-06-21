@@ -7,7 +7,7 @@ requires-python = ">=3.10,<3.14"
 dependencies = [
     "crewai[tools]>=1.14.7",  # 1.14.7: per-run state isolation (concurrent daemons), custom-BaseLLM
     #                           restore fix, aiohttp/docling CVE fixes, faster import
-    "aimeat-crewai>=0.6.0",  # 0.6.0: per-directory connector home (AIMEAT_HOME env wins, else <cwd>/.aimeat)
+    "aimeat-crewai>=0.7.0",  # 0.7.0: event push over the tunnel (listen_for="records" + record_spaces + on_record, auth_revoked self-exit, aimeat_agent_statistics tool)
     #                          + aimeat_crewai.paths.aimeat_home single source; 0.5.0: native offers +
     #                          workflow-compat (Sig, build_offer/publish_offers, aimeat-offers CLI, liaison)
     "tavily-python>=0.5.0",  # optional Tavily fallback (USE_TAVILY=1); default web search is SearXNG/DDG

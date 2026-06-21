@@ -78,11 +78,6 @@ from crewaimeat.progress import install_progress  # noqa: E402
 # run_crew() exits with this code when the agent's token is no longer accepted by the
 # node (needs re-approval). The watchdog scripts treat it as "stop, don't restart".
 AUTH_EXIT_CODE = 78
-# How often to probe the node for token liveness on idle (a DIRECT node GET). The daemon idles every
-# ~poll_seconds (~30s), but a token is revoked rarely — probing every ~5 min detects it fine and cuts the
-# idle node traffic ~10x. Tasks themselves arrive by PUSH over the tunnel, so the daemon never polls the
-# node for those; this probe was the main constant idle call.
-_AUTH_PROBE_SECONDS = 300
 
 
 # Lock-file handles for the single-instance guard, kept alive for the whole process lifetime
@@ -172,7 +167,17 @@ class CrewSpec:
     #   NO LLM (any LLM is in the work it triggers, only when there's something to do); exceptions are
     #   logged, never fatal.
     idle_hook_seconds: int = 60  # minimum seconds between idle_hook runs
-    listen_for: Iterable[str] = ("tasks",)  # add "messages" to also act on inbox messages
+    record_spaces: Any = None  # for listen_for=("records",): the (organism_id, ws, space) tuples this agent
+    #   subscribes to for workspace-record PUSH events (aimeat-crewai>=0.7.0, event-driven instead of
+    #   polling). A list of {"organism_id","ws","space"} (space = the NAMESPACE key segment, e.g.
+    #   "shared.moodboard_requests"), OR a 0-arg callable resolved at daemon start — e.g.
+    #   contract_record_spaces(AGENT, CONTRACT), which discovers member workspaces × the contract's
+    #   record/input namespaces. Replaces a record-scanning idle_hook.
+    on_record: Any = None  # handler for a pushed record event {type,organism_id,ws,space,id,op,ts}. op is
+    #   "created"|"updated" for a write, or "catchup" (id=None) once per space on (re)connect — re-scan that
+    #   space, then go event-only. The event is a WAKE + coordinates (no record value); the handler does its
+    #   own authorized read. If omitted, each event is wrapped into a synthetic task routed to build_domain.
+    listen_for: Iterable[str] = ("tasks",)  # add "messages" (inbox) and/or "records" (workspace events)
     wait_for_approval_seconds: int | None = 1800  # wait this long (30 min) for the token to be approved
     #   before onboarding, then exit for re-auth (None = wait indefinitely)
     services: list[dict] | None = None  # {name, description} capabilities to declare at
@@ -621,6 +626,22 @@ def member_workspaces(agent_name: str) -> list[tuple[str, str]]:
     return pairs
 
 
+def contract_record_spaces(agent_name: str, contract: dict) -> list[dict]:
+    """The subscription list for `listen_for=("records",)` — one {organism_id, ws, space} per
+    (member workspace) × (the contract's RECORD/input spaces). `space` is the namespace key segment
+    (e.g. "shared.moodboard_requests"), what the node matches in keys. Resolved ONCE at daemon start;
+    the connector re-sends the subscribe on reconnect, and a per-space catch-up event covers anything
+    written while the socket was down. Replaces a record-scanning idle_hook with event-driven wakes."""
+    namespaces = [
+        s["namespace"] for s in (contract.get("spaces") or []) if s.get("mode") == "records" and s.get("namespace")
+    ]
+    out: list[dict] = []
+    for oid, wid in member_workspaces(agent_name):
+        for ns in namespaces:
+            out.append({"organism_id": oid, "ws": wid, "space": ns})
+    return out
+
+
 def _onboarding_completed(agent_name: str) -> bool:
     data = _aimeat_call(agent_name, "aimeat_onboarding_status", {})
     return bool(data) and data.get("onboarding", {}).get("status") == "completed"
@@ -790,18 +811,12 @@ def _publish_selection_rollup(agent_name: str, owner: str | None = None, _state:
     (memory_read_public). Without this writer the selection key never exists and discover_crews shows
     '[no reputation yet]' forever. Normalizes avgStars (0-5) -> 0-1 and carries the node's confidence.
     Best-effort; never raises."""
-    if _aimeat_read_token is None:
-        return
     try:
-        token, node_url = _aimeat_read_token(agent_name, owner=owner)
-        r = requests.get(
-            f"{node_url.rstrip('/')}/v1/agents/{agent_name}/statistics",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=20,
-        )
-        if r.status_code != 200:
-            return
-        reviews = ((r.json() or {}).get("data") or {}).get("reviews") or {}
+        # P3 (aimeat-crewai 0.7.0): read the agent's OWN stats over the TUNNEL TOOL instead of a direct
+        # owner-only GET /v1/agents/:name/statistics — it rides the open WS (no separate connection).
+        # _aimeat_call returns the envelope's data (performance + reviews).
+        data = _aimeat_call(agent_name, "aimeat_agent_statistics", {})
+        reviews = (data.get("reviews") or {}) if isinstance(data, dict) else {}
         overall = reviews.get("overall") or {}
         n = overall.get("n") or 0
         avg = overall.get("avgStars")
@@ -1685,50 +1700,21 @@ def run_crew(spec: CrewSpec) -> None:
         _crew_holder["crew"] = crew  # so the publish callback can read usage_metrics after kickoff
         return crew
 
-    # 3) Idle auth-guard: run_crew_daemon's _poll_tasks swallows a 401 and returns []
-    #    (a dead token looks exactly like an empty queue), so the daemon would idle
-    #    forever. On each idle cycle we probe auth; after `max_idle_auth_failures`
-    #    consecutive rejections we exit with AUTH_EXIT_CODE so the user re-approves the
-    #    agent on AIMEAT. (SystemExit escapes the daemon's `except Exception` on_idle
-    #    guard, so this cleanly stops the loop.)
-    auth = {"fails": 0}
+    # Idle work runs between pushed tasks. NB the daemon now SELF-EXITS on a revoked token (aimeat-crewai
+    # 0.7.0: the node pushes auth_revoked, the connector reports transport auth_failed via /local/status,
+    # run_crew_daemon stops) — so we no longer probe auth here; the supervisor re-auths on the daemon's exit.
     pub = {"last": 0.0, "sig": None}
     hook = {"last": 0.0}
-    authchk = {"last": 0.0}
 
     def _on_idle() -> None:
         now = time.time()
-        # 1) Auth-liveness probe — a DIRECT node GET. THROTTLED to _AUTH_PROBE_SECONDS so an idle daemon
-        #    doesn't GET the node every ~poll_seconds (~30s) just to confirm a token that almost never dies.
-        #    Tasks arrive by PUSH over the tunnel; the daemon never polls the node for those.
-        if now - authchk["last"] >= _AUTH_PROBE_SECONDS:
-            authchk["last"] = now
-            alive = _auth_alive(spec.agent_name, spec.owner)
-            if alive is False:
-                auth["fails"] += 1
-                print(
-                    f"[{spec.agent_name}] token rejected by the node "
-                    f"({auth['fails']}/{spec.max_idle_auth_failures} consecutive idle checks)",
-                    file=sys.stderr,
-                )
-                if auth["fails"] >= spec.max_idle_auth_failures:
-                    print(
-                        f"\n[{spec.agent_name}] The agent's token is no longer valid. Re-approve / "
-                        "re-authenticate it on AIMEAT (Profile -> Agents), then start the crew again.",
-                        file=sys.stderr,
-                    )
-                    raise SystemExit(AUTH_EXIT_CODE)
-            elif alive is True:
-                auth["fails"] = 0
-            # alive is None -> unknown/transient; leave the counter unchanged.
-        if auth["fails"]:
-            return  # the last probe was rejected — do no idle work until the token is re-approved
-        # 2) Self-publish this crew's field-reputation rollup so coordinators' discover_crews see its live
-        #    score. Throttled to ~10 min AND conditional (writes only when the score actually moved).
+        # Self-publish this crew's field-reputation rollup so coordinators' discover_crews see its live
+        # score. Throttled to ~10 min, CONDITIONAL (writes only when the score moved), over the tunnel tool.
         if now - pub["last"] > 600:
             pub["last"] = now
             _publish_selection_rollup(spec.agent_name, spec.owner, _state=pub)
-        # 3) Optional DETERMINISTIC per-crew idle work (e.g. a workspace-contract poll). NO LLM; throttled.
+        # Optional DETERMINISTIC per-crew idle work (e.g. a CLOCK check). NO LLM; throttled. Record-driven
+        # contracts use listen_for="records" + on_record instead of polling here.
         if spec.idle_hook is not None and now - hook["last"] > spec.idle_hook_seconds:
             hook["last"] = now
             try:
@@ -1736,19 +1722,23 @@ def run_crew(spec: CrewSpec) -> None:
             except Exception as exc:  # noqa: BLE001
                 print(f"[{spec.agent_name}] idle_hook failed: {exc!r}", file=sys.stderr)
 
-    # 4) Daemon: poll the queue, execute the per-task crew. llm=get_llm() keeps the
-    #    daemon's liaison on the configured model (not CrewAI's OpenAI default).
+    # Daemon: receive pushed tasks/messages/records, execute the per-task crew. llm=get_llm() keeps the
+    # daemon's liaison on the configured model (not CrewAI's OpenAI default).
     # self_monitor crews must also hear inbox messages — that's how the owner's click on an
     # evolution prompt comes back (AIMEAT routes the answer to the agent that sent the prompt).
     _listen = tuple(spec.listen_for)
     if spec.self_monitor and "messages" not in _listen:
         _listen = _listen + ("messages",)
+    # record_spaces may be a 0-arg callable (resolved here at daemon start, e.g. discovers member workspaces).
+    _records = spec.record_spaces() if callable(spec.record_spaces) else spec.record_spaces
 
     run_crew_daemon(
         agent_name=spec.agent_name,
         build_crew=_build,
         poll_interval_seconds=spec.poll_seconds,
         listen_for=_listen,
+        record_spaces=_records,  # subscribe to workspace-record PUSH events for these spaces (0.7.0)
+        on_record=spec.on_record,  # handler for a pushed record event (or None -> synthetic task)
         llm=get_llm(),
         owner=spec.owner,
         on_idle=_on_idle,
