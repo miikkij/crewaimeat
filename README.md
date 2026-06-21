@@ -144,6 +144,7 @@ Output language follows the agent's judgment unless the task asks for a specific
 
 ## Docs
 
+- `ARCHITECTURE.md`: the map of the codebase — techstack, component layout (scaffold / crews / contracts / pipelines / TUI), the scaffold's lifecycle, fleet topology, and where to add things.
 - `SCAFFOLD_CANON.md`: how to build crews on the scaffold, and the reason each piece is there.
 - `CREW_AUTHORING_PROMPT.md`: the prompt that has an assistant build a crew with you.
 - `CHANGELOG.md`: notable changes.
@@ -259,6 +260,7 @@ Run one crew at a time, or manage the whole fleet with the scripts in `scripts/`
 | Run / develop a single crew | `uv run python crews/<x>_crew.py` | Runs one crew in the foreground (Ctrl+C stops it). |
 | Keep one crew alive (auto-restart) | `./scripts/watchdog.ps1 crews/<x>_crew.py` | Re-launches that crew if it ever exits. The building block the others use. |
 | Start the **whole fleet** now | `./scripts/start_fleet.ps1` | `uv sync`, then starts crew-forge, which **reconciles the fleet** — launches every approved crew (skipping running ones). crew-forge stays in that terminal; the rest run detached. |
+| Start the fleet **memory-light** (one process) | `./scripts/start_host.ps1` | Runs every agent as a **thread in ONE Python process** (crewai imported once) — ~20× less RAM than per-process. See [Fleet host](#fleet-host-one-process-memory-light) below. |
 | Start the fleet on **every boot** | `./scripts/install-autostart.ps1` | One-time: registers crew-forge to start at logon, so the fleet returns by itself after a reboot. |
 | See **what's running** | `./scripts/view_fleet.ps1` | Read-only: each crew's state (running / down) and the live-daemon count. Kills nothing. |
 | **Stop everything** | `./scripts/terminate_fleet.ps1` | Kills all watchdogs, crew daemons, and connectors (in that order). `-DryRun` lists first. |
@@ -267,6 +269,20 @@ Run one crew at a time, or manage the whole fleet with the scripts in `scripts/`
 **Which and when, in short:** for day-to-day dev, run one crew with `uv run python crews/<x>_crew.py`. To bring everything up in one go (or after `terminate_fleet`), use `start_fleet`. To have the fleet survive reboots unattended, run `install-autostart` once. Use `view_fleet` to check state, `terminate_fleet` to stop, and crew-forge's `/startall` to re-reconcile while it's running.
 
 **Why there's no "launch every crew" loop:** starting the fleet is crew-forge's *idempotent reconcile* (in code) — it skips crews already running and never double-launches. `start_fleet` and `install-autostart` only bootstrap crew-forge; it brings up the rest (see [Surviving a reboot](#surviving-a-reboot-the-fleet-supervisor)). `terminate_fleet` is the blunt inverse (kill all).
+
+### Fleet host (one process, memory-light)
+
+`start_fleet` runs **one OS process per crew**. Each imports `crewai` + `litellm` independently (~150–250 MB resident), so a large fleet costs several GB of pure import bloat — wasteful for I/O-bound work (poll, shuffle text, call an LLM API). **`./scripts/start_host.ps1`** (or `uv run python -m crewaimeat.fleet_host`) runs every agent as a **thread in ONE process** instead: `crewai` is imported once, and because the work is network-bound the GIL is released on every poll/LLM call so the agents run concurrently. Measured: **~800 MB for ~38 agents** (≈20× less RAM), and two full fleets (prod + a dev clone) fit in ~2 GB together.
+
+```powershell
+./scripts/start_host.ps1                       # every approved crew, one process
+./scripts/start_host.ps1 -Agents joker,image-maker   # just these
+./scripts/start_host.ps1 -List                 # show what would run, then exit
+```
+
+It's **opt-in and additive** — the per-process model above is unchanged and stays the default. Pick **one** model per checkout (host *or* per-process): the per-agent single-instance lock makes whichever starts second exit. A crashed agent is restarted (bounded) without touching the others; `crew-forge` is excluded (its job is launching the per-process fleet, redundant here). Ctrl+C stops the whole host. The TUI shows host-threaded agents as `running` with `host` in the wd/dae column.
+
+**Two fleets at once (e.g. dev + prod).** Run a second checkout (a `git clone`) against a different node: each clone has its own `AIMEAT_HOME`, serve daemon, logs and locks, so process detection (reconcile, the TUI, `terminate_fleet`) is scoped per-checkout and the two never collide. Mass-register the second node's agents with `uv run python scripts/register_fleet.py --owner <owner> --url http://localhost:40050`, then `start_host` there.
 
 ## Fleet TUI (crewaimeat-tui)
 
@@ -278,9 +294,9 @@ uv run crewaimeat-tui
 ```
 
 What you see:
-- **Status bar** — the serve daemon (pid:port), watchdog/lock counts, running vs stale, and any DUPLICATE/zombie warnings. Plus a **versions line**: the installed `aimeat-crewai` (PyPI) and `aimeat` CLI (npm) versions, flagged when a newer one is available.
-- **Agent table** — every crew with a color-coded status: `running` · `down` · `orphan` (no watchdog) · `DUPLICATE` · `zombie` (running, no crew file) · **`stale-heartbeat`** (locally up but the node hasn't heard from it — the "connector up, daemon not polling" case).
-- **Detail tabs** for the selected agent — **Overview** (status + the crew's README), **Config** (LLM profile + the ordered provider→model fallback chain + offer/workflow-compat counts), **Logs** (watchdog log tail). Switch with `o` / `c` / `l`.
+- **Status bar** — the serve daemon (pid:port), watchdog/lock counts, running vs stale, any DUPLICATE/zombie warnings, and — when the fleet runs via the [host](#fleet-host-one-process-memory-light) — `host pid N (K threaded)`. Plus a **versions line**: the installed `aimeat-crewai` (PyPI) and `aimeat` CLI (npm) versions, flagged when a newer one is available.
+- **Agent table** — every crew with a color-coded status: `running` · `down` · `orphan` (no watchdog) · `DUPLICATE` · `zombie` (running, no crew file) · **`stale-heartbeat`** (locally up but the node hasn't heard from it — the "connector up, daemon not polling" case). A host-threaded agent reads `running` with `host` in the wd/dae column.
+- **Detail tabs** for the selected agent — **Overview** (status + the crew's README), **Test** (fire a real task at the running agent and watch its deliverable), **Config** (LLM profile + provider→model chain + any pinned override + offers, contract schemas, capabilities, and the workflows the agent is a step in), **Logs** (watchdog log tail). Switch with `o` / `t` / `c` / `l`.
 
 Refresh is two-tier and off the UI thread: local state (~2 s, no network) and a cached node poll (~13 s, one read-only `agents_list`) — never a tight-loop AIMEAT call. `g` forces a node refresh.
 
@@ -290,6 +306,7 @@ Actions (each behind a y/n confirm, run off the UI thread):
 |---|---|
 | `s` / `x` / `r` | Start / stop / restart the **selected crew** |
 | `a` | Re-auth the selected crew |
+| `m` | Pick a model for the selected crew (from `llm_providers.json`) and restart it |
 | `S` / `X` / `R` | Start / stop / restart the **whole fleet** |
 | `d` | Reap stray serve daemons (enforce exactly one) |
 | `j` / `k`, ↑/↓ | Navigate · `q` quit |

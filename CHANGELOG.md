@@ -4,6 +4,62 @@ Notable changes to crewaimeat. Format loosely follows [Keep a Changelog](https:/
 Dates are the working dates; entries are **uncommitted and take effect on the next fleet restart**
 (the daemons import the modules at start).
 
+## [0.5.0] — 2026-06-19 → 2026-06-21
+
+### Added
+- **Fleet host — run the WHOLE fleet in ONE Python process (`crewaimeat.fleet_host` / `scripts/start_host.ps1`).**
+  One process per crew imports crewai+litellm independently (~150–250 MB each), so a 39-agent fleet costs
+  ~8 GB of pure import bloat — absurd for I/O-bound work. The host imports the heavy stack **once** and runs
+  each agent as a supervised thread; the work is network-bound, so the GIL is released on every poll/LLM call
+  and agents run concurrently. **Measured: ~800 MB for 38 agents (≈20× less RAM); two full fleets — prod +
+  a dev clone — fit in ~2 GB together.** Opt-in and additive: the per-process model (`start_fleet`) is
+  unchanged and stays the default. A crashed agent is restarted (bounded) without touching the others;
+  `--agents a,b,c` runs a subset, `--list` previews. Guards that make CrewAI thread-safe in the host:
+  CrewAI's telemetry registers a SIGINT handler (`signal.signal`, main-thread-only) — telemetry is opted out
+  and `signal.signal` is a no-op off the main thread; and `reconcile_fleet` no-ops when `AIMEAT_FLEET_HOST`
+  is set so crew-forge can't spawn a shadow per-process fleet inside the host.
+- **TUI: a live Test tab, an expanded Config tab, and a per-agent model picker.** **Test** (`t`) fires a REAL
+  task at the selected running agent and polls its deliverable — exercising the live daemon, its real model
+  and the tunnel — and shows the agent's own “How to task me” hint (so a contract agent that wants a request
+  record, not a free-text brief, says so). **Config** now also shows the agent's offers, contract input/output
+  spaces + schema field names, curated tags/capabilities, the workflows it has a step in, and any pinned model
+  override. **Model picker** (`m`) lists every model from `llm_providers.json`, pins one agent to it
+  (`<AIMEAT_HOME>/llm_overrides.json`, honored first by `get_llm`) and restarts the agent.
+- **TUI host-awareness.** The host heartbeats `logs/.host_status.json`; `fleet_state` reads it and shows
+  host-threaded agents as `running` with **`host`** in the wd/dae cell and **`host pid N (K threaded)`** in the
+  status bar — so the TUI works whether the fleet runs per-process or in the host.
+- **`register_fleet` — one-command mass registration against a SECOND node** (`scripts/register_fleet.py`,
+  `forge.register_fleet(owner, url)`). Registers every crew (or `--agents` subset) as a task-runner against a
+  node, surfacing each device-approval code — the way to stand the same fleet up on a local dev node from a
+  separate clone (isolated `AIMEAT_HOME`/serve/logs/locks).
+- **Quality tooling — Ruff, pre-commit, CI, and an architecture map.** `[tool.ruff]` (lint + format, line-length
+  120) wired into a `.pre-commit-config.yaml` and a GitHub Actions workflow (`ruff` + `pytest`); **`ARCHITECTURE.md`**
+  documents the techstack, component map (scaffold / crews / contracts / pipelines / TUI), the scaffold's
+  lifecycle, fleet topology, and where to add things.
+
+### Changed
+- **Repo-ROOT-scoped process detection.** `forge._is_running_file`, the TUI's process scan, and
+  `terminate_fleet.ps1` now match this checkout's root (with a trailing-separator boundary so `crewfive`
+  can't match `crewfive-dev`), so a **sibling clone** — e.g. a memory-light dev fleet beside prod — is never
+  mistaken for ours: each reconciles, monitors and terminates independently. (Without this, a dev clone's
+  reconcile saw the prod fleet's identically-named processes and launched nothing, leaving every agent stuck
+  at onboarding 1/7.)
+
+### Fixed
+- **Survive a transient serve-tunnel drop instead of losing work.** The 06-20 Sanomat “partial” edition: the
+  shared serve tunnel dropped mid-run and `write_pipeline` failed SILENT — a failed memory read looked like
+  empty raw, so 7 article categories were dropped (their raw was intact) and a written article was lost when
+  its publish hit the dead tunnel. Now `_aimeat_call` retries transient TRANSPORT failures (tunnel
+  reconnecting / dropped connection / 5xx) with backoff (tool-level errors like NOT_FOUND are not retried, so
+  “not found yet” polls stay cheap); `write_pipeline` distinguishes a failed read from genuinely-empty raw
+  (`RawReadError`) and raises `WriteIncomplete` so the step goes RED and is retried — never a silent partial;
+  `write-a`/`write-b` gained a step `retry`.
+- **Quiet expected workspace probes.** A contract agent's idle poll scans organisms via `member_workspaces`,
+  and offers read a fixed golden-sample workspace on every start; on a node that doesn't have those orgs
+  (e.g. a dev node) these returned “not an active member” / “organism not found” and logged loudly every
+  cycle. `_aimeat_call` gained a `quiet` flag for these EXPECTED probe failures; the org scan and the sample
+  read use it (a real problem still surfaces through the agent's own deliverable).
+
 ## [0.4.0] — 2026-06-15 → 2026-06-18
 
 ### Added
