@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from crewai import Agent, Task
 
-from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
+from crewaimeat.aimeat_crew import BuildContext, CrewSpec, contract_record_spaces, run_crew
 from crewaimeat.contract_adopt import build_adopt_domain, is_adopt_task
 from crewaimeat.image_contract import CONTRACT, make_image_tools, process_moodboards
 
@@ -68,12 +68,13 @@ def build_domain(ctx: BuildContext):
 
 
 def run() -> None:
-    # idle_hook: a DETERMINISTIC poll that fulfils any pending moodboard-requests. The CHECK uses
-    # NO LLM (workspace reads + delta math); the vision model runs only on real candidate images.
-    def _poll() -> None:
+    # Event-driven (aimeat-crewai 0.7.0): a pushed moodboard-request record (or the catch-up on connect)
+    # wakes us; process_moodboards is the DETERMINISTIC scan that fulfils any pending requests (NO LLM in
+    # the check; the vision model runs only on real candidate images). No idle polling.
+    def _on_record(_event) -> None:
         res = process_moodboards()
         if res.get("processed") or res.get("failed"):
-            print(f"[{AGENT_NAME}] moodboard poll: {res}")
+            print(f"[{AGENT_NAME}] moodboard event: {res}")
 
     run_crew(
         CrewSpec(
@@ -81,8 +82,9 @@ def run() -> None:
             build_domain=build_domain,
             readme_md=README,
             temperature=0.4,
-            idle_hook=_poll,
-            idle_hook_seconds=300,
+            listen_for=("tasks", "records"),
+            record_spaces=lambda: contract_record_spaces(AGENT_NAME, CONTRACT),
+            on_record=_on_record,
         )
     )
 

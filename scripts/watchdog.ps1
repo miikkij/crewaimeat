@@ -26,9 +26,11 @@ while ($true) {
     $code = $LASTEXITCODE
     $elapsed = [int]((Get-Date) - $start).TotalSeconds
 
-    if ($code -eq 78) {
+    # 78 = our startup re-auth exit; 2 = the daemon's own auth_revoked exit (aimeat-crewai 0.7.0, the node
+    # pushed auth_revoked). Either way the token needs re-approval — stop, don't crash-loop.
+    if ($code -eq 78 -or $code -eq 2) {
         Write-Host ""
-        Write-Host "[watchdog] The agent's token is no longer valid (exit 78). Stopping."
+        Write-Host "[watchdog] The agent's token is no longer valid (exit $code). Stopping."
         Write-Host "[watchdog] Re-approve it on AIMEAT (Profile -> Agents), then run this watchdog again."
         break
     }

@@ -626,17 +626,21 @@ def member_workspaces(agent_name: str) -> list[tuple[str, str]]:
     return pairs
 
 
-def contract_record_spaces(agent_name: str, contract: dict) -> list[dict]:
+def contract_record_spaces(agent_name: str, *contracts: dict) -> list[dict]:
     """The subscription list for `listen_for=("records",)` — one {organism_id, ws, space} per
-    (member workspace) × (the contract's RECORD/input spaces). `space` is the namespace key segment
-    (e.g. "shared.moodboard_requests"), what the node matches in keys. Resolved ONCE at daemon start;
-    the connector re-sends the subscribe on reconnect, and a per-space catch-up event covers anything
-    written while the socket was down. Replaces a record-scanning idle_hook with event-driven wakes."""
-    namespaces = [
-        s["namespace"] for s in (contract.get("spaces") or []) if s.get("mode") == "records" and s.get("namespace")
-    ]
+    (member workspace) × (the RECORD/input spaces of the given contract(s)). `space` is the namespace
+    key segment (e.g. "shared.moodboard_requests"), what the node matches in keys. Pass one contract or
+    several (an agent serving multiple contracts) — member workspaces are discovered ONCE. Resolved at
+    daemon start; the connector re-sends the subscribe on reconnect, and a per-space catch-up event
+    covers anything written while the socket was down. Replaces a record-scanning idle_hook."""
+    namespaces: list[str] = []
+    for contract in contracts:
+        for s in contract.get("spaces") or []:
+            if s.get("mode") == "records" and s.get("namespace"):
+                namespaces.append(s["namespace"])
+    namespaces = list(dict.fromkeys(namespaces))  # dedup, preserve order
     out: list[dict] = []
-    for oid, wid in member_workspaces(agent_name):
+    for oid, wid in member_workspaces(agent_name):  # discover member workspaces ONCE
         for ns in namespaces:
             out.append({"organism_id": oid, "ws": wid, "space": ns})
     return out

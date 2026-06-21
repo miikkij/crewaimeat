@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from crewai import Agent, Task
 
-from crewaimeat.aimeat_crew import CrewSpec, run_crew
+from crewaimeat.aimeat_crew import CrewSpec, contract_record_spaces, run_crew
 from crewaimeat.contract_adopt import build_adopt_domain, is_adopt_task
 from crewaimeat.crew import _web_tools  # free SearXNG web search by default (USE_TAVILY=1 for Tavily)
 from crewaimeat.research_contract import CONTRACT
@@ -116,26 +116,26 @@ def run() -> None:
     # specifics, honest "not found") + a final faithfulness-verify pass over the summary before publish,
     # on top of the crew's own Source Verifier. score_to_stats: keep the self-verify as introspection.
     #
-    # idle_hook: a DETERMINISTIC `research` workspace-contract poll every ~60s — it checks this agent's
-    # member workspaces for new research-request records and fulfils them. The CHECK uses NO LLM (workspace
-    # read + filter); the LLM (owl-alpha) runs only to distil a request that actually exists. This replaces
-    # an agent_task schedule (which would burn one LLM call per fire just to orchestrate the tool), so idle
-    # minutes cost zero tokens.
+    # Event-driven (aimeat-crewai 0.7.0): a pushed request record (or the catch-up on connect) wakes us,
+    # across all THREE of this agent's contracts — research, market-scan, company-research. Each process_*
+    # is a DETERMINISTIC scan that fulfils any pending requests (the CHECK uses NO LLM; the LLM runs only to
+    # distil a request that actually exists). No idle polling — idle minutes cost zero tokens.
+    from crewaimeat.company_contract import CONTRACT as COMPANY_CONTRACT
+    from crewaimeat.company_contract import process_company_research
+    from crewaimeat.market_contract import CONTRACT as MARKET_CONTRACT
     from crewaimeat.market_contract import process_market_scans
     from crewaimeat.research_contract import process_research_requests
 
-    def _contract_poll() -> None:
+    def _on_record(_event) -> None:
         res = process_research_requests(max_items=3)
         if res.get("processed") or res.get("failed"):
-            print(f"[{AGENT_NAME}] research-contract poll: {res}")
-        scans = process_market_scans(max_items=2)  # the agent's SECOND contract: market-scan
+            print(f"[{AGENT_NAME}] research-contract event: {res}")
+        scans = process_market_scans(max_items=2)  # SECOND contract: market-scan
         if scans.get("processed") or scans.get("failed"):
-            print(f"[{AGENT_NAME}] market-scan poll: {scans}")
-        from crewaimeat.company_contract import process_company_research
-
+            print(f"[{AGENT_NAME}] market-scan event: {scans}")
         cos = process_company_research(max_items=3)  # THIRD contract: company-research (YTJ + web)
         if cos.get("processed") or cos.get("failed"):
-            print(f"[{AGENT_NAME}] company-research poll: {cos}")
+            print(f"[{AGENT_NAME}] company-research event: {cos}")
 
     run_crew(
         CrewSpec(
@@ -144,8 +144,9 @@ def run() -> None:
             readme_md=README,
             adapt_to_task=True,
             score_to_stats=True,
-            idle_hook=_contract_poll,
-            idle_hook_seconds=60,
+            listen_for=("tasks", "records"),
+            record_spaces=lambda: contract_record_spaces(AGENT_NAME, CONTRACT, MARKET_CONTRACT, COMPANY_CONTRACT),
+            on_record=_on_record,
         )
     )
 

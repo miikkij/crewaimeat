@@ -26,9 +26,11 @@ while true; do
     code=$?
     elapsed=$(( $(date +%s) - start ))
 
-    if [ "$code" -eq 78 ]; then
+    # 78 = our startup re-auth exit; 2 = the daemon's own auth_revoked exit (aimeat-crewai 0.7.0).
+    # Either way the token needs re-approval — stop, don't crash-loop.
+    if [ "$code" -eq 78 ] || [ "$code" -eq 2 ]; then
         echo ""
-        echo "[watchdog] The agent's token is no longer valid (exit 78). Stopping."
+        echo "[watchdog] The agent's token is no longer valid (exit $code). Stopping."
         echo "[watchdog] Re-approve it on AIMEAT (Profile -> Agents), then run this watchdog again."
         break
     fi

@@ -11,7 +11,7 @@ Run: uv run python crews/image_maker_crew.py
 
 from __future__ import annotations
 
-from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
+from crewaimeat.aimeat_crew import BuildContext, CrewSpec, contract_record_spaces, run_crew
 from crewaimeat.contract_adopt import build_adopt_domain, is_adopt_task
 from crewaimeat.image_request_contract import CONTRACT, process_image_requests
 from crewaimeat.seedream_gen import make_image_tools
@@ -73,12 +73,13 @@ def build_domain(ctx: BuildContext):
 
 
 def run() -> None:
-    # idle_hook: a DETERMINISTIC poll that fulfils any pending image-request records (the contract
-    # surface). The CHECK is workspace reads (no LLM); generation runs only on a real pending request.
-    def _poll() -> None:
+    # Event-driven (aimeat-crewai 0.7.0): a pushed image-request record (or the catch-up on connect) wakes
+    # us; process_image_requests is the DETERMINISTIC scan that fulfils any pending requests (the check is
+    # workspace reads, no LLM; generation runs only on a real pending request). No idle polling.
+    def _on_record(_event) -> None:
         res = process_image_requests()
         if res.get("processed") or res.get("failed"):
-            print(f"[{AGENT_NAME}] image-request poll: {res}")
+            print(f"[{AGENT_NAME}] image-request event: {res}")
 
     # A creative service — a mild temperature for prompt-crafting; the image call itself is deterministic.
     run_crew(
@@ -87,8 +88,9 @@ def run() -> None:
             build_domain=build_domain,
             readme_md=README,
             temperature=0.6,
-            idle_hook=_poll,
-            idle_hook_seconds=300,
+            listen_for=("tasks", "records"),
+            record_spaces=lambda: contract_record_spaces(AGENT_NAME, CONTRACT),
+            on_record=_on_record,
         )
     )
 
