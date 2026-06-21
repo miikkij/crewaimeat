@@ -4,6 +4,31 @@ Notable changes to crewaimeat. Format loosely follows [Keep a Changelog](https:/
 Dates are the working dates; entries are **uncommitted and take effect on the next fleet restart**
 (the daemons import the modules at start).
 
+## [0.6.0] — 2026-06-22
+
+### Added
+- **Event-driven contract agents — workspace-record PUSH instead of idle polling** (requires
+  **aimeat-crewai >= 0.7.0**, the platform side of the tunnel-push work). A workspace-contract agent
+  now subscribes to its served record spaces and the node PUSHes a `workspace.record` wake over the
+  existing per-agent tunnel — so the agent runs its deterministic handler only on a real record (or a
+  one-time catch-up scan per space on connect), making **zero periodic node calls** when idle.
+  - `CrewSpec.record_spaces` (a list of `{organism_id, ws, space}`, or a 0-arg callable resolved at
+    daemon start) + `CrewSpec.on_record(event)` + `listen_for=("records",)`, passed through to
+    `run_crew_daemon`. `contract_record_spaces(agent, *contracts)` builds the subscription list from a
+    contract's record namespaces × the agent's member workspaces (discovered once).
+  - Wired **image-scout**, **image-maker** and **web-researcher** (all three of its contracts —
+    research / market-scan / company-research) to records; their idle-poll `idle_hook`s are removed.
+    Clock-based hooks (editorial / features / postman-07:00 / workflow-inspector / activity-reporter)
+    and the stats-driven feedback-wisdom keep their `idle_hook` — only request-record scanners moved.
+
+### Changed
+- **Idle traffic trimmed at the source.** The periodic `_auth_alive` probe is **gone** — the 0.7.0
+  daemon self-exits on a revoked token (`auth_revoked` push → connector `auth_failed` → exit), and the
+  supervisor re-auths on exit (`watchdog.ps1/.sh` treat exit code 2 like 78; the host handles it via
+  `SystemExit`). The reputation rollup now reads stats over the **`aimeat_agent_statistics` tunnel tool**
+  instead of a direct owner-only GET, and stays conditional (writes only when the score moved). (An
+  interim throttle of the probe shipped first, in 0.5.x, then was removed once 0.7.0 landed.)
+
 ## [0.5.0] — 2026-06-19 → 2026-06-21
 
 ### Added
