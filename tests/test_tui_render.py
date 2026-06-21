@@ -30,6 +30,45 @@ def _row(
     )
 
 
+def test_hosted_agent_reads_running_with_host_cell():
+    """An agent running as a THREAD in the fleet host (no per-crew process) shows running, and its
+    wd/dae cell shows 'host'."""
+    import datetime
+
+    from crewaimeat.tui import fleet_state as fs
+
+    now = datetime.datetime(2026, 6, 15, 18, 0, tzinfo=datetime.timezone.utc)
+    rows = fs.build_rows(
+        roster={"joker": "joker_crew.py"},
+        tally={},  # NO processes for joker (it's a thread in the host)
+        locks={"joker"},  # the host thread holds joker's lock
+        tunnel=set(),
+        node_index={},
+        now=now,
+        host_agents={"joker"},
+    )
+    assert rows[0].status == "running"  # hosted overrides the "down (stale lock)" it would otherwise read
+    assert rows[0].hosted is True
+    assert render.row_cells(rows[0])[2] == "host"
+
+
+def test_statusbar_shows_host_pid():
+    snap = FleetSnapshot(
+        serve_pid=1,
+        serve_port=2,
+        n_watchdogs=0,
+        n_connectors=1,
+        n_locks=1,
+        rows=[_row(agent="joker")],
+        zombies=[],
+        host_pid=9999,
+    )
+    # mark the row hosted so the hosted count is right
+    snap.rows[0].hosted = True
+    sb = render.statusbar_text(snap)
+    assert "host pid 9999" in sb and "threaded" in sb
+
+
 def test_format_age_buckets():
     assert render.format_age(None) == "—"
     assert render.format_age(30) == "30s"

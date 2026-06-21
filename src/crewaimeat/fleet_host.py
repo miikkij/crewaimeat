@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import os
 import signal
 import sys
@@ -67,6 +68,35 @@ _RESTART_DELAY_S = 10  # after an agent thread crashes, wait this long before re
 _MAX_RESTARTS = 5  # then give that ONE agent up (a persistent failure shouldn't hot-loop forever)
 _STAGGER_S = 0.3  # gap between agent starts, so 39 onboarding bursts don't hit the node at once
 
+# Status file the host heartbeats so the TUI (fleet_state) can SEE agents that run as threads here
+# rather than as separate processes. Lives next to the lock dir; the TUI treats it as stale (host
+# gone) if it stops being rewritten. {pid, agents: {AGENT_NAME: state}}.
+_STATUS_FILE = Path("logs") / ".host_status.json"
+_status: dict[str, str] = {}  # AGENT_NAME -> "running" | "crashed" | "stopped"
+_status_lock = threading.Lock()
+
+
+def _set_state(agent: str, state: str) -> None:
+    with _status_lock:
+        _status[agent] = state
+
+
+def _write_status() -> None:
+    try:
+        _STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with _status_lock:
+            payload = {"pid": os.getpid(), "agents": dict(_status)}
+        _STATUS_FILE.write_text(json.dumps(payload), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _clear_status() -> None:
+    try:
+        _STATUS_FILE.unlink()
+    except OSError:
+        pass
+
 
 def _load_module(path: Path):
     """Import a crew file as a uniquely-named module WITHOUT triggering its __main__ block. The heavy
@@ -101,31 +131,38 @@ def _select_crews(agents: list[str] | None) -> list[Path]:
     return out
 
 
-def _supervise(path: Path, stop: threading.Event) -> None:
+def _supervise(path: Path, agent: str, stop: threading.Event) -> None:
     """Run ONE crew's daemon loop, restarting it on an unexpected crash (bounded). A clean return or a
-    SystemExit (single-instance lock already held, or an auth exit) is final — we don't restart those."""
+    SystemExit (single-instance lock already held, or an auth exit) is final — we don't restart those.
+    Reports the agent's state into the shared status the host heartbeats for the TUI."""
     label = path.stem
     try:
         mod = _load_module(path)
     except Exception as exc:  # noqa: BLE001 — a bad crew file must not take down the host
         print(f"[host] {label}: import failed ({exc!r}); skipping", file=sys.stderr)
+        _set_state(agent, "crashed")
         return
     run = getattr(mod, "run", None)
     if not callable(run):
         print(f"[host] {label}: no run() — skipping", file=sys.stderr)
+        _set_state(agent, "stopped")
         return
 
     restarts = 0
     while not stop.is_set():
         try:
+            _set_state(agent, "running")
             run()  # blocks in run_crew's daemon loop for the lifetime of the agent
             print(f"[host] {label}: exited cleanly (will not restart)", file=sys.stderr)
+            _set_state(agent, "stopped")
             return
         except SystemExit:
             print(f"[host] {label}: SystemExit (lock held or auth) — not restarting", file=sys.stderr)
+            _set_state(agent, "stopped")
             return
         except Exception as exc:  # noqa: BLE001 — isolate: one agent's crash never kills the others
             restarts += 1
+            _set_state(agent, "crashed")
             if restarts > _MAX_RESTARTS:
                 print(f"[host] {label}: crashed {restarts}x ({exc!r}); giving up on this agent", file=sys.stderr)
                 return
@@ -154,22 +191,30 @@ def run_host(agents: list[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001 — agents can still auto-start/poll; just warn
         print(f"[host] could not ensure serve daemon ({exc!r}); agents will fall back per-call", file=sys.stderr)
 
+    from crewaimeat.forge import _agent_name_of
+
     print(f"[host] starting {len(crews)} agent(s) in ONE process: {', '.join(p.stem for p in crews)}", file=sys.stderr)
     stop = threading.Event()
     threads: list[threading.Thread] = []
     for path in crews:
-        t = threading.Thread(target=_supervise, args=(path, stop), name=path.stem, daemon=True)
+        agent = _agent_name_of(path) or path.stem
+        _set_state(agent, "starting")
+        t = threading.Thread(target=_supervise, args=(path, agent, stop), name=path.stem, daemon=True)
         t.start()
         threads.append(t)
+        _write_status()  # so the TUI sees agents appear as they start
         time.sleep(_STAGGER_S)  # avoid a thundering herd of simultaneous onboarding
 
     print("[host] all agents launched. Ctrl+C to stop the whole host.", file=sys.stderr)
     try:
         while any(t.is_alive() for t in threads):
-            time.sleep(1.0)
+            _write_status()  # heartbeat: the TUI treats a stale file as 'host gone'
+            time.sleep(2.0)
     except KeyboardInterrupt:
         print("\n[host] stopping (Ctrl+C) — agents will be torn down with the process.", file=sys.stderr)
         stop.set()
+    finally:
+        _clear_status()
     return 0
 
 

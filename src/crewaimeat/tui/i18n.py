@@ -16,6 +16,7 @@ STRINGS: dict[str, dict[str, str]] = {
     "sb.locks": {"en": "locks", "fi": "lukot"},
     "sb.running": {"en": "running", "fi": "ajossa"},
     "sb.stale": {"en": "stale", "fi": "vanhentunut"},
+    "sb.threaded": {"en": "threaded", "fi": "säikeinä"},
     "sb.down": {"en": "DOWN", "fi": "ALHAALLA"},
     "ver.loading": {"en": "versions: …", "fi": "versiot: …"},
     # table columns

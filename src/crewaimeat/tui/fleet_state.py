@@ -20,6 +20,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,6 +31,8 @@ _WATCHDOG_RE = re.compile(r"watchdog\.(ps1|sh)")
 _CONNECT_RE = re.compile(r"connect\s+serve")
 
 _LOCKS_DIR = Path("logs/.locks")
+_HOST_STATUS_FILE = Path("logs/.host_status.json")  # heartbeat written by fleet_host (threaded model)
+_HOST_STALE_S = 15  # the host rewrites it every ~2s; older than this means the host is gone
 
 # Node last_seen older than this WHILE the local daemon is up = the daemon isn't heartbeating to the
 # node (the "orange" stale-heartbeat case: image-maker / ledger-reader / research-crew / doc-fact-reader).
@@ -48,6 +51,7 @@ class AgentRow:
     last_seen_age_s: float | None
     mode: str | None
     status: str
+    hosted: bool = False  # running as a THREAD inside the fleet host (one process), not its own daemon
 
 
 @dataclass
@@ -59,6 +63,7 @@ class FleetSnapshot:
     n_locks: int
     rows: list[AgentRow]
     zombies: list[str]
+    host_pid: int | None = None  # the fleet host process, when agents run threaded in one process
 
 
 # ── pure derivation ──────────────────────────────────────────────────────────
@@ -130,14 +135,30 @@ def build_rows(
     node_index: dict,
     now: datetime.datetime,
     stale_after_s: float = STALE_AFTER_S,
+    host_agents: set | None = None,
 ) -> list[AgentRow]:
     """Assemble one AgentRow per local crew (roster = {agent: crew_fname}) plus a row for every
-    zombie (a running crew filename absent from the roster). Pure — all I/O already resolved."""
+    zombie (a running crew filename absent from the roster). Pure — all I/O already resolved. An agent
+    in `host_agents` runs as a THREAD in the fleet host (no per-crew process), so it reads as running."""
+    host_agents = host_agents or set()
     rows: list[AgentRow] = []
     for agent, fname in sorted(roster.items()):
         counts = tally.get(fname, {"watchdog": 0, "daemon": 0})
         node = node_index.get(agent) or {}
         age = age_seconds(node.get("last_seen"), now)
+        hosted = agent in host_agents
+        status = (
+            "running"
+            if hosted
+            else derive_status(
+                watchdog=counts["watchdog"],
+                daemon=counts["daemon"],
+                lock=agent in locks,
+                in_tunnel=agent in tunnel,
+                age_s=age,
+                stale_after_s=stale_after_s,
+            )
+        )
         rows.append(
             AgentRow(
                 agent=agent,
@@ -149,14 +170,8 @@ def build_rows(
                 last_seen=node.get("last_seen"),
                 last_seen_age_s=age,
                 mode=node.get("mode"),
-                status=derive_status(
-                    watchdog=counts["watchdog"],
-                    daemon=counts["daemon"],
-                    lock=agent in locks,
-                    in_tunnel=agent in tunnel,
-                    age_s=age,
-                    stale_after_s=stale_after_s,
-                ),
+                status=status,
+                hosted=hosted,
             )
         )
     known = set(roster.values())
@@ -243,6 +258,20 @@ def collect_locks() -> set[str]:
         return set()
 
 
+def collect_host_status() -> tuple[int | None, set[str]]:
+    """(host_pid, {agents running as threads in the fleet host}) from the host's heartbeat file. Empty
+    when no host is running — the file is absent or stale (the host rewrites it every ~2s). Lets the TUI
+    show host-threaded agents as 'running' even though they have no per-crew process to scan for."""
+    try:
+        if time.time() - _HOST_STATUS_FILE.stat().st_mtime > _HOST_STALE_S:
+            return (None, set())
+        data = json.loads(_HOST_STATUS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return (None, set())
+    agents = {a for a, s in (data.get("agents") or {}).items() if s in ("running", "starting")}
+    return (data.get("pid"), agents)
+
+
 def collect_serve() -> dict:
     from crewaimeat._home import serve_json_path
 
@@ -275,9 +304,18 @@ def build_snapshot(
     locks = collect_locks()
     serve = collect_serve()
     tunnel = serve_tunnel_agents(serve)
+    host_pid, host_agents = collect_host_status()
     if node_index is None:
         node_index = collect_node_index(caller_agent)
-    rows = build_rows(roster=roster, tally=tally, locks=locks, tunnel=tunnel, node_index=node_index, now=now)
+    rows = build_rows(
+        roster=roster,
+        tally=tally,
+        locks=locks,
+        tunnel=tunnel,
+        node_index=node_index,
+        now=now,
+        host_agents=host_agents,
+    )
     return FleetSnapshot(
         serve_pid=serve.get("pid"),
         serve_port=serve.get("port"),
@@ -286,4 +324,5 @@ def build_snapshot(
         n_locks=len(locks),
         rows=rows,
         zombies=[r.agent for r in rows if r.status == "zombie"],
+        host_pid=host_pid,
     )

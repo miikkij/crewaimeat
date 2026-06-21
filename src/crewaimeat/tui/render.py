@@ -47,11 +47,12 @@ def format_age(age_s: float | None) -> str:
 
 
 def row_cells(r: AgentRow) -> tuple[str, ...]:
-    """One table row, all PLAIN strings (status colored separately by the app via status_markup)."""
+    """One table row, all PLAIN strings (status colored separately by the app via status_markup). A
+    host-threaded agent has no per-crew process, so its wd/dae cell shows 'host' instead of '0/0'."""
     return (
         r.agent,
         r.status,
-        f"{r.watchdog_procs}/{r.daemon_procs}",
+        "host" if r.hosted else f"{r.watchdog_procs}/{r.daemon_procs}",
         "✓" if r.lock else "·",
         "✓" if r.in_tunnel else "·",
         format_age(r.last_seen_age_s),
@@ -68,9 +69,11 @@ def statusbar_text(snap: FleetSnapshot, lang: str = "en") -> str:
         warn += f"  [bold red]DUPLICATE: {', '.join(dups)}[/]"
     if snap.zombies:
         warn += f"  [magenta]zombie: {', '.join(snap.zombies)}[/]"
+    n_hosted = sum(1 for r in snap.rows if r.hosted)
+    host = f"  [cyan]host pid {snap.host_pid} ({n_hosted} {t('sb.threaded', lang)})[/]" if snap.host_pid else ""
     return (
         f"serve {serve} · {snap.n_watchdogs} {t('sb.watchdogs', lang)} · {snap.n_locks} {t('sb.locks', lang)} · "
-        f"[green]{n_run} {t('sb.running', lang)}[/] · [yellow]{n_stale} {t('sb.stale', lang)}[/]{warn}"
+        f"[green]{n_run} {t('sb.running', lang)}[/] · [yellow]{n_stale} {t('sb.stale', lang)}[/]{warn}{host}"
     )
 
 
