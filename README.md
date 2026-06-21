@@ -259,8 +259,9 @@ Run one crew at a time, or manage the whole fleet with the scripts in `scripts/`
 |---|---|---|
 | Run / develop a single crew | `uv run python crews/<x>_crew.py` | Runs one crew in the foreground (Ctrl+C stops it). |
 | Keep one crew alive (auto-restart) | `./scripts/watchdog.ps1 crews/<x>_crew.py` | Re-launches that crew if it ever exits. The building block the others use. |
-| Start the **whole fleet** now | `./scripts/start_fleet.ps1` | `uv sync`, then starts crew-forge, which **reconciles the fleet** — launches every approved crew (skipping running ones). crew-forge stays in that terminal; the rest run detached. |
-| Start the fleet **memory-light** (one process) | `./scripts/start_host.ps1` | Runs every agent as a **thread in ONE Python process** (crewai imported once) — ~20× less RAM than per-process. See [Fleet host](#fleet-host-one-process-memory-light) below. |
+| Start the **whole fleet** now | `./scripts/start_fleet.ps1` | `uv sync`, ensures the serve daemon + supervisor, then runs the **fleet host** — every approved agent as a thread in ONE process (memory-light, ~20× less RAM; default since 0.5.0). Stays in that terminal; Ctrl+C stops the whole fleet. See [Fleet host](#fleet-host-one-process-memory-light). |
+| Run a **subset** in the host (or preview) | `./scripts/start_host.ps1 -Agents a,b` | The same host, but lets you pick a subset (`-Agents`) or preview (`-List`). |
+| Start the fleet **per-process** (legacy) | `./scripts/watchdog.ps1 crews/crew_forge_crew.py` | The old model: crew-forge reconciles and launches one watchdog+daemon per crew. Heavier; use only if you need per-crew process isolation. |
 | Start the fleet on **every boot** | `./scripts/install-autostart.ps1` | One-time: registers crew-forge to start at logon, so the fleet returns by itself after a reboot. |
 | See **what's running** | `./scripts/view_fleet.ps1` | Read-only: each crew's state (running / down) and the live-daemon count. Kills nothing. |
 | **Stop everything** | `./scripts/terminate_fleet.ps1` | Kills all watchdogs, crew daemons, and connectors (in that order). `-DryRun` lists first. |
@@ -272,7 +273,7 @@ Run one crew at a time, or manage the whole fleet with the scripts in `scripts/`
 
 ### Fleet host (one process, memory-light)
 
-`start_fleet` runs **one OS process per crew**. Each imports `crewai` + `litellm` independently (~150–250 MB resident), so a large fleet costs several GB of pure import bloat — wasteful for I/O-bound work (poll, shuffle text, call an LLM API). **`./scripts/start_host.ps1`** (or `uv run python -m crewaimeat.fleet_host`) runs every agent as a **thread in ONE process** instead: `crewai` is imported once, and because the work is network-bound the GIL is released on every poll/LLM call so the agents run concurrently. Measured: **~800 MB for ~38 agents** (≈20× less RAM), and two full fleets (prod + a dev clone) fit in ~2 GB together.
+The **legacy** model runs **one OS process per crew**. Each imports `crewai` + `litellm` independently (~150–250 MB resident), so a large fleet costs several GB of pure import bloat — wasteful for I/O-bound work (poll, shuffle text, call an LLM API). Since 0.5.0 **`start_fleet` runs the host by default**; **`./scripts/start_host.ps1`** (or `uv run python -m crewaimeat.fleet_host`) is the same thing with `-Agents`/`-List`. It runs every agent as a **thread in ONE process**: `crewai` is imported once, and because the work is network-bound the GIL is released on every poll/LLM call so the agents run concurrently. Measured: **~800 MB for ~38 agents** (≈20× less RAM), and two full fleets (prod + a dev clone) fit in ~2 GB together.
 
 ```powershell
 ./scripts/start_host.ps1                       # every approved crew, one process

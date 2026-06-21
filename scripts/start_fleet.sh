@@ -4,15 +4,14 @@
 # Usage:   ./scripts/start_fleet.sh
 #
 # 1) uv sync                              — make the venv match pyproject/uv.lock
-# 2) start crew-forge under the watchdog  — in THIS terminal (foreground)
+# 2) ensure the shared serve daemon + supervisor (the forward tunnel + auto-restart)
+# 3) start the fleet HOST in THIS terminal — every agent as a thread in ONE process
 #
-# Starting the fleet = crew-forge's idempotent reconcile (in code), not a dumb start-all.
-# crew-forge calls reconcile_fleet() ON STARTUP (crews/crew_forge_crew.py): it launches every
-# APPROVED crew under its own watchdog (detached) and SKIPS the ones already running — so the
-# whole fleet comes up. crew-forge stays in the foreground here; Ctrl+C stops ONLY crew-forge
-# (the crews it launched keep running). Re-trigger any time with crew-forge's /startall, or:
-#   uv run python -c "from dotenv import load_dotenv; load_dotenv(); from crewaimeat.forge import reconcile_fleet; print(reconcile_fleet())"
-# (Unapproved/forged crews are reported, not auto-started — they need owner device-flow approval.)
+# MEMORY-LIGHT BY DEFAULT (since 0.5.0): no longer one OS process per crew (which imported crewai
+# ~N times and cost several GB). Runs the **fleet host** — every approved agent as a thread in ONE
+# Python process, crewai imported once — ~20x less RAM for I/O-bound work. Ctrl+C stops the WHOLE
+# fleet. Legacy per-process model: start crew-forge directly (bash scripts/watchdog.sh crews/crew_forge_crew.py).
+# (Only APPROVED agents come online; an unapproved one waits for its device-flow approval.)
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
@@ -51,6 +50,9 @@ mkdir -p "$root/logs"
 echo "[start_fleet] starting the serve-daemon supervisor (auto-restarts the shared tunnel) ..."
 nohup bash "$root/scripts/serve_watchdog.sh" >"$root/logs/serve_watchdog.log" 2>&1 &
 
-echo "[start_fleet] starting crew-forge under the watchdog (it reconciles the fleet on startup) ..."
-echo "[start_fleet] crew-forge stays in THIS window; other crews launch detached. Ctrl+C stops only crew-forge."
-exec bash "$root/scripts/watchdog.sh" crews/crew_forge_crew.py
+# Run the fleet HOST: every agent as a thread in ONE process (crewai imported once) — ~20x less RAM
+# than one process per crew. crew-forge is excluded and reconcile_fleet no-ops under AIMEAT_FLEET_HOST,
+# so nothing spawns a shadow per-process fleet. The host stays in THIS window; Ctrl+C stops the fleet.
+echo "[start_fleet] starting the fleet HOST (all agents as threads in ONE process — memory-light) ..."
+echo "[start_fleet] the host stays in THIS window; Ctrl+C stops the WHOLE fleet."
+exec uv run python -m crewaimeat.fleet_host

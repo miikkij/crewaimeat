@@ -47,9 +47,12 @@ function Get-ThisHomeServePids() {
 
 $total = 0
 
-# 1 + 2: serve-watchdog then crew watchdogs — repo-scoped, tree-killed (/T removes the child trees).
+# 1 + 2: serve-watchdog, then the fleet HOST (the 0.5.0 memory-light model — every agent is a thread
+# in ONE process), then crew watchdogs (the legacy per-process model). Repo-scoped, tree-killed (/T
+# removes the child trees, incl. the host's venv-shim -> c:\python child).
 foreach ($grp in @(
     @{ name = 'serve-watchdog'; pat = 'serve_watchdog' },
+    @{ name = 'fleet-host';     pat = 'fleet_host' },
     @{ name = 'watchdog';       pat = 'scripts[\\/]watchdog\.ps1' }
 )) {
     $procs = @(Get-RepoProcs $grp.pat)
@@ -87,7 +90,7 @@ if ($DryRun) {
 
 Start-Sleep -Seconds 2
 $left = 0
-foreach ($pat in @('serve_watchdog', 'scripts[\\/]watchdog\.ps1', 'crews[\\/][A-Za-z0-9_]+_crew\.py')) {
+foreach ($pat in @('serve_watchdog', 'fleet_host', 'scripts[\\/]watchdog\.ps1', 'crews[\\/][A-Za-z0-9_]+_crew\.py')) {
     Get-RepoProcs $pat | ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch {}; $left++ }
 }
 foreach ($sp in @(Get-ThisHomeServePids)) { try { Stop-Process -Id $sp -Force -ErrorAction Stop } catch {}; $left++ }

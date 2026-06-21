@@ -38,6 +38,10 @@ Dates are the working dates; entries are **uncommitted and take effect on the ne
   lifecycle, fleet topology, and where to add things.
 
 ### Changed
+- **`start_fleet` / `terminate_fleet` default to the fleet host.** `start_fleet.ps1`/`.sh` now bring up
+  the memory-light host (every agent threaded in one process) instead of one watchdog+daemon per crew;
+  `terminate_fleet` also stops the host process (tree-killed, so its venv-shim → c:\python child goes
+  too). The legacy per-process model is still available directly: `watchdog.ps1 crews/crew_forge_crew.py`.
 - **Repo-ROOT-scoped process detection.** `forge._is_running_file`, the TUI's process scan, and
   `terminate_fleet.ps1` now match this checkout's root (with a trailing-separator boundary so `crewfive`
   can't match `crewfive-dev`), so a **sibling clone** — e.g. a memory-light dev fleet beside prod — is never

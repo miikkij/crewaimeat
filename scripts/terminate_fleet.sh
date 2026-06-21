@@ -7,8 +7,9 @@
 #
 # Stops, in this order so nothing respawns mid-cleanup:
 #   1. watchdogs            (scripts/watchdog.sh)
-#   2. crew daemons         (uv run python crews/<x>_crew.py + the python it launches)
-#   3. connector MCP procs  (aimeat connect serve --agent <x>)
+#   2. fleet host           (python -m crewaimeat.fleet_host — the 0.5.0 memory-light model)
+#   3. crew daemons         (uv run python crews/<x>_crew.py + the python it launches)
+#   4. connector MCP procs  (aimeat connect serve --agent <x>)
 #
 # The single-instance locks under logs/.locks/ release automatically when the daemons
 # die (no stale locks), so they are left alone. Re-launch the fleet afterwards with
@@ -41,10 +42,12 @@ stop_group() {
 }
 
 PAT_WATCHDOG='watchdog\.sh'
+PAT_HOST='fleet_host'
 PAT_DAEMON='crews/[A-Za-z0-9_]+_crew\.py'
 PAT_CONNECTOR='connect serve'
 
-stop_group "watchdog"  "$PAT_WATCHDOG"
+stop_group "watchdog"   "$PAT_WATCHDOG"
+stop_group "fleet-host" "$PAT_HOST"
 [ "$DRY" -eq 0 ] && sleep 1
 stop_group "daemon"    "$PAT_DAEMON"
 stop_group "connector" "$PAT_CONNECTOR"
@@ -57,7 +60,7 @@ fi
 
 # Force-kill any stragglers that ignored SIGTERM.
 sleep 2
-for pat in "$PAT_WATCHDOG" "$PAT_DAEMON" "$PAT_CONNECTOR"; do
+for pat in "$PAT_WATCHDOG" "$PAT_HOST" "$PAT_DAEMON" "$PAT_CONNECTOR"; do
     for p in $(list_group "$pat" | awk '{print $1}'); do
         kill -9 "$p" 2>/dev/null || true
     done

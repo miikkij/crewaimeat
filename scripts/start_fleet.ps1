@@ -2,21 +2,19 @@
 #
 # Usage:   ./scripts/start_fleet.ps1
 #
-# It does two things:
+# It does three things:
 #   1. uv sync                                  — make sure the venv matches pyproject/uv.lock
-#   2. start crew-forge under the watchdog      — in THIS terminal (foreground)
+#   2. ensure the shared serve daemon + its supervisor (the forward tunnel + auto-restart)
+#   3. start the fleet HOST in THIS terminal    — every agent as a thread in ONE process
 #
-# There is no "launch every crew" loop here on purpose. Starting the fleet = crew-forge's
-# idempotent reconcile, which lives in code, not a dumb start-all that could double-launch.
-# crew-forge calls reconcile_fleet() ON STARTUP (crews/crew_forge_crew.py): it launches every
-# APPROVED crew under its own watchdog (detached) and SKIPS the ones already running — so the
-# whole fleet comes up on its own. crew-forge then stays in the foreground here; Ctrl+C stops
-# ONLY crew-forge (the crews it launched keep running). Re-trigger a reconcile any time via
-# crew-forge's /startall, or:
-#   uv run python -c "from dotenv import load_dotenv; load_dotenv(); from crewaimeat.forge import reconcile_fleet; print(reconcile_fleet())"
+# MEMORY-LIGHT BY DEFAULT (since 0.5.0): this no longer launches one OS process per crew (which
+# imported crewai ~N times and cost several GB). It runs the **fleet host** — every approved agent
+# as a thread in ONE Python process, crewai imported once — ~20x less RAM for I/O-bound work.
+# Ctrl+C stops the WHOLE fleet. To run the legacy per-process model instead (one watchdog per crew),
+# start crew-forge directly: ./scripts/watchdog.ps1 crews/crew_forge_crew.py
 #
-# Note: freshly-forged/unapproved crews are reported, not auto-started (they need the owner's
-# one-time device-flow approval first). install-autostart.ps1 does this same thing at logon.
+# Note: only APPROVED agents (with a token) come online; an unapproved one waits for its one-time
+# device-flow approval and joins by itself once approved.
 
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path "$PSScriptRoot\..").Path
@@ -56,6 +54,11 @@ Write-Host "[start_fleet] starting the serve-daemon supervisor (auto-restarts th
 Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',"$root\scripts\serve_watchdog.ps1" `
     -WorkingDirectory $root -WindowStyle Hidden -RedirectStandardOutput "$root\logs\serve_watchdog.log" -RedirectStandardError "$root\logs\serve_watchdog.err.log"
 
-Write-Host "[start_fleet] starting crew-forge under the watchdog (it reconciles the fleet on startup) ..."
-Write-Host "[start_fleet] crew-forge stays in THIS window; the other crews launch detached. Ctrl+C stops only crew-forge."
-& "$root\scripts\watchdog.ps1" 'crews\crew_forge_crew.py'
+# Run the fleet HOST: every agent as a thread in ONE Python process (crewai imported once), instead
+# of one OS process per crew. ~20x less RAM for I/O-bound work (poll, shuffle text, call an LLM API);
+# see scripts/start_host.ps1 / README "Fleet host". crew-forge is excluded (its job is launching the
+# per-process fleet, redundant here) and reconcile_fleet no-ops under AIMEAT_FLEET_HOST, so nothing
+# spawns a shadow per-process fleet. The host stays in THIS window; Ctrl+C stops the WHOLE fleet.
+Write-Host "[start_fleet] starting the fleet HOST (all agents as threads in ONE process — memory-light) ..."
+Write-Host "[start_fleet] the host stays in THIS window; Ctrl+C stops the WHOLE fleet."
+uv run python -m crewaimeat.fleet_host
