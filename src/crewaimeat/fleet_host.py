@@ -27,10 +27,32 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
+import signal
 import sys
 import threading
 import time
 from pathlib import Path
+
+# CrewAI registers SIGINT/SIGTERM handlers (telemetry + trace flushing) and calls signal.signal(),
+# which RAISES "signal only works in main thread of the main interpreter" when a Crew runs in one of
+# our worker threads. Two guards, applied AT IMPORT (before any crew runs):
+#   1) opt out of CrewAI telemetry (it also phones home) so it never reaches signal registration;
+#   2) make signal.signal a harmless no-op OFF the main thread — signals only ever fire on the main
+#      thread anyway, so a worker-thread registration is meaningless; degrade it instead of crashing.
+# The main thread keeps real signal handling (its Ctrl+C still stops the host).
+for _var in ("CREWAI_DISABLE_TELEMETRY", "OTEL_SDK_DISABLED", "CREWAI_DISABLE_TRACKING"):
+    os.environ.setdefault(_var, "true")
+
+_ORIG_SIGNAL = signal.signal
+
+
+def _safe_signal(sig, handler):
+    if threading.current_thread() is threading.main_thread():
+        return _ORIG_SIGNAL(sig, handler)
+    return None  # no-op in worker threads — signals are main-thread-only
+
+
+signal.signal = _safe_signal
 
 _RESTART_DELAY_S = 10  # after an agent thread crashes, wait this long before restarting it
 _MAX_RESTARTS = 5  # then give that ONE agent up (a persistent failure shouldn't hot-loop forever)
