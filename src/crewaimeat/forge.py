@@ -377,6 +377,16 @@ def reconcile_fleet() -> str:
     PIDs), so after a restart every crew reads as down and is relaunched exactly once. Only
     crews that are registered AND approved (have a token) are auto-started; others are reported.
     """
+    # Host mode: the fleet host runs every agent as a THREAD in one process, so it must NOT also
+    # spawn a per-process daemon per crew — that's exactly the duplication the host exists to avoid
+    # (and it double-dispatches + fights the per-agent locks). crew-forge calls this on startup, so
+    # when it runs inside the host this guard makes reconcile a no-op.
+    if os.getenv("AIMEAT_FLEET_HOST"):
+        return (
+            "Host mode (AIMEAT_FLEET_HOST set): agents run as threads in the fleet host; "
+            "skipping per-process reconcile so the host isn't shadowed by a duplicate per-crew fleet."
+        )
+
     from crewaimeat.aimeat_crew import _token_exists  # local import avoids any import cycle
 
     root = _project_root()

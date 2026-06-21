@@ -43,6 +43,15 @@ from pathlib import Path
 for _var in ("CREWAI_DISABLE_TELEMETRY", "OTEL_SDK_DISABLED", "CREWAI_DISABLE_TRACKING"):
     os.environ.setdefault(_var, "true")
 
+# Tell the rest of the code we're the in-process host. crew-forge's reconcile_fleet() checks this and
+# becomes a no-op, so running crew-forge here never spawns a duplicate PER-PROCESS fleet (the bug that
+# made the host launch 38 separate daemons). Set before any crew module runs.
+os.environ["AIMEAT_FLEET_HOST"] = "1"
+
+# Crews whose whole job is launching/reconciling the PER-PROCESS fleet — pointless (and historically
+# harmful) inside the host. Excluded from the default set; can still be named explicitly via --agents.
+_FLEET_LAUNCHER_STEMS = {"crew_forge_crew"}
+
 _ORIG_SIGNAL = signal.signal
 
 
@@ -79,7 +88,9 @@ def _select_crews(agents: list[str] | None) -> list[Path]:
 
     files = _crew_files()
     if not agents:
-        return files
+        # Default = every crew EXCEPT the per-process fleet launchers (crew-forge), which have no place
+        # in the host. Name them explicitly with --agents if you really want them.
+        return [p for p in files if p.stem not in _FLEET_LAUNCHER_STEMS]
     want = {a.strip().lower() for a in agents if a.strip()}
     out = []
     for p in files:
