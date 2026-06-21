@@ -59,6 +59,6 @@ Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass',
 # see scripts/start_host.ps1 / README "Fleet host". crew-forge is excluded (its job is launching the
 # per-process fleet, redundant here) and reconcile_fleet no-ops under AIMEAT_FLEET_HOST, so nothing
 # spawns a shadow per-process fleet. The host stays in THIS window; Ctrl+C stops the WHOLE fleet.
-Write-Host "[start_fleet] starting the fleet HOST (all agents as threads in ONE process — memory-light) ..."
+Write-Host "[start_fleet] starting the fleet HOST (all agents as threads in ONE process - memory-light) ..."
 Write-Host "[start_fleet] the host stays in THIS window; Ctrl+C stops the WHOLE fleet."
 uv run python -m crewaimeat.fleet_host
