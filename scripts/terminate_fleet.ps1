@@ -22,7 +22,9 @@ param([switch]$DryRun)
 
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path "$PSScriptRoot\..").Path
-$rootEsc = [regex]::Escape($root)
+# Match this repo's root FOLLOWED BY a path separator, so a sibling clone whose name merely starts
+# with ours (e.g. 'crewfive' vs 'crewfive-dev') is never swept up — its daemons carry '<root>-dev\…'.
+$rootEsc = [regex]::Escape($root) + '[\\/]'
 if (-not $env:AIMEAT_HOME) { $env:AIMEAT_HOME = Join-Path $root '.aimeat' }
 
 # Procs whose command line matches $pattern AND was launched from THIS repo ($root in the cmdline) —

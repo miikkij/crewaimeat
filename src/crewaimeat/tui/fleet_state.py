@@ -193,21 +193,33 @@ def serve_tunnel_agents(serve_doc: dict) -> set[str]:
 
 
 # ── impure collectors (the OS/network edges; defaults overridable for tests) ──
+def _scope_to_repo(cmdlines: list[str]) -> list[str]:
+    """Keep only command lines belonging to THIS checkout — those carrying this repo's root path (the
+    crew/watchdog procs reference it via the venv python / absolute watchdog path). So a sibling clone
+    running the SAME crew filenames (a separate dev fleet) is not counted into this fleet's view. The
+    root carries a trailing separator so 'crewfive' can't match 'crewfive-dev'. Falls back to all lines
+    if nothing matches (e.g. an unusual launch) so the view is never blanked by an over-strict filter."""
+    root = str(Path.cwd()).rstrip("\\/")
+    needles = (root + "\\", root + "/")
+    scoped = [cl for cl in cmdlines if any(n.lower() in cl.lower() for n in needles)]
+    return scoped or cmdlines
+
+
 def collect_cmdlines() -> list[str]:
-    """Command lines of fleet-relevant processes (crew daemons, watchdogs, the serve daemon).
-    Cross-platform: Win32_Process on Windows, `ps` elsewhere. Read-only; spawns nothing lasting."""
+    """Command lines of fleet-relevant processes (crew daemons, watchdogs, the serve daemon),
+    scoped to THIS checkout. Cross-platform: Win32_Process on Windows, `ps` elsewhere. Read-only."""
     if os.name == "nt":
         ps = "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine } | ForEach-Object { $_.CommandLine }"
         try:
             out = subprocess.run(
                 ["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=25
             ).stdout
-            return [ln for ln in out.splitlines() if ln.strip()]
+            return _scope_to_repo([ln for ln in out.splitlines() if ln.strip()])
         except Exception:  # noqa: BLE001
             return []
     try:
         out = subprocess.run(["ps", "-eo", "args"], capture_output=True, text=True, timeout=20).stdout
-        return [ln for ln in out.splitlines() if ln.strip()]
+        return _scope_to_repo([ln for ln in out.splitlines() if ln.strip()])
     except Exception:  # noqa: BLE001
         return []
 

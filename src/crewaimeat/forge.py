@@ -256,15 +256,23 @@ def register_agent(agent_name: str, owner: str, url: str = "https://aimeat.io") 
 
 
 def _is_running_file(fname: str) -> bool:
-    """True if some process command line references this crew filename (daemon or watchdog)."""
+    """True if some process command line references this crew filename FROM THIS checkout.
+
+    REPO-SCOPED: the match also requires this repo's root path (the daemon's cmdline carries it via
+    the venv python / absolute watchdog path), so a SIBLING clone running the SAME crew filename — e.g.
+    a separate dev fleet — is never mistaken for ours and reconcile relaunches correctly per checkout.
+    The root carries a trailing separator boundary so 'crewfive' can't match 'crewfive-dev'.
+    """
+    root = str(_project_root()).rstrip("\\/")
     try:
         if os.name == "nt":
-            # Exclude THIS query's own process ($PID): its command line contains `fname`
-            # (the -like pattern), so without the guard the check always matches itself
-            # and reports "running" for every crew.
+            # Exclude THIS query's own process ($PID): its command line contains `fname` (the -like
+            # pattern), so without the guard the check always matches itself and reports "running".
+            root_pat = (root + "\\").replace("'", "''")
             ps = (
                 "Get-CimInstance Win32_Process | "
-                f"Where-Object {{ $_.ProcessId -ne $PID -and $_.CommandLine -like '*{fname}*' }} | "
+                f"Where-Object {{ $_.ProcessId -ne $PID -and $_.CommandLine -like '*{fname}*' "
+                f"-and $_.CommandLine -like '*{root_pat}*' }} | "
                 "Select-Object -First 1 -ExpandProperty ProcessId"
             )
             proc = subprocess.run(
@@ -274,7 +282,10 @@ def _is_running_file(fname: str) -> bool:
                 timeout=30,
             )
             return bool((proc.stdout or "").strip())
-        proc = subprocess.run(["pgrep", "-f", fname], capture_output=True, text=True, timeout=30)
+        # posix: require BOTH this repo's root and the crew filename in the cmdline.
+        proc = subprocess.run(
+            ["pgrep", "-f", f"{re.escape(root)}/.*{re.escape(fname)}"], capture_output=True, text=True, timeout=30
+        )
         return proc.returncode == 0
     except Exception:  # noqa: BLE001
         return False
