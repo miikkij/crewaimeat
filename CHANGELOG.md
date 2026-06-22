@@ -22,6 +22,18 @@ Dates are the working dates; entries are **uncommitted and take effect on the ne
     and the stats-driven feedback-wisdom keep their `idle_hook` — only request-record scanners moved.
 
 ### Changed
+- **The idle 2-4 Mbit/s tunnel storm is fixed at the root (aimeat-crewai >= 0.7.1).** Prod access logs
+  showed ~596 MB over 240 `/v1/connect/tunnel` frames in 5 min — the crew **daemon re-listing tasks
+  every poll cycle** (queued/active/stalled, full payloads, ×3), which ride the tunnel as request/response
+  frames even when idle. 0.7.1's daemon re-lists **only on a push wake** (+ a rare safety-net) and adds a
+  `task.cancelled` push (`/local/cancelled`) so cancellation no longer needs an owner-scope memory scan
+  per dispatch. An idle agent on a live tunnel now makes ~zero periodic node calls. (CLI bumped to 1.29.0.)
+- On the crew side, `on_record` scopes each scan to the event's **own workspace** (`record_event_targets`
+  → `process_*(targets=[(org,ws)])`) instead of re-discovering and re-scanning all member workspaces per
+  event; **feedback-wisdom** (whose trigger is a memory key, not a record — so it stays a poll) is now
+  conditional (skips the derive/mirror pass when the stats are unchanged), quiet on expected NOT_FOUND/
+  ACCESS_DENIED, and polls every 30 min instead of 5; and the reputation rollup's `aimeat_agent_statistics`
+  call is quiet on a "no stats yet" NOT_FOUND.
 - **Idle traffic trimmed at the source.** The periodic `_auth_alive` probe is **gone** — the 0.7.0
   daemon self-exits on a revoked token (`auth_revoked` push → connector `auth_failed` → exit), and the
   supervisor re-auths on exit (`watchdog.ps1/.sh` treat exit code 2 like 78; the host handles it via
