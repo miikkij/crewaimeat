@@ -11,7 +11,7 @@ Run: uv run python crews/image_maker_crew.py
 
 from __future__ import annotations
 
-from crewaimeat.aimeat_crew import BuildContext, CrewSpec, contract_record_spaces, run_crew
+from crewaimeat.aimeat_crew import BuildContext, CrewSpec, contract_record_spaces, record_event_targets, run_crew
 from crewaimeat.contract_adopt import build_adopt_domain, is_adopt_task
 from crewaimeat.image_request_contract import CONTRACT, process_image_requests
 from crewaimeat.seedream_gen import make_image_tools
@@ -75,9 +75,10 @@ def build_domain(ctx: BuildContext):
 def run() -> None:
     # Event-driven (aimeat-crewai 0.7.0): a pushed image-request record (or the catch-up on connect) wakes
     # us; process_image_requests is the DETERMINISTIC scan that fulfils any pending requests (the check is
-    # workspace reads, no LLM; generation runs only on a real pending request). No idle polling.
-    def _on_record(_event) -> None:
-        res = process_image_requests()
+    # workspace reads, no LLM; generation runs only on a real pending request). No idle polling. targets
+    # scopes the scan to the event's OWN workspace — no member rediscovery/full re-scan per event.
+    def _on_record(event) -> None:
+        res = process_image_requests(targets=record_event_targets(event))
         if res.get("processed") or res.get("failed"):
             print(f"[{AGENT_NAME}] image-request event: {res}")
 

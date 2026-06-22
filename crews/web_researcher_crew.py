@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from crewai import Agent, Task
 
-from crewaimeat.aimeat_crew import CrewSpec, contract_record_spaces, run_crew
+from crewaimeat.aimeat_crew import CrewSpec, contract_record_spaces, record_event_targets, run_crew
 from crewaimeat.contract_adopt import build_adopt_domain, is_adopt_task
 from crewaimeat.crew import _web_tools  # free SearXNG web search by default (USE_TAVILY=1 for Tavily)
 from crewaimeat.research_contract import CONTRACT
@@ -126,14 +126,18 @@ def run() -> None:
     from crewaimeat.market_contract import process_market_scans
     from crewaimeat.research_contract import process_research_requests
 
-    def _on_record(_event) -> None:
-        res = process_research_requests(max_items=3)
+    # targets scopes every scan to the event's OWN workspace (no member rediscovery/full re-scan per
+    # event). The event may be for any of the three spaces; the non-matching scans just read that one
+    # workspace's (usually empty) space and dedupe — bounded and cheap.
+    def _on_record(event) -> None:
+        targets = record_event_targets(event)
+        res = process_research_requests(max_items=3, targets=targets)
         if res.get("processed") or res.get("failed"):
             print(f"[{AGENT_NAME}] research-contract event: {res}")
-        scans = process_market_scans(max_items=2)  # SECOND contract: market-scan
+        scans = process_market_scans(max_items=2, targets=targets)  # SECOND contract: market-scan
         if scans.get("processed") or scans.get("failed"):
             print(f"[{AGENT_NAME}] market-scan event: {scans}")
-        cos = process_company_research(max_items=3)  # THIRD contract: company-research (YTJ + web)
+        cos = process_company_research(max_items=3, targets=targets)  # THIRD contract: company-research
         if cos.get("processed") or cos.get("failed"):
             print(f"[{AGENT_NAME}] company-research event: {cos}")
 

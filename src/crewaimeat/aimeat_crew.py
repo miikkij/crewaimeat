@@ -646,6 +646,19 @@ def contract_record_spaces(agent_name: str, *contracts: dict) -> list[dict]:
     return out
 
 
+def record_event_targets(event: dict) -> list[tuple[str, str]] | None:
+    """Map a pushed record event to a `process_*(targets=...)` scope: JUST the (organism_id, ws) the
+    event came from. An on_record handler passes this so the deterministic scan reads ONLY that one
+    workspace — instead of re-discovering (organism_list + a workspace_list per org) and re-scanning
+    EVERY member workspace on every event. That bounds per-event traffic and makes a self-write loop
+    safe: an agent's own status-write (requested->in-progress->done in a subscribed space) wakes a
+    single bounded read of that workspace, the record is already claimed (dedup), so no re-write fires.
+    Works for the catch-up event too (op=="catchup" still carries the space's organism_id+ws). Returns
+    None when coords are absent (a malformed event) -> process_* falls back to a full member scan."""
+    oid, wid = event.get("organism_id"), event.get("ws")
+    return [(oid, wid)] if oid and wid else None
+
+
 def _onboarding_completed(agent_name: str) -> bool:
     data = _aimeat_call(agent_name, "aimeat_onboarding_status", {})
     return bool(data) and data.get("onboarding", {}).get("status") == "completed"
@@ -818,8 +831,10 @@ def _publish_selection_rollup(agent_name: str, owner: str | None = None, _state:
     try:
         # P3 (aimeat-crewai 0.7.0): read the agent's OWN stats over the TUNNEL TOOL instead of a direct
         # owner-only GET /v1/agents/:name/statistics — it rides the open WS (no separate connection).
-        # _aimeat_call returns the envelope's data (performance + reviews).
-        data = _aimeat_call(agent_name, "aimeat_agent_statistics", {})
+        # _aimeat_call returns the envelope's data (performance + reviews). quiet: an agent with no stats
+        # yet (or not registered on this node) returns NOT_FOUND — that is an EXPECTED "no reputation yet",
+        # not a fault to spam every ~10 min idle cycle (it just leaves the selection key absent).
+        data = _aimeat_call(agent_name, "aimeat_agent_statistics", {}, quiet=True)
         reviews = (data.get("reviews") or {}) if isinstance(data, dict) else {}
         overall = reviews.get("overall") or {}
         n = overall.get("n") or 0

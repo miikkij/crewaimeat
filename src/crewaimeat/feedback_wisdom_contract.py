@@ -112,6 +112,13 @@ def _call(tool: str, payload: dict):
     return _aimeat_call(AGENT, tool, payload)
 
 
+def _qcall(tool: str, payload: dict):
+    """A QUIET call for best-effort reads/writes whose failure is EXPECTED and not a fault to log every
+    cycle: an older dated stats key that 404s (NOT_FOUND), or a mirror write to a workspace this agent
+    isn't authorized for (ACCESS_DENIED). The caller already treats a falsy result as "skip"."""
+    return _aimeat_call(AGENT, tool, payload, quiet=True)
+
+
 def _slug(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", str(s).lower()).strip("-") or "x"
 
@@ -140,7 +147,7 @@ def discover_stats() -> list[tuple[str, dict, dict]]:
             continue
         val = it.get("value")
         if val is None:
-            val = (_call("aimeat_memory_read", {"key": key}) or {}).get("value")
+            val = (_qcall("aimeat_memory_read", {"key": key}) or {}).get("value")
         env = _as_obj(val)
         if not isinstance(env, dict):
             continue
@@ -160,7 +167,7 @@ def _prior_stats(org: str, current_window: str) -> dict | None:
         if (it.get("key") or "").rsplit(".", 1)[-1] not in ("latest",)
     )
     for key in reversed(dated):  # newest dated first; skip the one matching the current window
-        val = (_call("aimeat_memory_read", {"key": key}) or {}).get("value")
+        val = (_qcall("aimeat_memory_read", {"key": key}) or {}).get("value")
         env = _as_obj(val)
         st = env.get("stats") if isinstance(env, dict) else None
         if isinstance(st, dict):
@@ -398,8 +405,10 @@ def mirror_targets() -> list[tuple[str, str]]:
 
 
 def _ws_write(oid: str, wid: str, space: str, ns: str, rec_id: str, value: dict) -> bool:
-    if _call("aimeat_workspace_write", {"organism_id": oid, "ws": wid, "space": space, "id": rec_id, "value": value}):
-        return bool(_call("aimeat_workspace_publish", {"organism_id": oid, "ws": wid, "namespace": ns, "id": rec_id}))
+    # quiet: a workspace this agent isn't authorized to write returns ACCESS_DENIED — best-effort mirror,
+    # not a fault to log (the outbox is the real deliverable; the workspace chain is the visible bonus).
+    if _qcall("aimeat_workspace_write", {"organism_id": oid, "ws": wid, "space": space, "id": rec_id, "value": value}):
+        return bool(_qcall("aimeat_workspace_publish", {"organism_id": oid, "ws": wid, "namespace": ns, "id": rec_id}))
     return False
 
 
@@ -441,10 +450,30 @@ def mirror_chain(org: str, env: dict, stats: dict, advisories: list[dict], targe
 
 
 # ── the one run (used by the idle_hook AND the interactive crew tool) ─────────
+_LAST_SIG: dict = {"v": None}  # signature of the last snapshots fully processed (clean pass)
+
+
 def process_feedback_stats(max_orgs: int = 10) -> dict:
     """Read every produced stats snapshot, derive advisories with the deterministic rules, and write
-    them to the outbox (+ mirror the visible chain to adopted workspaces). Idempotent. Returns counts."""
+    them to the outbox (+ mirror the visible chain to adopted workspaces). Idempotent. Returns counts.
+
+    CONDITIONAL: the desk produces stats at most ~daily. When every snapshot is byte-identical to the
+    last fully-processed run, there is nothing to derive — we skip the whole pass (no _prior_stats dated
+    reads, no outbox reads/writes, no workspace mirror). So an idle poll costs ONE memory_list and stops.
+    The signature only "settles" on a clean pass (no outbox failure), so a transient write retries."""
     snapshots = discover_stats()[:max_orgs]
+    sig = hashlib.sha1(json.dumps([(o, s) for o, _e, s in snapshots], sort_keys=True, default=str).encode()).hexdigest()
+    if sig == _LAST_SIG["v"]:
+        return {
+            "orgs": len(snapshots),
+            "advisories_written": 0,
+            "skipped": 0,
+            "failed": 0,
+            "ws_records": 0,
+            "mirror_targets": 0,
+            "unchanged": True,
+            "per_org": [],
+        }
     targets = mirror_targets()
     written = skipped = failed = ws_records = 0
     per_org: list[dict] = []
@@ -460,6 +489,8 @@ def process_feedback_stats(max_orgs: int = 10) -> dict:
         if advs and targets:
             ws_records += mirror_chain(org, env, stats, advs, targets)
         per_org.append({"org": org, "window": window, "advisories": len(advs)})
+    if failed == 0:
+        _LAST_SIG["v"] = sig  # settle only on a clean pass; a transient outbox failure retries next cycle
     return {
         "orgs": len(snapshots),
         "advisories_written": written,

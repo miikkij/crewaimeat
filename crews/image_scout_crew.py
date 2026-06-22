@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from crewai import Agent, Task
 
-from crewaimeat.aimeat_crew import BuildContext, CrewSpec, contract_record_spaces, run_crew
+from crewaimeat.aimeat_crew import BuildContext, CrewSpec, contract_record_spaces, record_event_targets, run_crew
 from crewaimeat.contract_adopt import build_adopt_domain, is_adopt_task
 from crewaimeat.image_contract import CONTRACT, make_image_tools, process_moodboards
 
@@ -70,9 +70,10 @@ def build_domain(ctx: BuildContext):
 def run() -> None:
     # Event-driven (aimeat-crewai 0.7.0): a pushed moodboard-request record (or the catch-up on connect)
     # wakes us; process_moodboards is the DETERMINISTIC scan that fulfils any pending requests (NO LLM in
-    # the check; the vision model runs only on real candidate images). No idle polling.
-    def _on_record(_event) -> None:
-        res = process_moodboards()
+    # the check; the vision model runs only on real candidate images). No idle polling. targets scopes the
+    # scan to the event's OWN workspace — no member rediscovery/full re-scan per event, and loop-safe.
+    def _on_record(event) -> None:
+        res = process_moodboards(targets=record_event_targets(event))
         if res.get("processed") or res.get("failed"):
             print(f"[{AGENT_NAME}] moodboard event: {res}")
 

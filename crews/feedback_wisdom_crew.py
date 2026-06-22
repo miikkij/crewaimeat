@@ -227,9 +227,13 @@ def build_domain(ctx: BuildContext):
 
 
 def run() -> None:
-    # idle_hook: a DETERMINISTIC poll that fulfils the loop with NO LLM — derive advisories from any
-    # fresh stats and write them to the outbox + workspace. Restart-surviving (stable ids, identical-
-    # payload skip), so re-runs never duplicate. The interactive crew above adds LLM phrasing on top.
+    # A POLL, not a record subscription: this agent's trigger is the memory key feedback.stats.<org>.latest
+    # (the desk writes MEMORY, not a workspace record) — there is nothing to subscribe to with
+    # listen_for="records". So it stays an idle_hook, but a CHEAP one: process_feedback_stats is now
+    # CONDITIONAL (skips the whole derive/outbox/mirror pass when the snapshots are byte-identical to the
+    # last clean run), the best-effort dated reads + workspace mirror are quiet, and stats change at most
+    # ~daily — so the interval is relaxed to 30 min. An idle poll = one memory_list, then stop.
+    # (A future TRUE event-driven path: have the desk emit a tiny "stats-updated" record we subscribe to.)
     def _poll() -> None:
         res = fw.process_feedback_stats()
         if res.get("advisories_written") or res.get("failed"):
@@ -242,7 +246,7 @@ def run() -> None:
             readme_md=README,
             temperature=0.3,
             idle_hook=_poll,
-            idle_hook_seconds=300,
+            idle_hook_seconds=1800,
             tags=CAPABILITY_TAGS,
             capabilities=CAPABILITIES,
         )
