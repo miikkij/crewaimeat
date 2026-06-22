@@ -291,6 +291,25 @@ def run_dm_listener(agent: str, responder, *, stop=None, seen: set | None = None
             handle_dm_event(agent, event, responder, seen=seen)
 
 
+def start_dm_listener_thread(agent: str, responder, *, wait_ms: int = 5000):
+    """Start run_dm_listener in a background DAEMON thread and return it. Use this to drive federated DMs
+    when NOT using the daemon's native listen_for="dms"/on_dm — e.g. as a WORKAROUND for the aimeat-crewai
+    0.8.0 wake-consume bug (the daemon's idle wait pops /local/dm/next and discards the dm.inbound event,
+    so on_dm never fires). The listener OWNS the /local/dm/next queue (keep the agent's listen_for without
+    "dms" so the daemon never touches it). Drop this once the package is fixed and switch back to on_dm."""
+    import threading
+
+    t = threading.Thread(
+        target=run_dm_listener,
+        args=(agent, responder),
+        kwargs={"wait_ms": wait_ms},
+        daemon=True,
+        name=f"dm-listener-{agent}",
+    )
+    t.start()
+    return t
+
+
 # ── CrewAI tools: let an LLM crew SEND a reply / CHECK its inbox during a run ──
 def make_dm_tools(agent: str) -> list:
     """Tools an LLM crew can use mid-run. Only the SAFE surface is exposed: reply-in-thread + read.
