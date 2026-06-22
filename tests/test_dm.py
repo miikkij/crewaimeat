@@ -100,6 +100,29 @@ def test_process_dm_inbox_silent_responder_sends_nothing(monkeypatch):
     assert r["replied"] == 0 and sent == []
 
 
+def test_run_dm_listener_processes_then_stops(monkeypatch):
+    """The production drain loop: one pushed event -> reply in-thread -> stop when the queue drains."""
+    import threading
+
+    stop = threading.Event()
+    queue = [{"id": "m1", "conversationId": "c1", "senderGhii": "alice@n", "preview": "make a logo"}]
+
+    def fake_drain(agent, **k):
+        if queue:
+            return queue.pop(0)
+        stop.set()  # nothing left -> end the loop on the next top-of-loop check
+        return None
+
+    sent: list[tuple] = []
+    monkeypatch.setattr(dm, "dm_drain_next", fake_drain)
+    monkeypatch.setattr(dm, "dm_reply", lambda agent, to, body, **k: sent.append((to, body, k)) or {"ok": True})
+
+    dm.run_dm_listener("x", lambda e: f"re: {dm._inbound_fields(e)[3]}", stop=stop)
+    assert len(sent) == 1
+    to, body, kw = sent[0]
+    assert to == "alice@n" and kw.get("conversation_id") == "c1" and "make a logo" in body
+
+
 @pytest.mark.parametrize(
     "mime,kind",
     [

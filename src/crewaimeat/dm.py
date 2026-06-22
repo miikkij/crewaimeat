@@ -11,10 +11,14 @@ This module is the crewaimeat SEND side: deterministic helpers + CrewAI tools, w
 The tools are shell-callable (v1.30.1), so everything rides the existing tunnel via `_aimeat_call`
 (no REST glue) — except a file upload, which must stay binary (presigned PUT, never base64 over MCP).
 
-INBOUND (a DM -> a crew) is the daemon's `dm.inbound` tunnel-push drain (Phase 2, in aimeat-crewai):
-the node pushes a `{type:"deliver", kind:"dm.inbound", payload:{message_id, conversation_id, from, ...}}`
-frame on the SAME channel as `task_assigned`/`workspace.record`; the daemon builds a crew from the DM
-and hands the result back through `dm_reply` here. No poller — idle-quiet is preserved.
+INBOUND (a DM -> a crew): when a DM arrives the node pushes a lightweight `dm.inbound` wake over the
+connect tunnel, which the connector surfaces on its loopback `/local/dm/next` long-poll (v1.30.2, a
+mirror of `/local/records/next`). `run_dm_listener(agent, responder)` drains it (event-driven — it parks
+on the wake, zero node calls while idle), runs the responder, and hands the result back via `dm_reply`.
+Run it standalone (`scripts/dm_listener.py`) or in a background thread next to a coordinator agent; when
+aimeat-crewai's `run_crew_daemon` grows an `on_dm` drain this moves into the daemon. The wake carries a
+PREVIEW (aligned shape {id, conversationId, subject, senderGhii, preview, attachments, createdAt}); a
+responder needing the full body/attachments fetches them with `dm_thread(agent, conversationId)`.
 
 SAFETY — the first-contact gate (AIMEAT gates strangers into "requests"; we add an owner gate on top):
   - A reply IN a thread / to a requester is already consented -> `dm_reply` auto-sends.
@@ -151,10 +155,11 @@ def dm_initiate(
 def dm_attach(agent: str, path: str, *, name: str | None = None, mime: str | None = None) -> dict | None:
     """Upload a local file the PRESIGNED way (binary stays binary — never base64 over MCP/the tunnel) and
     return the attachment dict for dm_send/dm_reply: {storage_key, mime, kind, size, name}. Up to 20 per
-    message. NB visibility=public (unguessable key) so a cross-owner/cross-node recipient can fetch the
-    deliverable — open question with the AIMEAT dev whether a message-scoped visibility should replace it.
+    message. Uploads PRIVATE (v1.30.2): the node grants the recipient read per-message via a signed
+    federation storage grant on accept (in-thread hand-back to an accepted contact = automatic) — no
+    public exposure, no "message" visibility value needed.
 
-    Mirrors image_contract._upload_public: POST /v1/storage {mode:'presigned'} -> PUT raw bytes."""
+    Mirrors image_contract._upload_public's flow: POST /v1/storage {mode:'presigned'} -> PUT raw bytes."""
     if not os.path.isfile(path):
         print(f"[{agent}] dm_attach: no such file: {path}", file=sys.stderr)
         return None
@@ -167,7 +172,7 @@ def dm_attach(agent: str, path: str, *, name: str | None = None, mime: str | Non
         print(f"[{agent}] dm_attach read {path} failed: {exc!r}", file=sys.stderr)
         return None
     key = f"dm/{agent}/{fname}"
-    presign = {"key": key, "mime_type": ctype, "visibility": "public", "mode": "presigned"}
+    presign = {"key": key, "mime_type": ctype, "visibility": "private", "mode": "presigned"}
     try:
         api = _serve_api()
         if api is not None:
@@ -230,6 +235,50 @@ def process_dm_inbox(agent: str, responder, *, seen: set | None = None, max_item
         else:
             failed += 1
     return {"seen": len(msgs), "replied": replied, "skipped": skipped, "failed": failed}
+
+
+# ── INBOUND trigger: drain the loopback DM queue (v1.30.2) — event-driven, no poller ──
+def dm_drain_next(agent: str, *, wait_ms: int = 5000) -> dict | None:
+    """Long-poll the serve daemon's loopback DM queue (GET /local/dm/next — the mirror of
+    /local/records/next, v1.30.2+). Blocks up to wait_ms for a pushed `dm.inbound` wake, returns the event
+    {id, conversationId, subject, senderGhii, preview, attachments, createdAt} or None. Loopback only — NOT
+    a node call — so an idle listener parks here and makes zero node traffic until the node pushes a DM."""
+    api = _serve_api()
+    if api is None:
+        return None
+    base, session = api
+    try:
+        r = session.get(f"{base}/local/dm/next", params={"wait": wait_ms, "agent": agent}, timeout=wait_ms / 1000 + 10)
+        if r.status_code != 200:
+            return None
+        return (r.json() or {}).get("data", {}).get("event")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def run_dm_listener(agent: str, responder, *, stop=None, seen: set | None = None, wait_ms: int = 5000) -> None:
+    """The PRODUCTION inbound trigger, crewfive-side: drain `/local/dm/next` forever (long-poll) and hand
+    each NEW DM to `responder(event) -> reply_text`, replying in-thread via dm_reply. Event-driven (parks on
+    the loopback wake), so idle = zero node calls — the same idle-quiet as the records push. Run it in a
+    background thread next to a coordinator agent, or standalone (scripts/dm_listener.py). `stop` is an
+    optional threading.Event to end the loop. The wake carries a PREVIEW; a responder needing the full body
+    or attachments fetches them with dm_thread(agent, conversationId)."""
+    seen = seen if seen is not None else set()
+    while not (stop is not None and stop.is_set()):
+        event = dm_drain_next(agent, wait_ms=wait_ms)
+        if not event:
+            continue  # timeout with no DM -> re-park (no node call)
+        mid, conv, sender, _body, _subject = _inbound_fields(event)
+        if not mid or mid in seen or not sender or not conv:
+            continue
+        seen.add(mid)  # mark BEFORE running (runaway-safe)
+        try:
+            reply_text = responder(event)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[{agent}] dm listener responder failed for {mid}: {exc!r}", file=sys.stderr)
+            continue
+        if reply_text:
+            dm_reply(agent, sender, reply_text, conversation_id=conv)
 
 
 # ── CrewAI tools: let an LLM crew SEND a reply / CHECK its inbox during a run ──
