@@ -62,6 +62,44 @@ def test_dm_initiate_approved_sends_dm(calls):
     assert payload["subject"] == "Project X"
 
 
+def test_process_dm_inbox_replies_and_dedups(monkeypatch):
+    """Inbound handler: replies in-thread to a new DM, dedups via `seen`, skips DMs missing coords."""
+    inbox = {
+        "messages": [
+            {"message_id": "m1", "conversation_id": "c1", "from": "alice@n", "preview": "make a logo"},
+            {"message_id": "m2", "conversation_id": "c2", "from": "bob@n", "preview": "status?"},
+            {"message_id": "m3", "from": "carol@n", "preview": "no conversation_id -> skip"},
+        ]
+    }
+    sent: list[tuple] = []
+    monkeypatch.setattr(dm, "dm_inbox", lambda agent, **k: inbox)
+    monkeypatch.setattr(dm, "dm_reply", lambda agent, to, body, **k: sent.append((to, body, k)) or {"ok": True})
+
+    seen: set = set()
+    r1 = dm.process_dm_inbox("a", lambda m: f"re: {m['preview']}", seen=seen)
+    assert r1["replied"] == 2 and r1["skipped"] == 1  # m1+m2 replied, m3 (no conv) skipped
+    assert {to for to, _b, _k in sent} == {"alice@n", "bob@n"}
+    assert all(k.get("conversation_id") for _to, _b, k in sent)  # threaded
+
+    # Re-run: m1/m2 already in `seen` -> no new replies (runaway-safe).
+    r2 = dm.process_dm_inbox("a", lambda m: "again", seen=seen)
+    assert r2["replied"] == 0 and len(sent) == 2
+
+
+def test_process_dm_inbox_silent_responder_sends_nothing(monkeypatch):
+    monkeypatch.setattr(
+        dm,
+        "dm_inbox",
+        lambda agent, **k: {
+            "messages": [{"message_id": "m1", "conversation_id": "c1", "from": "x@n", "preview": "hi"}]
+        },
+    )
+    sent = []
+    monkeypatch.setattr(dm, "dm_reply", lambda *a, **k: sent.append(a) or {"ok": True})
+    r = dm.process_dm_inbox("a", lambda m: "")  # responder returns "" -> stay silent
+    assert r["replied"] == 0 and sent == []
+
+
 @pytest.mark.parametrize(
     "mime,kind",
     [

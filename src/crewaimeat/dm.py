@@ -182,6 +182,45 @@ def dm_attach(agent: str, path: str, *, name: str | None = None, mime: str | Non
     return {"storage_key": key, "mime": ctype, "kind": _kind_for(ctype), "size": len(data), "name": fname}
 
 
+# ── INBOUND: a DM -> a crew -> hand back (Phase 2 handler) ──
+def process_dm_inbox(agent: str, responder, *, seen: set | None = None, max_items: int = 5) -> dict:
+    """Read this agent's federated inbox and, for each NEW DM, run `responder(dm) -> reply_text` and hand
+    the result back IN-THREAD via `dm_reply`. This is the reusable Phase-2 handler:
+
+      - The daemon's future `dm.inbound` PUSH drain calls this on a wake (no poll) — `on_dm` in
+        aimeat-crewai mirrors the `on_record` drain; pass `seen` (a persistent set) for cross-call dedup.
+      - The test harness (`scripts/dm_inbound_test.py`) calls it directly so the read->crew->handback loop
+        is exercisable today, before the package push lands.
+
+    `responder(dm)` is where a real crew runs (e.g. build a crew from `dm['preview']`/the thread and return
+    its deliverable text); return "" to stay silent. Dedups on message id via `seen`. Returns counts."""
+    seen = seen if seen is not None else set()
+    data = dm_inbox(agent, per_page=max_items)
+    msgs = (data.get("messages") if isinstance(data, dict) else None) or []
+    replied = skipped = failed = 0
+    for m in msgs:
+        mid = m.get("message_id") or m.get("id")
+        sender, conv = m.get("from"), m.get("conversation_id")
+        if not mid or mid in seen or not sender or not conv:
+            skipped += 1
+            continue
+        seen.add(mid)  # mark BEFORE running so a crash can't re-trigger the same DM (runaway-safe)
+        try:
+            reply_text = responder(m)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[{agent}] dm responder failed for {mid}: {exc!r}", file=sys.stderr)
+            failed += 1
+            continue
+        if not reply_text:
+            continue
+        res = dm_reply(agent, sender, reply_text, conversation_id=conv)
+        if res:
+            replied += 1
+        else:
+            failed += 1
+    return {"seen": len(msgs), "replied": replied, "skipped": skipped, "failed": failed}
+
+
 # ── CrewAI tools: let an LLM crew SEND a reply / CHECK its inbox during a run ──
 def make_dm_tools(agent: str) -> list:
     """Tools an LLM crew can use mid-run. Only the SAFE surface is exposed: reply-in-thread + read.
