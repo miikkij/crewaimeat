@@ -48,6 +48,18 @@ def _kind_for(mime: str) -> str:
     return "file"
 
 
+def _inbound_fields(m: dict) -> tuple:
+    """Tolerant extraction from a received DM -> (id, conversation_id, sender, body, subject). Handles
+    BOTH shapes: the inbox-list response (camelCase + *Ghii: id/conversationId/senderGhii/body) and the
+    `dm.inbound` push payload (snake_case: message_id/conversation_id/from/preview)."""
+    mid = m.get("id") or m.get("message_id")
+    conv = m.get("conversationId") or m.get("conversation_id")
+    sender = m.get("senderGhii") or m.get("from") or m.get("sender")
+    body = m.get("body") or m.get("preview") or ""
+    subject = m.get("subject")
+    return mid, conv, sender, body, subject
+
+
 # ── low-level: the three federated-inbox tools (shell-callable since v1.30.1) ──
 def dm_inbox(agent: str, *, per_page: int = 20, page: int = 1) -> dict:
     """DMs addressed to THIS agent, newest first (aimeat_dm_inbox)."""
@@ -199,8 +211,7 @@ def process_dm_inbox(agent: str, responder, *, seen: set | None = None, max_item
     msgs = (data.get("messages") if isinstance(data, dict) else None) or []
     replied = skipped = failed = 0
     for m in msgs:
-        mid = m.get("message_id") or m.get("id")
-        sender, conv = m.get("from"), m.get("conversation_id")
+        mid, conv, sender, _body, _subject = _inbound_fields(m)
         if not mid or mid in seen or not sender or not conv:
             skipped += 1
             continue
@@ -235,11 +246,10 @@ def make_dm_tools(agent: str) -> list:
         msgs = (data.get("messages") if isinstance(data, dict) else None) or []
         if not msgs:
             return "No federated DMs."
-        lines = [
-            f"- [{m.get('conversation_id', '?')}] from {m.get('from', '?')}: "
-            f"{(m.get('subject') or '')} — {str(m.get('preview') or m.get('body') or '')[:120]}"
-            for m in msgs
-        ]
+        lines = []
+        for m in msgs:
+            _id, conv, sender, body, subject = _inbound_fields(m)
+            lines.append(f"- [{conv or '?'}] from {sender or '?'}: {subject or ''} — {str(body)[:120]}")
         return "\n".join(lines)
 
     @tool("reply_federated_dm")

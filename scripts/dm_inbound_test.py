@@ -25,9 +25,11 @@ from crewaimeat import dm
 
 def echo_responder(message: dict) -> str:
     """A deterministic acknowledgement — proves the round-trip without spending an LLM call."""
-    body = message.get("preview") or message.get("body") or "(no body)"
-    subject = message.get("subject") or "your message"
-    return f"Got it — re: **{subject}**.\n\n> {str(body)[:300]}\n\n_(crewaimeat dm-inbound test responder)_"
+    _id, _conv, _sender, body, subject = dm._inbound_fields(message)
+    return (
+        f"Got it — re: **{subject or 'your message'}**.\n\n> {str(body or '(no body)')[:300]}\n\n"
+        "_(crewaimeat dm-inbound test responder)_"
+    )
 
 
 def main() -> int:
@@ -41,10 +43,8 @@ def main() -> int:
     msgs = (inbox.get("messages") if isinstance(inbox, dict) else None) or []
     print(f"[{args.agent}] federated inbox: {len(msgs)} message(s)")
     for m in msgs:
-        print(
-            f"  - [{m.get('conversation_id', '?')}] from {m.get('from', '?')}: "
-            f"{m.get('subject') or ''} — {str(m.get('preview') or m.get('body') or '')[:80]}"
-        )
+        _id, conv, sender, body, subject = dm._inbound_fields(m)
+        print(f"  - [{conv or '?'}] from {sender or '?'}: {subject or ''} — {str(body)[:80]}")
     if not msgs:
         print("Nothing to process. Send a DM to this agent first, then re-run.")
         return 0
