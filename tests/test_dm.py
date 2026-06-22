@@ -117,6 +117,17 @@ def test_handle_dm_event_replies_and_dedups(monkeypatch):
     assert dm.handle_dm_event("wm", self_ev, lambda e: "yo") is False
 
 
+def test_handle_dm_event_dict_result_carries_attachments(monkeypatch):
+    """A responder may return {"text","attachments"} to hand back files; dm_reply gets the attachments."""
+    sent: list[tuple] = []
+    monkeypatch.setattr(dm, "dm_reply", lambda agent, to, body, **k: sent.append((body, k)) or {"ok": True})
+    ev = {"id": "m9", "conversationId": "c9", "senderGhii": "a@n", "preview": "hi"}
+    atts = [{"storage_key": "dm/x/a.png", "mime": "image/png", "kind": "image", "size": 1, "name": "a.png"}]
+    assert dm.handle_dm_event("x", ev, lambda e: {"text": "here you go", "attachments": atts}) is True
+    body, kw = sent[0]
+    assert body == "here you go" and kw.get("attachments") == atts
+
+
 def test_run_dm_listener_processes_then_stops(monkeypatch):
     """The production drain loop: one pushed event -> reply in-thread -> stop when the queue drains."""
     import threading

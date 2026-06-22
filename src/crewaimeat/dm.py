@@ -171,8 +171,16 @@ def dm_attach(agent: str, path: str, *, name: str | None = None, mime: str | Non
     except OSError as exc:
         print(f"[{agent}] dm_attach read {path} failed: {exc!r}", file=sys.stderr)
         return None
-    key = f"dm/{agent}/{fname}"
-    presign = {"key": key, "mime_type": ctype, "visibility": "private", "mode": "presigned"}
+    return dm_attach_bytes(agent, data, name=fname, mime=ctype)
+
+
+def dm_attach_bytes(agent: str, data: bytes, *, name: str, mime: str) -> dict | None:
+    """Attach IN-MEMORY bytes (a found image, a fetched file, a generated image) the presigned PRIVATE way —
+    binary never rides MCP. Returns the {storage_key, mime, kind, size, name} attachment dict, or None."""
+    if not data:
+        return None
+    key = f"dm/{agent}/{name}"
+    presign = {"key": key, "mime_type": mime, "visibility": "private", "mode": "presigned"}
     try:
         api = _serve_api()
         if api is not None:
@@ -189,14 +197,14 @@ def dm_attach(agent: str, path: str, *, name: str | None = None, mime: str | Non
         if not upload_url:
             print(f"[{agent}] dm_attach presign {key} failed: HTTP {r.status_code} {r.text[:160]}", file=sys.stderr)
             return None
-        put = requests.put(upload_url, data=data, headers={"Content-Type": ctype}, timeout=300)
+        put = requests.put(upload_url, data=data, headers={"Content-Type": mime}, timeout=300)
         if put.status_code not in (200, 201):
             print(f"[{agent}] dm_attach PUT {key} failed: HTTP {put.status_code}", file=sys.stderr)
             return None
     except Exception as exc:  # noqa: BLE001
         print(f"[{agent}] dm_attach {key} failed: {exc!r}", file=sys.stderr)
         return None
-    return {"storage_key": key, "mime": ctype, "kind": _kind_for(ctype), "size": len(data), "name": fname}
+    return {"storage_key": key, "mime": mime, "kind": _kind_for(mime), "size": len(data), "name": name}
 
 
 # ── INBOUND: a DM -> a crew -> hand back (Phase 2 handler) ──
@@ -270,13 +278,18 @@ def handle_dm_event(agent: str, event: dict, responder, *, seen: set | None = No
         return False  # never reply to our OWN message (self-DM) — the reply would re-trigger -> loop
     seen.add(mid)  # mark BEFORE running (runaway-safe)
     try:
-        reply_text = responder(event)
+        result = responder(event)
     except Exception as exc:  # noqa: BLE001
         print(f"[{agent}] on_dm responder failed for {mid}: {exc!r}", file=sys.stderr)
         return False
-    if not reply_text:
+    # The responder may return plain reply text, or {"text": ..., "attachments": [...]} to hand back files.
+    if isinstance(result, dict):
+        reply_text, attachments = result.get("text") or "", result.get("attachments")
+    else:
+        reply_text, attachments = result or "", None
+    if not reply_text and not attachments:
         return False
-    return bool(dm_reply(agent, sender, reply_text, conversation_id=conv))
+    return bool(dm_reply(agent, sender, reply_text, conversation_id=conv, attachments=attachments))
 
 
 def run_dm_listener(agent: str, responder, *, stop=None, seen: set | None = None, wait_ms: int = 5000) -> None:
