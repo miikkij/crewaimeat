@@ -256,29 +256,39 @@ def dm_drain_next(agent: str, *, wait_ms: int = 5000) -> dict | None:
         return None
 
 
+def handle_dm_event(agent: str, event: dict, responder, *, seen: set | None = None) -> bool:
+    """on_dm handler — process ONE pushed `dm.inbound` wake: dedup, run `responder(event) -> reply_text`,
+    hand back in-thread via dm_reply. This is what you pass to `run_crew_daemon(on_dm=...)` (aimeat-crewai
+    >=0.8.0) — the daemon parks its idle wait on /local/dm/next and calls this on each wake (event-based,
+    idle-quiet). Marks `seen` BEFORE running (runaway-safe). Returns True if it replied. The wake carries a
+    PREVIEW; a responder needing the full body/attachments fetches them with dm_thread(agent, conversationId)."""
+    seen = seen if seen is not None else set()
+    mid, conv, sender, _body, _subject = _inbound_fields(event)
+    if not mid or mid in seen or not sender or not conv:
+        return False
+    if sender.startswith(f"{agent}#"):
+        return False  # never reply to our OWN message (self-DM) — the reply would re-trigger -> loop
+    seen.add(mid)  # mark BEFORE running (runaway-safe)
+    try:
+        reply_text = responder(event)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[{agent}] on_dm responder failed for {mid}: {exc!r}", file=sys.stderr)
+        return False
+    if not reply_text:
+        return False
+    return bool(dm_reply(agent, sender, reply_text, conversation_id=conv))
+
+
 def run_dm_listener(agent: str, responder, *, stop=None, seen: set | None = None, wait_ms: int = 5000) -> None:
-    """The PRODUCTION inbound trigger, crewfive-side: drain `/local/dm/next` forever (long-poll) and hand
-    each NEW DM to `responder(event) -> reply_text`, replying in-thread via dm_reply. Event-driven (parks on
-    the loopback wake), so idle = zero node calls — the same idle-quiet as the records push. Run it in a
-    background thread next to a coordinator agent, or standalone (scripts/dm_listener.py). `stop` is an
-    optional threading.Event to end the loop. The wake carries a PREVIEW; a responder needing the full body
-    or attachments fetches them with dm_thread(agent, conversationId)."""
+    """Standalone version of the inbound trigger (when not using the daemon's on_dm): drain
+    `/local/dm/next` forever (long-poll) and hand each NEW DM through `handle_dm_event`. Event-driven (parks
+    on the loopback wake), so idle = zero node calls. Run it in a background thread next to a coordinator
+    agent, or standalone (scripts/dm_listener.py). `stop` is an optional threading.Event to end the loop."""
     seen = seen if seen is not None else set()
     while not (stop is not None and stop.is_set()):
         event = dm_drain_next(agent, wait_ms=wait_ms)
-        if not event:
-            continue  # timeout with no DM -> re-park (no node call)
-        mid, conv, sender, _body, _subject = _inbound_fields(event)
-        if not mid or mid in seen or not sender or not conv:
-            continue
-        seen.add(mid)  # mark BEFORE running (runaway-safe)
-        try:
-            reply_text = responder(event)
-        except Exception as exc:  # noqa: BLE001
-            print(f"[{agent}] dm listener responder failed for {mid}: {exc!r}", file=sys.stderr)
-            continue
-        if reply_text:
-            dm_reply(agent, sender, reply_text, conversation_id=conv)
+        if event:
+            handle_dm_event(agent, event, responder, seen=seen)
 
 
 # ── CrewAI tools: let an LLM crew SEND a reply / CHECK its inbox during a run ──

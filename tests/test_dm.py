@@ -100,6 +100,23 @@ def test_process_dm_inbox_silent_responder_sends_nothing(monkeypatch):
     assert r["replied"] == 0 and sent == []
 
 
+def test_handle_dm_event_replies_and_dedups(monkeypatch):
+    """on_dm handler: reply in-thread to a new event, dedup via seen, skip events missing coords."""
+    sent: list[tuple] = []
+    monkeypatch.setattr(dm, "dm_reply", lambda agent, to, body, **k: sent.append((to, body, k)) or {"ok": True})
+    ev = {"id": "m1", "conversationId": "c1", "senderGhii": "alice@n", "preview": "hi"}
+    seen: set = set()
+    assert dm.handle_dm_event("x", ev, lambda e: "yo", seen=seen) is True
+    assert sent[0][0] == "alice@n" and sent[0][2].get("conversation_id") == "c1"
+    assert dm.handle_dm_event("x", ev, lambda e: "yo", seen=seen) is False  # dedup
+    assert len(sent) == 1
+    # missing conversationId -> skip
+    assert dm.handle_dm_event("x", {"id": "m2", "senderGhii": "b@n", "preview": "x"}, lambda e: "yo") is False
+    # self-DM (sender is THIS agent) -> never reply (loop guard)
+    self_ev = {"id": "m3", "conversationId": "c3", "senderGhii": "wm#owner@n", "preview": "x"}
+    assert dm.handle_dm_event("wm", self_ev, lambda e: "yo") is False
+
+
 def test_run_dm_listener_processes_then_stops(monkeypatch):
     """The production drain loop: one pushed event -> reply in-thread -> stop when the queue drains."""
     import threading

@@ -177,7 +177,12 @@ class CrewSpec:
     #   "created"|"updated" for a write, or "catchup" (id=None) once per space on (re)connect — re-scan that
     #   space, then go event-only. The event is a WAKE + coordinates (no record value); the handler does its
     #   own authorized read. If omitted, each event is wrapped into a synthetic task routed to build_domain.
-    listen_for: Iterable[str] = ("tasks",)  # add "messages" (inbox) and/or "records" (workspace events)
+    on_dm: Any = None  # with "dms" in listen_for (aimeat-crewai>=0.8.0, node>=1.30.2): handler for a pushed
+    #   federated-inbox DM wake {id, conversationId, subject, senderGhii, preview, attachments, createdAt}.
+    #   The daemon parks its idle wait on /local/dm/next (event-based, idle-quiet) and calls on_dm(event); a
+    #   lightweight wake -> read the full body via dm.dm_thread(conversationId), hand back via dm.dm_reply.
+    #   Use dm.handle_dm_event(agent, event, responder, seen=...). If omitted, the wake becomes a synthetic task.
+    listen_for: Iterable[str] = ("tasks",)  # + "messages" (owner inbox), "records" (workspace), "dms" (federated)
     wait_for_approval_seconds: int | None = 1800  # wait this long (30 min) for the token to be approved
     #   before onboarding, then exit for re-auth (None = wait indefinitely)
     services: list[dict] | None = None  # {name, description} capabilities to declare at
@@ -1758,6 +1763,7 @@ def run_crew(spec: CrewSpec) -> None:
         listen_for=_listen,
         record_spaces=_records,  # subscribe to workspace-record PUSH events for these spaces (0.7.0)
         on_record=spec.on_record,  # handler for a pushed record event (or None -> synthetic task)
+        on_dm=spec.on_dm,  # handler for a pushed federated-inbox DM wake (0.8.0; or None -> synthetic task)
         llm=get_llm(),
         owner=spec.owner,
         on_idle=_on_idle,

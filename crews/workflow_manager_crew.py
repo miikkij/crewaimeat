@@ -151,6 +151,22 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
 
 
 def run() -> None:
+    # Federated-inbox DM trigger (aimeat-crewai>=0.8.0, node>=1.30.2): a DM addressed to this agent wakes
+    # the daemon on /local/dm/next -> on_dm (event-based, idle-quiet, no poll). As the coordinator (its
+    # profile carries messages:send/read), workflow-manager ACKNOWLEDGES the request in-thread — a safe,
+    # consented hand-back via dm_reply. A richer responder (run a crew from the dm_thread context and
+    # return its deliverable) is the next iteration; the trigger + hand-back path are proven now.
+    from crewaimeat import dm
+
+    _seen: set = set()
+
+    def _dm_responder(event: dict) -> str:
+        _id, _conv, _sender, preview, subject = dm._inbound_fields(event)
+        return (
+            f"Received — re: **{subject or 'your message'}**. workflow-manager has your request and will "
+            f"coordinate it.\n\n> {str(preview or '')[:200]}"
+        )
+
     # adapt_to_task: classify each goal (fact/creative/mixed) -> cool+grounded+faithfulness-verified for
     # fact work, warm+free for creative. verify="on" is the fallback when the gate is inactive.
     run_crew(
@@ -161,6 +177,8 @@ def run() -> None:
             adapt_to_task=True,
             verify="on",
             score_to_stats=True,
+            listen_for=("tasks", "dms"),
+            on_dm=lambda e: dm.handle_dm_event(AGENT_NAME, e, _dm_responder, seen=_seen),
         )
     )
 
