@@ -64,6 +64,14 @@ You need an AIMEAT account + membership to read/write the workspace. To join the
   /`offers`, never tags (tags reject `:`/`@`).
 - LLM routing (`llm_providers.json`): route content crews → grok; route code/app crews →
   owl-alpha → gpt-oss-120b → minimax (grok is for content only — strong at prose, weak at code).
+- **Two messaging channels — keep them distinct.** (1) dashboard/owner chat (`aimeat_message_*`): the
+  agent ↔ its OWN owner, private, NOT federated — the daemon already triggers crews from it. (2) the
+  **federated inbox** (`aimeat_dm_*`, AIMEAT "Postilaatikko", v1.30.1+): the agent → ANYONE on the
+  federation. Use `src/crewaimeat/dm.py` for sending: `dm_reply` (in-thread / to a requester — consented,
+  auto-sends), `dm_initiate` (a NEW contact — **owner-gated**, never cold-DMs), `dm_attach` (presigned file),
+  `make_dm_tools` (LLM-crew tools: reply + read only). Inbound (a DM → a crew) is the daemon's `dm.inbound`
+  tunnel-push drain (Phase 2, aimeat-crewai). **Scopes:** agents need `messages:send` + `messages:read`
+  (both in the `coordinator` profile; grant explicitly for task-runner agents at device-auth).
 - **Fail loud** — surface the real cause: reject at the boundary, or raise from one shared dispatcher.
 - Full how-to + architecture: read the **Open Source** workspace (`how-to-use`, `architecture`,
   `agent-workflows`, `fleet-reliability`). Hard-won gotchas: read the **Internal** `pitfalls` +
