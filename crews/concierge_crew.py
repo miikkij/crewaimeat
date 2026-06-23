@@ -232,17 +232,18 @@ def _concierge_tools(sink: dict, *, ask_to: str | None = None, ask_conv: str | N
             attach it. This is the DEFAULT for any 'find me a <kind> document/form/PDF' request — it never
             blindly grabs the wrong one. If I ask, STOP and wait for their pick."""
             ext = (filetype or "pdf").lstrip(".").lower()
-            results = _searxng_web(f"{query} filetype:{ext}", 15) or _searxng_web(query, 15)
+            results = _searxng_web(f"{query} filetype:{ext}", 18) or _searxng_web(query, 18)
             seen: set = set()
-            cands: list[dict] = []
+            direct, other = [], []  # direct .ext links first — they're the actual files, not landing pages
             for r in results:
                 u = r["url"]
                 if u in seen:
                     continue
                 seen.add(u)
-                cands.append({"id": f"d{len(cands)}", "label": (r.get("title") or u)[:70], "url": u})
-                if len(cands) >= 8:
-                    break
+                item = {"label": (r.get("title") or u)[:70], "url": u}
+                (direct if u.split("?")[0].lower().endswith(f".{ext}") else other).append(item)
+            ordered = (direct + other)[:8]
+            cands = [{"id": f"d{i}", **it} for i, it in enumerate(ordered)]
             if not cands:
                 return f"No documents found for '{query}'."
             if len(cands) == 1:  # nothing to choose — just deliver it
@@ -392,6 +393,9 @@ def _deliver_picked_docs(conv: str, picks: dict):
             lines.append(f"- {c['label']} — couldn't download")
             continue
         data, mime, name = got
+        if ext not in mime.lower() and not c["url"].split("?")[0].lower().endswith(f".{ext}"):
+            lines.append(f"- {c['label']} — not a {ext} file (skipped)")  # a landing page, not the doc
+            continue
         if not name.lower().endswith(f".{ext}"):
             name = f"{(name or 'document').rsplit('.', 1)[0]}.{ext}"
         att = dm.dm_attach_bytes(AGENT_NAME, data, name=name, mime=mime)
@@ -412,7 +416,7 @@ def run() -> None:
         # If this DM is the ANSWER to a clarifying question we asked, fold the structured picks into the
         # request and fulfil the ORIGINAL ask (which is in the thread context).
         if event.get("interactive") == "answers":
-            picks = dm.dm_read_answers(AGENT_NAME, conv) if conv else {}
+            picks = dm.dm_answers_from_event(AGENT_NAME, event)  # event-aware: THIS answer, not the latest
             # Did they pick from documents we offered? Deliver exactly those from the session store (no LLM).
             delivered = _deliver_picked_docs(conv, picks) if conv else None
             if delivered is not None:

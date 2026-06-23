@@ -201,17 +201,34 @@ def dm_ask(
         return None
 
 
-def dm_read_answers(agent: str, conversation_id: str) -> dict:
-    """The latest structured ANSWERS in a thread -> {qId: {"selected":[ids], "other": str|None}} (or {})."""
+def dm_read_answers(agent: str, conversation_id: str, *, answers_for: str | None = None) -> dict:
+    """The structured ANSWERS in a thread -> {qId: {"selected":[ids], "other": str|None}} (or {}). Pass
+    answers_for=<question id> to read a SPECIFIC question's answers rather than the latest."""
     from aimeat_crewai import read_answers as _read_answers
     from aimeat_crewai import serve_client as _serve_client
 
     try:
         api = _serve_client(agent)
-        r = _read_answers(api, conversation_id)
-        return (r.get("answers") or {}) if isinstance(r, dict) else {}
+        r = _read_answers(api, conversation_id, answers_for=answers_for)
+        return (r.get("answers", r) or {}) if isinstance(r, dict) else {}
     except Exception as exc:  # noqa: BLE001
         print(f"[{agent}] dm_read_answers failed: {exc!r}", file=sys.stderr)
+        return {}
+
+
+def dm_answers_from_event(agent: str, event: dict) -> dict:
+    """The structured answers for THIS on_dm 'answers' event -> {qId: {"selected":[ids], "other": str|None}}
+    (or {}). Uses the EVENT-aware helper (it knows exactly which answer message this wake is for), so it's
+    reliable in on_dm where read_answers-by-conversation can return a stale/other question's latest answer."""
+    from aimeat_crewai import answers_from_dm as _answers_from_dm
+    from aimeat_crewai import serve_client as _serve_client
+
+    try:
+        api = _serve_client(agent)
+        r = _answers_from_dm(api, event)
+        return (r.get("answers", r) or {}) if isinstance(r, dict) else {}
+    except Exception as exc:  # noqa: BLE001
+        print(f"[{agent}] dm_answers_from_event failed: {exc!r}", file=sys.stderr)
         return {}
 
 
