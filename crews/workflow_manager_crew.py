@@ -179,6 +179,7 @@ def run() -> None:
             adapt_to_task=True,
             verify="on",
             score_to_stats=True,
+            discover=True,  # coordinator: find existing crews/workflows/capabilities before commissioning new work
             listen_for=("tasks", "dms"),
             on_dm=lambda e: dm.handle_dm_event(AGENT_NAME, e, _dm_responder, seen=_seen),
         )

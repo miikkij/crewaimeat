@@ -706,6 +706,7 @@ def run() -> None:
             build_domain=build_domain,
             readme_md=README,
             adapt_to_task=True,
+            discover=True,  # router/front-door: survey what already exists on the node before answering/delegating
             listen_for=("tasks", "dms"),
             on_dm=lambda e: dm.handle_dm_event(AGENT_NAME, e, _dm_responder, seen=_seen),
             tags=CAPABILITY_TAGS,

@@ -227,7 +227,12 @@ def run() -> None:
     # Factual registry research — run cool to stay grounded.
     run_crew(
         CrewSpec(
-            agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README, temperature=0.25, dm_serviceable=True
+            agent_name=AGENT_NAME,
+            build_domain=build_domain,
+            readme_md=README,
+            temperature=0.25,
+            dm_serviceable=True,
+            discover=True,  # researcher: check the node for prior research/company records before digging
         )
     )
 

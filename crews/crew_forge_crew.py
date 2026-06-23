@@ -296,6 +296,8 @@ def run() -> None:
             # Mixed role: the Architect designs crews (creative) while the Builder writes/validates
             # code (precise) — a balanced temperature suits both.
             temperature=0.5,
+            # Builder of crews: survey existing crews/capabilities first so it reuses instead of duplicating.
+            discover=True,
             # Act on inbox messages too, so the fleet can be operated by messaging crew-forge.
             listen_for=("tasks", "messages"),
             # Declare capabilities at onboarding (Services), and publish the slash-command

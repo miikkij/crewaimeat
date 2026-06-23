@@ -192,6 +192,14 @@ class CrewSpec:
     #   before onboarding, then exit for re-auth (None = wait indefinitely)
     services: list[dict] | None = None  # {name, description} capabilities to declare at
     #   onboarding via aimeat_onboarding_declare_services
+    discover: bool = False  # give this crew's liaison the MASTER DIRECTORY tool `aimeat_discover` (aimeat-
+    #   crewai>=0.10.0, node/connector>=1.32) by ADDING it to the daemon tool_filter (the default 24-tool
+    #   allowlist omits it). One faceted query across every node domain (capabilities/workflows/knowledge/
+    #   decisions/research/material/companies/docs/apps/memory) -> the agent can ask "what already exists
+    #   here I can reuse?" before acting. The 0.10.0 liaison backstory already steers it to call discover
+    #   FIRST, so no extra prompt is needed — this flag just makes the tool LOADABLE. Turn ON for
+    #   researchers / planners / coordinators / delegators / a head agent; leave OFF for single-purpose
+    #   executors (they don't need to survey the node before doing their one job).
     commands: list[dict] | None = None  # slash-command palette [{name, description, category}, ...]
     #   published to memory key agents.<agent>.commands (owner) so the Messages UI surfaces it
     chat_commands: list[dict] | Callable[[str], list[dict]] | None = None  # PUBLIC chat-command palette the
@@ -1301,6 +1309,13 @@ def _classify_task_nature(prompt: str, llm: Any) -> dict:
     }
 
 
+def _liaison_tool_filter(discover: bool):
+    """The daemon liaison's MCP tool allowlist: the default ~24-tool set, plus `aimeat_discover` (the master
+    directory) when `discover` is on. The default filter omits discover, so without this the 0.10.0 liaison
+    backstory would steer at a tool it can't load."""
+    return (*DAEMON_DEFAULT_TOOL_FILTER, "aimeat_discover") if discover else DAEMON_DEFAULT_TOOL_FILTER
+
+
 def _valid_chat_commands(cmds) -> list[dict]:
     """Normalise + validate a chat-command list to the dev's public schema. Keeps only well-formed entries
     (need a charset-safe `id`); coerces param types to {text,number,select}; caps the count. Fail-soft —
@@ -1856,10 +1871,18 @@ def run_crew(spec: CrewSpec) -> None:
     # record_spaces may be a 0-arg callable (resolved here at daemon start, e.g. discovers member workspaces).
     _records = spec.record_spaces() if callable(spec.record_spaces) else spec.record_spaces
 
+    # Tool filter for the daemon liaison: the default ~24-tool allowlist, plus aimeat_discover (the master
+    # directory) when this crew opts in. The 0.10.0 liaison backstory steers it to discover first; without
+    # this the tool would be filtered out and that steering would point at a tool the liaison can't load.
+    _tool_filter: Any = _liaison_tool_filter(spec.discover)
+    if spec.discover:
+        print(f"[{spec.agent_name}] discover ON -> liaison tool_filter += aimeat_discover", file=sys.stderr)
+
     run_crew_daemon(
         agent_name=spec.agent_name,
         build_crew=_build,
         poll_interval_seconds=spec.poll_seconds,
+        tool_filter=_tool_filter,
         listen_for=_listen,
         record_spaces=_records,  # subscribe to workspace-record PUSH events for these spaces (0.7.0)
         on_record=spec.on_record,  # handler for a pushed record event (or None -> synthetic task)

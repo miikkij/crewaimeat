@@ -148,6 +148,7 @@ def run() -> None:
             readme_md=README,
             adapt_to_task=True,
             score_to_stats=True,
+            discover=True,  # researcher: survey what already exists on the node before researching
             listen_for=("tasks", "records"),
             record_spaces=lambda: contract_record_spaces(AGENT_NAME, CONTRACT, MARKET_CONTRACT, COMPANY_CONTRACT),
             on_record=_on_record,
