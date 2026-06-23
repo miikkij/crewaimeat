@@ -225,7 +225,11 @@ def build_domain(ctx):
 
 def run() -> None:
     # Factual registry research — run cool to stay grounded.
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README, temperature=0.25))
+    run_crew(
+        CrewSpec(
+            agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README, temperature=0.25, dm_serviceable=True
+        )
+    )
 
 
 if __name__ == "__main__":

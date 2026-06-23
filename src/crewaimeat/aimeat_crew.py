@@ -182,6 +182,11 @@ class CrewSpec:
     #   The daemon parks its idle wait on /local/dm/next (event-based, idle-quiet) and calls on_dm(event); a
     #   lightweight wake -> read the full body via dm.dm_thread(conversationId), hand back via dm.dm_reply.
     #   Use dm.handle_dm_event(agent, event, responder, seen=...). If omitted, the wake becomes a synthetic task.
+    dm_serviceable: bool = False  # turn this crew into a DM-callable SERVICE: when True (and on_dm is unset),
+    #   "dms" is added to listen_for and a generic on_dm runs the crew's own build_domain on the DM body and
+    #   REPLIES in-thread with the result. So an agent on the federation can DM "research X" / "make a logo"
+    #   and get the deliverable back — the substrate for agent-to-agent delegation (the orchestrator routes
+    #   to these). The first-contact gate still applies (it only replies inside a thread).
     listen_for: Iterable[str] = ("tasks",)  # + "messages" (owner inbox), "records" (workspace), "dms" (federated)
     wait_for_approval_seconds: int | None = 1800  # wait this long (30 min) for the token to be approved
     #   before onboarding, then exit for re-auth (None = wait indefinitely)
@@ -1750,7 +1755,38 @@ def run_crew(spec: CrewSpec) -> None:
     # daemon's liaison on the configured model (not CrewAI's OpenAI default).
     # self_monitor crews must also hear inbox messages — that's how the owner's click on an
     # evolution prompt comes back (AIMEAT routes the answer to the agent that sent the prompt).
+    # dm_serviceable: make this crew DM-callable. A generic on_dm runs the crew's OWN build_domain on the
+    # DM body and replies in-thread — so any agent/person can DM a request and get the deliverable back.
+    _on_dm = spec.on_dm
+    if spec.dm_serviceable and _on_dm is None:
+        from crewaimeat import dm as _dm
+
+        _svc_seen: set = set()
+
+        def _service_responder(event: dict):
+            mid, _conv, _sender, body, _subj = _dm._inbound_fields(event)
+            if not str(body or "").strip():
+                return ""
+            ctx = BuildContext(
+                task={"id": f"dm-{mid}", "title": "DM request", "description": body},
+                prompt=str(body),
+                llm=get_llm(agent_name=spec.agent_name),
+                today=_now_context(),
+            )
+            try:
+                agents, tasks = spec.build_domain(ctx)
+                result = Crew(agents=agents, tasks=tasks, process=spec.process, verbose=False).kickoff()
+            except Exception as exc:  # noqa: BLE001
+                print(f"[{spec.agent_name}] DM service crew failed: {exc!r}", file=sys.stderr)
+                return "Sorry — I couldn't complete that request."
+            return {"text": str(result)[:6000]}
+
+        def _on_dm(e):  # noqa: ANN001
+            return _dm.handle_dm_event(spec.agent_name, e, _service_responder, seen=_svc_seen)
+
     _listen = tuple(spec.listen_for)
+    if spec.dm_serviceable and "dms" not in _listen:
+        _listen = _listen + ("dms",)
     if spec.self_monitor and "messages" not in _listen:
         _listen = _listen + ("messages",)
     # record_spaces may be a 0-arg callable (resolved here at daemon start, e.g. discovers member workspaces).
@@ -1763,7 +1799,7 @@ def run_crew(spec: CrewSpec) -> None:
         listen_for=_listen,
         record_spaces=_records,  # subscribe to workspace-record PUSH events for these spaces (0.7.0)
         on_record=spec.on_record,  # handler for a pushed record event (or None -> synthetic task)
-        on_dm=spec.on_dm,  # handler for a pushed federated-inbox DM wake (0.8.0; or None -> synthetic task)
+        on_dm=_on_dm,  # federated-inbox DM wake: caller's on_dm, else the dm_serviceable generic, else None
         llm=get_llm(),
         owner=spec.owner,
         on_idle=_on_idle,
