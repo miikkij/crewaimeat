@@ -173,6 +173,25 @@ def test_dm_read_answers(monkeypatch):
     assert dm.dm_read_answers("x", "c") == {}
 
 
+def test_dm_answers_from_event(monkeypatch):
+    # the wake may carry the full interactive object
+    ev = {"id": "m1", "interactive": {"role": "answers", "answers": {"pick_docs": {"selected": ["d1"], "other": None}}}}
+    assert dm.dm_answers_from_event("a", ev) == {"pick_docs": {"selected": ["d1"], "other": None}}
+    # else: fetch the event's OWN message by id and read its interactive.answers (not the thread's latest)
+    ev2 = {"id": "m2", "interactive": "answers"}
+    monkeypatch.setattr(
+        dm,
+        "dm_inbox",
+        lambda a, **k: {
+            "messages": [
+                {"id": "stale", "interactive": {"role": "answers", "answers": {"clarify": {"selected": ["x"]}}}},
+                {"id": "m2", "interactive": {"role": "answers", "answers": {"pick_docs": {"selected": ["d3"]}}}},
+            ]
+        },
+    )
+    assert dm.dm_answers_from_event("a", ev2) == {"pick_docs": {"selected": ["d3"]}}
+
+
 @pytest.mark.parametrize(
     "mime,kind",
     [

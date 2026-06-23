@@ -218,18 +218,20 @@ def dm_read_answers(agent: str, conversation_id: str, *, answers_for: str | None
 
 def dm_answers_from_event(agent: str, event: dict) -> dict:
     """The structured answers for THIS on_dm 'answers' event -> {qId: {"selected":[ids], "other": str|None}}
-    (or {}). Uses the EVENT-aware helper (it knows exactly which answer message this wake is for), so it's
-    reliable in on_dm where read_answers-by-conversation can return a stale/other question's latest answer."""
-    from aimeat_crewai import answers_from_dm as _answers_from_dm
-    from aimeat_crewai import serve_client as _serve_client
-
-    try:
-        api = _serve_client(agent)
-        r = _answers_from_dm(api, event)
-        return (r.get("answers", r) or {}) if isinstance(r, dict) else {}
-    except Exception as exc:  # noqa: BLE001
-        print(f"[{agent}] dm_answers_from_event failed: {exc!r}", file=sys.stderr)
+    (or {}). Reads the event's OWN message `interactive.answers` (by id) — verified reliable. NB the package
+    read_answers/answers_from_dm return the thread's 'latest' answer, which in a multi-question thread can be
+    a DIFFERENT/stale question's answer; the message itself carries the exact answers for THIS wake."""
+    inter = event.get("interactive")
+    if isinstance(inter, dict) and inter.get("answers"):  # the wake may already carry the full object
+        return inter["answers"]
+    mid = event.get("id") or event.get("message_id")
+    if not mid:
         return {}
+    for m in dm_inbox(agent, per_page=15).get("messages") or []:
+        if (m.get("id") or m.get("message_id")) == mid:
+            mi = m.get("interactive")
+            return mi["answers"] if isinstance(mi, dict) and mi.get("answers") else {}
+    return {}
 
 
 # ── attachments: presigned upload -> the attachment dict the send contract wants ──
