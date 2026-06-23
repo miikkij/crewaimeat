@@ -44,7 +44,8 @@ CAPABILITIES_TEXT = (
     "- **Find images** for a vibe or topic and attach them moodboard-style (thumbnails in your inbox).\n"
     "- **Find a document** (a PDF form, application, report) on the web and attach it.\n"
     "- **Fetch a file** from a public URL you give me and attach it.\n"
-    "- **Generate an image** from a description and attach it.\n\n"
+    "- **Generate an image** from a description and attach it.\n"
+    "- If I'm unsure what you mean, I'll **ask you a quick multiple-choice question** to get it right.\n\n"
     'Just tell me what you want — e.g. "find 4 cosy cabin interiors", "find me a Business Finland funding '
     'application PDF", "search the latest on X and send links", or "make an image of a neon fox". I reply '
     "right here in this thread."
@@ -129,8 +130,10 @@ def _searxng_web(query: str, n: int = 15) -> list[dict]:
         return []
 
 
-def _concierge_tools(sink: dict) -> list:
-    """The toolset, bound to a per-message `sink` (sink["attachments"] collects files for the reply)."""
+def _concierge_tools(sink: dict, *, ask_to: str | None = None, ask_conv: str | None = None) -> list:
+    """The toolset, bound to a per-message `sink` (sink["attachments"] collects files for the reply; for a
+    DM, ask_to/ask_conv enable the clarify tool — it asks the user a structured question and sets
+    sink["asked"], so the responder sends the FORM instead of a normal reply)."""
 
     @tool("find_images")
     def find_images(query: str, count: int = 4) -> str:
@@ -217,21 +220,43 @@ def _concierge_tools(sink: dict) -> list:
         """Explain what I can do and what I can return to the user."""
         return CAPABILITIES_TEXT
 
-    return [*_web_tools(), find_images, fetch_file, find_file, generate_image, describe_capabilities]
+    tools = [*_web_tools(), find_images, fetch_file, find_file, generate_image, describe_capabilities]
+
+    if ask_to and ask_conv:
+
+        @tool("ask_user")
+        def ask_user(question: str, options: str, multi_select: bool = False) -> str:
+            """Ask the user ONE clarifying multiple-choice question, ONLY when the request is genuinely
+            ambiguous and a wrong guess would waste effort (don't over-use it). `options` = 2-5 short
+            choices separated by '|'. It renders as a tappable form in their inbox; you'll get their answer
+            as a follow-up. After calling this, STOP — do NOT also write a reply; just wait for the answer."""
+            opts = [o.strip() for o in (options or "").split("|") if o.strip()][:5]
+            if len(opts) < 2:
+                return "Provide at least 2 options separated by '|'."
+            q = dm.build_question("clarify", question[:60], question, opts, multi_select=multi_select)
+            res = dm.dm_ask(AGENT_NAME, ask_to, [q], body=question, conversation_id=ask_conv)
+            sink["asked"] = bool(res)
+            return "Asked the user; waiting for their answer." if res else "Could not send the question."
+
+        tools.append(ask_user)
+
+    return tools
 
 
-def _agent(llm, sink: dict) -> Agent:
+def _agent(llm, sink: dict, *, ask_to: str | None = None, ask_conv: str | None = None) -> Agent:
     return Agent(
         role="Concierge",
         goal="Understand the user's request and fulfil it with the right tool(s), then reply concisely.",
         backstory=(
             "You are a friendly, capable concierge reached over direct message. You search the web and "
-            "return the best links, find images and attach them, fetch a file from a URL and attach it, and "
-            "generate an image from a description. When the user asks what you can do, you call "
-            "describe_capabilities. You keep replies concise and always cite source links for web results."
+            "return the best links, find images and attach them, find a document/PDF on the web and attach "
+            "it, fetch a file from a URL, and generate an image from a description. When the user asks what "
+            "you can do, you call describe_capabilities. If a request is genuinely ambiguous (a wrong guess "
+            "would waste effort), you ask ONE structured clarifying question with ask_user instead of "
+            "guessing. You keep replies concise and always cite source links for web results."
         ),
         llm=llm,
-        tools=_concierge_tools(sink),
+        tools=_concierge_tools(sink, ask_to=ask_to, ask_conv=ask_conv),
         allow_delegation=False,
         verbose=False,
     )
@@ -248,8 +273,10 @@ def _task(request: str, context: str, agent: Agent, today: str) -> Task:
             "a DOCUMENT/form/PDF on the web and attach it, use find_file (it searches AND downloads); "
             "fetch_file is only for a URL the user already gave. If they "
             "ask what you can do (or it's a vague greeting), call describe_capabilities. Attach images/files "
-            "with the tools and mention what you attached. Reply concisely in markdown; cite source links for "
-            "any web results. Answer ONLY the message above — ignore earlier topics unless asked to continue."
+            "with the tools and mention what you attached. If the request is genuinely ambiguous (a wrong "
+            "guess would waste effort), call ask_user with 2-5 options to clarify FIRST, then STOP and wait. "
+            "Reply concisely in markdown; cite source links for any web results. Answer ONLY the message "
+            "above — ignore earlier topics unless asked to continue."
         ),
         expected_output="A concise, friendly markdown reply. Attachments are added by the tools.",
         agent=agent,
@@ -295,15 +322,30 @@ def run() -> None:
     _seen: set = set()
 
     def _dm_responder(event: dict):
+        _mid, conv, sender, _preview, _subject = dm._inbound_fields(event)
         request, context = _dm_request_and_context(event)
-        sink: dict = {"attachments": []}
-        agent = _agent(get_llm(agent_name=AGENT_NAME), sink)
+        # If this DM is the ANSWER to a clarifying question we asked, fold the structured picks into the
+        # request and fulfil the ORIGINAL ask (which is in the thread context).
+        if event.get("interactive") == "answers":
+            picks = dm.dm_read_answers(AGENT_NAME, conv) if conv else {}
+            clar = "; ".join(
+                f"{qid}={','.join(v.get('selected') or [])}" + (f" (other: {v['other']})" if v.get("other") else "")
+                for qid, v in picks.items()
+            )
+            request = (
+                f"The user answered your clarifying question(s): {clar or '(no picks)'}.\n\n"
+                "Now fulfil their ORIGINAL request (above, in the conversation context) using these answers."
+            )
+        sink: dict = {"attachments": [], "asked": False}
+        agent = _agent(get_llm(agent_name=AGENT_NAME), sink, ask_to=sender, ask_conv=conv)
         crew = Crew(agents=[agent], tasks=[_task(request, context, agent, "")], process=Process.sequential)
         try:
             result = crew.kickoff()
         except Exception as exc:  # noqa: BLE001
             print(f"[{AGENT_NAME}] concierge crew failed: {exc!r}", file=sys.stderr)
             return "Sorry — I hit an error handling that. Try rephrasing?"
+        if sink.get("asked"):
+            return ""  # the clarifying FORM was already sent as the message — don't also send a reply
         return {"text": str(result), "attachments": sink["attachments"][:20]}
 
     run_crew(

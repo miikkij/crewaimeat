@@ -151,6 +151,32 @@ def test_run_dm_listener_processes_then_stops(monkeypatch):
     assert to == "alice@n" and kw.get("conversation_id") == "c1" and "make a logo" in body
 
 
+def test_build_question_shape():
+    q = dm.build_question(
+        "auth", "Auth", "Which auth?", [("oauth", "OAuth"), "pw"], multi_select=True, allow_other=False
+    )
+    assert q["id"] == "auth" and q["multiSelect"] is True and q["allowOther"] is False
+    assert q["options"] == [{"id": "oauth", "label": "OAuth"}, {"id": "pw", "label": "pw"}]
+
+
+def test_dm_read_answers(monkeypatch):
+    thread = {
+        "messages": [
+            {"id": "1", "direction": "inbound", "body": "req", "interactive": None},
+            {"id": "2", "direction": "outbound", "interactive": {"role": "questions"}},
+            {
+                "id": "3",
+                "direction": "inbound",
+                "interactive": {"role": "answers", "answers": {"auth": {"selected": ["oauth"], "other": None}}},
+            },
+        ]
+    }
+    monkeypatch.setattr(dm, "dm_thread", lambda a, c, **k: thread)
+    assert dm.dm_read_answers("x", "c") == {"auth": {"selected": ["oauth"], "other": None}}
+    monkeypatch.setattr(dm, "dm_thread", lambda a, c, **k: {"messages": []})
+    assert dm.dm_read_answers("x", "c") == {}
+
+
 @pytest.mark.parametrize(
     "mime,kind",
     [

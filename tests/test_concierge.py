@@ -49,3 +49,10 @@ def test_concierge_tools_present():
     # 5 concierge tools + however many web tools — at least find_images/fetch_file/generate_image/help.
     names = {getattr(t, "name", "") for t in cc._concierge_tools({"attachments": []})}
     assert {"find_images", "fetch_file", "find_file", "generate_image", "describe_capabilities"} <= names
+
+
+def test_ask_user_tool_only_with_dm_context():
+    # the clarify tool needs a recipient + thread; absent on the task path, present for a DM
+    assert "ask_user" not in {getattr(t, "name", "") for t in cc._concierge_tools({"attachments": []})}
+    with_ctx = cc._concierge_tools({"attachments": []}, ask_to="u@n", ask_conv="c1")
+    assert "ask_user" in {getattr(t, "name", "") for t in with_ctx}

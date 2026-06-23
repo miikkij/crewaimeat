@@ -151,6 +151,73 @@ def dm_initiate(
     return {"status": "sent" if res else "failed", "to": to, "subject": subject, "result": res}
 
 
+# ── interactive: federated AskUserQuestion (aimeat-crewai>=0.9.0, node>=1.31) ──
+def build_question(
+    qid: str,
+    header: str,
+    prompt: str,
+    options,
+    *,
+    multi_select: bool = False,
+    allow_other: bool = True,
+    required: bool = True,
+) -> dict:
+    """One structured question for dm_ask. `options` = (id, label) tuples OR plain strings (string = both
+    id and label). Renders as radios (single-select) / checkboxes (multiSelect) + an 'Other' freeform."""
+    opts = []
+    for o in options:
+        if isinstance(o, (tuple, list)):
+            opts.append({"id": str(o[0]), "label": str(o[1])})
+        else:
+            opts.append({"id": str(o), "label": str(o)})
+    return {
+        "id": qid,
+        "header": header,
+        "prompt": prompt,
+        "options": opts,
+        "multiSelect": bool(multi_select),
+        "allowOther": bool(allow_other),
+        "required": bool(required),
+    }
+
+
+def dm_ask(
+    agent: str,
+    to: str,
+    questions: list[dict],
+    *,
+    body: str | None = None,
+    subject: str | None = None,
+    conversation_id: str | None = None,
+    submit_label: str | None = None,
+) -> dict | None:
+    """Send a STRUCTURED question (renders as a form in the recipient's inbox) via aimeat_dm_ask — map
+    intent / clarify BEFORE acting. The answer returns as a normal DM whose on_dm event has
+    interactive=="answers"; read the picks with dm_read_answers(agent, conversation_id)."""
+    payload: dict = {"to": to, "questions": questions}
+    if body:
+        payload["body"] = body
+    if subject:
+        payload["subject"] = subject
+    if conversation_id:
+        payload["conversation_id"] = conversation_id
+    if submit_label:
+        payload["submit_label"] = submit_label
+    return _aimeat_call(agent, "aimeat_dm_ask", payload)
+
+
+def dm_read_answers(agent: str, conversation_id: str) -> dict:
+    """The latest structured ANSWERS in a thread -> {qId: {"selected":[ids], "other": str|None}} (or {}).
+    The answer message carries interactive.role=="answers" + interactive.answers."""
+    th = dm_thread(agent, conversation_id)
+    msgs = (th.get("messages") if isinstance(th, dict) else None) or []
+    for m in reversed(msgs):
+        inter = m.get("interactive")
+        if isinstance(inter, dict) and inter.get("role") == "answers" and inter.get("answers"):
+            return inter["answers"]
+    return {}
+
+
 # ── attachments: presigned upload -> the attachment dict the send contract wants ──
 def dm_attach(agent: str, path: str, *, name: str | None = None, mime: str | None = None) -> dict | None:
     """Upload a local file the PRESIGNED way (binary stays binary — never base64 over MCP/the tunnel) and
