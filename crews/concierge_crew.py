@@ -227,10 +227,10 @@ def _concierge_tools(sink: dict, *, ask_to: str | None = None, ask_conv: str | N
 
         @tool("offer_documents")
         def offer_documents(query: str, filetype: str = "pdf") -> str:
-            """Search the web for documents matching `query`, then ASK the user (checkboxes) WHICH ones to
-            download — use when there are likely SEVERAL good matches and the user should choose (e.g. 'find
-            me the Business Finland funding PDFs'). I remember the candidates and, when they tick some, I
-            download + attach exactly those. After calling this, STOP — wait for their pick."""
+            """Find documents on the web for `query`. If there are SEVERAL good matches I AUTOMATICALLY ask
+            the user (checkboxes) which to download and deliver exactly those; if there's only ONE I just
+            attach it. This is the DEFAULT for any 'find me a <kind> document/form/PDF' request — it never
+            blindly grabs the wrong one. If I ask, STOP and wait for their pick."""
             ext = (filetype or "pdf").lstrip(".").lower()
             results = _searxng_web(f"{query} filetype:{ext}", 15) or _searxng_web(query, 15)
             seen: set = set()
@@ -245,6 +245,18 @@ def _concierge_tools(sink: dict, *, ask_to: str | None = None, ask_conv: str | N
                     break
             if not cands:
                 return f"No documents found for '{query}'."
+            if len(cands) == 1:  # nothing to choose — just deliver it
+                c = cands[0]
+                got = _fetch_url_bytes(c["url"])
+                if not got:
+                    return f"Found one ({c['label']}) but couldn't download it: {c['url']}"
+                data, mime, name = got
+                if not name.lower().endswith(f".{ext}"):
+                    name = f"{(name or 'document').rsplit('.', 1)[0]}.{ext}"
+                att = dm.dm_attach_bytes(AGENT_NAME, data, name=name, mime=mime)
+                if att:
+                    sink["attachments"].append(att)
+                return f"Attached '{name}' ({c['label']})."
             session_store.session_set(AGENT_NAME, ask_conv, "doc_candidates", {"ext": ext, "items": cands})
             q = dm.build_question(
                 "pick_docs",
@@ -312,10 +324,10 @@ def _task(request: str, context: str, agent: Agent, today: str) -> Task:
             "Decide what they want and do it with your tools. Use find_images to FIND existing images on the "
             "web (a 'find / show me' request) and generate_image ONLY to CREATE a new image from a "
             "description (a 'make / generate / draw' request) — never substitute one for the other. To find a "
-            "DOCUMENT/form/PDF: if they want ONE/'the' document use find_file (search+download one); if there "
-            "are likely SEVERAL and they should choose, use offer_documents (it lists matches as checkboxes, "
-            "then I deliver exactly the ones they tick). fetch_file is only for a URL the user already gave. "
-            "If they "
+            "DOCUMENT/form/PDF on the web, use offer_documents by DEFAULT — it searches and, if several "
+            "match, AUTOMATICALLY lets the user tick which to download (delivering exactly those); if only "
+            "one matches it just attaches it. (Use find_file only if the user clearly wants you to grab a "
+            "single best one without choosing.) fetch_file is only for a URL the user already gave. If they "
             "ask what you can do (or it's a vague greeting), call describe_capabilities. Attach images/files "
             "with the tools and mention what you attached. If the request is genuinely ambiguous (a wrong "
             "guess would waste effort), call ask_user with 2-5 options to clarify FIRST, then STOP and wait. "
