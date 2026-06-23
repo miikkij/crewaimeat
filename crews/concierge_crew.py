@@ -31,7 +31,7 @@ import requests
 from crewai import Agent, Crew, Process, Task
 from crewai.tools import tool
 
-from crewaimeat import dm, image_contract, seedream_gen
+from crewaimeat import dm, image_contract, seedream_gen, session_store
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 from crewaimeat.crew import _web_tools
 from crewaimeat.llm import get_llm
@@ -42,7 +42,8 @@ CAPABILITIES_TEXT = (
     "I'm a **concierge** you can DM. I can:\n"
     "- **Search the web** and reply with the best links (title + url + a one-line why).\n"
     "- **Find images** for a vibe or topic and attach them moodboard-style (thumbnails in your inbox).\n"
-    "- **Find a document** (a PDF form, application, report) on the web and attach it.\n"
+    "- **Find a document** (a PDF form, application, report) on the web and attach it — if there are "
+    "several good matches I'll show them as checkboxes so you can tick which ones I download.\n"
     "- **Fetch a file** from a public URL you give me and attach it.\n"
     "- **Generate an image** from a description and attach it.\n"
     "- If I'm unsure what you mean, I'll **ask you a quick multiple-choice question** to get it right.\n\n"
@@ -224,6 +225,47 @@ def _concierge_tools(sink: dict, *, ask_to: str | None = None, ask_conv: str | N
 
     if ask_to and ask_conv:
 
+        @tool("offer_documents")
+        def offer_documents(query: str, filetype: str = "pdf") -> str:
+            """Search the web for documents matching `query`, then ASK the user (checkboxes) WHICH ones to
+            download — use when there are likely SEVERAL good matches and the user should choose (e.g. 'find
+            me the Business Finland funding PDFs'). I remember the candidates and, when they tick some, I
+            download + attach exactly those. After calling this, STOP — wait for their pick."""
+            ext = (filetype or "pdf").lstrip(".").lower()
+            results = _searxng_web(f"{query} filetype:{ext}", 15) or _searxng_web(query, 15)
+            seen: set = set()
+            cands: list[dict] = []
+            for r in results:
+                u = r["url"]
+                if u in seen:
+                    continue
+                seen.add(u)
+                cands.append({"id": f"d{len(cands)}", "label": (r.get("title") or u)[:70], "url": u})
+                if len(cands) >= 8:
+                    break
+            if not cands:
+                return f"No documents found for '{query}'."
+            session_store.session_set(AGENT_NAME, ask_conv, "doc_candidates", {"ext": ext, "items": cands})
+            q = dm.build_question(
+                "pick_docs",
+                "Pick documents",
+                f"I found {len(cands)} documents for '{query}'. Which should I download?",
+                [(c["id"], c["label"]) for c in cands],
+                multi_select=True,
+                allow_other=False,
+            )
+            res = dm.dm_ask(
+                AGENT_NAME,
+                ask_to,
+                [q],
+                body=f"I found {len(cands)} documents for '{query}'. Tick the ones you want and I'll attach them:",
+                conversation_id=ask_conv,
+            )
+            sink["asked"] = bool(res)
+            return f"Found {len(cands)} and asked the user to pick." if res else "Couldn't send the picker."
+
+        tools.append(offer_documents)
+
         @tool("ask_user")
         def ask_user(question: str, options: str, multi_select: bool = False) -> str:
             """Ask the user ONE clarifying multiple-choice question, ONLY when the request is genuinely
@@ -269,9 +311,11 @@ def _task(request: str, context: str, agent: Agent, today: str) -> Task:
             f"Recent conversation (for context):\n{context or '(none)'}\n\n"
             "Decide what they want and do it with your tools. Use find_images to FIND existing images on the "
             "web (a 'find / show me' request) and generate_image ONLY to CREATE a new image from a "
-            "description (a 'make / generate / draw' request) — never substitute one for the other. To find "
-            "a DOCUMENT/form/PDF on the web and attach it, use find_file (it searches AND downloads); "
-            "fetch_file is only for a URL the user already gave. If they "
+            "description (a 'make / generate / draw' request) — never substitute one for the other. To find a "
+            "DOCUMENT/form/PDF: if they want ONE/'the' document use find_file (search+download one); if there "
+            "are likely SEVERAL and they should choose, use offer_documents (it lists matches as checkboxes, "
+            "then I deliver exactly the ones they tick). fetch_file is only for a URL the user already gave. "
+            "If they "
             "ask what you can do (or it's a vague greeting), call describe_capabilities. Attach images/files "
             "with the tools and mention what you attached. If the request is genuinely ambiguous (a wrong "
             "guess would waste effort), call ask_user with 2-5 options to clarify FIRST, then STOP and wait. "
@@ -318,6 +362,35 @@ def _dm_request_and_context(event: dict) -> tuple[str, str]:
     return str(request), "\n".join(ctx_lines)
 
 
+def _deliver_picked_docs(conv: str, picks: dict):
+    """If the conversation has documents we OFFERED (offer_documents) and the user ticked some, download +
+    attach exactly those — deterministic, no LLM, no re-search (the URLs were remembered in session_store).
+    Returns {"text","attachments"} or None when nothing is pending / nothing was picked."""
+    pending = session_store.session_get(AGENT_NAME, conv, "doc_candidates")
+    pick = (picks.get("pick_docs") or {}) if isinstance(picks, dict) else {}
+    chosen = set(pick.get("selected") or [])
+    if not pending or not chosen:
+        return None
+    ext = pending.get("ext", "pdf")
+    attached: list[dict] = []
+    lines: list[str] = []
+    for c in [c for c in pending.get("items", []) if c["id"] in chosen]:
+        got = _fetch_url_bytes(c["url"])
+        if not got:
+            lines.append(f"- {c['label']} — couldn't download")
+            continue
+        data, mime, name = got
+        if not name.lower().endswith(f".{ext}"):
+            name = f"{(name or 'document').rsplit('.', 1)[0]}.{ext}"
+        att = dm.dm_attach_bytes(AGENT_NAME, data, name=name, mime=mime)
+        if att:
+            attached.append(att)
+            lines.append(f"- {c['label']}")
+    session_store.session_clear(AGENT_NAME, conv, "doc_candidates")
+    head = "Here are the documents you picked:" if attached else "Sorry, I couldn't download the picked documents:"
+    return {"text": head + "\n" + "\n".join(lines), "attachments": attached[:20]}
+
+
 def run() -> None:
     _seen: set = set()
 
@@ -328,6 +401,10 @@ def run() -> None:
         # request and fulfil the ORIGINAL ask (which is in the thread context).
         if event.get("interactive") == "answers":
             picks = dm.dm_read_answers(AGENT_NAME, conv) if conv else {}
+            # Did they pick from documents we offered? Deliver exactly those from the session store (no LLM).
+            delivered = _deliver_picked_docs(conv, picks) if conv else None
+            if delivered is not None:
+                return delivered
             clar = "; ".join(
                 f"{qid}={','.join(v.get('selected') or [])}" + (f" (other: {v['other']})" if v.get("other") else "")
                 for qid, v in picks.items()

@@ -52,7 +52,33 @@ def test_concierge_tools_present():
 
 
 def test_ask_user_tool_only_with_dm_context():
-    # the clarify tool needs a recipient + thread; absent on the task path, present for a DM
+    # the clarify + offer tools need a recipient + thread; absent on the task path, present for a DM
     assert "ask_user" not in {getattr(t, "name", "") for t in cc._concierge_tools({"attachments": []})}
-    with_ctx = cc._concierge_tools({"attachments": []}, ask_to="u@n", ask_conv="c1")
-    assert "ask_user" in {getattr(t, "name", "") for t in with_ctx}
+    with_ctx = {getattr(t, "name", "") for t in cc._concierge_tools({"attachments": []}, ask_to="u@n", ask_conv="c1")}
+    assert {"ask_user", "offer_documents"} <= with_ctx
+
+
+def test_deliver_picked_docs(monkeypatch):
+    """The user ticked offered docs -> download + attach exactly those from the store (no LLM, no re-search)."""
+    pending = {
+        "ext": "pdf",
+        "items": [
+            {"id": "d0", "label": "Form A", "url": "https://x.org/a.pdf"},
+            {"id": "d1", "label": "Form B", "url": "https://x.org/b.pdf"},
+        ],
+    }
+    monkeypatch.setattr(
+        cc.session_store, "session_get", lambda a, c, k, default=None: pending if k == "doc_candidates" else default
+    )
+    monkeypatch.setattr(cc.session_store, "session_clear", lambda *a, **k: None)
+    monkeypatch.setattr(
+        cc, "_fetch_url_bytes", lambda url, **k: (b"%PDF-1.4", "application/pdf", url.rsplit("/", 1)[-1])
+    )
+    monkeypatch.setattr(cc.dm, "dm_attach_bytes", lambda a, d, *, name, mime: {"name": name, "mime": mime})
+
+    out = cc._deliver_picked_docs("conv", {"pick_docs": {"selected": ["d1"], "other": None}})
+    assert out and len(out["attachments"]) == 1 and "Form B" in out["text"] and "Form A" not in out["text"]
+
+    # nothing pending -> None (let the LLM path handle a generic clarify answer)
+    monkeypatch.setattr(cc.session_store, "session_get", lambda a, c, k, default=None: None)
+    assert cc._deliver_picked_docs("conv", {"pick_docs": {"selected": ["d1"]}}) is None
