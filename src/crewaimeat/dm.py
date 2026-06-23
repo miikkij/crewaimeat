@@ -152,9 +152,10 @@ def dm_initiate(
 
 
 # ── interactive: federated AskUserQuestion (aimeat-crewai>=0.9.0, node>=1.31) ──
-# NB aimeat_dm_ask is NOT shell-callable — the deterministic path is the aimeat_crewai helpers
-# (serve_client + ask + read_answers), the same loopback path as `aimeat connect call`. The node schema
-# (aimeat/src/models/message-schemas.ts) is authoritative, so we delegate question-building to them too.
+# We use the aimeat_crewai helpers (serve_client + ask + read_answers) for question-building because the
+# node schema (aimeat/src/models/message-schemas.ts) is authoritative. NB aimeat_dm_ask was NOT shell-
+# callable before node 1.32.1 (that's why these go through the package helpers, not `_aimeat_call`); since
+# 1.32.1 it IS shell-callable too, but the helpers stay (they own the schema-correct question shape).
 def build_question(
     qid: str,
     header: str,
