@@ -351,6 +351,90 @@ def _concierge_tools(sink: dict, *, ask_to: str | None = None, ask_conv: str | N
     return tools
 
 
+# Static chat-commands for the inbox composer — each is a fill-in template; clicking the chip drops the
+# filled PROSE into the composer, the user sends it, and concierge's crew interprets it (template-as-body,
+# so the {{params}} are LLM-interpreted, not rigidly parsed). See CrewSpec.chat_commands.
+_BASE_CHAT_COMMANDS = [
+    {
+        "id": "search_web",
+        "label": "Search the web",
+        "description": "Find the best links and send them",
+        "template": "Search the web for {{query}} and send me the top {{count}} links.",
+        "params": [
+            {"name": "query", "type": "text", "required": True, "placeholder": "e.g. AI agents in Finland"},
+            {"name": "count", "type": "number", "required": False, "placeholder": "5", "default": "5"},
+        ],
+    },
+    {
+        "id": "find_images",
+        "label": "Find images",
+        "description": "Find images for a vibe/topic and attach them (moodboard)",
+        "template": "Find {{count}} images of {{topic}} and attach them.",
+        "params": [
+            {"name": "topic", "type": "text", "required": True, "placeholder": "e.g. cosy cabin interiors"},
+            {"name": "count", "type": "number", "required": False, "placeholder": "4", "default": "4"},
+        ],
+    },
+    {
+        "id": "find_document",
+        "label": "Find a document",
+        "description": "Find a PDF/form on the web; pick which to download",
+        "template": "Find me a {{kind}} document/PDF about {{topic}} and let me pick which to download.",
+        "params": [
+            {
+                "name": "kind",
+                "type": "text",
+                "required": False,
+                "placeholder": "e.g. application form",
+                "default": "PDF",
+            },
+            {"name": "topic", "type": "text", "required": True, "placeholder": "e.g. Business Finland funding"},
+        ],
+    },
+    {
+        "id": "generate_image",
+        "label": "Make an image",
+        "description": "Generate an image from a description",
+        "template": "Make an image of {{description}}.",
+        "params": [{"name": "description", "type": "text", "required": True, "placeholder": "e.g. a neon fox in snow"}],
+    },
+    {
+        "id": "analyze_file",
+        "label": "Read my file",
+        "description": "Attach a file/image; I read it and extract what you ask",
+        "template": "Read the file I attached and {{what}}.",
+        "params": [
+            {
+                "name": "what",
+                "type": "text",
+                "required": False,
+                "placeholder": "extract everything useful",
+                "default": "extract everything useful and summarise it",
+            }
+        ],
+    },
+]
+
+
+def _chat_commands(agent_name: str) -> list[dict]:
+    """Build concierge's PUBLIC command palette DYNAMICALLY: the static base commands PLUS one
+    'Ask <specialist>' command per specialist whose daemon is LIVE right now (orchestrator.live_services).
+    Regenerated on every start, so the advertised menu reflects which specialists are actually up — and
+    the per-specialist command's filled prose ('Ask <name> to <request>') nudges concierge to delegate."""
+    cmds = list(_BASE_CHAT_COMMANDS)
+    for s in orchestrator.live_services(agent_name, SERVICE_DIRECTORY):
+        cmds.append(
+            {
+                "id": f"ask_{s['name'].replace('-', '_')}",
+                "label": f"Ask {s['name']}",
+                "description": s["desc"][:120],
+                "template": f"Ask {s['name']} to {{{{request}}}}.",
+                "params": [{"name": "request", "type": "text", "required": True, "placeholder": "what you need"}],
+            }
+        )
+    return cmds
+
+
 def _agent(llm, sink: dict, *, ask_to: str | None = None, ask_conv: str | None = None) -> Agent:
     return Agent(
         role="Concierge",
@@ -546,6 +630,7 @@ def run() -> None:
             on_dm=lambda e: dm.handle_dm_event(AGENT_NAME, e, _dm_responder, seen=_seen),
             tags=CAPABILITY_TAGS,
             capabilities=CAPABILITIES,
+            chat_commands=_chat_commands,  # dynamic: base commands + one "Ask <specialist>" per live agent
         )
     )
 

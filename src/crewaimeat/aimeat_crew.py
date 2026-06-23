@@ -194,6 +194,15 @@ class CrewSpec:
     #   onboarding via aimeat_onboarding_declare_services
     commands: list[dict] | None = None  # slash-command palette [{name, description, category}, ...]
     #   published to memory key agents.<agent>.commands (owner) so the Messages UI surfaces it
+    chat_commands: list[dict] | Callable[[str], list[dict]] | None = None  # PUBLIC chat-command palette the
+    #   peer inbox composer renders as fill-in CHIPS. [{id, label, description, template, params:[{name,
+    #   type∈text|number|select, required, placeholder, default, options}]}]; `template` uses {{param}}
+    #   placeholders. Published to the PUBLIC key "chat.commands" (a peer reads it via
+    #   aimeat_memory_read_public(<gaii>, "chat.commands")) on EVERY start. Template-as-prose: clicking a
+    #   chip fills the template and drops the resulting PROSE into the composer — the human sends it, the
+    #   agent receives text it already advertised, and its LLM interprets the filled params (no rigid
+    #   parse). May be a CALLABLE(agent_name)->list so an agent can GENERATE commands from LIVE state (e.g.
+    #   one "Ask <specialist>" command per live agent it can delegate to — the menu reflects who's up now).
     tags: list[str] | None = None  # capability TAGS set on the agent via aimeat_agent_tags_set
     #   on every start (idempotent, so they survive re-onboarding). The ecosystem-app agent picker
     #   matches on these (+ capabilities/domain), so e.g. tags=["feedback-analysis"] makes the agent the
@@ -1292,6 +1301,42 @@ def _classify_task_nature(prompt: str, llm: Any) -> dict:
     }
 
 
+def _valid_chat_commands(cmds) -> list[dict]:
+    """Normalise + validate a chat-command list to the dev's public schema. Keeps only well-formed entries
+    (need a charset-safe `id`); coerces param types to {text,number,select}; caps the count. Fail-soft —
+    junk is dropped, never raised, so a generated palette can't break startup."""
+    out: list[dict] = []
+    for c in cmds or []:
+        if not isinstance(c, dict):
+            continue
+        cid = str(c.get("id") or "").strip()
+        if not re.fullmatch(r"[a-z0-9_-]+", cid):
+            continue
+        cmd = {
+            "id": cid,
+            "label": str(c.get("label") or cid),
+            "description": str(c.get("description") or ""),
+            "template": str(c.get("template") or ""),
+        }
+        params: list[dict] = []
+        for p in c.get("params") or []:
+            if not isinstance(p, dict) or not p.get("name"):
+                continue
+            ptype = p.get("type") if p.get("type") in ("text", "number", "select") else "text"
+            pp: dict = {"name": str(p["name"]), "type": ptype, "required": bool(p.get("required", False))}
+            if p.get("placeholder"):
+                pp["placeholder"] = str(p["placeholder"])
+            if p.get("default") is not None:
+                pp["default"] = str(p["default"])
+            if ptype == "select" and isinstance(p.get("options"), list):
+                pp["options"] = [str(o) for o in p["options"]]
+            params.append(pp)
+        if params:
+            cmd["params"] = params
+        out.append(cmd)
+    return out[:24]
+
+
 def _publish_readme(agent_name: str, readme_md: str, commands: list[dict] | None = None) -> None:
     """Expand README directives (once per content change) and publish to memory.
 
@@ -1378,6 +1423,25 @@ def run_crew(spec: CrewSpec) -> None:
             f"agents.{spec.agent_name}.commands: {bool(res)}",
             file=sys.stderr,
         )
+
+    # 1b1) Publish the PUBLIC chat-command palette (dev spec: key "chat.commands") so a PEER's inbox
+    #      composer can render fill-in command chips. May be GENERATED dynamically from live state
+    #      (callable). Best-effort — a bad/empty palette must never block the daemon.
+    try:
+        _raw_cmds = spec.chat_commands(spec.agent_name) if callable(spec.chat_commands) else spec.chat_commands
+        _chat_cmds = _valid_chat_commands(_raw_cmds)
+        if _chat_cmds:
+            res = _aimeat_call(
+                spec.agent_name,
+                "aimeat_memory_write",
+                {"key": "chat.commands", "value": {"v": 1, "commands": _chat_cmds}, "visibility": "public"},
+            )
+            print(
+                f"[{spec.agent_name}] published {len(_chat_cmds)} chat.commands (public): {bool(res)}",
+                file=sys.stderr,
+            )
+    except Exception as exc:  # noqa: BLE001 — the command palette is cosmetic; never break startup
+        print(f"[{spec.agent_name}] chat.commands publish skipped: {exc!r}", file=sys.stderr)
 
     # Resolve the agent's tags + capabilities: the crew's own CrewSpec wins; otherwise fall back to
     # the curated fleet registry (so SPECIFIC identity is set fleet-wide without editing every crew).
