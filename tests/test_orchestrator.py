@@ -56,6 +56,8 @@ def test_conv_id_tolerates_shapes():
     assert orchestrator._conv_id({"conversation_id": "c1"}) == "c1"
     assert orchestrator._conv_id({"conversationId": "c2"}) == "c2"
     assert orchestrator._conv_id({"data": {"conversation_id": "c3"}}) == "c3"
+    # the live aimeat_dm_send shape: {"message": {"conversationId": ...}}
+    assert orchestrator._conv_id({"message": {"conversationId": "c4"}}) == "c4"
     assert orchestrator._conv_id({"nope": 1}) is None
     assert orchestrator._conv_id(None) is None
 

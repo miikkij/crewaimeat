@@ -92,10 +92,12 @@ def directory_text(services: list[dict]) -> str:
 
 
 def _conv_id(res) -> str | None:
-    """Pull a conversation id out of a dm_send result, tolerant of envelope/camel/snake shapes."""
+    """Pull a conversation id out of a dm_send result, tolerant of shape: top-level, nested under `data`,
+    or nested under `message` (the live aimeat_dm_send shape: {"message": {"conversationId": ...}})."""
     if not isinstance(res, dict):
         return None
-    for src in (res, res.get("data") if isinstance(res.get("data"), dict) else {}):
+    candidates = [res, res.get("data"), res.get("message")]
+    for src in candidates:
         if not isinstance(src, dict):
             continue
         cid = src.get("conversation_id") or src.get("conversationId")
