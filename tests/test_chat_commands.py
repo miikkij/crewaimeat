@@ -59,3 +59,39 @@ def test_concierge_dynamic_commands(monkeypatch):
     assert ask["params"][0]["name"] == "request"
     # all commands survive the scaffold validator unchanged in count
     assert len(_valid_chat_commands(cmds)) == len(cmds)
+
+
+def test_learned_commands_merge_and_save(monkeypatch):
+    """A self-authored command is read from memory, merged into the palette, and republished on save."""
+    mem: dict = {}
+    monkeypatch.setattr(cc.orchestrator, "live_services", lambda agent, directory: [])
+
+    def fake_call(agent, tool, payload):
+        if tool == "aimeat_memory_read":
+            return {"value": mem.get(payload["key"])}
+        if tool == "aimeat_memory_write":
+            mem[payload["key"]] = payload["value"]
+        return {"ok": True}
+
+    monkeypatch.setattr(cc, "_aimeat_call", fake_call)
+
+    # No learned commands yet -> palette is just the base.
+    assert all(not c["id"].startswith("learned_") for c in cc._chat_commands("concierge"))
+
+    # Save one -> persisted to owner memory AND republished to the public key.
+    cmd = {
+        "id": "learned_funding",
+        "label": "Find funding form",
+        "template": "Find a {{programme}} PDF.",
+        "params": [{"name": "programme", "type": "text", "required": True}],
+    }
+    assert cc._save_learned_command("concierge", cmd) is True
+    assert mem["chat.commands.learned"]["commands"][0]["id"] == "learned_funding"
+    published = mem["chat.commands"]["commands"]
+    assert any(c["id"] == "learned_funding" for c in published)
+
+    # Now the dynamic builder includes it, and a re-save dedups by id (no duplicate).
+    assert any(c["id"] == "learned_funding" for c in cc._chat_commands("concierge"))
+    cc._save_learned_command("concierge", {**cmd, "label": "Renamed"})
+    learned = mem["chat.commands.learned"]["commands"]
+    assert len([c for c in learned if c["id"] == "learned_funding"]) == 1

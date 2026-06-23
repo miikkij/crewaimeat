@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import re
 import socket
 import sys
 import urllib.parse
@@ -31,8 +32,8 @@ import requests
 from crewai import Agent, Crew, Process, Task
 from crewai.tools import tool
 
-from crewaimeat import dm, image_contract, orchestrator, seedream_gen, session_store, vision
-from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
+from crewaimeat import dm, hitl, image_contract, orchestrator, seedream_gen, session_store, vision
+from crewaimeat.aimeat_crew import BuildContext, CrewSpec, _aimeat_call, _valid_chat_commands, run_crew
 from crewaimeat.crew import _web_tools
 from crewaimeat.llm import get_llm
 
@@ -74,6 +75,8 @@ CAPABILITIES_TEXT = (
     "then summarise or answer questions about them.\n"
     "- **Delegate to a specialist** in my fleet when your request needs deep expertise (e.g. detailed "
     "research on a Finnish company, a jingle) — I hand it to the right agent and relay their answer back here.\n"
+    "- **Save a request you use a lot as a command** — ask me to 'save that as a command' and, once you "
+    "approve it, it becomes a one-click chip in your composer.\n"
     "- If I'm unsure what you mean, I'll **ask you a quick multiple-choice question** to get it right.\n\n"
     'Just tell me what you want — e.g. "find 4 cosy cabin interiors", "find me a Business Finland funding '
     'application PDF", "search the latest on X and send links", or "make an image of a neon fox". I reply '
@@ -348,6 +351,32 @@ def _concierge_tools(sink: dict, *, ask_to: str | None = None, ask_conv: str | N
 
         tools.append(delegate_to_specialist)
 
+        @tool("propose_command")
+        def propose_command(name: str, template: str, param: str = "") -> str:
+            """When the user asks to SAVE a repeated request as a reusable command (e.g. 'save that as a
+            command', 'remember this as a command'), propose it for THEIR approval. `name` = a short label;
+            `template` = the request written as prose with a {{param}} slot for the part that varies (e.g.
+            'Find me a Business Finland {{programme}} funding PDF and let me pick'); `param` = that slot's
+            name (omit if the command has no variable part). I show it to the user as a Yes/No approval and,
+            only if they approve, add it to my command menu. Use ONLY on an explicit save request; then STOP."""
+            cid = re.sub(r"[^a-z0-9_]+", "_", (name or "").lower()).strip("_") or "cmd"
+            cmd = {
+                "id": f"learned_{cid}"[:40],
+                "label": (name or "Saved command")[:40],
+                "description": f"Saved command: {name}"[:120],
+                "template": template or "",
+            }
+            if param and ("{{" + param + "}}") in (template or ""):
+                cmd["params"] = [{"name": param, "type": "text", "required": True}]
+            summary = f'Save this as a command?\n\n• **{cmd["label"]}** -> "{template}"'
+            ok = hitl.ask_approval(
+                AGENT_NAME, ask_to, ask_conv, summary=summary, action_id="save_command", payload=cmd, body=summary
+            )
+            sink["asked"] = ok
+            return "Asked the user to approve saving the command." if ok else "Couldn't send the approval question."
+
+        tools.append(propose_command)
+
     return tools
 
 
@@ -416,11 +445,35 @@ _BASE_CHAT_COMMANDS = [
 ]
 
 
+_LEARNED_CMDS_KEY = "chat.commands.learned"  # owner memory: commands the user taught me (self-authored)
+
+
+def _learned_commands(agent_name: str) -> list[dict]:
+    """Commands the owner has SAVED via the self-authoring flow (persisted in owner memory)."""
+    r = _aimeat_call(agent_name, "aimeat_memory_read", {"key": _LEARNED_CMDS_KEY}) or {}
+    val = r.get("value") if isinstance(r, dict) else None
+    val = val if val is not None else (r.get("data") or {}).get("value") if isinstance(r, dict) else None
+    items = (val or {}).get("commands") if isinstance(val, dict) else val
+    return items if isinstance(items, list) else []
+
+
+def _save_learned_command(agent_name: str, cmd: dict) -> bool:
+    """Append a learned command (dedup by id), persist to owner memory, and REPUBLISH the public palette."""
+    learned = [c for c in _learned_commands(agent_name) if c.get("id") != cmd.get("id")]
+    learned.append(cmd)
+    _aimeat_call(
+        agent_name,
+        "aimeat_memory_write",
+        {"key": _LEARNED_CMDS_KEY, "value": {"commands": learned[:24]}, "visibility": "owner"},
+    )
+    return _republish_chat_commands(agent_name)
+
+
 def _chat_commands(agent_name: str) -> list[dict]:
-    """Build concierge's PUBLIC command palette DYNAMICALLY: the static base commands PLUS one
-    'Ask <specialist>' command per specialist whose daemon is LIVE right now (orchestrator.live_services).
-    Regenerated on every start, so the advertised menu reflects which specialists are actually up — and
-    the per-specialist command's filled prose ('Ask <name> to <request>') nudges concierge to delegate."""
+    """Build concierge's PUBLIC command palette DYNAMICALLY: the static base commands, PLUS one
+    'Ask <specialist>' command per specialist whose daemon is LIVE right now (orchestrator.live_services),
+    PLUS any commands the owner has SELF-AUTHORED (saved via the approval flow). Regenerated on every start
+    + on each new saved command, so the advertised menu reflects who's up and what the owner has taught me."""
     cmds = list(_BASE_CHAT_COMMANDS)
     for s in orchestrator.live_services(agent_name, SERVICE_DIRECTORY):
         cmds.append(
@@ -432,7 +485,20 @@ def _chat_commands(agent_name: str) -> list[dict]:
                 "params": [{"name": "request", "type": "text", "required": True, "placeholder": "what you need"}],
             }
         )
+    cmds.extend(_learned_commands(agent_name))
     return cmds
+
+
+def _republish_chat_commands(agent_name: str) -> bool:
+    """Rewrite the public 'chat.commands' key at runtime (after a command is learned) — same shape the
+    scaffold publishes on start."""
+    cmds = _valid_chat_commands(_chat_commands(agent_name))
+    res = _aimeat_call(
+        agent_name,
+        "aimeat_memory_write",
+        {"key": "chat.commands", "value": {"v": 1, "commands": cmds}, "visibility": "public"},
+    )
+    return bool(res)
 
 
 def _agent(llm, sink: dict, *, ask_to: str | None = None, ask_conv: str | None = None) -> Agent:
@@ -482,6 +548,8 @@ def _task(request: str, context: str, agent: Agent, today: str, directory: str =
             "If the context contains an 'Attached file analysis' section, the user sent file(s)/image(s) and "
             "that is what I already read from them — use it to answer their question or to summarise/extract "
             "what's in the file; don't claim I can't open files. "
+            "If the user explicitly asks to SAVE or REMEMBER a request as a reusable command, call "
+            "propose_command (then STOP — they'll get a Yes/No to approve it). "
             "Reply concisely in markdown; cite source links for any web results. Answer ONLY the message "
             "above — ignore earlier topics unless asked to continue."
         ),
@@ -576,6 +644,18 @@ def run() -> None:
         # (B) If this DM is the ANSWER to a clarifying question we asked, fold the structured picks into the
         # request and fulfil the ORIGINAL ask (which is in the thread context).
         if event.get("interactive") == "answers":
+            # (B0) Is it the answer to a HITL gate we opened (e.g. approving a self-authored command)?
+            res = hitl.resolve(AGENT_NAME, event)
+            if res is not None and res.get("action_id") == "save_command":
+                if not res.get("approved"):
+                    return "Okay, I won't save it."
+                cmd = res.get("payload") or {}
+                ok = _save_learned_command(AGENT_NAME, cmd)
+                return (
+                    f"Saved **{cmd.get('label')}** as a command — you'll see it in the composer."
+                    if ok
+                    else "I approved it but couldn't publish the command; try again?"
+                )
             picks = dm.dm_answers_from_event(AGENT_NAME, event)  # event-aware: THIS answer, not the latest
             # Did they pick from documents we offered? Deliver exactly those from the session store (no LLM).
             delivered = _deliver_picked_docs(conv, picks) if conv else None
