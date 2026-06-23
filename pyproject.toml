@@ -20,6 +20,7 @@ dependencies = [
     "trafilatura>=2.0.0",
     "litellm>=1.87.1",
     "feedparser>=6.0.12",
+    "pypdf>=5.0.0",
 ]
 
 [project.optional-dependencies]

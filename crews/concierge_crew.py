@@ -31,7 +31,7 @@ import requests
 from crewai import Agent, Crew, Process, Task
 from crewai.tools import tool
 
-from crewaimeat import dm, image_contract, orchestrator, seedream_gen, session_store
+from crewaimeat import dm, image_contract, orchestrator, seedream_gen, session_store, vision
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 from crewaimeat.crew import _web_tools
 from crewaimeat.llm import get_llm
@@ -70,6 +70,8 @@ CAPABILITIES_TEXT = (
     "several good matches I'll show them as checkboxes so you can tick which ones I download.\n"
     "- **Fetch a file** from a public URL you give me and attach it.\n"
     "- **Generate an image** from a description and attach it.\n"
+    "- **Read a file or image you attach** — I run images through vision and pull text out of PDFs/docs, "
+    "then summarise or answer questions about them.\n"
     "- **Delegate to a specialist** in my fleet when your request needs deep expertise (e.g. detailed "
     "research on a Finnish company, a jingle) — I hand it to the right agent and relay their answer back here.\n"
     "- If I'm unsure what you mean, I'll **ask you a quick multiple-choice question** to get it right.\n\n"
@@ -393,6 +395,9 @@ def _task(request: str, context: str, agent: Agent, today: str, directory: str =
             "ask what you can do (or it's a vague greeting), call describe_capabilities. Attach images/files "
             "with the tools and mention what you attached. If the request is genuinely ambiguous (a wrong "
             "guess would waste effort), call ask_user with 2-5 options to clarify FIRST, then STOP and wait. "
+            "If the context contains an 'Attached file analysis' section, the user sent file(s)/image(s) and "
+            "that is what I already read from them — use it to answer their question or to summarise/extract "
+            "what's in the file; don't claim I can't open files. "
             "Reply concisely in markdown; cite source links for any web results. Answer ONLY the message "
             "above — ignore earlier topics unless asked to continue."
         ),
@@ -409,10 +414,11 @@ def build_domain(ctx: BuildContext):
     return ([agent], [_task(ctx.prompt, "", agent, ctx.today)])
 
 
-def _dm_request_and_context(event: dict) -> tuple[str, str]:
-    """THIS event's message (full body) + a short prior-context. The request is the TRIGGERING message —
-    matched by the event id in the thread, else the wake's own preview. NOT inbound[-1]: the thread read
-    can lag behind the just-arrived DM (read-after-write), which would make us answer the PREVIOUS one."""
+def _dm_request_and_context(event: dict) -> tuple[str, str, list]:
+    """THIS event's message (full body) + a short prior-context + the message's ATTACHMENTS. The request is
+    the TRIGGERING message — matched by the event id in the thread, else the wake's own preview. NOT
+    inbound[-1]: the thread read can lag behind the just-arrived DM (read-after-write), which would make us
+    answer the PREVIOUS one."""
     mid, conv, _sender, preview, _subject = dm._inbound_fields(event)
     msgs = []
     if conv:
@@ -424,6 +430,8 @@ def _dm_request_and_context(event: dict) -> tuple[str, str]:
 
     target = next((m for m in msgs if _mid(m) == mid), None)
     request = (target.get("body") if target else None) or preview or "(empty message)"
+    # full attachment objects live on the thread message; the wake's are lightweight — prefer the message's
+    attachments = (target.get("attachments") if target else None) or event.get("attachments") or []
     # context = messages strictly BEFORE this one, so the current request never leaks into "context"
     prior: list = []
     for m in msgs:
@@ -433,7 +441,7 @@ def _dm_request_and_context(event: dict) -> tuple[str, str]:
     ctx_lines = [
         f"{'me' if m.get('direction') == 'outbound' else 'user'}: {str(m.get('body') or '')[:300]}" for m in prior[-6:]
     ]
-    return str(request), "\n".join(ctx_lines)
+    return str(request), "\n".join(ctx_lines), attachments
 
 
 def _deliver_picked_docs(conv: str, picks: dict):
@@ -473,7 +481,7 @@ def run() -> None:
 
     def _dm_responder(event: dict):
         _mid, conv, sender, _preview, _subject = dm._inbound_fields(event)
-        request, context = _dm_request_and_context(event)
+        request, context, attachments = _dm_request_and_context(event)
         # (A) Is this the reply to a request we DELEGATED to a specialist? Relay it to the original user and
         # stop (we don't reply to the specialist — that would just bounce back). Cheap: a session lookup.
         pending = orchestrator.match_delegation(AGENT_NAME, conv, sender)
@@ -504,6 +512,13 @@ def run() -> None:
         if orchestrator.in_roster(roster, sender):
             return ""
         menu = orchestrator.directory_text(orchestrator.services_from_roster(roster, SERVICE_DIRECTORY))
+        # (D) The user attached file(s)/image(s)? Read each through vision/text extraction and give the crew
+        # the findings as context — so it can answer questions about them or just summarise what it found.
+        if attachments:
+            blocks = [vision.analyze_attachment(AGENT_NAME, a) for a in attachments[:5]]
+            context = (context + "\n\n" if context else "") + "Attached file analysis:\n" + "\n\n".join(blocks)
+            if not request or request in ("(empty message)", "(empty)") or len(request.strip()) < 4:
+                request = "I attached file(s)/image(s). Read them and extract everything useful, then summarise."
         sink: dict = {"attachments": [], "asked": False}
         agent = _agent(get_llm(agent_name=AGENT_NAME), sink, ask_to=sender, ask_conv=conv)
         crew = Crew(agents=[agent], tasks=[_task(request, context, agent, "", menu)], process=Process.sequential)

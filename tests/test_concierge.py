@@ -40,9 +40,10 @@ def test_dm_request_uses_event_message_not_stale_thread(monkeypatch):
     }
     monkeypatch.setattr(dmmod, "dm_thread", lambda agent, conv, **k: stale_thread)
     event = {"id": "c", "conversationId": "x", "senderGhii": "u@n", "preview": "make an image of a neon fox"}
-    req, ctx = cc._dm_request_and_context(event)
+    req, ctx, atts = cc._dm_request_and_context(event)
     assert req == "make an image of a neon fox"  # the EVENT's message, not inbound[-1] == "find 4 cosy cabins"
     assert "neon fox" not in ctx  # the current request never leaks into context
+    assert atts == []  # no attachments on this message
 
 
 def test_concierge_tools_present():
