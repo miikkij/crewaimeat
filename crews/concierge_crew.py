@@ -116,10 +116,10 @@ def _concierge_tools(sink: dict) -> list:
         """Find up to `count` images on the open web for `query` and ATTACH them to the reply (moodboard)."""
         n = 0
         want = min(max(int(count or 4), 1), _MAX_IMAGES)
-        for hit in image_contract._searxng_images(query, want * 2):
+        for hit in image_contract._searxng_images(query, want * 3):
             if n >= want:
                 break
-            dl = image_contract._download_image(hit.get("url", ""))
+            dl = image_contract._download_image(hit.get("img_src", ""))  # img_src = the image; url = source page
             if not dl:
                 continue
             data, mime = dl
@@ -189,9 +189,12 @@ def _task(request: str, context: str, agent: Agent, today: str) -> Task:
         description=(
             f"Today is {today}. The user sent this direct message:\n\n{request}\n\n"
             f"Recent conversation (for context):\n{context or '(none)'}\n\n"
-            "Decide what they want and do it with your tools. If they ask what you can do (or it's a vague "
-            "greeting), call describe_capabilities. Attach images/files with the tools and mention what you "
-            "attached. Reply concisely in markdown; include source links for any web results."
+            "Decide what they want and do it with your tools. Use find_images to FIND existing images on the "
+            "web (a 'find / show me' request) and generate_image ONLY to CREATE a new image from a "
+            "description (a 'make / generate / draw' request) — never substitute one for the other. If they "
+            "ask what you can do (or it's a vague greeting), call describe_capabilities. Attach images/files "
+            "with the tools and mention what you attached. Reply concisely in markdown; cite source links for "
+            "any web results. Answer ONLY the message above — ignore earlier topics unless asked to continue."
         ),
         expected_output="A concise, friendly markdown reply. Attachments are added by the tools.",
         agent=agent,
@@ -207,17 +210,28 @@ def build_domain(ctx: BuildContext):
 
 
 def _dm_request_and_context(event: dict) -> tuple[str, str]:
-    """The triggering DM's full text + a short prior-message context, fetched from the thread (the wake's
-    preview is truncated). Falls back to the wake preview if the thread read fails."""
-    _id, conv, _sender, preview, _subject = dm._inbound_fields(event)
+    """THIS event's message (full body) + a short prior-context. The request is the TRIGGERING message —
+    matched by the event id in the thread, else the wake's own preview. NOT inbound[-1]: the thread read
+    can lag behind the just-arrived DM (read-after-write), which would make us answer the PREVIOUS one."""
+    mid, conv, _sender, preview, _subject = dm._inbound_fields(event)
     msgs = []
     if conv:
         thread = dm.dm_thread(AGENT_NAME, conv)
         msgs = (thread.get("messages") if isinstance(thread, dict) else None) or []
-    inbound = [m for m in msgs if m.get("direction") == "inbound"]
-    request = (inbound[-1].get("body") if inbound else None) or preview or "(empty message)"
+
+    def _mid(m):
+        return m.get("id") or m.get("message_id")
+
+    target = next((m for m in msgs if _mid(m) == mid), None)
+    request = (target.get("body") if target else None) or preview or "(empty message)"
+    # context = messages strictly BEFORE this one, so the current request never leaks into "context"
+    prior: list = []
+    for m in msgs:
+        if _mid(m) == mid:
+            break
+        prior.append(m)
     ctx_lines = [
-        f"{'me' if m.get('direction') == 'outbound' else 'user'}: {str(m.get('body') or '')[:300]}" for m in msgs[-6:]
+        f"{'me' if m.get('direction') == 'outbound' else 'user'}: {str(m.get('body') or '')[:300]}" for m in prior[-6:]
     ]
     return str(request), "\n".join(ctx_lines)
 
