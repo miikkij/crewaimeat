@@ -42,20 +42,24 @@ CAPABILITIES_TEXT = (
     "I'm a **concierge** you can DM. I can:\n"
     "- **Search the web** and reply with the best links (title + url + a one-line why).\n"
     "- **Find images** for a vibe or topic and attach them moodboard-style (thumbnails in your inbox).\n"
-    "- **Fetch a file** from a public URL and attach it (pdf, doc, image, …).\n"
+    "- **Find a document** (a PDF form, application, report) on the web and attach it.\n"
+    "- **Fetch a file** from a public URL you give me and attach it.\n"
     "- **Generate an image** from a description and attach it.\n\n"
-    'Just tell me what you want — e.g. "find 4 cosy cabin interiors", "search the latest on X and send '
-    'links", "grab this PDF <url>", or "make an image of a neon fox". I reply right here in this thread.'
+    'Just tell me what you want — e.g. "find 4 cosy cabin interiors", "find me a Business Finland funding '
+    'application PDF", "search the latest on X and send links", or "make an image of a neon fox". I reply '
+    "right here in this thread."
 )
 
 README = """[[FIGLET:slant]["Concierge"]]
 
 A conversational agent you **DM**. It searches the web (returns links), finds images and attaches them
-moodboard-style, fetches a file from a URL as an attachment, and generates an image from a description —
-then replies right in the thread. Ask **"what can you do?"** and it tells you.
+moodboard-style, **finds a document (a PDF form/application) on the web and attaches it**, fetches a file
+from a URL, and generates an image from a description — then replies right in the thread. Ask
+**"what can you do?"** and it tells you.
 
-**How to talk to me:** DM me a request — "find 4 cosy cabins", "search latest on X + links",
-"grab <url>", "make an image of a neon fox". I reply in-thread with text, links, and attachments.
+**How to talk to me:** DM me a request — "find 4 cosy cabins", "find me a Business Finland funding
+application PDF", "search latest on X + links", "make an image of a neon fox". I reply in-thread with
+text, links, and attachments.
 """
 
 CAPABILITY_TAGS = ["concierge", "chat", "web-search", "image-search", "moodboard", "file-fetch", "image-gen"]
@@ -108,6 +112,23 @@ def _fetch_url_bytes(url: str, *, max_bytes: int = _FETCH_MAX_BYTES):
         return None
 
 
+def _searxng_web(query: str, n: int = 15) -> list[dict]:
+    """SearXNG general web search -> [{url, title}]. Used by find_file to locate a downloadable document."""
+    base = os.getenv("SEARXNG_URL", "http://localhost:21333").rstrip("/")
+    try:
+        r = requests.get(base + "/search", params={"q": query, "format": "json"}, timeout=20)
+        out = []
+        for it in r.json().get("results") or []:
+            u = it.get("url") or ""
+            if u.startswith("http"):
+                out.append({"url": u, "title": it.get("title") or ""})
+            if len(out) >= n:
+                break
+        return out
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def _concierge_tools(sink: dict) -> list:
     """The toolset, bound to a per-message `sink` (sink["attachments"] collects files for the reply)."""
 
@@ -143,6 +164,38 @@ def _concierge_tools(sink: dict) -> list:
         sink["attachments"].append(att)
         return f"Attached '{name}' ({mime}, {len(data)} bytes)."
 
+    @tool("find_file")
+    def find_file(query: str, filetype: str = "pdf") -> str:
+        """Search the web for a downloadable DOCUMENT (e.g. a PDF form/application) matching `query`, download
+        the first one that works, and ATTACH it. Use for 'find me a <kind> form/document/pdf' requests (this
+        is search+download in one; fetch_file is only for a URL the user already gave)."""
+        ext = (filetype or "pdf").lstrip(".").lower()
+        results = _searxng_web(f"{query} filetype:{ext}", 15) or _searxng_web(query, 15)
+        direct = [r["url"] for r in results if r["url"].split("?")[0].lower().endswith(f".{ext}")]
+        tried = 0
+        for url in [*direct, *[r["url"] for r in results]]:
+            if tried >= 6:
+                break
+            tried += 1
+            got = _fetch_url_bytes(url)
+            if not got:
+                continue
+            data, mime, name = got
+            if ext not in mime.lower() and not url.split("?")[0].lower().endswith(f".{ext}"):
+                continue  # it's a page, not the file — keep looking
+            if not name.lower().endswith(f".{ext}"):
+                name = f"{(name or 'document').rsplit('.', 1)[0]}.{ext}"
+            att = dm.dm_attach_bytes(AGENT_NAME, data, name=name, mime=mime)
+            if att:
+                sink["attachments"].append(att)
+                return f"Attached '{name}' from {url} ({mime}, {len(data)} bytes)."
+        pages = "; ".join(f"{r['title']} — {r['url']}" for r in results[:4])
+        return (
+            f"Couldn't download a .{ext} for '{query}'. Closest pages: {pages}"
+            if pages
+            else f"No results for '{query}'."
+        )
+
     @tool("generate_image")
     def generate_image(description: str) -> str:
         """Generate an image from `description` (Seedream) and ATTACH it to the reply."""
@@ -164,7 +217,7 @@ def _concierge_tools(sink: dict) -> list:
         """Explain what I can do and what I can return to the user."""
         return CAPABILITIES_TEXT
 
-    return [*_web_tools(), find_images, fetch_file, generate_image, describe_capabilities]
+    return [*_web_tools(), find_images, fetch_file, find_file, generate_image, describe_capabilities]
 
 
 def _agent(llm, sink: dict) -> Agent:
@@ -191,7 +244,9 @@ def _task(request: str, context: str, agent: Agent, today: str) -> Task:
             f"Recent conversation (for context):\n{context or '(none)'}\n\n"
             "Decide what they want and do it with your tools. Use find_images to FIND existing images on the "
             "web (a 'find / show me' request) and generate_image ONLY to CREATE a new image from a "
-            "description (a 'make / generate / draw' request) — never substitute one for the other. If they "
+            "description (a 'make / generate / draw' request) — never substitute one for the other. To find "
+            "a DOCUMENT/form/PDF on the web and attach it, use find_file (it searches AND downloads); "
+            "fetch_file is only for a URL the user already gave. If they "
             "ask what you can do (or it's a vague greeting), call describe_capabilities. Attach images/files "
             "with the tools and mention what you attached. Reply concisely in markdown; cite source links for "
             "any web results. Answer ONLY the message above — ignore earlier topics unless asked to continue."

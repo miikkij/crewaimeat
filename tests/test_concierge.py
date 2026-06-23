@@ -48,4 +48,4 @@ def test_dm_request_uses_event_message_not_stale_thread(monkeypatch):
 def test_concierge_tools_present():
     # 5 concierge tools + however many web tools — at least find_images/fetch_file/generate_image/help.
     names = {getattr(t, "name", "") for t in cc._concierge_tools({"attachments": []})}
-    assert {"find_images", "fetch_file", "generate_image", "describe_capabilities"} <= names
+    assert {"find_images", "fetch_file", "find_file", "generate_image", "describe_capabilities"} <= names
