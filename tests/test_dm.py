@@ -160,20 +160,16 @@ def test_build_question_shape():
 
 
 def test_dm_read_answers(monkeypatch):
-    thread = {
-        "messages": [
-            {"id": "1", "direction": "inbound", "body": "req", "interactive": None},
-            {"id": "2", "direction": "outbound", "interactive": {"role": "questions"}},
-            {
-                "id": "3",
-                "direction": "inbound",
-                "interactive": {"role": "answers", "answers": {"auth": {"selected": ["oauth"], "other": None}}},
-            },
-        ]
-    }
-    monkeypatch.setattr(dm, "dm_thread", lambda a, c, **k: thread)
+    import aimeat_crewai
+
+    monkeypatch.setattr(aimeat_crewai, "serve_client", lambda agent, **k: object())
+    monkeypatch.setattr(
+        aimeat_crewai,
+        "read_answers",
+        lambda api, conv, **k: {"answers_for": "q", "answers": {"auth": {"selected": ["oauth"], "other": None}}},
+    )
     assert dm.dm_read_answers("x", "c") == {"auth": {"selected": ["oauth"], "other": None}}
-    monkeypatch.setattr(dm, "dm_thread", lambda a, c, **k: {"messages": []})
+    monkeypatch.setattr(aimeat_crewai, "read_answers", lambda api, conv, **k: None)
     assert dm.dm_read_answers("x", "c") == {}
 
 

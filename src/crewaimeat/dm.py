@@ -152,6 +152,9 @@ def dm_initiate(
 
 
 # ── interactive: federated AskUserQuestion (aimeat-crewai>=0.9.0, node>=1.31) ──
+# NB aimeat_dm_ask is NOT shell-callable — the deterministic path is the aimeat_crewai helpers
+# (serve_client + ask + read_answers), the same loopback path as `aimeat connect call`. The node schema
+# (aimeat/src/models/message-schemas.ts) is authoritative, so we delegate question-building to them too.
 def build_question(
     qid: str,
     header: str,
@@ -162,23 +165,14 @@ def build_question(
     allow_other: bool = True,
     required: bool = True,
 ) -> dict:
-    """One structured question for dm_ask. `options` = (id, label) tuples OR plain strings (string = both
-    id and label). Renders as radios (single-select) / checkboxes (multiSelect) + an 'Other' freeform."""
-    opts = []
-    for o in options:
-        if isinstance(o, (tuple, list)):
-            opts.append({"id": str(o[0]), "label": str(o[1])})
-        else:
-            opts.append({"id": str(o), "label": str(o)})
-    return {
-        "id": qid,
-        "header": header,
-        "prompt": prompt,
-        "options": opts,
-        "multiSelect": bool(multi_select),
-        "allowOther": bool(allow_other),
-        "required": bool(required),
-    }
+    """One structured question for dm_ask. `options` = (id, label) tuples OR plain strings. Renders as
+    radios (single-select) / checkboxes (multiSelect) + an 'Other' freeform. Delegates to the package
+    builder so the shape always matches the node schema."""
+    from aimeat_crewai import build_question as _bq
+
+    return _bq(
+        qid, prompt, list(options), header=header, multi_select=multi_select, allow_other=allow_other, required=required
+    )
 
 
 def dm_ask(
@@ -191,31 +185,34 @@ def dm_ask(
     conversation_id: str | None = None,
     submit_label: str | None = None,
 ) -> dict | None:
-    """Send a STRUCTURED question (renders as a form in the recipient's inbox) via aimeat_dm_ask — map
-    intent / clarify BEFORE acting. The answer returns as a normal DM whose on_dm event has
-    interactive=="answers"; read the picks with dm_read_answers(agent, conversation_id)."""
-    payload: dict = {"to": to, "questions": questions}
-    if body:
-        payload["body"] = body
-    if subject:
-        payload["subject"] = subject
-    if conversation_id:
-        payload["conversation_id"] = conversation_id
-    if submit_label:
-        payload["submit_label"] = submit_label
-    return _aimeat_call(agent, "aimeat_dm_ask", payload)
+    """Send a STRUCTURED question (renders as a form in the recipient's inbox) to map intent / clarify
+    BEFORE acting. The answer returns as a normal DM whose on_dm event has interactive=="answers"; read
+    the picks with dm_read_answers(agent, conversation_id). Returns {message_id, conversation_id} or None."""
+    from aimeat_crewai import ask as _ask
+    from aimeat_crewai import serve_client as _serve_client
+
+    try:
+        api = _serve_client(agent)
+        return _ask(
+            api, to, questions, body=body, subject=subject, conversation_id=conversation_id, submit_label=submit_label
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[{agent}] dm_ask failed: {exc!r}", file=sys.stderr)
+        return None
 
 
 def dm_read_answers(agent: str, conversation_id: str) -> dict:
-    """The latest structured ANSWERS in a thread -> {qId: {"selected":[ids], "other": str|None}} (or {}).
-    The answer message carries interactive.role=="answers" + interactive.answers."""
-    th = dm_thread(agent, conversation_id)
-    msgs = (th.get("messages") if isinstance(th, dict) else None) or []
-    for m in reversed(msgs):
-        inter = m.get("interactive")
-        if isinstance(inter, dict) and inter.get("role") == "answers" and inter.get("answers"):
-            return inter["answers"]
-    return {}
+    """The latest structured ANSWERS in a thread -> {qId: {"selected":[ids], "other": str|None}} (or {})."""
+    from aimeat_crewai import read_answers as _read_answers
+    from aimeat_crewai import serve_client as _serve_client
+
+    try:
+        api = _serve_client(agent)
+        r = _read_answers(api, conversation_id)
+        return (r.get("answers") or {}) if isinstance(r, dict) else {}
+    except Exception as exc:  # noqa: BLE001
+        print(f"[{agent}] dm_read_answers failed: {exc!r}", file=sys.stderr)
+        return {}
 
 
 # ── attachments: presigned upload -> the attachment dict the send contract wants ──
