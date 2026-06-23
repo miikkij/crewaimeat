@@ -31,12 +31,36 @@ import requests
 from crewai import Agent, Crew, Process, Task
 from crewai.tools import tool
 
-from crewaimeat import dm, image_contract, seedream_gen, session_store
+from crewaimeat import dm, image_contract, orchestrator, seedream_gen, session_store
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 from crewaimeat.crew import _web_tools
 from crewaimeat.llm import get_llm
 
 AGENT_NAME = "concierge"
+
+# ── Delegation directory: the fleet specialists the concierge can hand a request to (the SERVICE MESH).
+# {agent_name: "use-when description"}. Only those whose daemon is LIVE are ever offered (orchestrator
+# filters by last_seen), so a dead/unregistered entry is harmless — it's simply skipped. Keep the
+# descriptions sharp: they ARE the router's menu. The concierge's OWN tools (web search, images, file
+# fetch, image-gen) take priority; delegate only when a specialist clearly fits better.
+SERVICE_DIRECTORY = {
+    "finnish-corporate-researcher": (
+        "Deep research on a FINNISH company — financials, registry (Y-tunnus/PRH), people, and sentiment, "
+        "every fact with a source URL. Use for 'tell me about <Finnish company>' / due-diligence asks."
+    ),
+    "web-researcher": (
+        "In-depth web research, market scans, and company research on ANY topic — returns a structured, "
+        "sourced report. Use for substantial research questions that need more than a few links."
+    ),
+    "jingle-writer": (
+        "Writes a short, catchy rhyming jingle (4-6 lines) for a product, brand, or campaign. "
+        "Use for 'write a jingle for <X>'."
+    ),
+    "tagline-translator": (
+        "Translates / localizes a marketing tagline or short slogan between languages while keeping the "
+        "punch. Use for 'translate this tagline/slogan'."
+    ),
+}
 
 CAPABILITIES_TEXT = (
     "I'm a **concierge** you can DM. I can:\n"
@@ -46,6 +70,8 @@ CAPABILITIES_TEXT = (
     "several good matches I'll show them as checkboxes so you can tick which ones I download.\n"
     "- **Fetch a file** from a public URL you give me and attach it.\n"
     "- **Generate an image** from a description and attach it.\n"
+    "- **Delegate to a specialist** in my fleet when your request needs deep expertise (e.g. detailed "
+    "research on a Finnish company, a jingle) — I hand it to the right agent and relay their answer back here.\n"
     "- If I'm unsure what you mean, I'll **ask you a quick multiple-choice question** to get it right.\n\n"
     'Just tell me what you want — e.g. "find 4 cosy cabin interiors", "find me a Business Finland funding '
     'application PDF", "search the latest on X and send links", or "make an image of a neon fox". I reply '
@@ -56,7 +82,8 @@ README = """[[FIGLET:slant]["Concierge"]]
 
 A conversational agent you **DM**. It searches the web (returns links), finds images and attaches them
 moodboard-style, **finds a document (a PDF form/application) on the web and attaches it**, fetches a file
-from a URL, and generates an image from a description — then replies right in the thread. Ask
+from a URL, generates an image from a description, and **delegates to fleet specialists** (handing a
+request to the right agent and relaying its reply back) — then replies right in the thread. Ask
 **"what can you do?"** and it tells you.
 
 **How to talk to me:** DM me a request — "find 4 cosy cabins", "find me a Business Finland funding
@@ -295,6 +322,30 @@ def _concierge_tools(sink: dict, *, ask_to: str | None = None, ask_conv: str | N
 
         tools.append(ask_user)
 
+        @tool("delegate_to_specialist")
+        def delegate_to_specialist(specialist: str, request: str) -> str:
+            """Hand the request to a fleet SPECIALIST (see the 'Specialists you can delegate to' menu in
+            your task) and relay their reply back to the user when it's ready. Use this ONLY when a
+            specialist clearly fits the request better than your own tools (e.g. deep company research, a
+            jingle). `specialist` = the EXACT agent name from the menu; `request` = a complete, standalone
+            brief for them (they don't see this chat). After calling this, STOP — do NOT also answer; the
+            user gets a short 'on it' note now and the specialist's reply is relayed automatically later."""
+            live = {s["name"]: s for s in orchestrator.live_services(AGENT_NAME, SERVICE_DIRECTORY)}
+            s = live.get(specialist)
+            if not s:
+                avail = ", ".join(live) or "none right now"
+                return f"'{specialist}' isn't an available specialist. Available: {avail}."
+            conv = orchestrator.delegate(AGENT_NAME, s["gaii"], request)
+            if not conv:
+                return f"Couldn't reach {specialist} just now."
+            orchestrator.record_delegation(
+                AGENT_NAME, conv, user_to=ask_to, user_conv=ask_conv, specialist=specialist, request=request
+            )
+            sink["delegated"] = specialist
+            return f"Delegated to {specialist}; their reply will be relayed to the user."
+
+        tools.append(delegate_to_specialist)
+
     return tools
 
 
@@ -317,11 +368,21 @@ def _agent(llm, sink: dict, *, ask_to: str | None = None, ask_conv: str | None =
     )
 
 
-def _task(request: str, context: str, agent: Agent, today: str) -> Task:
+def _task(request: str, context: str, agent: Agent, today: str, directory: str = "") -> Task:
+    delegation = (
+        (
+            "\n\nSpecialists you can delegate to (use delegate_to_specialist with the EXACT name) when one "
+            "fits FAR better than your own tools — otherwise just answer yourself:\n"
+            f"{directory}\n"
+        )
+        if directory
+        else ""
+    )
     return Task(
         description=(
             f"Today is {today}. The user sent this direct message:\n\n{request}\n\n"
-            f"Recent conversation (for context):\n{context or '(none)'}\n\n"
+            f"Recent conversation (for context):\n{context or '(none)'}\n"
+            f"{delegation}\n"
             "Decide what they want and do it with your tools. Use find_images to FIND existing images on the "
             "web (a 'find / show me' request) and generate_image ONLY to CREATE a new image from a "
             "description (a 'make / generate / draw' request) — never substitute one for the other. To find a "
@@ -413,7 +474,14 @@ def run() -> None:
     def _dm_responder(event: dict):
         _mid, conv, sender, _preview, _subject = dm._inbound_fields(event)
         request, context = _dm_request_and_context(event)
-        # If this DM is the ANSWER to a clarifying question we asked, fold the structured picks into the
+        # (A) Is this the reply to a request we DELEGATED to a specialist? Relay it to the original user and
+        # stop (we don't reply to the specialist — that would just bounce back). Cheap: a session lookup.
+        pending = orchestrator.match_delegation(AGENT_NAME, conv, sender)
+        if pending:
+            relay = f"**{pending['specialist']}** got back to me:\n\n{request}"
+            dm.dm_reply(AGENT_NAME, pending["user_to"], relay, conversation_id=pending["user_conv"])
+            return ""
+        # (B) If this DM is the ANSWER to a clarifying question we asked, fold the structured picks into the
         # request and fulfil the ORIGINAL ask (which is in the thread context).
         if event.get("interactive") == "answers":
             picks = dm.dm_answers_from_event(AGENT_NAME, event)  # event-aware: THIS answer, not the latest
@@ -429,9 +497,16 @@ def run() -> None:
                 f"The user answered your clarifying question(s): {clar or '(no picks)'}.\n\n"
                 "Now fulfil their ORIGINAL request (above, in the conversation context) using these answers."
             )
+        # Fetch the roster ONCE — it serves both the agent<->agent loop-guard and the delegation menu.
+        roster = orchestrator.list_node_agents(AGENT_NAME)
+        # (C) A DM from a SIBLING agent that ISN'T a tracked delegation -> stay silent (no crew, no reply):
+        # otherwise two dm_serviceable crews would loop on each other's replies forever.
+        if orchestrator.in_roster(roster, sender):
+            return ""
+        menu = orchestrator.directory_text(orchestrator.services_from_roster(roster, SERVICE_DIRECTORY))
         sink: dict = {"attachments": [], "asked": False}
         agent = _agent(get_llm(agent_name=AGENT_NAME), sink, ask_to=sender, ask_conv=conv)
-        crew = Crew(agents=[agent], tasks=[_task(request, context, agent, "")], process=Process.sequential)
+        crew = Crew(agents=[agent], tasks=[_task(request, context, agent, "", menu)], process=Process.sequential)
         try:
             result = crew.kickoff()
         except Exception as exc:  # noqa: BLE001
@@ -439,6 +514,11 @@ def run() -> None:
             return "Sorry — I hit an error handling that. Try rephrasing?"
         if sink.get("asked"):
             return ""  # the clarifying FORM was already sent as the message — don't also send a reply
+        if sink.get("delegated"):  # handed to a specialist — ack now; their reply is relayed later (branch A)
+            return (
+                f"On it — I've asked **{sink['delegated']}** to handle that. "
+                "I'll relay their reply here as soon as it's ready."
+            )
         return {"text": str(result), "attachments": sink["attachments"][:20]}
 
     run_crew(
