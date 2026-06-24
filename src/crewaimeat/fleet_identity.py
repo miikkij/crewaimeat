@@ -116,10 +116,29 @@ FLEET_IDENTITY: dict[str, dict] = {
         },
     },
     "web-tester": {
-        "tags": ["web-testing", "browser-automation", "role.task-runner"],
+        "tags": ["web-testing", "browser-automation", "vision", "role.task-runner"],
         "capabilities": {
-            "technical": [_skill("web-tester"), _skill("playwright")],
-            "domain": ["browser-driven web-flow testing (Playwright)", "evidence capture"],
+            "technical": [_skill("web-tester"), _skill("playwright"), _skill("vision")],
+            "domain": [
+                "browser-driven web-flow testing (Playwright)",
+                "evidence capture",
+                # vision MODALITY: on screenshots it CAPTURES itself — not on an image you hand it.
+                "vision over page SCREENSHOTS it captures (self-captured) — visual verification of what rendered",
+            ],
+            "languages": ["en"],
+        },
+    },
+    "image-scout": {
+        "tags": ["image-scout", "moodboard", "image-curation", "image-search", "vision", "role.task-runner"],
+        "capabilities": {
+            "technical": [_skill("vision"), _skill("image-search"), _skill("image-curation")],
+            "domain": [
+                "image moodboard curation",
+                "web image search (SearXNG)",
+                # vision MODALITY: on images it FINDS on the web — judges subject/style/colour/relevance.
+                # It does NOT analyse an image you provide; it discovers + curates its own.
+                "vision over images it FINDS on the web (discovered material) — curation, not provided-image analysis",
+            ],
             "languages": ["en"],
         },
     },

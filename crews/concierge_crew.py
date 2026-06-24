@@ -119,7 +119,13 @@ CAPABILITIES = {
         {"name": "federated-dm", "type": "skill"},
         {"name": "delegation", "type": "skill"},  # routes to fleet specialists
     ],
-    "domain": ["assistant", "concierge", "consumes:dm@1"],
+    "domain": [
+        "assistant",
+        "concierge",
+        # vision MODALITY: on images & documents the USER SENDS it (provided content) — describe / extract.
+        "vision over images & documents the USER sends it (provided content) — describe / OCR / extract",
+        "consumes:dm@1",
+    ],
     "languages": ["en", "fi"],
 }
 
