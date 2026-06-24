@@ -96,9 +96,29 @@ application PDF", "search latest on X + links", "make an image of a neon fox". I
 text, links, and attachments.
 """
 
-CAPABILITY_TAGS = ["concierge", "chat", "web-search", "image-search", "moodboard", "file-fetch", "image-gen"]
+CAPABILITY_TAGS = [
+    "concierge",
+    "chat",
+    "vision",
+    "web-search",
+    "image-search",
+    "moodboard",
+    "file-analysis",
+    "image-gen",
+    "delegation",
+]
 CAPABILITIES = {
-    "technical": [{"name": "federated-dm", "type": "messaging"}, {"name": "web-search", "type": "research"}],
+    # NB technical[].type MUST be one of mcp|skill|tool — the node REJECTS anything else (e.g. "messaging"/
+    # "research" → INVALID_INPUT, which silently drops the whole report and the dashboard shows generic defaults).
+    "technical": [
+        {"name": "vision", "type": "skill"},  # sees what's in an attached image (qwen-2.5-vl)
+        {"name": "web-search", "type": "skill"},
+        {"name": "image-search", "type": "skill"},  # moodboards
+        {"name": "image-generation", "type": "skill"},
+        {"name": "file-analysis", "type": "skill"},  # reads attached PDFs/docs
+        {"name": "federated-dm", "type": "skill"},
+        {"name": "delegation", "type": "skill"},  # routes to fleet specialists
+    ],
     "domain": ["assistant", "concierge", "consumes:dm@1"],
     "languages": ["en", "fi"],
 }
