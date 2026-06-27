@@ -251,8 +251,7 @@ class MultiProviderLLM(BaseLLM):
     _context_window: int = PrivateAttr(default=_FALLBACK_CONTEXT)
 
     def __init__(self, endpoints: list[dict], temperature: float):
-        super().__init__(model=endpoints[0]["model"], temperature=temperature)
-        llms, labels = [], []
+        llms, labels, models, contexts = [], [], [], []
         for ep in endpoints:
             # NB: context is enforced via get_context_window_size() below (the outer LLM CrewAI queries),
             # not as a constructor kwarg — the concrete completion class would leak it into the API call.
@@ -263,11 +262,27 @@ class MultiProviderLLM(BaseLLM):
                 kw["api_key"] = ep["api_key"]
             if ep.get("additional_params"):
                 kw["additional_params"] = ep["additional_params"]
-            llms.append(LLM(**kw))
+            # SKIP an endpoint that can't even be CONSTRUCTED (e.g. a litellm-routed model like xai/grok-4.3
+            # when litellm is broken) and keep the rest of the chain — otherwise one bad provider would abort
+            # the whole config and silently drop EVERY crew to the env fallback (this hid a 2-week outage).
+            try:
+                llm = LLM(**kw)
+            except Exception as e:  # noqa: BLE001
+                print(
+                    f"[llm] endpoint '{ep['label']}' could not initialise ({type(e).__name__}); skipping",
+                    file=sys.stderr,
+                )
+                continue
+            llms.append(llm)
             labels.append(ep["label"])
+            models.append(ep["model"])
+            contexts.append(ep["context"])
+        if not llms:  # nothing usable in the whole chain → let get_llm fall back to env config
+            raise RuntimeError("no usable LLM endpoints in the provider chain (all failed to initialise)")
+        super().__init__(model=models[0], temperature=temperature)
         self._llms = llms
         self._labels = labels
-        self._context_window = endpoints[0]["context"]  # the primary (model used ~always)
+        self._context_window = contexts[0]  # the first ENDPOINT THAT INITIALISED (the effective primary)
 
     def call(self, *args, **kwargs):
         last: Exception | None = None
