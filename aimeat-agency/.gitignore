@@ -3,3 +3,6 @@ node_modules/
 dist/
 src-tauri/target/
 src-tauri/gen/
+# Staged in CI (bundled runtime source + uv binary) — never committed.
+src-tauri/resources/
+src-tauri/binaries/

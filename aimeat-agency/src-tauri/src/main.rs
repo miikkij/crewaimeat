@@ -1,6 +1,6 @@
-// aimeat-agency — thin Tauri shell. On first run it PROVISIONS the cockpit runtime the way
-// aimeat-desktop does (clone the crewaimeat repo + `uv sync`, never bundling Python), then spawns the
-// Python cockpit and points the window at it. All product logic lives in the cockpit.
+// aimeat-agency — thin Tauri shell. The crewaimeat SOURCE and the `uv` binary are BUNDLED in the
+// installer (no git, no pre-installed tools). On first run it copies the bundled source to a writable
+// dir and `uv sync`s it (uv fetches Python + deps), then spawns the Python cockpit and shows it.
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 use std::path::{Path, PathBuf};
@@ -8,21 +8,18 @@ use std::process::{Child, Command};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use tauri::{Manager, WebviewWindow};
+use tauri::{AppHandle, Manager, WebviewWindow};
 
 const PORT: u16 = 8753;
-const REPO: &str = "https://github.com/miikkij/crewaimeat";
 
 struct Cockpit(Mutex<Option<Child>>);
 
-/// Where the cockpit runtime lives on the user's machine (the cloned crewaimeat checkout + its venv).
+/// Writable home for the runtime (the copied crewaimeat checkout + its venv).
 fn runtime_dir() -> PathBuf {
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
         return PathBuf::from(local).join("aimeat-agency");
     }
-    PathBuf::from(std::env::var("USERPROFILE").unwrap_or_else(|_| ".".into()))
-        .join(".aimeat")
-        .join("agency-runtime")
+    PathBuf::from(std::env::var("USERPROFILE").unwrap_or_else(|_| ".".into())).join(".aimeat-agency")
 }
 
 fn run(cmd: &str, args: &[&str], cwd: Option<&Path>) -> std::io::Result<std::process::Output> {
@@ -38,71 +35,57 @@ fn ok(out: &std::io::Result<std::process::Output>) -> bool {
     matches!(out, Ok(o) if o.status.success())
 }
 
-/// Find `uv`: on PATH, else the location its official installer drops it.
-fn find_uv() -> Option<String> {
+fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if from.is_dir() {
+            copy_dir(&from, &to)?;
+        } else {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
+/// The bundled `uv.exe` (Tauri places the externalBin next to the app exe, triple stripped). Falls back
+/// to a `uv` on PATH for `tauri dev`.
+fn uv_path() -> Option<String> {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let p = dir.join("uv.exe");
+            if p.exists() {
+                return Some(p.to_string_lossy().into_owned());
+            }
+        }
+    }
     if ok(&run("uv", &["--version"], None)) {
         return Some("uv".into());
-    }
-    let home = std::env::var("USERPROFILE").unwrap_or_default();
-    for p in [
-        format!("{home}\\.local\\bin\\uv.exe"),
-        format!("{home}\\.cargo\\bin\\uv.exe"),
-    ] {
-        if Path::new(&p).exists() {
-            return Some(p);
-        }
     }
     None
 }
 
-/// Provision the cockpit runtime (idempotent): ensure uv, clone/update crewaimeat, `uv sync --extra
-/// agency`. Returns the uv binary + the repo dir on success. `say` streams a status to the splash.
-fn provision(say: &dyn Fn(&str)) -> Result<(String, PathBuf), String> {
-    let rt = runtime_dir();
-    let repo = rt.join("crewaimeat");
-    std::fs::create_dir_all(&rt).ok();
+/// Provision idempotently from BUNDLED assets (no git, no network for the source): copy the bundled
+/// crewaimeat source to the writable runtime on first run, then `uv sync --extra agency` (uv fetches
+/// Python + the deps). Returns (uv, repo_dir). `say` streams a status to the splash.
+fn provision(handle: &AppHandle, say: &dyn Fn(&str)) -> Result<(String, PathBuf), String> {
+    let repo = runtime_dir().join("crewaimeat");
+    std::fs::create_dir_all(repo.parent().unwrap()).ok();
 
-    // 1) git is required to fetch the runtime.
-    if !ok(&run("git", &["--version"], None)) {
-        return Err("Git is required — install Git for Windows from https://git-scm.com, then reopen.".into());
+    let uv = uv_path().ok_or("uv not found (the bundled uv.exe is missing).")?;
+
+    if !repo.join("pyproject.toml").exists() {
+        say("Setting up the agency (first run)…");
+        let res = handle.path().resource_dir().map_err(|e| e.to_string())?;
+        // Tauri may place a resource under <res>/resources/runtime-src or <res>/runtime-src.
+        let a = res.join("resources").join("runtime-src");
+        let bundled = if a.exists() { a } else { res.join("runtime-src") };
+        copy_dir(&bundled, &repo).map_err(|e| format!("could not lay out the runtime: {e}"))?;
     }
 
-    // 2) ensure uv (install via the official script if missing).
-    let uv = match find_uv() {
-        Some(u) => u,
-        None => {
-            say("Installing uv (one-time)…");
-            let _ = run(
-                "powershell",
-                &["-NoProfile", "-Command", "irm https://astral.sh/uv/install.ps1 | iex"],
-                None,
-            );
-            find_uv().ok_or("Could not install uv (https://astral.sh/uv).")?
-        }
-    };
-
-    // 3) clone or update the crewaimeat checkout (in place, branch-tracking).
-    if repo.join(".git").exists() || repo.join("pyproject.toml").exists() {
-        say("Updating the agency runtime…");
-        let _ = run("git", &["-C", repo.to_str().unwrap(), "init", "-q"], None);
-        if !ok(&run("git", &["-C", repo.to_str().unwrap(), "remote", "add", "origin", REPO], None)) {
-            let _ = run("git", &["-C", repo.to_str().unwrap(), "remote", "set-url", "origin", REPO], None);
-        }
-        let f = run("git", &["-C", repo.to_str().unwrap(), "fetch", "--depth", "1", "origin", "main"], None);
-        let _ = run("git", &["-C", repo.to_str().unwrap(), "checkout", "-f", "-B", "main", "origin/main"], None);
-        if !ok(&f) {
-            say("Could not update (offline?) — using the existing runtime.");
-        }
-    } else {
-        say("Downloading the agency runtime (first run, a few minutes)…");
-        let r = run("git", &["clone", "--depth", "1", REPO, repo.to_str().unwrap()], None);
-        if !ok(&r) {
-            return Err("Could not download the runtime (git clone failed — check your connection).".into());
-        }
-    }
-
-    // 4) install the Python env with the agency extra (cockpit deps).
-    say("Installing dependencies (uv sync — this can take a few minutes the first time)…");
+    say("Installing dependencies (first run, a few minutes)…");
     let s = run(&uv, &["sync", "--extra", "agency"], Some(&repo));
     if !ok(&s) {
         return Err("Dependency install failed (uv sync). Check your connection and reopen.".into());
@@ -131,7 +114,6 @@ fn wait_up(timeout: Duration) -> bool {
     false
 }
 
-/// Update the splash window's status line (best-effort).
 fn splash_say(win: &WebviewWindow, msg: &str) {
     let safe = msg.replace('\'', "\\'");
     let _ = win.eval(&format!("var m=document.querySelector('.muted'); if(m) m.textContent='{safe}';"));
@@ -151,7 +133,7 @@ fn main() {
 
             std::thread::spawn(move || {
                 let say = |m: &str| splash_say(&win, m);
-                match provision(&say) {
+                match provision(&handle, &say) {
                     Ok((uv, repo)) => {
                         say("Starting your agency…");
                         match spawn_cockpit(&uv, &repo, &token) {

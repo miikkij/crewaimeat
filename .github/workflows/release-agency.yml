@@ -54,6 +54,26 @@ jobs:
         with:
           workspaces: aimeat-agency/src-tauri
 
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+
+      # Bundle the crewaimeat SOURCE snapshot + the uv binary so the installer is self-contained
+      # (no git, no pre-installed tools). First run copies the source out + `uv sync`s it.
+      - name: Stage runtime (crewaimeat source + uv sidecar)
+        shell: pwsh
+        run: |
+          $ag = "aimeat-agency/src-tauri"
+          $src = "$ag/resources/runtime-src"
+          New-Item -ItemType Directory -Force $src | Out-Null
+          # crewaimeat source snapshot (exclude dev/heavy dirs; robocopy exit <8 = success)
+          robocopy . $src /E /XD .git aimeat-agency .github node_modules .venv .aimeat logs docs .ruff_cache .pytest_cache /XF *.pyc *.log | Out-Null
+          if ($LASTEXITCODE -ge 8) { throw "robocopy failed ($LASTEXITCODE)" }; $global:LASTEXITCODE = 0
+          # uv sidecar, named for the Rust host triple Tauri expects (windows-latest = msvc)
+          $triple = (((rustc -vV) -split "`n" | Select-String '^host:') -replace '^host:\s*','').Trim()
+          $bin = "$ag/binaries"; New-Item -ItemType Directory -Force $bin | Out-Null
+          Copy-Item (Get-Command uv).Source "$bin/uv-$triple.exe"
+          Write-Host "Staged: source -> $src ; uv -> $bin/uv-$triple.exe (triple $triple)"
+
       - name: Install Tauri CLI
         run: pnpm install --frozen-lockfile
         working-directory: aimeat-agency
