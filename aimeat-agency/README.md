@@ -50,15 +50,25 @@ pnpm tauri dev       # spawns the cockpit + opens the window
 pnpm tauri build     # NSIS/MSI installer under src-tauri/target/release/bundle/
 ```
 
-## Still to do (next Step-4 iterations)
+## First-run provisioning (implemented, the aimeat-desktop way)
 
-1. **Sidecar bundling** — stage `uv` (single static binary) + `node` (the connector) as Tauri
-   `externalBin`, and the `crewaimeat` package, so the app is self-contained. Copy the pattern from
-   `aimeat-desktop/scripts/stage-node.mjs` (add `stage-uv.mjs`).
-2. **First-run provisioning** — narrated `uv python install` + `uv sync` step on first launch
-   (online-first; offline wheelhouse later), streamed to the window.
-3. **Package `static/`** into the wheel so the cockpit's UI ships with the package
-   (hatch `force-include` for `src/crewaimeat/agency/static`).
-4. **Code-signing** (open decision) before public release — unsigned → SmartScreen.
+On first launch the Rust shell PROVISIONS the runtime the same way aimeat-desktop does — it does NOT
+bundle Python. In `src-tauri/src/main.rs`:
 
-The cockpit itself is feature-complete for the v1 operator experience; this shell is the packaging.
+1. ensure `uv` (install via the official script if missing),
+2. `git clone --depth 1` the crewaimeat repo into `%LOCALAPPDATA%\aimeat-agency\crewaimeat` (or update
+   it in place on later runs),
+3. `uv sync --extra agency` (installs the cockpit + crewaimeat),
+4. spawn the cockpit (`uv run … crewaimeat.agency.cockpit`) from that checkout and point the window at it.
+
+The splash shows progress. Requires `git` on the machine (reported if missing). This mirrors
+`aimeat-desktop/src-tauri/resources/provision.mjs`, reimplemented directly in Rust (no `node` sidecar).
+
+## Still to do
+
+1. **Non-dev git/offline** — bundle a tarball download fallback so `git` isn't required, and an offline
+   wheelhouse so first-run needs no network.
+2. **Tray + auto-update** — copy from aimeat-desktop (`tray.rs`, the updater plugin + signing key).
+3. **Code-signing** (open decision) before public release — unsigned → SmartScreen.
+
+The cockpit is feature-complete for the v1 operator experience; this shell is the packaging.
