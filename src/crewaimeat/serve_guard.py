@@ -18,6 +18,7 @@ goes through `ensure_single_serve()`. Crews never spawn (they discover, auto_sta
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -42,6 +43,42 @@ def _norm(p: str | Path | None) -> str | None:
         return os.path.normcase(os.path.realpath(str(p)))
     except OSError:
         return None
+
+
+# ── per-home daemon PID registry ─────────────────────────────────────────────
+# The env-read ownership check (_process_aimeat_home) is fragile on Windows (ReadProcessMemory can
+# return None for a daemon that IS ours), and a None result means "leave it alone" — so a same-home
+# duplicate whose env we can't read would survive and steal tunnels. Defence in depth: we also RECORD
+# the pid of every serve daemon we spawn/adopt in a per-home file, so the reap can positively identify
+# our OWN stale daemons by pid even when the env-read fails. The file lives under AIMEAT_HOME (per-home,
+# so prod/dev never see each other's pids). Dead pids are pruned on every touch; pid-reuse is guarded by
+# only reaping a registered pid whose env does NOT positively read as a DIFFERENT home.
+def _registry_path() -> Path:
+    return _aimeat_home() / ".serve-daemons.json"
+
+
+def _load_registry() -> set[int]:
+    try:
+        data = json.loads(_registry_path().read_text(encoding="utf-8"))
+        return {int(x) for x in data} if isinstance(data, list) else set()
+    except Exception:  # noqa: BLE001 — missing/corrupt registry is just an empty set
+        return set()
+
+
+def _save_registry(pids: set[int]) -> None:
+    try:
+        p = _registry_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(sorted(pids)), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _record_daemon(pid: int | None) -> None:
+    """Remember `pid` as one of OUR serve daemons, pruning any registered pid no longer a live serve."""
+    live = set(_serve_pids())
+    reg = (_load_registry() | ({int(pid)} if pid else set())) & live
+    _save_registry(reg)
 
 
 def _process_aimeat_home(pid: int) -> str | None:
@@ -196,7 +233,16 @@ def _reap_duplicates(keep_pid: int | None) -> int:
     only kill a process we can POSITIVELY confirm shares our home; unknown/other-home serves are
     left untouched. Returns how many were reaped."""
     our_home = _norm(_aimeat_home())
-    pids = [p for p in _serve_pids() if _process_aimeat_home(p) == our_home]  # same-home serves only
+    live = _serve_pids()
+    registry = _load_registry()
+    # OURS = a live serve that EITHER reads as our home (env) OR we previously recorded (registry).
+    # Pid-reuse guard: never reap a registered pid whose env POSITIVELY reads as a DIFFERENT home
+    # (the pid was reused by another home's daemon) — only when it's our home or unreadable (None).
+    pids = [
+        p
+        for p in live
+        if _process_aimeat_home(p) == our_home or (p in registry and _process_aimeat_home(p) in (our_home, None))
+    ]
     reaped = 0
     if keep_pid is None:
         if len(pids) <= 1:
@@ -209,6 +255,8 @@ def _reap_duplicates(keep_pid: int | None) -> int:
             print(
                 f"[serve-guard] reaped duplicate serve daemon pid {pid} (kept {keep_pid}, home {our_home})", flush=True
             )
+    if reaped:  # prune the killed pids from the registry so a future reused pid can't match
+        _save_registry((registry | {keep_pid}) & set(_serve_pids()))
     return reaped
 
 
@@ -229,6 +277,7 @@ def ensure_single_serve(timeout: float = 60.0) -> dict:
 
     with _CrossProcessLock(_LOCK, timeout):
         doc = ensure_serve(auto_start=True)  # discovers a live daemon, or spawns one if none
+        _record_daemon(doc.get("pid"))  # remember our canonical daemon so the reap can ID our strays by pid
         reaped = _reap_duplicates(doc.get("pid"))
         if reaped:
             doc["_reaped_duplicates"] = reaped
