@@ -1,0 +1,5 @@
+# Tauri / Node build output — never committed; CI installs + builds fresh.
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/

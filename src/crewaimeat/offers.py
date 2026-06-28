@@ -1190,6 +1190,45 @@ def publish_offers_any(agent: str, with_samples: bool = True) -> bool:
     return ok
 
 
+def publish_meta_offer(agent: str, meta: dict, with_sample: bool = False) -> tuple[bool, str]:
+    """Publish ONE offer built from a `meta` dict (a brain template's `offer`) to agents.<agent>.offers
+    via the node-validated PUT route, falling back to a direct memory write on a 404. Used by the
+    aimeat-agency cockpit when an operator OPTS IN to advertise a brain's capability. Needs the agent's
+    token (registered + approved). Returns (ok, detail) so the caller can show the REAL reason on failure
+    (e.g. the node's validation message) rather than guessing."""
+    offer = crew_offer(agent, dict(meta), with_sample=with_sample)
+    try:
+        import requests
+
+        from crewaimeat.generator_tool import _discover_owner, _token
+
+        tok, url = _token(agent, _discover_owner(agent))
+        r = requests.put(
+            f"{url.rstrip('/')}/v1/agents/{agent}/offers",
+            json={"offers": [offer]},
+            headers={"Authorization": f"Bearer {tok}"},
+            timeout=60,
+        )
+        if r.status_code == 200:
+            print(f"[offers] {agent}: advertised offer '{offer['id']}' via route")
+            return True, f"advertised '{offer['id']}'"
+        if r.status_code != 404:  # validation/auth errors are REAL — surface, don't mask
+            detail = r.text[:300]
+            print(f"[offers] {agent}: offer route FAILED HTTP {r.status_code}: {detail}", file=sys.stderr)
+            return False, f"node rejected the offer (HTTP {r.status_code}): {detail}"
+        print(f"[offers] {agent}: offer route 404 -> direct memory write", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001
+        return False, f"could not reach the node ({exc!r}) — is the agent approved + the fleet up?"
+    ok = bool(
+        _aimeat_call(
+            agent,
+            "aimeat_memory_write",
+            {"key": f"agents.{agent}.offers", "visibility": "owner", "value": {"offers": [offer]}},
+        )
+    )
+    return (ok, "advertised (direct write)" if ok else "direct memory write failed")
+
+
 def publish_all(with_samples: bool = True) -> dict:
     agents = dict.fromkeys(PILOT_AGENTS + CREW_AGENTS)
     return {agent: publish_offers_any(agent, with_samples=with_samples) for agent in agents}

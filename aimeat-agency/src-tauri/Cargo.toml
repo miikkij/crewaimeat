@@ -1,0 +1,19 @@
+[package]
+name = "aimeat-agency"
+version = "0.8.0"
+description = "aimeat-agency — desktop appliance for running an agency of agents on AIMEAT"
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+# Keep release builds small/fast.
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+strip = true

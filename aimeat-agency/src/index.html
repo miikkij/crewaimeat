@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>aimeat-agency</title>
+<style>
+  html,body { margin:0; height:100%; background:#0a0a1a; color:#e8e8f0;
+    font:15px -apple-system,Segoe UI,Roboto,sans-serif; display:flex; align-items:center; justify-content:center; }
+  .box { text-align:center; }
+  .brand { color:#ff69b4; font-weight:700; font-size:22px; letter-spacing:.3px; }
+  .spin { margin:20px auto 0; width:22px; height:22px; border:3px solid rgba(255,255,255,.12);
+    border-top-color:#a78bfa; border-radius:50%; animation:s .8s linear infinite; }
+  .muted { color:#9aa0b4; margin-top:14px; font-size:13px; }
+  @keyframes s { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+  <!-- Splash shown while the Rust shell starts the cockpit; it then opens the cockpit window. -->
+  <div class="box">
+    <div class="brand">aimeat-agency</div>
+    <div class="spin"></div>
+    <div class="muted">starting your agency…</div>
+  </div>
+</body>
+</html>

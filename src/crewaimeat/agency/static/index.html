@@ -1,0 +1,616 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>aimeat-agency</title>
+<style>
+  :root {
+    --bg:#0a0a1a; --panel:rgba(255,255,255,.04); --panel2:rgba(255,255,255,.06);
+    --border:rgba(255,255,255,.10); --brand:#ff69b4; --accent:#a78bfa;
+    --txt:#e8e8f0; --muted:#9aa0b4; --ok:#4ade80; --warn:#fbbf24; --bad:#ef4444;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt);
+    font:14px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+  a { color:var(--accent); }
+  header { position:sticky; top:0; z-index:10; display:flex; align-items:center; gap:18px;
+    padding:12px 20px; background:rgba(10,10,26,.92); border-bottom:1px solid var(--border); backdrop-filter:blur(8px); }
+  .brand { font-weight:700; color:var(--brand); letter-spacing:.3px; }
+  nav { display:flex; gap:6px; flex:1; }
+  nav button { background:transparent; border:1px solid transparent; color:var(--muted);
+    padding:6px 12px; border-radius:8px; cursor:pointer; font-size:13px; }
+  nav button.active { color:var(--txt); background:var(--panel2); border-color:var(--border); }
+  nav button:hover { color:var(--txt); }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--bad); display:inline-block; }
+  .dot.ok { background:var(--ok); box-shadow:0 0 8px var(--ok); }
+  select.lang { background:var(--panel); color:var(--txt); border:1px solid var(--border); border-radius:8px; padding:4px 8px; }
+  main { max-width:1000px; margin:0 auto; padding:22px 20px 60px; }
+  h2 { font-size:18px; margin:4px 0 14px; }
+  .sub { color:var(--muted); font-size:13px; margin:-8px 0 18px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:14px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:16px; }
+  .card h3 { margin:0 0 6px; font-size:15px; }
+  .card p { color:var(--muted); margin:0 0 14px; font-size:13px; min-height:34px; }
+  button.btn { background:linear-gradient(135deg,var(--brand),var(--accent)); color:#160a16; border:0;
+    padding:8px 14px; border-radius:9px; cursor:pointer; font-weight:600; font-size:13px; }
+  button.ghost { background:var(--panel2); color:var(--txt); border:1px solid var(--border); }
+  button.btn:hover { filter:brightness(1.07); }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  label { display:block; color:var(--muted); font-size:12px; margin:12px 0 4px; }
+  input, textarea, select.f { width:100%; background:#0e0e22; color:var(--txt); border:1px solid var(--border);
+    border-radius:9px; padding:9px 11px; font:inherit; }
+  textarea { min-height:120px; resize:vertical; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--border); }
+  th { color:var(--muted); font-weight:600; }
+  .pill { padding:2px 9px; border-radius:999px; font-size:12px; border:1px solid var(--border); }
+  .pill.running, .pill.published { color:var(--ok); border-color:rgba(74,222,128,.4); }
+  .pill.down, .pill.raw { color:var(--muted); }
+  .pill.stale-heartbeat, .pill.orphan { color:var(--warn); border-color:rgba(251,191,36,.4); }
+  .pill.DUPLICATE, .pill.zombie { color:var(--bad); border-color:rgba(239,68,68,.4); }
+  pre { background:#0e0e22; border:1px solid var(--border); border-radius:10px; padding:12px; overflow:auto;
+    font-size:12px; white-space:pre-wrap; }
+  .muted { color:var(--muted); }
+  .toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:var(--panel2);
+    border:1px solid var(--border); padding:10px 16px; border-radius:10px; opacity:0; transition:opacity .2s; }
+  .toast.show { opacity:1; }
+  .spacer { flex:1; }
+  .back { color:var(--muted); cursor:pointer; font-size:13px; }
+  .spin { width:14px; height:14px; border:2px solid var(--border); border-top-color:var(--brand);
+    border-radius:50%; display:inline-block; animation:sp .8s linear infinite; }
+  @keyframes sp { to { transform:rotate(360deg); } }
+  .pill.run { color:var(--ok); border-color:rgba(74,222,128,.4); }
+  .pill.wait { color:var(--warn); border-color:rgba(251,191,36,.4); }
+  .pill.off { color:var(--muted); }
+  .md { line-height:1.6; } .md h1,.md h2,.md h3,.md h4 { margin:14px 0 6px; }
+  .md h1 { font-size:20px; } .md h2 { font-size:17px; } .md h3 { font-size:15px; }
+  .md p { margin:8px 0; } .md ul { margin:8px 0 8px 18px; } .md li { margin:3px 0; }
+  .md code { background:#0e0e22; padding:1px 5px; border-radius:5px; font-size:12px; }
+  .md pre { background:#0e0e22; border:1px solid var(--border); border-radius:8px; padding:10px; overflow:auto; }
+  .md a { word-break:break-all; }
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">aimeat-agency</span>
+  <nav id="nav"></nav>
+  <span class="spacer"></span>
+  <span id="account" class="muted" style="font-size:12px"></span>
+  <span id="health"><span class="dot" id="healthdot"></span> <span class="muted" id="healthtxt">…</span></span>
+  <select class="lang" id="lang"><option value="en">EN</option><option value="fi">FI</option></select>
+</header>
+<main id="main"></main>
+<div class="toast" id="toast"></div>
+
+<script>
+const TOKEN = "__AGENCY_TOKEN__";
+let LANG = localStorage.getItem("agencyLang") || "en";
+
+const STR = {
+  "nav.gallery":{en:"Gallery",fi:"Galleria"}, "nav.fleet":{en:"Fleet",fi:"Laivue"},
+  "nav.memory":{en:"Memory",fi:"Muisti"}, "nav.sync":{en:"Sync",fi:"Synkronointi"},
+  "manage":{en:"Manage",fi:"Hallinnoi"}, "logs":{en:"Logs",fi:"Lokit"},
+  "notconnected":{en:"not connected",fi:"ei yhteyttä"}, "livesat":{en:"lives at",fi:"sijaitsee"},
+  "connect.title":{en:"Connect your aimeat account",fi:"Yhdistä aimeat-tilisi"},
+  "connect.sub":{en:"Your agents live under one account on a home node. You approve each agent in your aimeat.io dashboard before it can do anything — nothing runs without your OK.",fi:"Agenttisi elävät yhden tilin alla kotinodessa. Hyväksyt jokaisen agentin aimeat.io-hallinnassasi ennen kuin se voi tehdä mitään — mikään ei käynnisty ilman lupaasi."},
+  "owner":{en:"Account name (owner)",fi:"Tilin nimi (omistaja)"}, "node":{en:"Home node",fi:"Kotinode"},
+  "connectbtn":{en:"Connect",fi:"Yhdistä"}, "change":{en:"Change account",fi:"Vaihda tili"},
+  "needsapproval":{en:"needs approval",fi:"odottaa hyväksyntää"}, "approved":{en:"connected",fi:"yhdistetty"},
+  "approve":{en:"Connect agent (approve)",fi:"Yhdistä agentti (hyväksy)"},
+  "approveinstr":{en:"Open this in your aimeat.io dashboard and enter the code, then it connects automatically:",fi:"Avaa tämä aimeat.io-hallinnassasi ja syötä koodi, sitten se yhdistyy automaattisesti:"},
+  "code":{en:"Code",fi:"Koodi"}, "waiting":{en:"Waiting for approval…",fi:"Odotetaan hyväksyntää…"},
+  "approveddone":{en:"Connected! The agent can now run.",fi:"Yhdistetty! Agentti voi nyt ajaa."},
+  "approvefirst":{en:"Connect (approve) the agent before starting it.",fi:"Yhdistä (hyväksy) agentti ennen käynnistystä."},
+  "connecting":{en:"Starting device-auth — requesting a code (this can take ~30s)…",fi:"Käynnistetään laitehyväksyntä — pyydetään koodia (voi kestää ~30s)…"},
+  "dismiss":{en:"Dismiss",fi:"Sulje"}, "activity":{en:"Activity",fi:"Tapahtumat"}, "changed":{en:"changed",fi:"muuttui"},
+  "run.running":{en:"running",fi:"käynnissä"}, "run.stopped":{en:"stopped",fi:"pysäytetty"},
+  "run.starting":{en:"starting…",fi:"käynnistyy…"}, "run.stopping":{en:"stopping…",fi:"pysäytetään…"},
+  "run.restarting":{en:"restarting…",fi:"uudelleenkäynnistyy…"}, "run.stale":{en:"stale heartbeat",fi:"vanhentunut yhteys"},
+  "model.default":{en:"(default routing)",fi:"(oletusreititys)"},
+  "model.local":{en:"Local (Ollama) — free, private",fi:"Paikallinen (Ollama) — ilmainen, yksityinen"},
+  "model.cloud":{en:"Cloud",fi:"Pilvi"},
+  "notattached":{en:"This agent isn't attached to the local connector yet (it loads agents at startup). Restart the fleet so it's picked up.",fi:"Tätä agenttia ei ole vielä liitetty paikalliseen liittimeen (se lataa agentit käynnistyessä). Käynnistä laivue uudelleen, jotta se huomataan."},
+  "ev.brain_saved":{en:"saved brain",fi:"tallensi aivot"}, "ev.connected":{en:"connected to aimeat.io",fi:"yhdistetty aimeat.io:hon"},
+  "ev.connect_requested":{en:"requested connect",fi:"pyysi yhdistämistä"}, "ev.start":{en:"started",fi:"käynnistetty"},
+  "ev.stop":{en:"stopped",fi:"pysäytetty"}, "ev.restart":{en:"restarted",fi:"uudelleenkäynnistetty"},
+  "ev.rolled_back":{en:"rolled back",fi:"palautettu versio"}, "ev.offer_published":{en:"advertised offering",fi:"julkaisi tarjouksen"},
+  "ev.task":{en:"task run",fi:"tehtäväajo"}, "input":{en:"Input",fi:"Syöte"},
+  "tk.started":{en:"started",fi:"alkoi"}, "tk.finished":{en:"finished",fi:"valmistui"}, "tk.took":{en:"took",fi:"kesto"},
+  "nooutput":{en:"finished with no output",fi:"valmistui ilman tulosta"}, "openresult":{en:"click a task run to see its input + result",fi:"avaa tehtäväajon syöte + tulos klikkaamalla"},
+  "offer.section":{en:"Offering",fi:"Tarjous"},
+  "offer.note":{en:"Advertise this agent on aimeat.io so others can discover and request it. Opt-in — nothing is advertised until you publish it.",fi:"Mainosta tätä agenttia aimeat.io:ssa, jotta muut löytävät ja voivat pyytää sitä. Valinnainen — mitään ei mainosteta ennen kuin julkaiset sen."},
+  "offer.publish":{en:"Advertise on aimeat.io",fi:"Mainosta aimeat.io:ssa"}, "offer.published":{en:"advertised",fi:"mainostettu"},
+  "offer.none":{en:"This template has nothing to offer others.",fi:"Tällä pohjalla ei ole tarjottavaa muille."},
+  "offer.needsconnect":{en:"Connect the agent first, then advertise it.",fi:"Yhdistä agentti ensin, sitten mainosta."},
+  "testrun":{en:"Test run",fi:"Koeajo"}, "tasks":{en:"Tasks",fi:"Tehtävät"},
+  "testprompt":{en:"What should it do for this test? (e.g. a topic to summarize)",fi:"Mitä sen pitäisi tehdä tässä testissä? (esim. aihe tiivistettäväksi)"},
+  "run":{en:"Run",fi:"Aja"}, "queued":{en:"queued — waiting for the agent…",fi:"jonossa — odotetaan agenttia…"},
+  "working":{en:"working…",fi:"työskentelee…"}, "result":{en:"Result",fi:"Tulos"},
+  "notasks":{en:"No tasks yet.",fi:"Ei tehtäviä vielä."}, "needsrun":{en:"Start the agent first (a test needs the running daemon).",fi:"Käynnistä agentti ensin (koeajo tarvitsee käynnissä olevan daemonin)."},
+  "mem.key":{en:"Published to (memory key)",fi:"Julkaistu (muistiavain)"}, "mem.open":{en:"click a row to read the full record",fi:"avaa koko tietue klikkaamalla riviä"},
+  "sync.open":{en:"these are the keys live on aimeat.io — click one to read what's published",fi:"nämä avaimet ovat aimeat.io:ssa — avaa lukeaksesi julkaistun sisällön"},
+  "keymode":{en:"Output key per run",fi:"Tulosavain per ajo"},
+  "keymode.latest":{en:"one key, overwritten (…latest)",fi:"yksi avain, ylikirjoitetaan (…latest)"},
+  "keymode.date":{en:"per day (…YYYY-MM-DD) — sortable",fi:"per päivä (…VVVV-KK-PP) — lajiteltava"},
+  "keymode.timestamp":{en:"per run (…full timestamp) — sortable",fi:"per ajo (…täysi aikaleima) — lajiteltava"},
+  "ev.test_run":{en:"test run",fi:"koeajo"},
+  "gallery.title":{en:"Pick a brain",fi:"Valitse aivot"},
+  "gallery.sub":{en:"Choose a template, give it a brain (prose + policy), and put it to work.",fi:"Valitse pohja, anna sille aivot (teksti + säännöt) ja laita töihin."},
+  "gallery.your":{en:"Your agents",fi:"Agenttisi"},
+  "use":{en:"Use this brain",fi:"Käytä näitä aivoja"},
+  "edit":{en:"Edit",fi:"Muokkaa"}, "dryrun":{en:"Dry-run",fi:"Koeajo"},
+  "start":{en:"Start",fi:"Käynnistä"}, "stop":{en:"Stop",fi:"Pysäytä"}, "restart":{en:"Restart",fi:"Uudelleen"},
+  "save":{en:"Save brain",fi:"Tallenna aivot"}, "instantiate":{en:"Add to fleet",fi:"Lisää laivueeseen"},
+  "agentname":{en:"Agent name (identity)",fi:"Agentin nimi (identiteetti)"},
+  "prose":{en:"What it should do (your words)",fi:"Mitä sen pitäisi tehdä (omin sanoin)"},
+  "policy":{en:"Policy",fi:"Säännöt"}, "autonomy":{en:"Autonomy",fi:"Autonomia"},
+  "schedule":{en:"Schedule (cron)",fi:"Ajastus (cron)"}, "publishkey":{en:"Publish to (memory key)",fi:"Julkaise (muistiavain)"},
+  "visibility":{en:"Visibility",fi:"Näkyvyys"}, "model":{en:"Model",fi:"Malli"},
+  "history":{en:"History",fi:"Historia"}, "rollback":{en:"Roll back",fi:"Palauta"},
+  "fleet.title":{en:"Fleet",fi:"Laivue"}, "fleet.sub":{en:"Every agent's status, live.",fi:"Jokaisen agentin tila, livenä."},
+  "memory.title":{en:"Local memory",fi:"Paikallinen muisti"},
+  "memory.sub":{en:"The agent's private scratch — raw findings stay on this machine.",fi:"Agentin yksityinen luonnos — raakahavainnot pysyvät tällä koneella."},
+  "sync.title":{en:"Sync with aimeat.io",fi:"Synkka aimeat.io:n kanssa"},
+  "sync.sub":{en:"What stays local vs what has been published upward.",fi:"Mikä pysyy paikallisena vs. mikä on julkaistu ylös."},
+  "insync":{en:"All in sync",fi:"Kaikki synkassa"}, "notinsync":{en:"raw items not yet published",fi:"raakakohdetta julkaisematta"},
+  "raw":{en:"local (raw)",fi:"paikallinen (raaka)"}, "published":{en:"published",fi:"julkaistu"},
+  "preview.note":{en:"Plan preview — no spend. Full PROPOSE runs when the agent is live.",fi:"Suunnitelman esikatselu — ei kuluja. Täysi PROPOSE ajetaan kun agentti on käynnissä."},
+  "noagents":{en:"No agents yet — pick a brain from the gallery.",fi:"Ei agentteja vielä — valitse aivot galleriasta."},
+  "pickagent":{en:"Pick an agent",fi:"Valitse agentti"}, "saved":{en:"Saved",fi:"Tallennettu"},
+};
+const t = k => (STR[k]&&STR[k][LANG]) || (STR[k]&&STR[k].en) || k;
+
+async function api(path, opts={}) {
+  const r = await fetch(path, {...opts, headers:{"Authorization":"Bearer "+TOKEN,
+    ...(opts.body?{"Content-Type":"application/json"}:{}), ...(opts.headers||{})}});
+  if (!r.ok) { const e = await r.json().catch(()=>({detail:r.statusText})); throw new Error(e.detail||r.statusText); }
+  return r.status===204 ? null : r.json();
+}
+function toast(msg){ const el=document.getElementById("toast"); el.textContent=msg; el.classList.add("show");
+  setTimeout(()=>el.classList.remove("show"),2200); }
+// NB: a <template> parses ANY fragment incl. <tr>/<td> (a <div> silently drops table rows → null).
+function el(html){ const t=document.createElement("template"); t.innerHTML=html.trim(); return t.content.firstChild; }
+function esc(s){ return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+const VIEWS = ["gallery","fleet","memory","sync"];
+let view = "gallery", editing = null, editorStream = null, latestState = null;
+
+function renderNav(){
+  const nav=document.getElementById("nav"); nav.innerHTML="";
+  VIEWS.forEach(v=>{ const b=el(`<button>${t("nav."+v)}</button>`);
+    if(v===view) b.classList.add("active"); b.onclick=()=>{ view=v; editing=null; render(); }; nav.appendChild(b); });
+}
+
+async function render(){
+  if(editorStream){ editorStream.close(); editorStream=null; }   // close the Manage-page live stream on nav
+  latestState=null;
+  renderNav();
+  const m=document.getElementById("main"); m.innerHTML="<p class='muted'>…</p>";
+  try {
+    const acc = await api("/api/account");
+    if (!acc.owner_set) return renderConnect(m, acc);   // first run: must connect an account first
+    if (editing!==null) return renderEditor(m);
+    if (view==="gallery") return renderGallery(m);
+    if (view==="fleet") return renderFleet(m);
+    if (view==="memory") return renderMemory(m);
+    if (view==="sync") return renderSync(m);
+  } catch(e){ m.innerHTML=`<p class='muted'>Error: ${esc(e.message)}</p>`; }
+}
+
+function renderConnect(m, acc){
+  m.innerHTML=`<h2>${t("connect.title")}</h2><div class="sub">${t("connect.sub")}</div>`;
+  const form=el(`<div class="card" style="max-width:480px"></div>`);
+  form.appendChild(el(`<label>${t("owner")}</label>`));
+  const owner=el(`<input placeholder="e.g. happydude500001" value="${esc(acc.owner||"")}">`); form.appendChild(owner);
+  form.appendChild(el(`<label>${t("node")}</label>`));
+  const node=el(`<input value="${esc(acc.node||"https://aimeat.io")}">`); form.appendChild(node);
+  const btn=el(`<button class="btn" style="margin-top:16px">${t("connectbtn")}</button>`);
+  btn.onclick=async()=>{ const o=owner.value.trim(); if(!o) return toast(t("owner"));
+    try{ await api("/api/account/connect",{method:"POST",body:JSON.stringify({owner:o,node:node.value.trim()})});
+      toast(t("approveddone").split("!")[0]); pollAccount(); render(); }catch(e){ toast(e.message); } };
+  form.appendChild(btn); m.appendChild(form);
+}
+
+async function renderGallery(m){
+  const [tpls, brains] = await Promise.all([api("/api/templates?lang="+LANG), api("/api/brains")]);
+  m.innerHTML=`<h2>${t("gallery.title")}</h2><div class="sub">${t("gallery.sub")}</div>`;
+  const g=el(`<div class="grid"></div>`);
+  tpls.templates.forEach(tp=>{
+    const c=el(`<div class="card"><h3>${esc(tp.title)}</h3><p>${esc(tp.description)}</p></div>`);
+    const b=el(`<button class="btn">${t("use")}</button>`);
+    b.onclick=()=>{ editing={isNew:true, template:tp, brain:{agent_name:"", template_id:tp.id, prose:tp.default_prose, policy:tp.default_policy, title:tp.title}}; render(); };
+    c.appendChild(b); g.appendChild(c);
+  });
+  m.appendChild(g);
+  m.appendChild(el(`<h2 style="margin-top:28px">${t("gallery.your")}</h2>`));
+  if(!brains.brains.length){ m.appendChild(el(`<p class="muted">${t("noagents")}</p>`)); return; }
+  const g2=el(`<div class="grid"></div>`);
+  brains.brains.forEach(b=>{
+    const c=el(`<div class="card"><h3>${esc(b.agent_name)}</h3><p>${esc((b.prose||"").slice(0,90))}</p></div>`);
+    const r=el(`<div class="row"></div>`);
+    const eb=el(`<button class="btn ghost">${t("manage")}</button>`); eb.onclick=()=>openEditor(b.agent_name);
+    r.appendChild(eb); c.appendChild(r); g2.appendChild(c);
+  });
+  m.appendChild(g2);
+}
+
+async function openEditor(agent){ const b=await api("/api/brains/"+encodeURIComponent(agent));
+  const tpls=await api("/api/templates?lang="+LANG); const tp=tpls.templates.find(x=>x.id===b.template_id);
+  editing={isNew:false, template:tp, brain:b}; render(); }
+
+function renderEditor(m){
+  const {isNew, brain} = editing; const p=brain.policy||{};
+  m.innerHTML="";
+  const back=el(`<div class="back">← ${t("nav.gallery")}</div>`); back.onclick=()=>{ editing=null; view="gallery"; render(); };
+  m.appendChild(back);
+  const who = isNew ? (brain.title||brain.template_id) : (t("manage")+": "+brain.agent_name);
+  m.appendChild(el(`<h2>${esc(who)} <span class="muted" style="font-size:13px">· ${esc(brain.template_id)}${brain.version?(" · v"+brain.version):""}</span> <span id="authbadge"></span> <span id="runbadge"></span></h2>`));
+  const authState = {authorized:false};
+  const form=el(`<div class="card"></div>`);
+  form.appendChild(el(`<label>${t("agentname")}</label>`));
+  const name=el(`<input ${isNew?"":"disabled"} value="${esc(brain.agent_name)}" placeholder="e.g. news-watcher-1">`); form.appendChild(name);
+  form.appendChild(el(`<label>${t("prose")}</label>`));
+  const prose=el(`<textarea>${esc(brain.prose||"")}</textarea>`); form.appendChild(prose);
+  form.appendChild(el(`<label>${t("policy")}</label>`));
+  const pr=el(`<div class="row" style="gap:14px"></div>`);
+  const autonomy=el(`<div style="flex:1;min-width:140px"><label>${t("autonomy")}</label><select class="f" id="pa">
+    ${["act","draft","ask","off"].map(a=>`<option ${p.autonomy===a?"selected":""}>${a}</option>`).join("")}</select></div>`);
+  const sched=el(`<div style="flex:1;min-width:160px"><label>${t("schedule")}</label><input class="f" id="ps" value="${esc((p.schedule||{}).cron||"")}"></div>`);
+  const vis=el(`<div style="flex:1;min-width:120px"><label>${t("visibility")}</label><select class="f" id="pv">
+    ${["owner","public"].map(a=>`<option ${p.visibility===a?"selected":""}>${a}</option>`).join("")}</select></div>`);
+  const modelBox=el(`<div style="flex:1;min-width:220px"><label>${t("model")}</label><select class="f" id="pm"><option value="">${esc(t("model.default"))}</option></select></div>`);
+  pr.appendChild(autonomy); pr.appendChild(sched); pr.appendChild(vis); pr.appendChild(modelBox); form.appendChild(pr);
+  form.appendChild(el(`<label>${t("publishkey")}</label>`));
+  const pk=el(`<input value="${esc(p.publish_key||"")}" placeholder="blank = auto from agent name">`); form.appendChild(pk);
+  form.appendChild(el(`<label>${t("keymode")}</label>`));
+  const km=el(`<select class="f" id="pkm" style="max-width:340px">${["latest","date","timestamp"].map(x=>`<option value="${x}" ${(p.key_mode||"date")===x?"selected":""}>${t("keymode."+x)}</option>`).join("")}</select>`);
+  form.appendChild(km);
+  m.appendChild(form);
+  const offerBox=el(`<div id="offerbox"></div>`); m.appendChild(offerBox);
+  if(!isNew) loadOffer(offerBox, m, brain.agent_name, authState);
+
+  // model picker — async catalogue; preserve the brain's current model until it loads (don't clobber on save)
+  let modelsLoaded=false; const modelSpecs={};
+  (async()=>{ try{ const mm=await api("/api/models"); const sel=form.querySelector("#pm");
+    const cur=(p.model&&p.model.label)||"";
+    const addGroup=(label,arr)=>{ if(!arr.length) return; const og=el(`<optgroup label="${esc(label)}"></optgroup>`);
+      arr.forEach(x=>{ modelSpecs[x.label]=x.spec; og.appendChild(el(`<option ${x.label===cur?"selected":""}>${esc(x.label)}</option>`)); }); sel.appendChild(og); };
+    addGroup(t("model.local"), mm.models.filter(x=>x.local)); addGroup(t("model.cloud"), mm.models.filter(x=>!x.local));
+    modelsLoaded=true; }catch{} })();
+  const collectModel=()=>{ if(!modelsLoaded) return p.model||null; const v=form.querySelector("#pm").value; return v?(modelSpecs[v]||null):null; };
+
+  const collectPolicy=()=>({...p, autonomy:form.querySelector("#pa").value,
+    schedule:{...(p.schedule||{}), cron:form.querySelector("#ps").value}, visibility:form.querySelector("#pv").value,
+    publish_key:pk.value, key_mode:form.querySelector("#pkm").value, model:collectModel()});
+
+  const bar=el(`<div class="row" style="margin-top:16px"></div>`);
+  const save=el(`<button class="btn">${t("save")}</button>`);
+  save.onclick=async()=>{ try{
+    if(isNew){ const an=name.value.trim(); if(!an) return toast("agent name required");
+      await api("/api/brains",{method:"POST",body:JSON.stringify({agent_name:an,template_id:brain.template_id,prose:prose.value,policy:collectPolicy(),title:brain.title})});
+    } else { await api("/api/brains/"+encodeURIComponent(brain.agent_name),{method:"PATCH",body:JSON.stringify({prose:prose.value,policy:collectPolicy()})}); }
+    toast(t("saved")); openEditor(isNew?name.value.trim():brain.agent_name);
+  }catch(e){ toast(e.message); } };
+  bar.appendChild(save);
+
+  if(!isNew){
+    const dry=el(`<button class="btn ghost">${t("dryrun")}</button>`);
+    dry.onclick=async()=>{ try{ const d=await api("/api/brains/"+encodeURIComponent(brain.agent_name)+"/dry-run"); showPreview(m,d); }catch(e){ toast(e.message); } };
+    const hist=el(`<button class="btn ghost">${t("history")}</button>`);
+    hist.onclick=async()=>{ try{ const h=await api("/api/agents/"+encodeURIComponent(brain.agent_name)+"/activity"); showActivity(m,brain.agent_name,h.events); }catch(e){ toast(e.message); } };
+    const logs=el(`<button class="btn ghost">${t("logs")}</button>`);
+    logs.onclick=async()=>{ try{ const l=await api("/api/fleet/"+encodeURIComponent(brain.agent_name)+"/logs"); showLogs(m,l); }catch(e){ toast(e.message); } };
+    const approve=el(`<button class="btn">${t("approve")}</button>`);
+    approve.onclick=async()=>{ approve.disabled=true;
+      const out=m.querySelector("#editorout"); out.innerHTML=`<div class="card"><div class="row"><span class="spin"></span> <span>${t("connecting")}</span></div></div>`;
+      try{ const d=await api("/api/agents/"+encodeURIComponent(brain.agent_name)+"/register",{method:"POST"});
+        showApprove(m, brain.agent_name, d, authState); }catch(e){ out.innerHTML=`<p class="muted">${esc(e.message)}</p>`; toast(e.message); }
+      finally{ approve.disabled=false; } };
+    const test=el(`<button class="btn ghost">${t("testrun")}</button>`);
+    test.onclick=()=>showTestRun(m, brain.agent_name, authState);
+    const tasks=el(`<button class="btn ghost">${t("tasks")}</button>`);
+    tasks.onclick=async()=>{ try{ const r=await api("/api/agents/"+encodeURIComponent(brain.agent_name)+"/tasks"); showTasks(m,r,brain.agent_name); }catch(e){ toast(e.message); } };
+    bar.appendChild(approve); bar.appendChild(dry); bar.appendChild(test); bar.appendChild(tasks); bar.appendChild(hist); bar.appendChild(logs);
+    ["start","stop","restart"].forEach(act=>{ const b=el(`<button class="btn ghost">${t(act)}</button>`);
+      b.onclick=async()=>{ if(act==="start" && !authState.authorized) return toast(t("approvefirst"));
+        setRunBadge(m, act==="stop"?"stopping":act==="restart"?"restarting":"starting");   // SSE confirms the real state next tick
+        try{ const r=await api(`/api/fleet/${encodeURIComponent(brain.agent_name)}/${act}`,{method:"POST"}); toast((r.result||"").slice(0,120)); }catch(e){ toast(e.message); } }; bar.appendChild(b); });
+    refreshAuth(m, brain.agent_name, authState);
+    // LIVE updates via SSE — the cockpit pushes run-status + task changes; no browser polling.
+    const es=new EventSource(`/api/agents/${encodeURIComponent(brain.agent_name)}/stream?token=${encodeURIComponent(TOKEN)}`);
+    es.onmessage=(ev)=>{ try{ latestState=JSON.parse(ev.data); applyRunBadge(m, latestState.status);
+      const out=m.querySelector("#editorout"); if(out && out.dataset.view==="tasks") showTasks(m, latestState, brain.agent_name);
+    }catch{} };
+    editorStream=es;
+  }
+  m.appendChild(bar);
+  const out=el(`<div id="editorout" style="margin-top:16px"></div>`); m.appendChild(out);
+}
+
+function showPreview(m,d){
+  const out=m.querySelector("#editorout"); out.dataset.view="preview"; out.innerHTML="";
+  out.appendChild(el(`<div class="sub">${t("preview.note")}</div>`));
+  d.agents.forEach(a=>out.appendChild(el(`<div class="card"><h3>${esc(a.role)}</h3><p class="muted">${esc(a.goal)}</p><div class="muted">tools: ${esc((a.tools||[]).join(", "))}</div></div>`)));
+  d.tasks.forEach(tk=>out.appendChild(el(`<pre>${esc(tk.description)}</pre>`)));
+}
+function setRunBadge(m, transient){
+  const b=m.querySelector("#runbadge"); if(!b) return;
+  b.innerHTML=`<span class="pill wait"><span class="spin" style="width:9px;height:9px;vertical-align:-1px"></span> ${t("run."+transient)}</span>`;
+}
+function applyRunBadge(m, status){
+  const b=m.querySelector("#runbadge"); if(!b) return;
+  if(status==="running") b.innerHTML=`<span class="pill run">${t("run.running")}</span>`;
+  else if(status==="stale-heartbeat") b.innerHTML=`<span class="pill wait">${t("run.stale")}</span>`;
+  else if(status==="unknown"||!status) b.innerHTML="";
+  else b.innerHTML=`<span class="pill off">${t("run.stopped")}</span>`;
+}
+function showActivity(m, agent, evs){
+  const out=m.querySelector("#editorout"); out.dataset.view="history";
+  out.innerHTML=`<h3>${t("history")}</h3><div class="muted" style="font-size:12px;margin-bottom:8px">${t("openresult")}</div>`;
+  if(!evs || !evs.length){ out.appendChild(el(`<p class="muted">—</p>`)); return; }
+  const tb=el(`<table><tr><th>when</th><th>event</th><th>detail</th><th></th></tr></table>`);
+  evs.forEach(e=>{
+    const d=e.detail||{}; const when=e.ts?new Date(e.ts*1000).toLocaleString():"—";
+    let label=t("ev."+e.kind)!=="ev."+e.kind ? t("ev."+e.kind) : e.kind; let detail=""; let clickable=false;
+    if(e.kind==="brain_saved"){ const ch=(d.changed||[]).join(", "); detail=`v${d.version}${ch?(" · "+t("changed")+": "+esc(ch)):""}`; }
+    else if(e.kind==="rolled_back"){ detail=`→ v${d.to_version}`; }
+    else if(e.kind==="connect_requested" && d.code){ detail=esc(d.code); }
+    else if(e.kind==="test_run"){ detail=esc(d.prompt||""); }
+    else if(e.kind==="task"){ label=`${t("ev.task")}: ${esc(d.title||"—")}`;
+      detail=`<span class="pill ${statusCls(d.status)}">${esc(d.status||"?")}</span> ${esc((d.description||"").slice(0,70))}`; clickable=!!d.id; }
+    const tr=el(`<tr ${clickable?'style="cursor:pointer"':''}><td class="muted">${esc(when)}</td><td>${label}</td><td class="muted">${detail}</td><td></td></tr>`);
+    if(clickable){ tr.onclick=()=>showTaskResult(m, agent, d); }
+    if(e.kind==="brain_saved" && d.version){ const b=el(`<button class="btn ghost" style="padding:3px 8px">${t("rollback")}</button>`);
+      b.onclick=async(ev)=>{ ev.stopPropagation(); try{ await api("/api/brains/"+encodeURIComponent(agent)+"/rollback",{method:"POST",body:JSON.stringify({version:d.version})}); toast(t("rollback")+" v"+d.version); openEditor(agent); }catch(x){ toast(x.message); } };
+      tr.lastChild.appendChild(b); }
+    tb.appendChild(tr);
+  });
+  out.appendChild(tb);
+}
+async function showTaskResult(m, agent, d){
+  const out=m.querySelector("#editorout"); out.dataset.view="history";
+  out.innerHTML=""; const back=el(`<div class="back">← ${t("history")}</div>`);
+  back.onclick=async()=>{ try{ const r=await api("/api/agents/"+encodeURIComponent(agent)+"/activity"); showActivity(m, agent, r.events); }catch(e){ toast(e.message); } };
+  out.appendChild(back);
+  out.appendChild(el(`<div class="row" style="gap:12px;margin:10px 0"><span class="pill ${statusCls(d.status)}">${esc(d.status||"?")}</span> <b>${esc(d.title||"")}</b></div>`));
+  if(d.description) out.appendChild(el(`<div class="card" style="margin-bottom:12px"><label>${t("input")}</label><div>${esc(d.description)}</div></div>`));
+  const slot=el(`<div class="muted">…</div>`); out.appendChild(slot);
+  try{ const r=await api("/api/agents/"+encodeURIComponent(agent)+"/task/"+encodeURIComponent(d.id)+"/result");
+    if(r.result){ slot.innerHTML=`<h3>${t("result")}</h3>`+(r.key?`<div class="muted" style="font-size:12px;margin-bottom:6px;word-break:break-all">${esc(r.key)}</div>`:""); slot.appendChild(el(mdRender(r.result))); }
+    else slot.innerHTML=`<p class="muted">${t("nooutput")} (${esc(r.status||d.status||"")})</p>`;
+  }catch(e){ slot.innerHTML=`<p class="muted">${esc(e.message)}</p>`; }
+}
+async function refreshAuth(m, agent, authState){
+  const badge=m.querySelector("#authbadge"); if(!badge) return;
+  try{ const s=await api("/api/agents/"+encodeURIComponent(agent)+"/auth-status");
+    authState.authorized = !!s.authorized;
+    badge.innerHTML = s.authorized ? `<span class="pill published">${t("approved")}</span>`
+                                   : `<span class="pill stale-heartbeat">${t("needsapproval")}</span>`;
+  }catch{ badge.innerHTML=""; }
+}
+function showApprove(m, agent, d, authState){
+  const out=m.querySelector("#editorout"); out.dataset.view="approve"; out.innerHTML="";
+  if(!d.code || !d.verify_url){ out.appendChild(el(`<pre>${esc(d.message||"started")}</pre>`)); }
+  else {
+    out.appendChild(el(`<div class="sub">${t("approveinstr")}</div>`));
+    out.appendChild(el(`<div class="card"><div class="row" style="gap:20px">
+      <div><label>URL</label><a href="${esc(d.verify_url)}" target="_blank">${esc(d.verify_url)}</a></div>
+      <div><label>${t("code")}</label><div style="font-size:22px;font-weight:700;letter-spacing:2px">${esc(d.code)}</div></div>
+    </div></div>`));
+  }
+  const status=el(`<div class="row" style="margin-top:10px"><span class="spin"></span> <span class="muted">${t("waiting")}</span></div>`); out.appendChild(status);
+  const iv=setInterval(async()=>{
+    try{ const s=await api("/api/agents/"+encodeURIComponent(agent)+"/auth-status");
+      if(s.authorized){ clearInterval(iv); authState.authorized=true;
+        const b=m.querySelector("#authbadge"); if(b) b.innerHTML=`<span class="pill published">${t("approved")}</span>`;
+        status.innerHTML="";
+        const done=el(`<div class="row" style="margin-top:10px"><span class="pill published">${t("approveddone")}</span></div>`);
+        const dismiss=el(`<button class="btn ghost" style="padding:4px 10px">${t("dismiss")}</button>`);
+        dismiss.onclick=()=>{ out.innerHTML=""; }; done.appendChild(dismiss); status.replaceWith(done);
+        toast(t("approveddone")); }
+    }catch{}
+  }, 4000);
+  out._iv=iv;  // cleared when the panel is dismissed/re-rendered
+}
+function showTestRun(m, agent, authState){
+  if(!authState.authorized) return toast(t("offer.needsconnect"));
+  const out=m.querySelector("#editorout"); out.dataset.view="test"; out.innerHTML="";
+  const card=el(`<div class="card"></div>`);
+  card.appendChild(el(`<label>${t("testprompt")}</label>`));
+  const inp=el(`<input placeholder="${esc(t("testprompt"))}">`); card.appendChild(inp);
+  const run=el(`<button class="btn" style="margin-top:12px">${t("run")}</button>`);
+  const status=el(`<div style="margin-top:12px"></div>`);
+  run.onclick=async()=>{ const p=inp.value.trim(); if(!p) return; run.disabled=true;
+    status.innerHTML=`<div class="row"><span class="spin"></span> <span class="muted">${t("queued")}</span></div>`;
+    try{ const r=await api("/api/agents/"+encodeURIComponent(agent)+"/test",{method:"POST",body:JSON.stringify({prompt:p})});
+      let waited=0; const iv=setInterval(async()=>{ waited+=5;
+        try{ const res=await api("/api/agents/"+encodeURIComponent(agent)+"/task/"+encodeURIComponent(r.task_id)+"/result");
+          if(res.done){ clearInterval(iv); run.disabled=false;
+            if(res.result){ status.innerHTML=`<h3>${t("result")}</h3>`+(res.key?`<div class="muted" style="font-size:12px;margin-bottom:6px;word-break:break-all">${esc(res.key)}</div>`:""); status.appendChild(el(mdRender(res.result))); }
+            else status.innerHTML=`<p class="muted">${t("nooutput")} (${esc(res.status||"")})</p>`; }
+          else status.innerHTML=`<div class="row"><span class="spin"></span> <span class="muted">${t("working")} ${waited}s</span></div>`;
+        }catch{}
+        if(waited>1800){ clearInterval(iv); run.disabled=false; }   // 30 min — slow models (e.g. owl-alpha) run long
+      }, 5000);
+    }catch(e){ status.innerHTML=`<p class="muted">${esc(e.message)}</p>`; run.disabled=false; toast(e.message); } };
+  card.appendChild(run); card.appendChild(status); out.appendChild(card);
+}
+function statusCls(s){ return {running:"run",active:"run",queued:"wait",done:"published",failed:"DUPLICATE"}[s]||"off"; }
+function fmtTime(iso){ if(!iso) return "—"; try{ return new Date(iso).toLocaleString(); }catch{ return "—"; } }
+function fmtDur(a,b){ if(!a||!b) return "—"; try{ const s=(new Date(b)-new Date(a))/1000; if(s<0||isNaN(s)) return "—";
+  if(s<60) return Math.round(s)+"s"; const m=Math.floor(s/60); return m+"m "+Math.round(s%60)+"s"; }catch{ return "—"; } }
+function showTasks(m, resp, agent){
+  const out=m.querySelector("#editorout"); out.dataset.view="tasks"; out.innerHTML=`<h3>${t("tasks")} <span class="muted" style="font-size:11px">live</span></h3>`;
+  if(resp && (resp.error==="agent_not_attached" || resp.attached===false)){ out.appendChild(el(`<p class="muted">${t("notattached")}</p>`)); return; }
+  const tasks=(resp&&resp.tasks)||[];
+  if(!tasks.length){ out.appendChild(el(`<p class="muted">${t("notasks")}</p>`)); return; }
+  tasks.forEach(tk=>{ const st=tk.status||"?";
+    const card=el(`<div class="card" style="padding:9px 14px;margin-bottom:8px"></div>`);
+    const head=el(`<div class="row" style="cursor:pointer;justify-content:space-between;gap:10px"></div>`);
+    head.appendChild(el(`<div class="row" style="gap:10px;flex:1;min-width:0"><span style="color:var(--muted)">▸</span> <span class="pill ${statusCls(st)}">${esc(st)}</span> <b style="overflow:hidden;text-overflow:ellipsis">${esc(tk.title||"—")}</b></div>`));
+    head.appendChild(el(`<span class="muted" style="font-size:12px;white-space:nowrap">${t("tk.took")} ${fmtDur(tk.created,tk.completed)}</span>`));
+    card.appendChild(head);
+    const detail=el(`<div style="display:none;margin-top:10px"></div>`); card.appendChild(detail);
+    let loaded=false;
+    head.onclick=async()=>{ const open=detail.style.display==="none"; detail.style.display=open?"block":"none";
+      head.firstChild.firstChild.textContent=open?"▾":"▸";
+      if(open && !loaded){ loaded=true;
+        detail.innerHTML=`<div class="muted" style="font-size:12px">${t("tk.started")}: ${esc(fmtTime(tk.created))} · ${t("tk.finished")}: ${esc(fmtTime(tk.completed))} · ${t("tk.took")} ${fmtDur(tk.created,tk.completed)} · id ${esc((tk.id||"").slice(0,8))}</div>`;
+        if(tk.description) detail.appendChild(el(`<div class="card" style="margin:8px 0"><label>${t("input")}</label><div>${esc(tk.description)}</div></div>`));
+        const slot=el(`<div class="muted">…</div>`); detail.appendChild(slot);
+        try{ const r=await api("/api/agents/"+encodeURIComponent(agent)+"/task/"+encodeURIComponent(tk.id)+"/result");
+          if(r.result){ slot.innerHTML=`<label>${t("result")}</label>`+(r.key?`<div class="muted" style="font-size:12px;word-break:break-all">${esc(r.key)}</div>`:""); slot.appendChild(el(mdRender(r.result))); }
+          else slot.innerHTML=`<p class="muted">${t("nooutput")} (${esc(r.status||st)})</p>`;
+        }catch(e){ slot.innerHTML=`<p class="muted">${esc(e.message)}</p>`; }
+      }
+    };
+    out.appendChild(card);
+  });
+}
+async function loadOffer(box, m, agent, authState){
+  let info; try{ info=await api("/api/agents/"+encodeURIComponent(agent)+"/offer"); }catch{ return; }
+  box.innerHTML="";
+  const card=el(`<div class="card" style="margin-top:14px"></div>`);
+  card.appendChild(el(`<h3>${t("offer.section")} ${info.enabled?`<span class="pill published">${t("offer.published")}</span>`:""}</h3>`));
+  if(!info.available){ card.appendChild(el(`<p class="muted">${t("offer.none")}</p>`)); box.appendChild(card); return; }
+  card.appendChild(el(`<div class="sub" style="margin:0 0 10px">${t("offer.note")}</div>`));
+  card.appendChild(el(`<div><b>${esc(info.offer.title)}</b></div>`));
+  card.appendChild(el(`<div class="muted" style="margin:4px 0 12px">${esc(info.offer.ask)}</div>`));
+  const btn=el(`<button class="btn">${t("offer.publish")}</button>`);
+  btn.onclick=async()=>{ if(!authState.authorized) return toast(t("offer.needsconnect"));
+    btn.disabled=true; try{ await api("/api/agents/"+encodeURIComponent(agent)+"/offer/publish",{method:"POST"});
+      toast(t("offer.published")); loadOffer(box, m, agent, authState); }catch(e){ toast(e.message); } finally{ btn.disabled=false; } };
+  card.appendChild(btn); box.appendChild(card);
+}
+function showLogs(m,l){
+  const out=m.querySelector("#editorout"); out.dataset.view="logs";
+  if(!l.lines.length){ out.innerHTML=`<p class="muted">${t("logs")}: —</p>`; return; }
+  out.innerHTML=`<h3>${t("logs")} <span class="muted" style="font-size:12px">${esc(l.file||"")}</span></h3>`;
+  out.appendChild(el(`<pre>${esc(l.lines.join("\n"))}</pre>`));
+}
+
+async function renderFleet(m){
+  const snap=await api("/api/fleet");
+  m.innerHTML=`<h2>${t("fleet.title")}</h2><div class="sub">${t("fleet.sub")} · serve ${snap.serve_port?("port "+snap.serve_port):"down"} · ${snap.n_locks} locks</div>`;
+  if(!snap.rows.length){ m.appendChild(el(`<p class="muted">${t("noagents")}</p>`)); return; }
+  const tb=el(`<table><tr><th>agent</th><th>status</th><th>wd/dmn</th><th>last seen</th><th></th></tr></table>`);
+  snap.rows.forEach(r=>{
+    const age=r.last_seen_age_s==null?"—":(Math.round(r.last_seen_age_s)+"s");
+    const tr=el(`<tr><td>${esc(r.agent)}</td><td><span class="pill ${esc(r.status)}">${esc(r.status)}</span></td>
+      <td class="muted">${r.watchdog_procs}/${r.daemon_procs}</td><td class="muted">${age}</td><td></td></tr>`);
+    const cell=tr.lastChild;
+    ["start","stop","restart"].forEach(act=>{ const b=el(`<button class="btn ghost" style="padding:4px 9px">${t(act)}</button>`);
+      b.onclick=async()=>{ try{ const x=await api(`/api/fleet/${encodeURIComponent(r.agent)}/${act}`,{method:"POST"}); toast(x.result.slice(0,120)); render(); }catch(e){ toast(e.message); } }; cell.appendChild(b); });
+    tb.appendChild(tr);
+  });
+  m.appendChild(tb);
+}
+
+async function agentPicker(m, onPick){
+  const brains=await api("/api/brains");
+  const sel=el(`<select class="f" style="max-width:280px"><option value="">${t("pickagent")}…</option>${brains.brains.map(b=>`<option>${esc(b.agent_name)}</option>`).join("")}</select>`);
+  sel.onchange=()=>onPick(sel.value); m.appendChild(sel); return sel;
+}
+
+// minimal, dependency-free markdown -> HTML (headings, lists, code fences, bold/italic/code, links).
+function mdInline(s){
+  s=esc(s);
+  s=s.replace(/`([^`]+)`/g,'<code>$1</code>');
+  s=s.replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>').replace(/\*([^*]+)\*/g,'<i>$1</i>');
+  s=s.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,'<a href="$2" target="_blank">$1</a>');
+  s=s.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g,'$1<a href="$2" target="_blank">$2</a>');
+  return s;
+}
+function mdRender(src){
+  if(typeof src!=="string") src=JSON.stringify(src,null,2);
+  const lines=src.replace(/\r\n/g,"\n").split("\n"); let html="",inList=false,inCode=false,code="";
+  const closeList=()=>{ if(inList){ html+="</ul>"; inList=false; } };
+  for(const ln of lines){
+    if(/^```/.test(ln)){ if(inCode){ html+=`<pre>${esc(code)}</pre>`; code=""; inCode=false; } else { closeList(); inCode=true; } continue; }
+    if(inCode){ code+=ln+"\n"; continue; }
+    const h=ln.match(/^(#{1,6})\s+(.*)$/); if(h){ closeList(); html+=`<h${h[1].length}>${mdInline(h[2])}</h${h[1].length}>`; continue; }
+    const li=ln.match(/^\s*[-*]\s+(.*)$/); if(li){ if(!inList){ html+="<ul>"; inList=true; } html+=`<li>${mdInline(li[1])}</li>`; continue; }
+    if(ln.trim()===""){ closeList(); continue; }
+    closeList(); html+=`<p>${mdInline(ln)}</p>`;
+  }
+  if(inCode) html+=`<pre>${esc(code)}</pre>`; closeList();
+  return `<div class="md">${html}</div>`;
+}
+
+async function renderMemory(m){
+  m.innerHTML=`<h2>${t("memory.title")}</h2><div class="sub">${t("memory.sub")}</div>`;
+  const out=el(`<div style="margin-top:14px"></div>`);
+  await agentPicker(m, async agent=>{ out.innerHTML=""; if(!agent) return; await loadMem(out, agent); });
+  m.appendChild(out);
+}
+async function loadMem(out, agent){
+  const [recs,facets]=await Promise.all([api("/api/memory/"+encodeURIComponent(agent)),api("/api/memory/"+encodeURIComponent(agent)+"/facets")]);
+  const fr=Object.entries(facets.topic||{}).map(([k,n])=>`${esc(k)} (${n})`).join(" · ");
+  out.innerHTML = (fr?`<div class="muted" style="margin-bottom:6px">topics: ${fr}</div>`:"")+`<div class="muted" style="margin-bottom:10px;font-size:12px">${t("mem.open")}</div>`;
+  if(!recs.records.length){ out.appendChild(el(`<p class="muted">empty</p>`)); return; }
+  const tb=el(`<table><tr><th>status</th><th>topic</th><th>source</th><th>body</th></tr></table>`);
+  recs.records.forEach(r=>{ const body=typeof r.body==="string"?r.body:JSON.stringify(r.body);
+    const tr=el(`<tr style="cursor:pointer"><td><span class="pill ${esc(r.status)}">${esc(r.status)}</span></td><td>${esc(r.topic||"—")}</td><td class="muted">${esc(r.source||"—")}</td><td class="muted">${esc(body.slice(0,90))}</td></tr>`);
+    tr.onclick=()=>showMemRecord(out, agent, r); tb.appendChild(tr); });
+  out.appendChild(tb);
+}
+function showMemRecord(out, agent, r){
+  out.innerHTML="";
+  const back=el(`<div class="back">← ${t("memory.title")}</div>`); back.onclick=()=>loadMem(out, agent); out.appendChild(back);
+  const meta=[`<span class="pill ${esc(r.status)}">${esc(r.status)}</span>`];
+  if(r.topic) meta.push(`topic: ${esc(r.topic)}`); if(r.source) meta.push(`source: ${esc(r.source)}`);
+  out.appendChild(el(`<div class="row" style="gap:14px;margin:10px 0">${meta.join(' · ')}</div>`));
+  if(r.status==="published" && r.key){
+    const when=r.published_at?(" · "+new Date(r.published_at*1000).toLocaleString()):"";
+    out.appendChild(el(`<div class="card" style="margin-bottom:12px"><label>${t("mem.key")}</label><div style="font-family:monospace;word-break:break-all">${esc(r.key)}</div><div class="muted" style="font-size:12px">${esc(r.visibility||"")}${when}</div></div>`));
+  }
+  out.appendChild(el(mdRender(r.body)));
+}
+
+async function renderSync(m){
+  m.innerHTML=`<h2>${t("sync.title")}</h2><div class="sub">${t("sync.sub")}</div>`;
+  const out=el(`<div style="margin-top:14px"></div>`);
+  await agentPicker(m, async agent=>{ out.innerHTML=""; if(!agent) return; await loadSync(out, agent); });
+  m.appendChild(out);
+}
+async function loadSync(out, agent){
+  const s=await api("/api/sync/"+encodeURIComponent(agent));
+  const banner=s.in_sync?`<span class="pill published">${t("insync")}</span>`:`<span class="pill stale-heartbeat">${s.raw_count} ${t("notinsync")}</span>`;
+  out.innerHTML=`<div class="row" style="gap:18px;margin-bottom:6px">${banner} <span class="muted">${s.raw_count} ${t("raw")} · ${s.published_count} ${t("published")} (aimeat.io)</span></div><div class="muted" style="font-size:12px;margin-bottom:10px">${t("sync.open")}</div>`;
+  if(!s.published.length){ out.appendChild(el(`<p class="muted">—</p>`)); return; }
+  const tb=el(`<table><tr><th>key</th><th>visibility</th><th>updated</th></tr></table>`);
+  s.published.forEach(p=>{ const when=p.updated?new Date(p.updated).toLocaleString():"—";
+    const tr=el(`<tr style="cursor:pointer"><td style="font-family:monospace;word-break:break-all;font-size:12px">${esc(p.key)}</td><td class="muted">${esc(p.visibility||"")}</td><td class="muted">${esc(when)}</td></tr>`);
+    tr.onclick=()=>showNodeKey(out, agent, p); tb.appendChild(tr); });
+  out.appendChild(tb);
+}
+async function showNodeKey(out, agent, p){
+  out.innerHTML=""; const back=el(`<div class="back">← ${t("sync.title")}</div>`); back.onclick=()=>loadSync(out, agent); out.appendChild(back);
+  const when=p.updated?(" · "+new Date(p.updated).toLocaleString()):"";
+  out.appendChild(el(`<div class="card" style="margin:10px 0"><div style="font-family:monospace;word-break:break-all">${esc(p.key)}</div><div class="muted" style="font-size:12px">${esc(p.visibility||"")}${when}</div></div>`));
+  const slot=el(`<div class="muted">…</div>`); out.appendChild(slot);
+  try{ const r=await api("/api/agents/"+encodeURIComponent(agent)+"/key?key="+encodeURIComponent(p.key));
+    slot.innerHTML=""; slot.appendChild(el(mdRender(r.value||"(empty)")));
+  }catch(e){ slot.innerHTML=`<p class="muted">${esc(e.message)}</p>`; }
+}
+
+async function pollHealth(){
+  try{ const h=await fetch("/healthz").then(r=>r.json()); document.getElementById("healthdot").classList.toggle("ok",!!h.ok);
+    document.getElementById("healthtxt").textContent="cockpit "+h.version; }
+  catch{ document.getElementById("healthdot").classList.remove("ok"); document.getElementById("healthtxt").textContent="offline"; }
+}
+async function pollAccount(){
+  const a=document.getElementById("account");
+  try{ const acc=await api("/api/account");
+    a.textContent = acc.owner ? `${acc.owner} @ ${(acc.node||"").replace(/^https?:\/\//,"")}` : t("notconnected");
+    a.title = acc.connected ? `${acc.registered_agents} ${t("nav.fleet")}` : t("notconnected");
+  }catch{ a.textContent=""; }
+}
+
+document.getElementById("lang").value=LANG;
+document.getElementById("lang").onchange=e=>{ LANG=e.target.value; localStorage.setItem("agencyLang",LANG); pollAccount(); render(); };
+pollHealth(); pollAccount(); setInterval(pollHealth,5000); render();
+</script>
+</body>
+</html>
