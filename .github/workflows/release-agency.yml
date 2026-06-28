@@ -1,0 +1,95 @@
+# Builds the aimeat-agency desktop installer (Tauri, Windows) on a GitHub runner and publishes it as a
+# downloadable GitHub Release. Triggered by an `agency-v*.*.*` tag whose numeric part must match
+# aimeat-agency/src-tauri/tauri.conf.json `version` (mirror of aimeat-protocol's release-desktop gate).
+#
+# Why CI: GitHub's windows-latest runner uses the MSVC Rust toolchain, which skips windres entirely —
+# so the build works regardless of a dev machine's mingw/gcc state. workflow_dispatch builds only (a
+# smoke test, no release); a tag publishes the release.
+name: Release aimeat-agency
+
+on:
+  push:
+    tags:
+      - 'agency-v*.*.*'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write # create the GitHub Release and upload installer assets
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tag matches tauri.conf.json version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME#agency-v}"
+          MANIFEST="$(node -p "require('./aimeat-agency/src-tauri/tauri.conf.json').version")"
+          echo "tag=$TAG manifest=$MANIFEST"
+          if [ "$TAG" != "$MANIFEST" ]; then
+            echo "::error::Tag agency-v$TAG does not match tauri.conf.json version $MANIFEST. Bump the manifest before tagging."
+            exit 1
+          fi
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+
+      # windows-latest defaults to the x86_64-pc-windows-msvc host target (MSVC + Windows SDK
+      # preinstalled) — no windres, no mingw. This is the whole point of building in CI.
+      - name: Setup Rust (MSVC)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo / Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: aimeat-agency/src-tauri
+
+      - name: Install Tauri CLI
+        run: pnpm install --frozen-lockfile
+        working-directory: aimeat-agency
+
+      - name: Build installers (NSIS + MSI)
+        run: pnpm tauri build
+        working-directory: aimeat-agency
+
+      - name: List built bundles
+        shell: bash
+        run: ls -R aimeat-agency/src-tauri/target/release/bundle || true
+
+      # NOTE (Slice 1): the shell currently launches the cockpit via `uv run` from the repo (dev mode).
+      # A fully self-contained installer needs the uv + node sidecars + the crewaimeat package staged
+      # (next Step-4 iteration). This workflow already produces a versioned installer for that work to
+      # build on, and proves the MSVC build is green.
+      - name: Assemble release files
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp aimeat-agency/src-tauri/target/release/bundle/nsis/*-setup.exe dist/ 2>/dev/null || true
+          cp aimeat-agency/src-tauri/target/release/bundle/msi/*.msi dist/ 2>/dev/null || true
+          ls -la dist
+
+      - name: Upload build artifacts (every run)
+        uses: actions/upload-artifact@v4
+        with:
+          name: aimeat-agency-windows
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Create / update GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: aimeat-agency ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: dist/*

@@ -1,0 +1,14 @@
+{
+  "name": "aimeat-agency",
+  "version": "0.8.0",
+  "private": true,
+  "description": "Desktop appliance for running an agency of agents on AIMEAT — a thin Tauri shell over the Python cockpit.",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}
