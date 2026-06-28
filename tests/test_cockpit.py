@@ -47,6 +47,29 @@ def test_templates_lists_topic_watcher(client):
     assert "topic-watcher" in ids
 
 
+def test_setup_status_shape(client, monkeypatch):
+    # Onboarding wizard contract: fresh home → owner not set, no brains, model not ready.
+    monkeypatch.delenv("AIMEAT_OWNER", raising=False)  # else a loaded .env owner makes owner_set True
+    monkeypatch.setattr("crewaimeat.agency.cockpit._ollama_probe", lambda: (False, []))
+    monkeypatch.setattr("crewaimeat.agency.cockpit._has_openrouter_key", lambda: False)
+    s = client.get("/api/setup/status").json()
+    for k in ("owner_set", "ollama", "openrouter_key", "brain_count", "first_agent_running"):
+        assert k in s
+    assert s["owner_set"] is False and s["brain_count"] == 0
+    assert s["ollama"] == {"running": False, "has_gemma4": False, "models": []}
+
+
+def test_setup_status_sees_gemma4(client, monkeypatch):
+    monkeypatch.setattr("crewaimeat.agency.cockpit._ollama_probe", lambda: (True, ["gemma4:latest", "llama3"]))
+    monkeypatch.setattr("crewaimeat.agency.cockpit._has_openrouter_key", lambda: False)
+    s = client.get("/api/setup/status").json()
+    assert s["ollama"]["running"] is True and s["ollama"]["has_gemma4"] is True
+
+
+def test_openrouter_key_requires_value(client):
+    assert client.post("/api/setup/openrouter-key", json={"key": "  "}).status_code == 400
+
+
 def test_models_catalogue(client, monkeypatch):
     from crewaimeat import llm
 

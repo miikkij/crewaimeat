@@ -70,6 +70,14 @@ class TestIn(BaseModel):
     prompt: str
 
 
+class KeyIn(BaseModel):
+    key: str
+
+
+class PullIn(BaseModel):
+    model: str = "gemma4"
+
+
 def _brain_diff(prev: dict | None, new: dict) -> list[str]:
     """What changed between two brain versions — for the activity log ('created', 'prose',
     'policy.autonomy', …) so History shows not just THAT a save happened but WHAT it changed."""
@@ -103,37 +111,77 @@ def _require_token_dependency(app: FastAPI):
     return _check
 
 
-def _ollama_models() -> list[dict]:
-    """Local models from a RUNNING Ollama (localhost:11434), as picker entries with an ollama override
-    spec. Empty if Ollama isn't up. llm.py already routes ollama/<model> to the local endpoint, and skips
-    forced tool-use for ollama — so a local model is a first-class, free, private choice."""
+def _ollama_base() -> str:
+    return os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
+
+
+def _ollama_probe() -> tuple[bool, list[str]]:
+    """(running, model-names). `running` = Ollama answered; the model list may be empty (not yet pulled)."""
     import requests
 
-    base = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
     try:
-        r = requests.get(f"{base}/api/tags", timeout=2)
-        tags = r.json().get("models") or [] if r.status_code == 200 else []
+        r = requests.get(f"{_ollama_base()}/api/tags", timeout=2)
+        if r.status_code != 200:
+            return False, []
+        tags = r.json().get("models") or []
+        return True, [n for m in tags if (n := (m.get("name") or m.get("model")))]
     except Exception:  # noqa: BLE001 — Ollama not running / unreachable is normal
-        return []
-    out = []
-    for m in tags:
-        name = m.get("name") or m.get("model")
-        if not name:
-            continue
-        out.append(
-            {
-                "label": f"ollama:{name}",
-                "id": name,
-                "context": None,
-                "local": True,
-                "spec": {
-                    "kind": "model",
-                    "label": f"ollama:{name}",
-                    "provider": {"type": "ollama", "name": "ollama", "base_url": base, "models": [{"id": name}]},
-                },
-            }
-        )
-    return out
+        return False, []
+
+
+def _ollama_models() -> list[dict]:
+    """Local models from a RUNNING Ollama, as picker entries with an ollama override spec. Empty if Ollama
+    isn't up. llm.py routes ollama/<model> to the local endpoint and skips forced tool-use — so a local
+    model is a first-class, free, private choice."""
+    base = _ollama_base()
+    _running, names = _ollama_probe()
+    return [
+        {
+            "label": f"ollama:{n}",
+            "id": n,
+            "context": None,
+            "local": True,
+            "spec": {
+                "kind": "model",
+                "label": f"ollama:{n}",
+                "provider": {"type": "ollama", "name": "ollama", "base_url": base, "models": [{"id": n}]},
+            },
+        }
+        for n in names
+    ]
+
+
+def ollama_gemma4_spec() -> dict:
+    """The model override for the default local brain: gemma4 on the local Ollama (tool-calling capable)."""
+    return {
+        "kind": "model",
+        "label": "ollama:gemma4",
+        "provider": {"type": "ollama", "name": "ollama", "base_url": _ollama_base(), "models": [{"id": "gemma4"}]},
+    }
+
+
+def _has_openrouter_key() -> bool:
+    if os.environ.get("OPENROUTER_API_KEY"):
+        return True
+    try:
+        from crewaimeat.forge import _project_root
+
+        env = _project_root() / ".env"
+        return env.is_file() and "OPENROUTER_API_KEY=" in env.read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _set_openrouter_key(key: str) -> None:
+    """Persist OPENROUTER_API_KEY to the runtime's .env (the fleet load_dotenv's it) + this process."""
+    from crewaimeat.forge import _project_root
+
+    env = _project_root() / ".env"
+    lines = env.read_text(encoding="utf-8").splitlines() if env.is_file() else []
+    lines = [ln for ln in lines if not ln.startswith("OPENROUTER_API_KEY=")]
+    lines.append(f"OPENROUTER_API_KEY={key}")
+    env.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.environ["OPENROUTER_API_KEY"] = key
 
 
 def _task_brief(tt: dict) -> dict:
@@ -205,11 +253,66 @@ def create_app(token: str | None = None) -> FastAPI:
     @app.post("/api/account/connect", dependencies=[require_token])
     def connect_account(body: ConnectIn) -> dict:
         """Set the owner + home node new agents register under. This does NOT grant access by itself —
-        access is proven per-agent when the owner approves each one via device-auth (see register)."""
+        access is proven per-agent when the owner approves each one via device-auth (see register).
+
+        NOTE: the guided-setup endpoints (/api/setup/status, /api/ollama/pull, /api/setup/openrouter-key)
+        are defined below; the onboarding wizard drives them in order."""
         try:
             return account.save(body.owner, body.node)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.get("/api/setup/status", dependencies=[require_token])
+    def setup_status() -> dict:
+        """Aggregate state for the onboarding wizard: account, model (local Ollama / OpenRouter key), and
+        the first agent's progress (created → connected → running) — so the wizard shows the whole checklist
+        and gates each step on the previous."""
+        from crewaimeat.tui import fleet_state
+
+        acc = account.load()
+        running, names = _ollama_probe()
+        has_gemma4 = any(n.startswith("gemma4") for n in names)
+        bs = brains.list_brains()
+        first = bs[0]["agent_name"] if bs else None
+        first_auth = account.agent_auth(first, acc["owner"]) if first else {"authorized": False}
+        serve_agents = {a.get("agent") for a in (fleet_state.collect_serve().get("agents") or [])}
+        return {
+            "owner_set": acc["owner_set"],
+            "owner": acc["owner"],
+            "node": acc["node"],
+            "ollama": {"running": running, "has_gemma4": has_gemma4, "models": names},
+            "openrouter_key": _has_openrouter_key(),
+            "brain_count": len(bs),
+            "first_agent": first,
+            "first_agent_connected": bool(first_auth.get("authorized")),
+            "first_agent_running": bool(first and first in serve_agents),
+        }
+
+    @app.post("/api/ollama/pull", dependencies=[require_token])
+    def ollama_pull(body: PullIn) -> dict:
+        """Kick off `ollama pull <model>` (default gemma4) in the background; the wizard polls
+        /api/setup/status until the model appears. Needs Ollama installed + on PATH."""
+        import subprocess
+        import threading
+
+        model = (body.model or "gemma4").strip()
+
+        def _pull():
+            try:
+                subprocess.run(["ollama", "pull", model], capture_output=True, timeout=3600)
+            except Exception:  # noqa: BLE001
+                pass
+
+        threading.Thread(target=_pull, daemon=True).start()
+        return {"started": True, "model": model}
+
+    @app.post("/api/setup/openrouter-key", dependencies=[require_token])
+    def set_openrouter_key_route(body: KeyIn) -> dict:
+        """Store an OpenRouter API key (the cloud-model 'advanced' option) in the runtime's .env."""
+        if not body.key or not body.key.strip():
+            raise HTTPException(status_code=400, detail="key is required")
+        _set_openrouter_key(body.key.strip())
+        return {"ok": True}
 
     @app.post("/api/agents/{agent}/register", dependencies=[require_token])
     def register_agent_route(agent: str) -> dict:

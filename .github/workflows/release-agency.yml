@@ -86,10 +86,8 @@ jobs:
         shell: bash
         run: ls -R aimeat-agency/src-tauri/target/release/bundle || true
 
-      # NOTE (Slice 1): the shell currently launches the cockpit via `uv run` from the repo (dev mode).
-      # A fully self-contained installer needs the uv + node sidecars + the crewaimeat package staged
-      # (next Step-4 iteration). This workflow already produces a versioned installer for that work to
-      # build on, and proves the MSVC build is green.
+      # The installer is self-contained: the crewaimeat source + uv are staged above and bundled, so first
+      # run provisions with no git and no pre-installed tools (uv fetches Python + deps online once).
       - name: Assemble release files
         shell: bash
         run: |

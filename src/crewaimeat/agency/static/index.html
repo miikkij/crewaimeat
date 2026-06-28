@@ -88,7 +88,25 @@ const TOKEN = "__AGENCY_TOKEN__";
 let LANG = localStorage.getItem("agencyLang") || "en";
 
 const STR = {
+  "nav.setup":{en:"Setup",fi:"Käyttöönotto"},
   "nav.gallery":{en:"Gallery",fi:"Galleria"}, "nav.fleet":{en:"Fleet",fi:"Laivue"},
+  "w.title":{en:"Get your first agent running",fi:"Ota ensimmäinen agentti käyttöön"},
+  "w.sub":{en:"A few one-time steps. Each unlocks the next — do them top to bottom.",fi:"Muutama kertaluonteinen vaihe. Kukin avaa seuraavan — tee ylhäältä alas."},
+  "w.account":{en:"Connect your aimeat.io account",fi:"Yhdistä aimeat.io-tilisi"},
+  "w.model":{en:"Set up the AI brain",fi:"Aseta tekoälyaivot"},
+  "w.agent":{en:"Create your first agent",fi:"Luo ensimmäinen agentti"},
+  "w.approve":{en:"Approve your agent",fi:"Hyväksy agenttisi"},
+  "w.start":{en:"Start your agent",fi:"Käynnistä agenttisi"},
+  "w.done":{en:"All set — your agent is running! 🎉",fi:"Valmista — agenttisi on käynnissä! 🎉"},
+  "w.done.sub":{en:"Open it to give it a test run and watch it work.",fi:"Avaa se, tee koeajo ja katso miten se toimii."},
+  "w.open":{en:"Open my agent",fi:"Avaa agenttini"},
+  "w.recheck":{en:"Re-check",fi:"Tarkista uudelleen"}, "w.next":{en:"Continue",fi:"Jatka"},
+  "w.noacct":{en:"Don't have an account? Create one at aimeat.io",fi:"Ei tiliä? Luo sellainen osoitteessa aimeat.io"},
+  "w.installollama":{en:"Download Ollama",fi:"Lataa Ollama"}, "w.getgemma":{en:"Download gemma4 (~3 GB)",fi:"Lataa gemma4 (~3 GB)"},
+  "w.downloading":{en:"Downloading the model… this takes a few minutes (you can leave this open).",fi:"Ladataan mallia… kestää muutaman minuutin (voit pitää tämän auki)."},
+  "w.advanced":{en:"Advanced: use a cloud model instead",fi:"Lisäasetus: käytä pilvimallia"},
+  "w.savekey":{en:"Save key",fi:"Tallenna avain"}, "w.opendash":{en:"Open aimeat.io to approve",fi:"Avaa aimeat.io hyväksyäksesi"},
+  "w.copycode":{en:"Copy code",fi:"Kopioi koodi"}, "w.skip":{en:"Skip — I'll set up manually",fi:"Ohita — teen itse"},
   "nav.memory":{en:"Memory",fi:"Muisti"}, "nav.sync":{en:"Sync",fi:"Synkronointi"},
   "manage":{en:"Manage",fi:"Hallinnoi"}, "logs":{en:"Logs",fi:"Lokit"},
   "notconnected":{en:"not connected",fi:"ei yhteyttä"}, "livesat":{en:"lives at",fi:"sijaitsee"},
@@ -173,8 +191,8 @@ function toast(msg){ const el=document.getElementById("toast"); el.textContent=m
 function el(html){ const t=document.createElement("template"); t.innerHTML=html.trim(); return t.content.firstChild; }
 function esc(s){ return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 
-const VIEWS = ["gallery","fleet","memory","sync"];
-let view = "gallery", editing = null, editorStream = null, latestState = null;
+const VIEWS = ["setup","gallery","fleet","memory","sync"];
+let view = "gallery", editing = null, editorStream = null, latestState = null, skipSetup = false;
 
 function renderNav(){
   const nav=document.getElementById("nav"); nav.innerHTML="";
@@ -188,9 +206,8 @@ async function render(){
   renderNav();
   const m=document.getElementById("main"); m.innerHTML="<p class='muted'>…</p>";
   try {
-    const acc = await api("/api/account");
-    if (!acc.owner_set) return renderConnect(m, acc);   // first run: must connect an account first
     if (editing!==null) return renderEditor(m);
+    if (view==="setup") return renderSetup(m);          // the guided first-run wizard (full checklist + gated steps)
     if (view==="gallery") return renderGallery(m);
     if (view==="fleet") return renderFleet(m);
     if (view==="memory") return renderMemory(m);
@@ -210,6 +227,114 @@ function renderConnect(m, acc){
     try{ await api("/api/account/connect",{method:"POST",body:JSON.stringify({owner:o,node:node.value.trim()})});
       toast(t("approveddone").split("!")[0]); pollAccount(); render(); }catch(e){ toast(e.message); } };
   form.appendChild(btn); m.appendChild(form);
+}
+
+function openExt(url){ try{ window.open(url,"_blank"); }catch{ location.href=url; } }
+
+async function renderSetup(m){
+  let s; try{ s=await api("/api/setup/status"); }catch(e){ m.innerHTML=`<p class="muted">${esc(e.message)}</p>`; return; }
+  const steps=[
+    {key:"account", title:t("w.account"), done:s.owner_set},
+    {key:"model",   title:t("w.model"),   done:s.ollama.has_gemma4||s.openrouter_key},
+    {key:"agent",   title:t("w.agent"),   done:s.brain_count>0},
+    {key:"approve", title:t("w.approve"), done:s.first_agent_connected},
+    {key:"start",   title:t("w.start"),   done:s.first_agent_running},
+  ];
+  const cur=steps.findIndex(x=>!x.done);
+  m.innerHTML=`<h2>${t("w.title")}</h2><div class="sub">${t("w.sub")}</div>`;
+  // the FULL checklist, always visible, so the user sees what's coming
+  const list=el(`<div class="card" style="max-width:560px;margin-bottom:14px"></div>`);
+  steps.forEach((st,i)=>{ const cl=st.done?"var(--ok)":(i===cur?"var(--brand)":"var(--muted)"); const ic=st.done?"✓":(i===cur?"▶":"○");
+    list.appendChild(el(`<div style="padding:5px 0;color:${cl}"><b style="display:inline-block;width:22px">${ic}</b> ${i+1}. ${esc(st.title)}</div>`)); });
+  m.appendChild(list);
+  if(cur===-1){ const c=el(`<div class="card" style="max-width:560px"><h3>${t("w.done")}</h3><p class="muted">${t("w.done.sub")}</p></div>`);
+    const b=el(`<button class="btn">${t("w.open")}</button>`); b.onclick=()=>{ skipSetup=true; openEditor(s.first_agent); }; c.appendChild(b); m.appendChild(c);
+    m.appendChild(el(`<div style="margin-top:10px"><a class="muted" style="cursor:pointer" onclick="skipSetup=true;view='gallery';render()">${t("nav.gallery")} →</a></div>`)); return; }
+  const panel=el(`<div class="card" style="max-width:660px"></div>`); m.appendChild(panel);
+  setupStep(panel, steps[cur].key, s, ()=>renderSetup(m));
+  m.appendChild(el(`<div style="margin-top:14px"><a class="muted" style="cursor:pointer;font-size:13px" onclick="skipSetup=true;view='gallery';render()">${t("w.skip")}</a></div>`));
+}
+
+async function setupStep(p, key, s, refresh){
+  if(key==="account"){
+    p.innerHTML=`<h3>1. ${t("w.account")}</h3><p class="muted">This is your account on aimeat.io — the place your agents live and are known by. Everything you make belongs to it.</p>`;
+    p.appendChild(el(`<label>Account name</label>`)); const o=el(`<input placeholder="e.g. happydude500001" value="${esc(s.owner||"")}">`); p.appendChild(o);
+    p.appendChild(el(`<label>Home node</label>`)); const n=el(`<input value="${esc(s.node||"https://aimeat.io")}">`); p.appendChild(n);
+    const b=el(`<button class="btn" style="margin-top:12px">${t("w.next")}</button>`);
+    b.onclick=async()=>{ const ov=o.value.trim(); if(!ov) return toast("account name required");
+      try{ await api("/api/account/connect",{method:"POST",body:JSON.stringify({owner:ov,node:n.value.trim()})}); pollAccount(); refresh(); }catch(e){ toast(e.message); } };
+    p.appendChild(b); p.appendChild(el(`<div style="margin-top:10px;font-size:13px"><a href="https://aimeat.io" target="_blank">${t("w.noacct")}</a></div>`));
+  }
+  else if(key==="model"){
+    p.innerHTML=`<h3>2. ${t("w.model")}</h3><p class="muted">Your agent needs an AI brain to think. By default it runs <b>on your own computer</b> with <b>Ollama</b> — free, private, works offline once set up. Nothing leaves your machine.</p>`;
+    if(!s.ollama.running){
+      p.appendChild(el(`<p>First, install <b>Ollama</b> — a small free app that runs AI models locally.</p>`));
+      const dl=el(`<button class="btn">${t("w.installollama")}</button>`); dl.onclick=()=>openExt("https://ollama.com/download");
+      const rc=el(`<button class="btn ghost" style="margin-left:8px">${t("w.recheck")}</button>`); rc.onclick=refresh;
+      const r=el(`<div class="row" style="margin-top:6px"></div>`); r.appendChild(dl); r.appendChild(rc); p.appendChild(r);
+    } else if(!s.ollama.has_gemma4){
+      p.appendChild(el(`<p>Now download the <b>gemma4</b> model (~3 GB, one-time). It's the actual AI brain — gemma4 is used because it can call tools (search the web, save notes), which your agent needs.</p>`));
+      const slot=el(`<div style="margin-top:8px"></div>`);
+      const g=el(`<button class="btn">${t("w.getgemma")}</button>`);
+      g.onclick=async()=>{ g.disabled=true; try{ await api("/api/ollama/pull",{method:"POST",body:JSON.stringify({model:"gemma4"})});
+        slot.innerHTML=`<div class="row"><span class="spin"></span> <span class="muted">${t("w.downloading")}</span></div>`;
+        const iv=setInterval(async()=>{ try{ const st=await api("/api/setup/status"); if(st.ollama.has_gemma4){ clearInterval(iv); refresh(); } }catch{} }, 5000);
+      }catch(e){ g.disabled=false; toast(e.message); } };
+      p.appendChild(g); p.appendChild(slot);
+    } else {
+      p.appendChild(el(`<p style="color:var(--ok)">✓ Local AI ready (gemma4 on Ollama).</p>`));
+      const b=el(`<button class="btn">${t("w.next")}</button>`); b.onclick=refresh; p.appendChild(b);
+    }
+    const adv=el(`<details style="margin-top:18px"><summary class="muted" style="cursor:pointer">${t("w.advanced")}</summary></details>`);
+    const body=el(`<div style="margin-top:10px"></div>`);
+    body.appendChild(el(`<p class="muted"><b>OpenRouter</b> is a paid online service that hosts many powerful AI models (you pay per use). Use it only if you want a stronger model than your computer can run. Get a key at <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai</a>, then paste it here.${s.openrouter_key?" <b>(a key is already saved)</b>":""}</p>`));
+    const k=el(`<input placeholder="sk-or-...">`); body.appendChild(k);
+    const sk=el(`<button class="btn ghost" style="margin-top:8px">${t("w.savekey")}</button>`);
+    sk.onclick=async()=>{ const kv=k.value.trim(); if(!kv) return; try{ await api("/api/setup/openrouter-key",{method:"POST",body:JSON.stringify({key:kv})}); toast("saved"); refresh(); }catch(e){ toast(e.message); } };
+    body.appendChild(sk); adv.appendChild(body); p.appendChild(adv);
+  }
+  else if(key==="agent"){
+    p.innerHTML=`<h3>3. ${t("w.agent")}</h3><p class="muted">Give it a name and say, in your own words, what it should do. It'll use the AI brain you just set up.</p>`;
+    p.appendChild(el(`<label>Agent name</label>`)); const nm=el(`<input placeholder="e.g. news-watcher">`); p.appendChild(nm);
+    p.appendChild(el(`<label>What should it do?</label>`));
+    const pr=el(`<textarea>Get the latest news on the topic given in the task. Summarize the notable items with their sources.</textarea>`); p.appendChild(pr);
+    const b=el(`<button class="btn" style="margin-top:12px">${t("w.next")}</button>`);
+    b.onclick=async()=>{ const an=nm.value.trim(); if(!an) return toast("name required"); b.disabled=true;
+      try{ const [tpls,models]=await Promise.all([api("/api/templates?lang="+LANG), api("/api/models").catch(()=>({models:[]}))]);
+        const tp=(tpls.templates||[]).find(x=>x.id==="topic-watcher");
+        const gem=(models.models||[]).find(x=>x.local && x.id.startsWith("gemma4"));
+        const policy={...(tp?tp.default_policy:{}), model: gem?gem.spec:null};
+        await api("/api/brains",{method:"POST",body:JSON.stringify({agent_name:an,template_id:"topic-watcher",prose:pr.value,policy})}); refresh();
+      }catch(e){ b.disabled=false; toast(e.message); } };
+    p.appendChild(b);
+  }
+  else if(key==="approve"){
+    const agent=s.first_agent;
+    p.innerHTML=`<h3>4. ${t("w.approve")}</h3><p class="muted">Your agent must be approved by you on aimeat.io before it can act — this proves it's really yours. Click below: we'll open your dashboard and copy a code for you to paste there.</p>`;
+    const slot=el(`<div></div>`); p.appendChild(slot);
+    const go=el(`<button class="btn">${t("w.approve")}</button>`);
+    go.onclick=async()=>{ go.disabled=true; slot.innerHTML=`<div class="row" style="margin-top:10px"><span class="spin"></span> <span class="muted">${t("connecting")}</span></div>`;
+      try{ const d=await api("/api/agents/"+encodeURIComponent(agent)+"/register",{method:"POST"});
+        if(d.code) try{ navigator.clipboard.writeText(d.code); }catch{}
+        if(d.verify_url) openExt(d.verify_url);
+        slot.innerHTML="";
+        slot.appendChild(el(`<div class="card" style="margin-top:10px"><div><label>${t("code")} (copied)</label><div style="font-size:24px;font-weight:700;letter-spacing:2px">${esc(d.code||"—")}</div></div><div class="muted" style="margin-top:8px">${t("approveinstr")} <a href="${esc(d.verify_url||'#')}" target="_blank">${esc(d.verify_url||'')}</a></div></div>`));
+        const od=el(`<button class="btn ghost" style="margin-top:8px">${t("w.opendash")}</button>`); od.onclick=()=>openExt(d.verify_url); slot.appendChild(od);
+        const status=el(`<div class="row" style="margin-top:10px"><span class="spin"></span> <span class="muted">${t("waiting")}</span></div>`); slot.appendChild(status);
+        const iv=setInterval(async()=>{ try{ const a=await api("/api/agents/"+encodeURIComponent(agent)+"/auth-status"); if(a.authorized){ clearInterval(iv); refresh(); } }catch{} }, 4000);
+      }catch(e){ go.disabled=false; toast(e.message); } };
+    p.appendChild(go);
+  }
+  else if(key==="start"){
+    const agent=s.first_agent;
+    p.innerHTML=`<h3>5. ${t("w.start")}</h3><p class="muted">Last step — start your agent so it's live and ready to work.</p>`;
+    const b=el(`<button class="btn">${t("start")}</button>`);
+    b.onclick=async()=>{ b.disabled=true; b.textContent="…";
+      try{ await api("/api/fleet/"+encodeURIComponent(agent)+"/start",{method:"POST"});
+        let n=0; const iv=setInterval(async()=>{ n++; try{ const st=await api("/api/setup/status"); if(st.first_agent_running||n>20){ clearInterval(iv); refresh(); } }catch{} }, 3000);
+      }catch(e){ b.disabled=false; b.textContent=t("start"); toast(e.message); } };
+    p.appendChild(b);
+  }
 }
 
 async function renderGallery(m){
@@ -610,7 +735,9 @@ async function pollAccount(){
 
 document.getElementById("lang").value=LANG;
 document.getElementById("lang").onchange=e=>{ LANG=e.target.value; localStorage.setItem("agencyLang",LANG); pollAccount(); render(); };
-pollHealth(); pollAccount(); setInterval(pollHealth,5000); render();
+pollHealth(); pollAccount(); setInterval(pollHealth,5000);
+// On boot, land on the guided wizard until the first agent is fully up (account → model → agent → approve → start).
+(async()=>{ try{ const st=await api("/api/setup/status"); if(!st.first_agent_running) view="setup"; }catch{} render(); })();
 </script>
 </body>
 </html>

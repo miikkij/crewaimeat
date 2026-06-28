@@ -50,25 +50,34 @@ pnpm tauri dev       # spawns the cockpit + opens the window
 pnpm tauri build     # NSIS/MSI installer under src-tauri/target/release/bundle/
 ```
 
-## First-run provisioning (implemented, the aimeat-desktop way)
+## First-run provisioning (self-contained — no git, no dev setup)
 
-On first launch the Rust shell PROVISIONS the runtime the same way aimeat-desktop does — it does NOT
-bundle Python. In `src-tauri/src/main.rs`:
+The installer **bundles** the crewaimeat source snapshot + the `uv` binary (Tauri `resources` +
+`externalBin`, staged in CI). On first launch `src-tauri/src/main.rs`:
 
-1. ensure `uv` (install via the official script if missing),
-2. `git clone --depth 1` the crewaimeat repo into `%LOCALAPPDATA%\aimeat-agency\crewaimeat` (or update
-   it in place on later runs),
-3. `uv sync --extra agency` (installs the cockpit + crewaimeat),
-4. spawn the cockpit (`uv run … crewaimeat.agency.cockpit`) from that checkout and point the window at it.
+1. copies the bundled source to `%LOCALAPPDATA%\aimeat-agency\crewaimeat` (first run only),
+2. `uv sync --extra agency` with the bundled `uv` (uv fetches Python + the deps — internet that first
+   run only; no git, no pre-installed tools),
+3. spawns the cockpit (`uv run … crewaimeat.agency.cockpit`) from that checkout and points the window at it.
 
-The splash shows progress. Requires `git` on the machine (reported if missing). This mirrors
-`aimeat-desktop/src-tauri/resources/provision.mjs`, reimplemented directly in Rust (no `node` sidecar).
+The splash shows progress.
+
+## Guided onboarding (in the cockpit)
+
+The cockpit opens on a **step-by-step wizard** (`renderSetup`) that shows the whole checklist up front and
+gates each step on the previous: **account → AI brain → first agent → approve → start**. The default model
+is **local Ollama + gemma4** (free/private, with in-app install + download guidance and plain-language
+"what it means"); **OpenRouter** is an optional "advanced" path (explained, with a key field). Device-auth
+is smoothed: it opens aimeat.io for you, copies the code, and auto-detects approval. Backed by
+`/api/setup/status`, `/api/ollama/pull`, `/api/setup/openrouter-key`.
 
 ## Still to do
 
-1. **Non-dev git/offline** — bundle a tarball download fallback so `git` isn't required, and an offline
-   wheelhouse so first-run needs no network.
+1. **Offline wheelhouse** — so the first run needs no network at all.
 2. **Tray + auto-update** — copy from aimeat-desktop (`tray.rs`, the updater plugin + signing key).
 3. **Code-signing** (open decision) before public release — unsigned → SmartScreen.
+4. **External-link opening in the packaged app** — the wizard uses `window.open` for ollama.com /
+   openrouter.ai / the device-auth URL; confirm Tauri routes these to the default browser (opener plugin
+   if not).
 
 The cockpit is feature-complete for the v1 operator experience; this shell is the packaging.
