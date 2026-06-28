@@ -107,6 +107,20 @@ const STR = {
   "w.advanced":{en:"Advanced: use a cloud model instead",fi:"Lisäasetus: käytä pilvimallia"},
   "w.savekey":{en:"Save key",fi:"Tallenna avain"}, "w.opendash":{en:"Open aimeat.io to approve",fi:"Avaa aimeat.io hyväksyäksesi"},
   "w.copycode":{en:"Copy code",fi:"Kopioi koodi"}, "w.skip":{en:"Skip — I'll set up manually",fi:"Ohita — teen itse"},
+  "w.account.desc":{en:"This is your account on aimeat.io — the place your agents live and are known by. Everything you make belongs to it.",fi:"Tämä on aimeat.io-tilisi — paikka, jossa agenttisi elävät ja jolla ne tunnetaan. Kaikki luomasi kuuluu sille."},
+  "w.lbl.account":{en:"Account name",fi:"Tilin nimi"}, "w.lbl.node":{en:"Home node",fi:"Kotinoodi"},
+  "w.lbl.agentname":{en:"Agent name",fi:"Agentin nimi"}, "w.lbl.dowhat":{en:"What should it do?",fi:"Mitä sen pitäisi tehdä?"},
+  "w.model.desc":{en:"Your agent needs an AI brain to think. By default it runs <b>on your own computer</b> with <b>Ollama</b> — free, private, works offline once set up. Nothing leaves your machine.",fi:"Agenttisi tarvitsee tekoälyaivot ajatellakseen. Oletuksena ne toimivat <b>omalla tietokoneellasi</b> <b>Ollamalla</b> — ilmainen, yksityinen ja toimii offline-tilassa asennuksen jälkeen. Mikään ei lähde koneeltasi."},
+  "w.ollama.install":{en:"First, install <b>Ollama</b> — a small free app that runs AI models locally.",fi:"Asenna ensin <b>Ollama</b> — pieni ilmainen sovellus, joka ajaa tekoälymalleja paikallisesti."},
+  "w.gemma.desc":{en:"Now download the <b>gemma4</b> model (~3 GB, one-time). It's the actual AI brain — gemma4 is used because it can call tools (search the web, save notes), which your agent needs.",fi:"Lataa nyt <b>gemma4</b>-malli (~3 Gt, kertaluonteinen). Se on varsinaiset tekoälyaivot — gemma4 valittiin, koska se osaa käyttää työkaluja (hakea verkosta, tallentaa muistiinpanoja), joita agenttisi tarvitsee."},
+  "w.localready":{en:"✓ Local AI ready (gemma4 on Ollama).",fi:"✓ Paikallinen tekoäly valmis (gemma4 Ollamalla)."},
+  "w.or.desc":{en:"<b>OpenRouter</b> is a paid online service that hosts many powerful AI models (you pay per use). Use it only if you want a stronger model than your computer can run. Get a key at <a href=\"https://openrouter.ai/keys\" target=\"_blank\">openrouter.ai</a>, then paste it here.",fi:"<b>OpenRouter</b> on maksullinen verkkopalvelu, joka tarjoaa monia tehokkaita tekoälymalleja (maksat käytön mukaan). Käytä sitä vain, jos haluat tehokkaamman mallin kuin tietokoneesi pystyy ajamaan. Hae avain osoitteesta <a href=\"https://openrouter.ai/keys\" target=\"_blank\">openrouter.ai</a> ja liitä se tähän."},
+  "w.or.saved":{en:" <b>(a key is already saved)</b>",fi:" <b>(avain on jo tallennettu)</b>"},
+  "w.agent.desc":{en:"Give it a name and say, in your own words, what it should do. It'll use the AI brain you just set up.",fi:"Anna sille nimi ja kerro omin sanoin, mitä sen pitäisi tehdä. Se käyttää juuri asentamiasi tekoälyaivoja."},
+  "w.defaultprose":{en:"Get the latest news on the topic given in the task. Summarize the notable items with their sources.",fi:"Hae uusimmat uutiset tehtävässä annetusta aiheesta. Tiivistä merkittävät kohdat lähteineen."},
+  "w.approve.desc":{en:"Your agent must be approved by you on aimeat.io before it can act — this proves it's really yours. Click below: we'll open your dashboard and copy a code for you to paste there.",fi:"Sinun on hyväksyttävä agenttisi aimeat.io:ssa ennen kuin se voi toimia — tämä todistaa, että se on todella sinun. Napsauta alta: avaamme hallintapaneelisi ja kopioimme koodin, jonka liität sinne."},
+  "w.start.desc":{en:"Last step — start your agent so it's live and ready to work.",fi:"Viimeinen vaihe — käynnistä agenttisi, jotta se on käynnissä ja valmis työhön."},
+  "w.err.account":{en:"account name required",fi:"tilin nimi vaaditaan"}, "w.err.name":{en:"name required",fi:"nimi vaaditaan"}, "w.saved":{en:"saved",fi:"tallennettu"},
   "nav.memory":{en:"Memory",fi:"Muisti"}, "nav.sync":{en:"Sync",fi:"Synkronointi"},
   "manage":{en:"Manage",fi:"Hallinnoi"}, "logs":{en:"Logs",fi:"Lokit"},
   "notconnected":{en:"not connected",fi:"ei yhteyttä"}, "livesat":{en:"lives at",fi:"sijaitsee"},
@@ -257,23 +271,23 @@ async function renderSetup(m){
 
 async function setupStep(p, key, s, refresh){
   if(key==="account"){
-    p.innerHTML=`<h3>1. ${t("w.account")}</h3><p class="muted">This is your account on aimeat.io — the place your agents live and are known by. Everything you make belongs to it.</p>`;
-    p.appendChild(el(`<label>Account name</label>`)); const o=el(`<input placeholder="e.g. happydude500001" value="${esc(s.owner||"")}">`); p.appendChild(o);
-    p.appendChild(el(`<label>Home node</label>`)); const n=el(`<input value="${esc(s.node||"https://aimeat.io")}">`); p.appendChild(n);
+    p.innerHTML=`<h3>1. ${t("w.account")}</h3><p class="muted">${t("w.account.desc")}</p>`;
+    p.appendChild(el(`<label>${t("w.lbl.account")}</label>`)); const o=el(`<input placeholder="e.g. happydude500001" value="${esc(s.owner||"")}">`); p.appendChild(o);
+    p.appendChild(el(`<label>${t("w.lbl.node")}</label>`)); const n=el(`<input value="${esc(s.node||"https://aimeat.io")}">`); p.appendChild(n);
     const b=el(`<button class="btn" style="margin-top:12px">${t("w.next")}</button>`);
-    b.onclick=async()=>{ const ov=o.value.trim(); if(!ov) return toast("account name required");
+    b.onclick=async()=>{ const ov=o.value.trim(); if(!ov) return toast(t("w.err.account"));
       try{ await api("/api/account/connect",{method:"POST",body:JSON.stringify({owner:ov,node:n.value.trim()})}); pollAccount(); refresh(); }catch(e){ toast(e.message); } };
     p.appendChild(b); p.appendChild(el(`<div style="margin-top:10px;font-size:13px"><a href="https://aimeat.io" target="_blank">${t("w.noacct")}</a></div>`));
   }
   else if(key==="model"){
-    p.innerHTML=`<h3>2. ${t("w.model")}</h3><p class="muted">Your agent needs an AI brain to think. By default it runs <b>on your own computer</b> with <b>Ollama</b> — free, private, works offline once set up. Nothing leaves your machine.</p>`;
+    p.innerHTML=`<h3>2. ${t("w.model")}</h3><p class="muted">${t("w.model.desc")}</p>`;
     if(!s.ollama.running){
-      p.appendChild(el(`<p>First, install <b>Ollama</b> — a small free app that runs AI models locally.</p>`));
+      p.appendChild(el(`<p>${t("w.ollama.install")}</p>`));
       const dl=el(`<button class="btn">${t("w.installollama")}</button>`); dl.onclick=()=>openExt("https://ollama.com/download");
       const rc=el(`<button class="btn ghost" style="margin-left:8px">${t("w.recheck")}</button>`); rc.onclick=refresh;
       const r=el(`<div class="row" style="margin-top:6px"></div>`); r.appendChild(dl); r.appendChild(rc); p.appendChild(r);
     } else if(!s.ollama.has_gemma4){
-      p.appendChild(el(`<p>Now download the <b>gemma4</b> model (~3 GB, one-time). It's the actual AI brain — gemma4 is used because it can call tools (search the web, save notes), which your agent needs.</p>`));
+      p.appendChild(el(`<p>${t("w.gemma.desc")}</p>`));
       const slot=el(`<div style="margin-top:8px"></div>`);
       const g=el(`<button class="btn">${t("w.getgemma")}</button>`);
       g.onclick=async()=>{ g.disabled=true; try{ await api("/api/ollama/pull",{method:"POST",body:JSON.stringify({model:"gemma4"})});
@@ -282,24 +296,24 @@ async function setupStep(p, key, s, refresh){
       }catch(e){ g.disabled=false; toast(e.message); } };
       p.appendChild(g); p.appendChild(slot);
     } else {
-      p.appendChild(el(`<p style="color:var(--ok)">✓ Local AI ready (gemma4 on Ollama).</p>`));
+      p.appendChild(el(`<p style="color:var(--ok)">${t("w.localready")}</p>`));
       const b=el(`<button class="btn">${t("w.next")}</button>`); b.onclick=refresh; p.appendChild(b);
     }
     const adv=el(`<details style="margin-top:18px"><summary class="muted" style="cursor:pointer">${t("w.advanced")}</summary></details>`);
     const body=el(`<div style="margin-top:10px"></div>`);
-    body.appendChild(el(`<p class="muted"><b>OpenRouter</b> is a paid online service that hosts many powerful AI models (you pay per use). Use it only if you want a stronger model than your computer can run. Get a key at <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai</a>, then paste it here.${s.openrouter_key?" <b>(a key is already saved)</b>":""}</p>`));
+    body.appendChild(el(`<p class="muted">${t("w.or.desc")}${s.openrouter_key?t("w.or.saved"):""}</p>`));
     const k=el(`<input placeholder="sk-or-...">`); body.appendChild(k);
     const sk=el(`<button class="btn ghost" style="margin-top:8px">${t("w.savekey")}</button>`);
-    sk.onclick=async()=>{ const kv=k.value.trim(); if(!kv) return; try{ await api("/api/setup/openrouter-key",{method:"POST",body:JSON.stringify({key:kv})}); toast("saved"); refresh(); }catch(e){ toast(e.message); } };
+    sk.onclick=async()=>{ const kv=k.value.trim(); if(!kv) return; try{ await api("/api/setup/openrouter-key",{method:"POST",body:JSON.stringify({key:kv})}); toast(t("w.saved")); refresh(); }catch(e){ toast(e.message); } };
     body.appendChild(sk); adv.appendChild(body); p.appendChild(adv);
   }
   else if(key==="agent"){
-    p.innerHTML=`<h3>3. ${t("w.agent")}</h3><p class="muted">Give it a name and say, in your own words, what it should do. It'll use the AI brain you just set up.</p>`;
-    p.appendChild(el(`<label>Agent name</label>`)); const nm=el(`<input placeholder="e.g. news-watcher">`); p.appendChild(nm);
-    p.appendChild(el(`<label>What should it do?</label>`));
-    const pr=el(`<textarea>Get the latest news on the topic given in the task. Summarize the notable items with their sources.</textarea>`); p.appendChild(pr);
+    p.innerHTML=`<h3>3. ${t("w.agent")}</h3><p class="muted">${t("w.agent.desc")}</p>`;
+    p.appendChild(el(`<label>${t("w.lbl.agentname")}</label>`)); const nm=el(`<input placeholder="e.g. news-watcher">`); p.appendChild(nm);
+    p.appendChild(el(`<label>${t("w.lbl.dowhat")}</label>`));
+    const pr=el(`<textarea>${t("w.defaultprose")}</textarea>`); p.appendChild(pr);
     const b=el(`<button class="btn" style="margin-top:12px">${t("w.next")}</button>`);
-    b.onclick=async()=>{ const an=nm.value.trim(); if(!an) return toast("name required"); b.disabled=true;
+    b.onclick=async()=>{ const an=nm.value.trim(); if(!an) return toast(t("w.err.name")); b.disabled=true;
       try{ const [tpls,models]=await Promise.all([api("/api/templates?lang="+LANG), api("/api/models").catch(()=>({models:[]}))]);
         const tp=(tpls.templates||[]).find(x=>x.id==="topic-watcher");
         const gem=(models.models||[]).find(x=>x.local && x.id.startsWith("gemma4"));
@@ -310,7 +324,7 @@ async function setupStep(p, key, s, refresh){
   }
   else if(key==="approve"){
     const agent=s.first_agent;
-    p.innerHTML=`<h3>4. ${t("w.approve")}</h3><p class="muted">Your agent must be approved by you on aimeat.io before it can act — this proves it's really yours. Click below: we'll open your dashboard and copy a code for you to paste there.</p>`;
+    p.innerHTML=`<h3>4. ${t("w.approve")}</h3><p class="muted">${t("w.approve.desc")}</p>`;
     const slot=el(`<div></div>`); p.appendChild(slot);
     const go=el(`<button class="btn">${t("w.approve")}</button>`);
     go.onclick=async()=>{ go.disabled=true; slot.innerHTML=`<div class="row" style="margin-top:10px"><span class="spin"></span> <span class="muted">${t("connecting")}</span></div>`;
@@ -327,7 +341,7 @@ async function setupStep(p, key, s, refresh){
   }
   else if(key==="start"){
     const agent=s.first_agent;
-    p.innerHTML=`<h3>5. ${t("w.start")}</h3><p class="muted">Last step — start your agent so it's live and ready to work.</p>`;
+    p.innerHTML=`<h3>5. ${t("w.start")}</h3><p class="muted">${t("w.start.desc")}</p>`;
     const b=el(`<button class="btn">${t("start")}</button>`);
     b.onclick=async()=>{ b.disabled=true; b.textContent="…";
       try{ await api("/api/fleet/"+encodeURIComponent(agent)+"/start",{method:"POST"});
