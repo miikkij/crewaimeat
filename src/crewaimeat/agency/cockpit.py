@@ -31,7 +31,7 @@ from pydantic import BaseModel
 from crewaimeat import brain_templates, brains, local_memory
 from crewaimeat.agency import account, events
 
-COCKPIT_VERSION = "0.8.9"
+COCKPIT_VERSION = "0.8.10"
 _TOKEN_ENV = "AIMEAT_AGENCY_TOKEN"
 _STATIC = Path(__file__).parent / "static"
 # Default local model for the wizard — light + tool-capable so it loads on modest GPUs (gemma4 is a big
@@ -412,8 +412,20 @@ def create_app(token: str | None = None) -> FastAPI:
             actions.stop_fleet()
         except Exception:  # noqa: BLE001
             pass
-        home = Path(aimeat_home())
         removed = []
+        # Brains live in a SQLite DB that may be LOCKED (so file-unlink can fail silently) — clear the rows
+        # through the data layer instead, plus its model overrides. This is the bit a plain file delete missed.
+        try:
+            from crewaimeat import llm
+
+            for b in brains.list_brains():
+                name = b["agent_name"]
+                if brains.delete_brain(name):
+                    removed.append("brain:" + name)
+                llm.clear_override(name)
+        except Exception:  # noqa: BLE001
+            pass
+        home = Path(aimeat_home())
         for name in (
             "brains.db",
             "local_memory.db",
