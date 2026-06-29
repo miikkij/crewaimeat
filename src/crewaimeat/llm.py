@@ -332,6 +332,21 @@ def get_llm(for_tool_use: bool = True, temperature: float | None = None, agent_n
     """
     temperature = temperature if temperature is not None else float(os.getenv("LLM_TEMPERATURE", "0.5"))
 
+    # --- Per-agent MODEL override (e.g. the agency's local-Ollama pick) — wins over everything, needs NO
+    # llm_providers.json. This MUST be honored here: previously a model override was only consulted inside
+    # the providers-file branch below, so on a machine WITHOUT llm_providers.json (the installed appliance!)
+    # the Ollama choice was silently ignored and we fell through to the cloud OPENROUTER_API_KEY → crash.
+    # (A "profile" override still needs the providers file to resolve, so it stays in _select_chain.)
+    ov = agent_override(agent_name)
+    if ov and ov.get("kind") == "model" and isinstance(ov.get("provider"), dict):
+        eps = _flatten_endpoints([ov["provider"]], for_tool_use)
+        if eps:
+            print(
+                f"[llm] {agent_name or '?'} -> override {ov.get('label', 'model')} (no providers file needed)",
+                file=sys.stderr,
+            )
+            return MultiProviderLLM(eps, temperature)
+
     # --- Provider config (per-crew profile -> priority chain across providers + models) — wins when present ---
     pf = _providers_file()
     if pf:

@@ -69,3 +69,36 @@ def test_call_falls_through_on_runtime_error(monkeypatch):
     monkeypatch.setattr(llmmod, "LLM", FlakyLLM)
     mp = llmmod.MultiProviderLLM(_eps(("a", "m1", 1000), ("b", "m2", 1000)), temperature=0.5)
     assert mp.call([{"role": "user", "content": "x"}]) == "ok:m2"
+
+
+def test_model_override_honored_without_providers_file(monkeypatch):
+    """A per-agent MODEL override (e.g. local Ollama) must be used even when there is NO llm_providers.json
+    and NO OPENROUTER_API_KEY — the installed appliance case. Previously get_llm ignored the override unless
+    a providers file existed, and crashed on the missing cloud key."""
+    monkeypatch.setattr(llmmod, "_providers_file", lambda: None)  # no llm_providers.json
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("USE_XAI", raising=False)
+    monkeypatch.setattr(
+        llmmod,
+        "agent_override",
+        lambda name: {
+            "kind": "model",
+            "label": "ollama:gemma4:latest",
+            "provider": {
+                "type": "ollama",
+                "name": "ollama",
+                "base_url": "http://localhost:11434",
+                "models": [{"id": "gemma4:latest"}],
+            },
+        },
+    )
+    captured = {}
+
+    def _fake_mp(eps, temp):
+        captured["eps"] = eps
+        return "LLM"
+
+    monkeypatch.setattr(llmmod, "MultiProviderLLM", _fake_mp)
+    out = llmmod.get_llm(agent_name="news-watcher-500001")
+    assert out == "LLM"  # built from the override, did NOT raise on the missing cloud key
+    assert captured["eps"], "override provider produced no endpoints"
