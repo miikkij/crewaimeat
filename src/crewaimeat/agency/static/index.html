@@ -87,7 +87,11 @@
 
 <script>
 const TOKEN = "__AGENCY_TOKEN__";
-let LANG = localStorage.getItem("agencyLang") || "en";
+// The Tauri shell picks the language up front (splash) and passes it via ?lang=; honor it and remember it.
+// When the shell already chose the language, skip the in-app wizard intro (it was the splash's job).
+const _qlang = new URLSearchParams(location.search).get("lang");
+let LANG = (_qlang === "en" || _qlang === "fi") ? _qlang : (localStorage.getItem("agencyLang") || "en");
+if (_qlang) { localStorage.setItem("agencyLang", LANG); }
 
 const STR = {
   "nav.setup":{en:"Setup",fi:"Käyttöönotto"},
@@ -223,7 +227,7 @@ function esc(s){ return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;
 
 const VIEWS = ["setup","gallery","fleet","memory","sync"];
 let view = "gallery", editing = null, editorStream = null, latestState = null, skipSetup = false;
-let wizardStarted = false, pendingAuth = null;   // wizard: intro shown? + in-flight device-auth (survives re-render)
+let wizardStarted = !!_qlang, pendingAuth = null;   // shell already did language+plan? skip the in-app intro. + in-flight device-auth
 
 function renderNav(){
   const nav=document.getElementById("nav"); nav.innerHTML="";

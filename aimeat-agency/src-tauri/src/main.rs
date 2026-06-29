@@ -1,12 +1,10 @@
 // aimeat-agency — thin Tauri shell. The crewaimeat SOURCE and the `uv` binary are BUNDLED in the
-// installer (no git, no pre-installed tools). On first run it copies the bundled source to a writable
-// dir and `uv sync`s it, then spawns the Python cockpit and shows it.
+// installer (no git, no pre-installed tools).
 //
-// Lifecycle (what the user asked for):
-//   • The window's X HIDES to the system tray (does NOT quit). Reopen from the tray icon.
-//   • Tray menu: Open Window · Shut down & Quit. "Shut down" POSTs /api/shutdown so the cockpit stops
-//     the WHOLE fleet (serve daemon + crew CMD windows, repo/home-scoped) BEFORE the app exits.
-//   • If the cockpit process exits (e.g. the in-app "Shut down" button asked it to), the shell quits too.
+// First-run order (what the user asked for): the splash asks the LANGUAGE and shows WHAT WILL HAPPEN —
+// INCLUDING that helper terminal windows (the agency engine + agents) will open and stay open — and
+// nothing runs until the user clicks Begin. The windows are intentionally visible; the splash explains
+// them so they aren't scary, and "Shut down" closes them all safely. The window's X hides to the tray.
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 use std::path::{Path, PathBuf};
@@ -25,16 +23,13 @@ const TRAY_ID: &str = "aimeat_agency_tray";
 const ID_OPEN: &str = "open_window";
 const ID_QUIT: &str = "shutdown_quit";
 
-/// Shared state: the per-launch cockpit token (to authenticate /api/shutdown) + the cockpit PID.
 struct AppState {
     token: String,
     pid: Mutex<Option<u32>>,
+    lang: Mutex<String>,
+    started: Mutex<bool>, // provisioning kicked off? (guards against a double Begin)
 }
 
-/// Writable home for the runtime (the copied crewaimeat checkout + its venv). NOTE: this is a `runtime`
-/// SUBfolder of the install dir — kept separate from the app exe + uninstall.exe (which NSIS owns at the
-/// install root) so wiping/resetting the runtime can never delete the uninstaller. The NSIS uninstaller
-/// removes the whole install dir (incl. this subfolder), so uninstall stays clean.
 fn runtime_dir() -> PathBuf {
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
         return PathBuf::from(local).join("aimeat-agency").join("runtime");
@@ -70,8 +65,6 @@ fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// The bundled `uv.exe` (Tauri places the externalBin next to the app exe, triple stripped). Falls back
-/// to a `uv` on PATH for `tauri dev`.
 fn uv_path() -> Option<String> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
@@ -87,16 +80,13 @@ fn uv_path() -> Option<String> {
     None
 }
 
-/// Provision idempotently from BUNDLED assets: copy the bundled crewaimeat source to the writable runtime
-/// on first run, then `uv sync --extra agency` (uv fetches Python + deps). Returns (uv, repo_dir).
+/// First run AND version change → (re)copy the bundled source (preserves .aimeat/.venv), then uv sync.
 fn provision(handle: &AppHandle, say: &dyn Fn(&str)) -> Result<(String, PathBuf), String> {
     let repo = runtime_dir().join("crewaimeat");
     std::fs::create_dir_all(repo.parent().unwrap()).ok();
 
     let uv = uv_path().ok_or("uv not found (the bundled uv.exe is missing).")?;
 
-    // Refresh the source on first run AND on version change, so an UPDATE actually delivers new code.
-    // The bundle excludes .aimeat/.venv, so copying over the checkout preserves user state + the venv.
     let version = env!("CARGO_PKG_VERSION");
     let marker = repo.join(".agency_version");
     let installed = std::fs::read_to_string(&marker).unwrap_or_default();
@@ -119,6 +109,8 @@ fn provision(handle: &AppHandle, say: &dyn Fn(&str)) -> Result<(String, PathBuf)
 }
 
 fn spawn_cockpit(uv: &str, repo: &Path, token: &str) -> std::io::Result<Child> {
+    // The cockpit (and later the fleet) run in their own visible windows ON PURPOSE — the splash tells the
+    // user they'll open and what they are. "Shut down" closes them all safely.
     Command::new(uv)
         .args(["run", "--extra", "agency", "python", "-m", "crewaimeat.agency.cockpit"])
         .current_dir(repo)
@@ -142,7 +134,7 @@ fn wait_up(timeout: Duration) -> bool {
 fn splash_say(handle: &AppHandle, msg: &str) {
     if let Some(win) = handle.get_webview_window("splash") {
         let safe = msg.replace('\'', "\\'");
-        let _ = win.eval(&format!("var m=document.querySelector('.muted'); if(m) m.textContent='{safe}';"));
+        let _ = win.eval(&format!("if(window.agencyStatus)window.agencyStatus('{safe}');"));
     }
 }
 
@@ -154,20 +146,64 @@ fn show_window(handle: &AppHandle) {
     }
 }
 
-/// Ask the cockpit to stop the whole fleet (it self-exits afterwards, which makes the shell quit). Falls
-/// back to a forced kill + exit if the cockpit doesn't answer.
+/// Provision + spawn the cockpit, then point the window at it (with the chosen language). Called once,
+/// from the `begin` command — never before the user picks a language and clicks Begin.
+fn start_provisioning(handle: AppHandle) {
+    let token = handle.state::<AppState>().token.clone();
+    let lang = handle.state::<AppState>().lang.lock().unwrap().clone();
+    std::thread::spawn(move || {
+        let say = |m: &str| splash_say(&handle, m);
+        match provision(&handle, &say) {
+            Ok((uv, repo)) => {
+                say("Starting your agency…");
+                match spawn_cockpit(&uv, &repo, &token) {
+                    Ok(mut child) => {
+                        *handle.state::<AppState>().pid.lock().unwrap() = Some(child.id());
+                        if wait_up(Duration::from_secs(120)) {
+                            let url = format!("http://127.0.0.1:{}/?lang={}", PORT, lang);
+                            if let Some(win) = handle.get_webview_window("splash") {
+                                let _ = win.eval(&format!("window.location.replace('{}')", url));
+                            }
+                        } else {
+                            say("The cockpit did not start — see the logs.");
+                        }
+                        let _ = child.wait(); // cockpit exited (e.g. in-app Shut down) -> quit the app
+                        handle.exit(0);
+                    }
+                    Err(e) => say(&format!("Could not start the cockpit: {e}")),
+                }
+            }
+            Err(e) => say(&e),
+        }
+    });
+}
+
+/// Called by the splash AFTER the user picks a language and clicks Begin. Stores the language, then
+/// provisions + opens the cockpit. Idempotent (a second Begin is ignored).
+#[tauri::command]
+fn begin(app: AppHandle, lang: String) {
+    let st = app.state::<AppState>();
+    *st.lang.lock().unwrap() = if lang.trim().is_empty() { "en".into() } else { lang };
+    {
+        let mut started = st.started.lock().unwrap();
+        if *started {
+            return;
+        }
+        *started = true;
+    }
+    start_provisioning(app.clone());
+}
+
 fn shutdown_and_quit(handle: &AppHandle) {
     let state = handle.state::<AppState>();
     let token = state.token.clone();
     let pid = *state.pid.lock().unwrap();
     let h = handle.clone();
     std::thread::spawn(move || {
-        // best-effort: cockpit stops the fleet (crews + serve) then self-exits
         let _ = ureq::post(&format!("http://127.0.0.1:{PORT}/api/shutdown"))
             .set("Authorization", &format!("Bearer {token}"))
             .timeout(Duration::from_secs(30))
             .call();
-        // give the cockpit a moment to exit on its own (the child-watcher would quit us), else force it
         std::thread::sleep(Duration::from_secs(3));
         if let Some(p) = pid {
             let _ = run("taskkill", &["/PID", &p.to_string(), "/T", "/F"], None);
@@ -216,51 +252,27 @@ fn main() {
     let token = format!("{:x}{:x}", nanos, std::process::id());
 
     tauri::Builder::default()
-        .manage(AppState { token: token.clone(), pid: Mutex::new(None) })
+        .manage(AppState {
+            token,
+            pid: Mutex::new(None),
+            lang: Mutex::new("en".into()),
+            started: Mutex::new(false),
+        })
+        .invoke_handler(tauri::generate_handler![begin])
         .setup(move |app| {
             setup_tray(app)?;
-            let handle = app.handle().clone();
-            let token = token.clone();
-            let url = format!("http://127.0.0.1:{}/", PORT);
-
-            std::thread::spawn(move || {
-                let say = |m: &str| splash_say(&handle, m);
-                match provision(&handle, &say) {
-                    Ok((uv, repo)) => {
-                        say("Starting your agency…");
-                        match spawn_cockpit(&uv, &repo, &token) {
-                            Ok(mut child) => {
-                                *handle.state::<AppState>().pid.lock().unwrap() = Some(child.id());
-                                if wait_up(Duration::from_secs(120)) {
-                                    if let Some(win) = handle.get_webview_window("splash") {
-                                        let _ = win.eval(&format!("window.location.replace('{}')", url));
-                                    }
-                                } else {
-                                    say("The cockpit did not start — see the logs.");
-                                }
-                                // Block until the cockpit exits (e.g. the in-app Shut down). Then quit the app.
-                                let _ = child.wait();
-                                handle.exit(0);
-                            }
-                            Err(e) => say(&format!("Could not start the cockpit: {e}")),
-                        }
-                    }
-                    Err(e) => say(&e),
-                }
-            });
+            // Do NOT provision yet — the splash gathers language + consent (Begin) first.
             Ok(())
         })
         .on_window_event(|window, event| {
-            // The X hides to tray instead of quitting (reopen from the tray icon).
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                let _ = window.hide();
+                let _ = window.hide(); // X hides to tray; reopen from the tray icon
             }
         })
         .build(tauri::generate_context!())
         .expect("error while building aimeat-agency")
         .run(|app_handle, event| {
-            // Belt-and-suspenders: if the app exits by any path, make sure the cockpit child is gone.
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 if let Some(pid) = *app_handle.state::<AppState>().pid.lock().unwrap() {
                     let _ = run("taskkill", &["/PID", &pid.to_string(), "/T", "/F"], None);
