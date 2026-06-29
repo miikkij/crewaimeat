@@ -79,6 +79,7 @@
   <span id="account" class="muted" style="font-size:12px"></span>
   <span id="health"><span class="dot" id="healthdot"></span> <span class="muted" id="healthtxt">…</span></span>
   <button id="shutdownbtn" class="btn ghost" style="padding:4px 10px;font-size:12px"></button>
+  <button id="resetbtn" class="btn ghost" style="padding:4px 10px;font-size:12px"></button>
   <select class="lang" id="lang"><option value="en">EN</option><option value="fi">FI</option></select>
 </header>
 <div id="updatebar"></div>
@@ -108,7 +109,7 @@ const STR = {
   "w.open":{en:"Open my agent",fi:"Avaa agenttini"},
   "w.recheck":{en:"Re-check",fi:"Tarkista uudelleen"}, "w.next":{en:"Continue",fi:"Jatka"},
   "w.noacct":{en:"Don't have an account? Create one at aimeat.io",fi:"Ei tiliä? Luo sellainen osoitteessa aimeat.io"},
-  "w.installollama":{en:"Download Ollama",fi:"Lataa Ollama"}, "w.getgemma":{en:"Download gemma4 (~3 GB)",fi:"Lataa gemma4 (~3 GB)"},
+  "w.installollama":{en:"Download Ollama",fi:"Lataa Ollama"}, "w.getgemma":{en:"Download the AI model (~2 GB)",fi:"Lataa tekoälymalli (~2 Gt)"},
   "w.downloading":{en:"Downloading the model… this takes a few minutes (you can leave this open).",fi:"Ladataan mallia… kestää muutaman minuutin (voit pitää tämän auki)."},
   "w.advanced":{en:"Advanced: use a cloud model instead",fi:"Lisäasetus: käytä pilvimallia"},
   "w.savekey":{en:"Save key",fi:"Tallenna avain"}, "w.opendash":{en:"Open aimeat.io to approve",fi:"Avaa aimeat.io hyväksyäksesi"},
@@ -118,8 +119,8 @@ const STR = {
   "w.lbl.agentname":{en:"Agent name",fi:"Agentin nimi"}, "w.lbl.dowhat":{en:"What should it do?",fi:"Mitä sen pitäisi tehdä?"},
   "w.model.desc":{en:"Your agent needs an AI brain to think. By default it runs <b>on your own computer</b> with <b>Ollama</b> — free, private, works offline once set up. Nothing leaves your machine.",fi:"Agenttisi tarvitsee tekoälyaivot ajatellakseen. Oletuksena ne toimivat <b>omalla tietokoneellasi</b> <b>Ollamalla</b> — ilmainen, yksityinen ja toimii offline-tilassa asennuksen jälkeen. Mikään ei lähde koneeltasi."},
   "w.ollama.install":{en:"First, install <b>Ollama</b> — a small free app that runs AI models locally.",fi:"Asenna ensin <b>Ollama</b> — pieni ilmainen sovellus, joka ajaa tekoälymalleja paikallisesti."},
-  "w.gemma.desc":{en:"Now download the <b>gemma4</b> model (~3 GB, one-time). It's the actual AI brain — gemma4 is used because it can call tools (search the web, save notes), which your agent needs.",fi:"Lataa nyt <b>gemma4</b>-malli (~3 Gt, kertaluonteinen). Se on varsinaiset tekoälyaivot — gemma4 valittiin, koska se osaa käyttää työkaluja (hakea verkosta, tallentaa muistiinpanoja), joita agenttisi tarvitsee."},
-  "w.localready":{en:"✓ Local AI ready (gemma4 on Ollama).",fi:"✓ Paikallinen tekoäly valmis (gemma4 Ollamalla)."},
+  "w.gemma.desc":{en:"Now download a small AI model (~2 GB, one-time). It's your agent's brain — light enough to run on most computers, and it can call tools (search the web, save notes).",fi:"Lataa nyt pieni tekoälymalli (~2 Gt, kertaluonteinen). Se on agenttisi aivot — kevyt pyörimään useimmilla koneilla, ja se osaa käyttää työkaluja (hakea verkosta, tallentaa muistiinpanoja)."},
+  "w.localready":{en:"✓ Local AI ready.",fi:"✓ Paikallinen tekoäly valmis."},
   "w.or.free":{en:"You don't need this. The free local model above already works — nothing to pay, nothing leaves your computer. OpenRouter is only for those who want a more powerful model than their machine can run.",fi:"Et tarvitse tätä. Yllä oleva ilmainen paikallinen malli toimii jo — mitään ei makseta, mikään ei lähde koneeltasi. OpenRouter on vain niille, jotka haluavat tehokkaamman mallin kuin oma kone pystyy ajamaan."},
   "w.or.desc":{en:"<b>OpenRouter</b> is an online service that hosts many AI models. It's <b>pay-as-you-go</b>: you add a small amount of credit (a few euros is plenty) and pay only for what you use — often a few cents per run, no subscription.",fi:"<b>OpenRouter</b> on verkkopalvelu, joka tarjoaa monia tekoälymalleja. Se on <b>käytön mukaan maksava</b>: lisäät pienen summan saldoa (muutama euro riittää hyvin) ja maksat vain käytöstä — usein muutama sentti per ajo, ei kuukausimaksua."},
   "w.or.howto":{en:"Click below to open OpenRouter: sign in, add a little credit, create an API key, then paste it here.",fi:"Avaa OpenRouter alta: kirjaudu, lisää hieman saldoa, luo API-avain ja liitä se tähän."},
@@ -139,6 +140,9 @@ const STR = {
   "shutdown.done":{en:"Agents stopped safely. Closing…",fi:"Agentit pysäytetty turvallisesti. Suljetaan…"},
   "update.available":{en:"A new version is available:",fi:"Uusi versio on saatavilla:"},
   "update.download":{en:"Download",fi:"Lataa"}, "update.dismiss":{en:"Later",fi:"Myöhemmin"},
+  "reset":{en:"Reset",fi:"Nollaa"},
+  "reset.confirm":{en:"This deletes ALL your agents, settings and data for a completely fresh start. This cannot be undone. Are you sure?",fi:"Tämä poistaa KAIKKI agenttisi, asetuksesi ja datasi täysin puhdasta aloitusta varten. Tätä ei voi peruuttaa. Oletko varma?"},
+  "reset.done":{en:"Reset done — starting fresh.",fi:"Nollattu — aloitetaan alusta."},
   "nav.memory":{en:"Memory",fi:"Muisti"}, "nav.sync":{en:"Sync",fi:"Synkronointi"},
   "manage":{en:"Manage",fi:"Hallinnoi"}, "logs":{en:"Logs",fi:"Lokit"},
   "notconnected":{en:"not connected",fi:"ei yhteyttä"}, "livesat":{en:"lives at",fi:"sijaitsee"},
@@ -275,7 +279,7 @@ async function renderSetup(m){
   let s; try{ s=await api("/api/setup/status"); }catch(e){ m.innerHTML=`<p class="muted">${esc(e.message)}</p>`; return; }
   const steps=[
     {key:"account", title:t("w.account"), done:s.owner_set},
-    {key:"model",   title:t("w.model"),   done:s.ollama.has_gemma4||s.openrouter_key},
+    {key:"model",   title:t("w.model"),   done:s.ollama.has_model||s.openrouter_key},
     {key:"agent",   title:t("w.agent"),   done:s.brain_count>0},
     {key:"approve", title:t("w.approve"), done:s.first_agent_connected},
     {key:"start",   title:t("w.start"),   done:s.first_agent_running},
@@ -329,13 +333,13 @@ async function setupStep(p, key, s, refresh){
       const dl=el(`<button class="btn">${t("w.installollama")}</button>`); dl.onclick=()=>openExt("https://ollama.com/download");
       const rc=el(`<button class="btn ghost" style="margin-left:8px">${t("w.recheck")}</button>`); rc.onclick=refresh;
       const r=el(`<div class="row" style="margin-top:6px"></div>`); r.appendChild(dl); r.appendChild(rc); p.appendChild(r);
-    } else if(!s.ollama.has_gemma4){
+    } else if(!s.ollama.has_model){
       p.appendChild(el(`<p>${t("w.gemma.desc")}</p>`));
       const slot=el(`<div style="margin-top:8px"></div>`);
       const g=el(`<button class="btn">${t("w.getgemma")}</button>`);
-      g.onclick=async()=>{ g.disabled=true; try{ await api("/api/ollama/pull",{method:"POST",body:JSON.stringify({model:"gemma4"})});
+      g.onclick=async()=>{ g.disabled=true; try{ await api("/api/ollama/pull",{method:"POST",body:JSON.stringify({model:s.ollama.default_model})});
         slot.innerHTML=`<div class="row"><span class="spin"></span> <span class="muted">${t("w.downloading")}</span></div>`;
-        const iv=setInterval(async()=>{ try{ const st=await api("/api/setup/status"); if(st.ollama.has_gemma4){ clearInterval(iv); refresh(); } }catch{} }, 5000);
+        const iv=setInterval(async()=>{ try{ const st=await api("/api/setup/status"); if(st.ollama.has_model){ clearInterval(iv); refresh(); } }catch{} }, 5000);
       }catch(e){ g.disabled=false; toast(e.message); } };
       p.appendChild(g); p.appendChild(slot);
     } else {
@@ -362,7 +366,8 @@ async function setupStep(p, key, s, refresh){
     b.onclick=async()=>{ const an=nm.value.trim(); if(!an) return toast(t("w.err.name")); b.disabled=true;
       try{ const [tpls,models]=await Promise.all([api("/api/templates?lang="+LANG), api("/api/models").catch(()=>({models:[]}))]);
         const tp=(tpls.templates||[]).find(x=>x.id==="topic-watcher");
-        const gem=(models.models||[]).find(x=>x.local && x.id.startsWith("gemma4"));
+        const _fam=(s.ollama.default_model||"").split(":")[0];
+        const gem=(models.models||[]).find(x=>x.local && (x.id===s.ollama.default_model || (_fam && x.id.startsWith(_fam))));
         const policy={...(tp?tp.default_policy:{}), model: gem?gem.spec:null};
         await api("/api/brains",{method:"POST",body:JSON.stringify({agent_name:an,template_id:"topic-watcher",prose:pr.value,policy})}); refresh();
       }catch(e){ b.disabled=false; toast(e.message); } };
@@ -833,7 +838,16 @@ document.getElementById("lang").onchange=e=>{ LANG=e.target.value; localStorage.
 
 // Header shutdown button: stop all agents safely, then the app closes itself (the Tauri shell quits when
 // the cockpit exits). In a plain browser it just stops the fleet + the cockpit goes down.
-function renderChrome(){ const b=document.getElementById("shutdownbtn"); if(b) b.textContent="⏻ "+t("shutdown"); }
+function renderChrome(){ const b=document.getElementById("shutdownbtn"); if(b) b.textContent="⏻ "+t("shutdown");
+  const r=document.getElementById("resetbtn"); if(r) r.textContent="↺ "+t("reset"); }
+async function doReset(){
+  if(!confirm(t("reset.confirm"))) return;
+  const r=document.getElementById("resetbtn"); if(r){ r.disabled=true; r.textContent="…"; }
+  try{ await api("/api/reset",{method:"POST"}); toast(t("reset.done"));
+    skipSetup=false; wizardStarted=false; setTimeout(()=>location.reload(), 600);   // back to a clean wizard
+  }catch(e){ if(r){ r.disabled=false; renderChrome(); } toast(e.message); }
+}
+document.getElementById("resetbtn").onclick=doReset;
 async function doShutdown(){
   if(!confirm(t("shutdown.confirm"))) return;
   const b=document.getElementById("shutdownbtn"); if(b){ b.disabled=true; b.textContent=t("shutdown.stopping"); }

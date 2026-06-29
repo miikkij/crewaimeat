@@ -56,14 +56,30 @@ def test_setup_status_shape(client, monkeypatch):
     for k in ("owner_set", "ollama", "openrouter_key", "brain_count", "first_agent_running"):
         assert k in s
     assert s["owner_set"] is False and s["brain_count"] == 0
-    assert s["ollama"] == {"running": False, "has_gemma4": False, "models": []}
+    assert s["ollama"]["running"] is False and s["ollama"]["has_model"] is False and s["ollama"]["models"] == []
+    assert s["ollama"]["default_model"]  # the wizard pulls/picks this light default
 
 
-def test_setup_status_sees_gemma4(client, monkeypatch):
-    monkeypatch.setattr("crewaimeat.agency.cockpit._ollama_probe", lambda: (True, ["gemma4:latest", "llama3"]))
+def test_setup_status_sees_default_model(client, monkeypatch):
+    # has_model is True when a model of the default family (e.g. llama3.2) is present
+    monkeypatch.setattr("crewaimeat.agency.cockpit._ollama_probe", lambda: (True, ["llama3.2:3b", "qwen2.5:7b"]))
     monkeypatch.setattr("crewaimeat.agency.cockpit._has_openrouter_key", lambda: False)
     s = client.get("/api/setup/status").json()
-    assert s["ollama"]["running"] is True and s["ollama"]["has_gemma4"] is True
+    assert s["ollama"]["running"] is True and s["ollama"]["has_model"] is True
+
+
+def test_reset_wipes_state(client, monkeypatch, tmp_path):
+    # chdir so the 'crews' glob in reset can never touch the dev repo's real crews/
+    monkeypatch.chdir(tmp_path)
+    import crewaimeat.tui.actions as actions
+
+    monkeypatch.setattr(actions, "stop_fleet", lambda: "stopped")
+    (tmp_path / "agency_account.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "brains.db").write_text("x", encoding="utf-8")
+    r = client.post("/api/reset").json()
+    assert r["ok"] is True and "agency_account.json" in r["removed"]
+    assert not (tmp_path / "agency_account.json").exists()
+    assert not (tmp_path / "brains.db").exists()
 
 
 def test_openrouter_key_requires_value(client):

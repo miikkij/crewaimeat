@@ -31,9 +31,12 @@ from pydantic import BaseModel
 from crewaimeat import brain_templates, brains, local_memory
 from crewaimeat.agency import account, events
 
-COCKPIT_VERSION = "0.8.8"
+COCKPIT_VERSION = "0.8.9"
 _TOKEN_ENV = "AIMEAT_AGENCY_TOKEN"
 _STATIC = Path(__file__).parent / "static"
+# Default local model for the wizard — light + tool-capable so it loads on modest GPUs (gemma4 is a big
+# vision model that needs lots of VRAM). The model picker still offers anything Ollama has + OpenRouter.
+DEFAULT_OLLAMA_MODEL = "llama3.2:3b"
 
 
 # ── request bodies ────────────────────────────────────────────────────────────
@@ -75,7 +78,7 @@ class KeyIn(BaseModel):
 
 
 class PullIn(BaseModel):
-    model: str = "gemma4"
+    model: str = DEFAULT_OLLAMA_MODEL
 
 
 class UrlIn(BaseModel):
@@ -153,15 +156,6 @@ def _ollama_models() -> list[dict]:
         }
         for n in names
     ]
-
-
-def ollama_gemma4_spec() -> dict:
-    """The model override for the default local brain: gemma4 on the local Ollama (tool-calling capable)."""
-    return {
-        "kind": "model",
-        "label": "ollama:gemma4",
-        "provider": {"type": "ollama", "name": "ollama", "base_url": _ollama_base(), "models": [{"id": "gemma4"}]},
-    }
 
 
 def _has_openrouter_key() -> bool:
@@ -307,7 +301,8 @@ def create_app(token: str | None = None) -> FastAPI:
 
         acc = account.load()
         running, names = _ollama_probe()
-        has_gemma4 = any(n.startswith("gemma4") for n in names)
+        _fam = DEFAULT_OLLAMA_MODEL.split(":")[0]  # e.g. "llama3.2" — present in any variant tag
+        has_model = any(_fam in n for n in names)
         bs = brains.list_brains()
         first = bs[0]["agent_name"] if bs else None
         first_auth = account.agent_auth(first, acc["owner"]) if first else {"authorized": False}
@@ -316,7 +311,12 @@ def create_app(token: str | None = None) -> FastAPI:
             "owner_set": acc["owner_set"],
             "owner": acc["owner"],
             "node": acc["node"],
-            "ollama": {"running": running, "has_gemma4": has_gemma4, "models": names},
+            "ollama": {
+                "running": running,
+                "has_model": has_model,
+                "default_model": DEFAULT_OLLAMA_MODEL,
+                "models": names,
+            },
             "openrouter_key": _has_openrouter_key(),
             "brain_count": len(bs),
             "first_agent": first,
@@ -331,7 +331,7 @@ def create_app(token: str | None = None) -> FastAPI:
         import subprocess
         import threading
 
-        model = (body.model or "gemma4").strip()
+        model = (body.model or DEFAULT_OLLAMA_MODEL).strip()
 
         def _pull():
             try:
@@ -398,6 +398,50 @@ def create_app(token: str | None = None) -> FastAPI:
 
             threading.Thread(target=_bye, daemon=True).start()
         return {"ok": True, "detail": detail}
+
+    @app.post("/api/reset", dependencies=[require_token])
+    def reset() -> dict:
+        """Wipe ALL agency state (account, brains, agents, memory, tokens) for a true fresh start — what the
+        uninstaller's 'delete application data' doesn't reach. Stops the fleet first so nothing is locked."""
+        import shutil
+
+        from crewaimeat._home import aimeat_home
+        from crewaimeat.tui import actions
+
+        try:
+            actions.stop_fleet()
+        except Exception:  # noqa: BLE001
+            pass
+        home = Path(aimeat_home())
+        removed = []
+        for name in (
+            "brains.db",
+            "local_memory.db",
+            "events.db",
+            "agency_account.json",
+            "llm_overrides.json",
+            "serve.json",
+        ):
+            for suffix in ("", "-wal", "-shm"):
+                p = home / (name + suffix)
+                try:
+                    if p.exists():
+                        p.unlink()
+                        removed.append(p.name)
+                except OSError:
+                    pass
+        tok = home / "tokens"
+        if tok.is_dir():
+            shutil.rmtree(tok, ignore_errors=True)
+            removed.append("tokens/")
+        for f in Path("crews").glob("*_crew.py"):  # generated brain stubs
+            try:
+                f.unlink()
+                removed.append(f.name)
+            except OSError:
+                pass
+        os.environ.pop("AIMEAT_OWNER", None)  # so the wizard restarts at step 1
+        return {"ok": True, "removed": removed}
 
     @app.post("/api/agents/{agent}/register", dependencies=[require_token])
     def register_agent_route(agent: str) -> dict:

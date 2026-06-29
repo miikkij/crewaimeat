@@ -129,9 +129,21 @@ fn provision(handle: &AppHandle, lang: &str, say: &dyn Fn(&str)) -> Result<(Stri
 fn spawn_cockpit(uv: &str, repo: &Path, token: &str) -> std::io::Result<Child> {
     // The cockpit (and later the fleet) run in their own visible windows ON PURPOSE — the splash tells the
     // user they'll open and what they are. "Shut down" closes them all safely.
-    Command::new(uv)
-        .args(["run", "--extra", "agency", "python", "-m", "crewaimeat.agency.cockpit"])
-        .current_dir(repo)
+    //
+    // Spawn the VENV python directly (not `uv run`): `uv run` keeps uv.exe alive as the parent for the whole
+    // app session, which LOCKS uv.exe so the next installer can't overwrite it ("Error opening file for
+    // writing: uv.exe"). After `uv sync`, the venv python exists, so we use it and uv.exe stays free.
+    let venv_py = repo.join(".venv").join("Scripts").join("python.exe");
+    let mut c = if venv_py.exists() {
+        let mut c = Command::new(&venv_py);
+        c.args(["-m", "crewaimeat.agency.cockpit"]);
+        c
+    } else {
+        let mut c = Command::new(uv);
+        c.args(["run", "--extra", "agency", "python", "-m", "crewaimeat.agency.cockpit"]);
+        c
+    };
+    c.current_dir(repo)
         .env("AIMEAT_HOME", repo.join(".aimeat"))
         .env("AIMEAT_AGENCY_TOKEN", token)
         .env("AIMEAT_AGENCY_PORT", PORT.to_string())
