@@ -31,10 +31,13 @@ struct AppState {
     pid: Mutex<Option<u32>>,
 }
 
-/// Writable home for the runtime (the copied crewaimeat checkout + its venv).
+/// Writable home for the runtime (the copied crewaimeat checkout + its venv). NOTE: this is a `runtime`
+/// SUBfolder of the install dir — kept separate from the app exe + uninstall.exe (which NSIS owns at the
+/// install root) so wiping/resetting the runtime can never delete the uninstaller. The NSIS uninstaller
+/// removes the whole install dir (incl. this subfolder), so uninstall stays clean.
 fn runtime_dir() -> PathBuf {
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
-        return PathBuf::from(local).join("aimeat-agency");
+        return PathBuf::from(local).join("aimeat-agency").join("runtime");
     }
     PathBuf::from(std::env::var("USERPROFILE").unwrap_or_else(|_| ".".into())).join(".aimeat-agency")
 }
