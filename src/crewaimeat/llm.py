@@ -256,6 +256,12 @@ class MultiProviderLLM(BaseLLM):
             # NB: context is enforced via get_context_window_size() below (the outer LLM CrewAI queries),
             # not as a constructor kwarg — the concrete completion class would leak it into the API call.
             kw: dict = dict(model=ep["model"], temperature=temperature)
+            # Local Ollama models emit tool calls FAR more reliably when cool: a small model at temp ~0.5
+            # tends to "narrate" the call as text ({"name": "fetch_article_text", ...}) instead of emitting
+            # a structured tool call. Cap Ollama endpoints to a low temperature (override via OLLAMA_TEMPERATURE).
+            if str(ep["model"]).startswith("ollama/"):
+                cool = float(os.getenv("OLLAMA_TEMPERATURE", "0.1"))
+                kw["temperature"] = min(temperature, cool)
             if ep.get("base_url"):
                 kw["base_url"] = ep["base_url"]
             if ep.get("api_key"):
