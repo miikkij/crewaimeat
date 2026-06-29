@@ -26,8 +26,10 @@ def _path() -> str:
 
 
 def load() -> dict:
-    """The operator context {owner, node, owner_set}. owner falls back to the AIMEAT_OWNER env; node to
-    aimeat.io. owner_set is False on a fresh install — the cue to show the first-run Connect screen."""
+    """The operator context {owner, node, owner_set}. The owner comes ONLY from what the user connected in
+    this app (the saved agency_account.json) — NOT from an ambient AIMEAT_OWNER env, so a stray shell/system
+    var on a dev machine can never silently skip onboarding. owner_set is False on a fresh install — the cue
+    to show the first-run wizard. node defaults to aimeat.io."""
     owner = node = None
     try:
         with open(_path(), encoding="utf-8") as fh:
@@ -36,8 +38,6 @@ def load() -> dict:
         node = (doc.get("node") or "").strip() or None
     except (OSError, ValueError):
         pass
-    env_owner = os.environ.get("AIMEAT_OWNER", "").strip() or None
-    owner = owner or env_owner
     node = node or os.environ.get("AIMEAT_NODE_URL", "").strip() or DEFAULT_NODE
     return {"owner": owner, "node": node, "owner_set": bool(owner)}
 

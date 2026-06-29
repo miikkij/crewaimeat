@@ -92,15 +92,22 @@ fn provision(handle: &AppHandle, say: &dyn Fn(&str)) -> Result<(String, PathBuf)
 
     let uv = uv_path().ok_or("uv not found (the bundled uv.exe is missing).")?;
 
-    if !repo.join("pyproject.toml").exists() {
-        say("Setting up the agency (first run)…");
+    // Refresh the source on first run AND on version change, so an UPDATE actually delivers new code.
+    // The bundle excludes .aimeat/.venv, so copying over the checkout preserves user state + the venv.
+    let version = env!("CARGO_PKG_VERSION");
+    let marker = repo.join(".agency_version");
+    let installed = std::fs::read_to_string(&marker).unwrap_or_default();
+    let fresh = !repo.join("pyproject.toml").exists();
+    if fresh || installed.trim() != version {
+        say(if fresh { "Setting up the agency (first run)…" } else { "Updating to the latest version…" });
         let res = handle.path().resource_dir().map_err(|e| e.to_string())?;
         let a = res.join("resources").join("runtime-src");
         let bundled = if a.exists() { a } else { res.join("runtime-src") };
         copy_dir(&bundled, &repo).map_err(|e| format!("could not lay out the runtime: {e}"))?;
+        std::fs::write(&marker, version).ok();
     }
 
-    say("Installing dependencies (first run, a few minutes)…");
+    say("Installing dependencies (a moment)…");
     let s = run(&uv, &["sync", "--extra", "agency"], Some(&repo));
     if !ok(&s) {
         return Err("Dependency install failed (uv sync). Check your connection and reopen.".into());

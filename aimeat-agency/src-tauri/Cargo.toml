@@ -1,6 +1,6 @@
 [package]
 name = "aimeat-agency"
-version = "0.8.2"
+version = "0.8.3"
 description = "aimeat-agency — desktop appliance for running an agency of agents on AIMEAT"
 edition = "2021"
 rust-version = "1.77"

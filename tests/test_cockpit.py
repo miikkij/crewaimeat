@@ -165,11 +165,15 @@ def test_templates_localized_fi(client):
     assert "fi" in fi["languages"]
 
 
-def test_account_endpoint(client, monkeypatch):
+def test_account_ignores_ambient_env(client, monkeypatch):
+    # The agency account must NOT come from a stray AIMEAT_OWNER env — that would silently skip onboarding
+    # on a dev/system machine that happens to have it set. Only an explicit connect sets the owner.
     monkeypatch.setenv("AIMEAT_OWNER", "happydude500001")
     acc = client.get("/api/account").json()
-    assert acc["owner"] == "happydude500001"
+    assert acc["owner_set"] is False and acc["owner"] is None
     assert acc["node"].endswith("aimeat.io")
+    client.post("/api/account/connect", json={"owner": "jdoe2026"})
+    assert client.get("/api/account").json()["owner"] == "jdoe2026"
 
 
 def test_fleet_logs_empty_when_no_log(client):
