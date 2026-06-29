@@ -182,7 +182,7 @@ const STR = {
   "testrunhint":{en:"Run it once for real",fi:"Aja se kerran oikeasti"},
   "testprompt":{en:"What should it do for this test? (e.g. a topic to summarize)",fi:"Mitä sen pitäisi tehdä tässä testissä? (esim. aihe tiivistettäväksi)"},
   "run":{en:"Run",fi:"Aja"}, "queued":{en:"queued — waiting for the agent…",fi:"jonossa — odotetaan agenttia…"},
-  "working":{en:"working…",fi:"työskentelee…"}, "result":{en:"Result",fi:"Tulos"},
+  "working":{en:"working…",fi:"työskentelee…"}, "result":{en:"Result",fi:"Tulos"}, "result.source":{en:"Source",fi:"Lähde"},
   "notasks":{en:"No tasks yet.",fi:"Ei tehtäviä vielä."}, "needsrun":{en:"Start the agent first (a test needs the running daemon).",fi:"Käynnistä agentti ensin (koeajo tarvitsee käynnissä olevan daemonin)."},
   "mem.key":{en:"Published to (memory key)",fi:"Julkaistu (muistiavain)"}, "mem.open":{en:"click a row to read the full record",fi:"avaa koko tietue klikkaamalla riviä"},
   "sync.open":{en:"these are the keys live on aimeat.io — click one to read what's published",fi:"nämä avaimet ovat aimeat.io:ssa — avaa lukeaksesi julkaistun sisällön"},
@@ -600,7 +600,7 @@ async function showTaskResult(m, agent, d){
   if(d.description) out.appendChild(el(`<div class="card" style="margin-bottom:12px"><label>${t("input")}</label><div>${esc(d.description)}</div></div>`));
   const slot=el(`<div class="muted">…</div>`); out.appendChild(slot);
   try{ const r=await api("/api/agents/"+encodeURIComponent(agent)+"/task/"+encodeURIComponent(d.id)+"/result");
-    if(r.result){ slot.innerHTML=`<h3>${t("result")}</h3>`+(r.key?`<div class="muted" style="font-size:12px;margin-bottom:6px;word-break:break-all">${esc(r.key)}</div>`:""); slot.appendChild(el(mdRender(r.result))); }
+    if(r.result){ slot.innerHTML=`<h3>${t("result")}</h3>`+(r.key?`<div class="muted" style="font-size:12px;margin-bottom:6px;word-break:break-all">${esc(r.key)}</div>`:""); slot.appendChild(el(renderResult(r.result))); }
     else slot.innerHTML=`<p class="muted">${t("nooutput")} (${esc(r.status||d.status||"")})</p>`;
   }catch(e){ slot.innerHTML=`<p class="muted">${esc(e.message)}</p>`; }
 }
@@ -651,7 +651,7 @@ function showTestRun(m, agent, authState){
       let waited=0; const iv=setInterval(async()=>{ waited+=5;
         try{ const res=await api("/api/agents/"+encodeURIComponent(agent)+"/task/"+encodeURIComponent(r.task_id)+"/result");
           if(res.done){ clearInterval(iv); run.disabled=false;
-            if(res.result){ status.innerHTML=`<h3>${t("result")}</h3>`+(res.key?`<div class="muted" style="font-size:12px;margin-bottom:6px;word-break:break-all">${esc(res.key)}</div>`:""); status.appendChild(el(mdRender(res.result))); }
+            if(res.result){ status.innerHTML=`<h3>${t("result")}</h3>`+(res.key?`<div class="muted" style="font-size:12px;margin-bottom:6px;word-break:break-all">${esc(res.key)}</div>`:""); status.appendChild(el(renderResult(res.result))); }
             else status.innerHTML=`<p class="muted">${t("nooutput")} (${esc(res.status||"")})</p>`; }
           else status.innerHTML=`<div class="row"><span class="spin"></span> <span class="muted">${t("working")} ${waited}s</span></div>`;
         }catch{}
@@ -684,7 +684,7 @@ function showTasks(m, resp, agent){
         if(tk.description) detail.appendChild(el(`<div class="card" style="margin:8px 0"><label>${t("input")}</label><div>${esc(tk.description)}</div></div>`));
         const slot=el(`<div class="muted">…</div>`); detail.appendChild(slot);
         try{ const r=await api("/api/agents/"+encodeURIComponent(agent)+"/task/"+encodeURIComponent(tk.id)+"/result");
-          if(r.result){ slot.innerHTML=`<label>${t("result")}</label>`+(r.key?`<div class="muted" style="font-size:12px;word-break:break-all">${esc(r.key)}</div>`:""); slot.appendChild(el(mdRender(r.result))); }
+          if(r.result){ slot.innerHTML=`<label>${t("result")}</label>`+(r.key?`<div class="muted" style="font-size:12px;word-break:break-all">${esc(r.key)}</div>`:""); slot.appendChild(el(renderResult(r.result))); }
           else slot.innerHTML=`<p class="muted">${t("nooutput")} (${esc(r.status||st)})</p>`;
         }catch(e){ slot.innerHTML=`<p class="muted">${esc(e.message)}</p>`; }
       }
@@ -762,6 +762,22 @@ function mdRender(src){
   if(inCode) html+=`<pre>${esc(code)}</pre>`; closeList();
   return `<div class="md">${html}</div>`;
 }
+// A deliverable can come back as a raw record JSON (e.g. a published "watch": {parameters:{source,body}}).
+// Show the READABLE body (+ source) instead of dumping the raw JSON blob at the user.
+function renderResult(raw){
+  if(typeof raw==="string"){
+    const s=raw.trim();
+    if(s.startsWith("{")||s.startsWith("[")){
+      try{ const o=JSON.parse(s); const rec=(o&&o.parameters)||o;
+        const body=rec&&(rec.body||rec.summary||rec.text||rec.content||rec.output);
+        if(body){ let h=mdRender(String(body)); const src=rec.source||o.source;
+          if(src) h+=`<div class="muted" style="font-size:12px;margin-top:8px">${t("result.source")||"Source"}: <a href="${esc(src)}">${esc(src)}</a></div>`;
+          return h; }
+      }catch{}
+    }
+  }
+  return mdRender(raw);
+}
 
 async function renderMemory(m){
   m.innerHTML=`<h2>${t("memory.title")}</h2><div class="sub">${t("memory.sub")}</div>`;
@@ -816,7 +832,7 @@ async function showNodeKey(out, agent, p){
   out.appendChild(el(`<div class="card" style="margin:10px 0"><div style="font-family:monospace;word-break:break-all">${esc(p.key)}</div><div class="muted" style="font-size:12px">${esc(p.visibility||"")}${when}</div></div>`));
   const slot=el(`<div class="muted">…</div>`); out.appendChild(slot);
   try{ const r=await api("/api/agents/"+encodeURIComponent(agent)+"/key?key="+encodeURIComponent(p.key));
-    slot.innerHTML=""; slot.appendChild(el(mdRender(r.value||"(empty)")));
+    slot.innerHTML=""; slot.appendChild(el(renderResult(r.value||"(empty)")));
   }catch(e){ slot.innerHTML=`<p class="muted">${esc(e.message)}</p>`; }
 }
 

@@ -183,10 +183,15 @@ def _build_topic_watcher(ctx: Any, brain: dict) -> tuple[list, list]:
             "3. Write a concise summary of the notable new items (with source URLs).\n"
             f"4. Publish ONLY that refined summary upward with `publish_memory(id, key='{publish_key}', "
             f"visibility='{visibility}')` — first `remember` the summary to get its id, then publish "
-            "that id. Do not publish the raw findings.\n"
-            "Report the published summary as your result."
+            "that id. Do not publish the raw findings.\n\n"
+            "YOUR FINAL ANSWER must be ONLY the clean summary itself — plain, readable prose with the "
+            "source URLs, exactly as a person would want to read it. Do NOT output JSON, tool-call syntax, "
+            "key/visibility fields, or the raw record. Just the summary text."
         ),
-        expected_output="A concise summary of the new items on the requested topic, with source URLs.",
+        expected_output=(
+            "Plain readable prose: a concise summary of the notable new items with their source URLs. "
+            "NOT JSON, not a record — just the summary text a person would read."
+        ),
         agent=watcher,
     )
     return [watcher], [watch]
