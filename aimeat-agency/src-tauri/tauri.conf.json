@@ -1,6 +1,6 @@
 {
   "productName": "aimeat-agency",
-  "version": "0.8.5",
+  "version": "0.8.6",
   "identifier": "io.aimeat.agency",
   "build": {
     "frontendDist": "../src"

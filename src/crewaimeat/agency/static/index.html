@@ -459,6 +459,21 @@ function renderEditor(m){
     ${["owner","public"].map(a=>`<option ${p.visibility===a?"selected":""}>${a}</option>`).join("")}</select></div>`);
   const modelBox=el(`<div style="flex:1;min-width:220px"><label>${t("model")}</label><select class="f" id="pm"><option value="">${esc(t("model.default"))}</option></select></div>`);
   pr.appendChild(autonomy); pr.appendChild(sched); pr.appendChild(vis); pr.appendChild(modelBox); form.appendChild(pr);
+  // OpenRouter (cloud model) — set/replace the key anytime, with guidance. Same option as the wizard's
+  // model step, surfaced here so it's reachable AFTER onboarding (next to the Model picker).
+  const orWrap=el(`<div style="margin-top:6px"></div>`); form.appendChild(orWrap);
+  (async()=>{ let saved=false; try{ saved=(await api("/api/setup/status")).openrouter_key; }catch{}
+    const adv=el(`<details><summary class="muted" style="cursor:pointer;font-size:13px">${t("w.advanced")}</summary></details>`);
+    const body=el(`<div style="margin-top:10px"></div>`);
+    body.appendChild(el(`<p class="muted" style="border-left:3px solid var(--ok);padding-left:10px">${t("w.or.free")}</p>`));
+    body.appendChild(el(`<p class="muted">${t("w.or.desc")}${saved?t("w.or.saved"):""}</p>`));
+    body.appendChild(el(`<p class="muted">${t("w.or.howto")}</p>`));
+    const getkey=el(`<button class="btn ghost">${t("w.or.getkey")}</button>`); getkey.onclick=()=>openExt("https://openrouter.ai/keys"); body.appendChild(getkey);
+    const k=el(`<input placeholder="sk-or-..." style="margin-top:10px">`); body.appendChild(k);
+    const sk=el(`<button class="btn ghost" style="margin-top:8px">${t("w.savekey")}</button>`);
+    sk.onclick=async()=>{ const kv=k.value.trim(); if(!kv) return; try{ await api("/api/setup/openrouter-key",{method:"POST",body:JSON.stringify({key:kv})}); toast(t("w.saved")); k.value=""; }catch(e){ toast(e.message); } };
+    body.appendChild(sk); adv.appendChild(body); orWrap.appendChild(adv);
+  })();
   form.appendChild(el(`<label>${t("publishkey")}</label>`));
   const pk=el(`<input value="${esc(p.publish_key||"")}" placeholder="blank = auto from agent name">`); form.appendChild(pk);
   form.appendChild(el(`<label>${t("keymode")}</label>`));
