@@ -116,7 +116,10 @@ const STR = {
   "w.ollama.install":{en:"First, install <b>Ollama</b> — a small free app that runs AI models locally.",fi:"Asenna ensin <b>Ollama</b> — pieni ilmainen sovellus, joka ajaa tekoälymalleja paikallisesti."},
   "w.gemma.desc":{en:"Now download the <b>gemma4</b> model (~3 GB, one-time). It's the actual AI brain — gemma4 is used because it can call tools (search the web, save notes), which your agent needs.",fi:"Lataa nyt <b>gemma4</b>-malli (~3 Gt, kertaluonteinen). Se on varsinaiset tekoälyaivot — gemma4 valittiin, koska se osaa käyttää työkaluja (hakea verkosta, tallentaa muistiinpanoja), joita agenttisi tarvitsee."},
   "w.localready":{en:"✓ Local AI ready (gemma4 on Ollama).",fi:"✓ Paikallinen tekoäly valmis (gemma4 Ollamalla)."},
-  "w.or.desc":{en:"<b>OpenRouter</b> is a paid online service that hosts many powerful AI models (you pay per use). Use it only if you want a stronger model than your computer can run. Get a key at <a href=\"https://openrouter.ai/keys\" target=\"_blank\">openrouter.ai</a>, then paste it here.",fi:"<b>OpenRouter</b> on maksullinen verkkopalvelu, joka tarjoaa monia tehokkaita tekoälymalleja (maksat käytön mukaan). Käytä sitä vain, jos haluat tehokkaamman mallin kuin tietokoneesi pystyy ajamaan. Hae avain osoitteesta <a href=\"https://openrouter.ai/keys\" target=\"_blank\">openrouter.ai</a> ja liitä se tähän."},
+  "w.or.free":{en:"You don't need this. The free local model above already works — nothing to pay, nothing leaves your computer. OpenRouter is only for those who want a more powerful model than their machine can run.",fi:"Et tarvitse tätä. Yllä oleva ilmainen paikallinen malli toimii jo — mitään ei makseta, mikään ei lähde koneeltasi. OpenRouter on vain niille, jotka haluavat tehokkaamman mallin kuin oma kone pystyy ajamaan."},
+  "w.or.desc":{en:"<b>OpenRouter</b> is an online service that hosts many AI models. It's <b>pay-as-you-go</b>: you add a small amount of credit (a few euros is plenty) and pay only for what you use — often a few cents per run, no subscription.",fi:"<b>OpenRouter</b> on verkkopalvelu, joka tarjoaa monia tekoälymalleja. Se on <b>käytön mukaan maksava</b>: lisäät pienen summan saldoa (muutama euro riittää hyvin) ja maksat vain käytöstä — usein muutama sentti per ajo, ei kuukausimaksua."},
+  "w.or.howto":{en:"Click below to open OpenRouter: sign in, add a little credit, create an API key, then paste it here.",fi:"Avaa OpenRouter alta: kirjaudu, lisää hieman saldoa, luo API-avain ja liitä se tähän."},
+  "w.or.getkey":{en:"Open OpenRouter & get a key →",fi:"Avaa OpenRouter & hae avain →"},
   "w.or.saved":{en:" <b>(a key is already saved)</b>",fi:" <b>(avain on jo tallennettu)</b>"},
   "w.agent.desc":{en:"Give it a name and say, in your own words, what it should do. It'll use the AI brain you just set up.",fi:"Anna sille nimi ja kerro omin sanoin, mitä sen pitäisi tehdä. Se käyttää juuri asentamiasi tekoälyaivoja."},
   "w.defaultprose":{en:"Get the latest news on the topic given in the task. Summarize the notable items with their sources.",fi:"Hae uusimmat uutiset tehtävässä annetusta aiheesta. Tiivistä merkittävät kohdat lähteineen."},
@@ -336,8 +339,11 @@ async function setupStep(p, key, s, refresh){
     }
     const adv=el(`<details style="margin-top:18px"><summary class="muted" style="cursor:pointer">${t("w.advanced")}</summary></details>`);
     const body=el(`<div style="margin-top:10px"></div>`);
+    body.appendChild(el(`<p class="muted" style="border-left:3px solid var(--ok);padding-left:10px">${t("w.or.free")}</p>`));
     body.appendChild(el(`<p class="muted">${t("w.or.desc")}${s.openrouter_key?t("w.or.saved"):""}</p>`));
-    const k=el(`<input placeholder="sk-or-...">`); body.appendChild(k);
+    body.appendChild(el(`<p class="muted">${t("w.or.howto")}</p>`));
+    const getkey=el(`<button class="btn ghost">${t("w.or.getkey")}</button>`); getkey.onclick=()=>openExt("https://openrouter.ai/keys"); body.appendChild(getkey);
+    const k=el(`<input placeholder="sk-or-..." style="margin-top:10px">`); body.appendChild(k);
     const sk=el(`<button class="btn ghost" style="margin-top:8px">${t("w.savekey")}</button>`);
     sk.onclick=async()=>{ const kv=k.value.trim(); if(!kv) return; try{ await api("/api/setup/openrouter-key",{method:"POST",body:JSON.stringify({key:kv})}); toast(t("w.saved")); refresh(); }catch(e){ toast(e.message); } };
     body.appendChild(sk); adv.appendChild(body); p.appendChild(adv);
