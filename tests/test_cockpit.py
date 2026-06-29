@@ -61,8 +61,11 @@ def test_setup_status_shape(client, monkeypatch):
 
 
 def test_setup_status_sees_default_model(client, monkeypatch):
-    # has_model is True when a model of the default family (e.g. llama3.2) is present
-    monkeypatch.setattr("crewaimeat.agency.cockpit._ollama_probe", lambda: (True, ["llama3.2:3b", "qwen2.5:7b"]))
+    # has_model is True when a model of the default family is present
+    from crewaimeat.agency.cockpit import DEFAULT_OLLAMA_MODEL
+
+    fam = DEFAULT_OLLAMA_MODEL.split(":")[0]
+    monkeypatch.setattr("crewaimeat.agency.cockpit._ollama_probe", lambda: (True, [f"{fam}:latest", "qwen2.5:7b"]))
     monkeypatch.setattr("crewaimeat.agency.cockpit._has_openrouter_key", lambda: False)
     s = client.get("/api/setup/status").json()
     assert s["ollama"]["running"] is True and s["ollama"]["has_model"] is True

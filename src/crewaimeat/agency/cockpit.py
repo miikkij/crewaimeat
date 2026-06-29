@@ -31,12 +31,13 @@ from pydantic import BaseModel
 from crewaimeat import brain_templates, brains, local_memory
 from crewaimeat.agency import account, events
 
-COCKPIT_VERSION = "0.8.10"
+COCKPIT_VERSION = "0.8.11"
 _TOKEN_ENV = "AIMEAT_AGENCY_TOKEN"
 _STATIC = Path(__file__).parent / "static"
-# Default local model for the wizard — light + tool-capable so it loads on modest GPUs (gemma4 is a big
-# vision model that needs lots of VRAM). The model picker still offers anything Ollama has + OpenRouter.
-DEFAULT_OLLAMA_MODEL = "llama3.2:3b"
+# Default local model for the wizard. gemma4 is capable enough for the agentic onboarding + news task
+# (proven); small 3B models (llama3.2:3b) were too weak in practice. Small-GPU users can pick a lighter
+# model in the picker or use OpenRouter.
+DEFAULT_OLLAMA_MODEL = "gemma4"
 
 
 # ── request bodies ────────────────────────────────────────────────────────────

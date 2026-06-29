@@ -202,6 +202,9 @@ def run_brain(agent_name: str) -> None:
     stub calls; the fleet host discovers that stub and runs it like any other crew."""
     from crewaimeat.aimeat_crew import run_crew
 
+    # Appliance web search = DuckDuckGo (zero-config, no local server). Without this, the search auto-detect
+    # would grab any reachable SearXNG on localhost:21333 (e.g. a dev fleet's) and fail with its errors.
+    os.environ.setdefault("WEB_SEARCH", "ddg")
     apply_policy(agent_name)
     run_crew(build_crewspec(agent_name))
 
