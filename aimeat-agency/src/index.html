@@ -50,17 +50,17 @@
   <script>
     const T = {
       lang:   { en:"Choose your language", fi:"Valitse kielesi" },
-      title:  { en:"Here's what will happen when you click Begin:", fi:"Näin tapahtuu kun painat Aloita:" },
-      s1:     { en:"It downloads the agency runtime (a few minutes, needs internet — one time only).",
-                fi:"Se lataa agency-ajoympäristön (muutama minuutti, vaatii netin — vain kerran)." },
-      s2:     { en:"A few small black terminal windows will open and STAY open — that's normal. They are your agency's engine and your agents actually running. Don't close them by hand.",
-                fi:"Muutama pieni musta terminaali-ikkuna aukeaa ja JÄÄ auki — se on normaalia. Ne ovat agencyn moottori ja agenttisi, jotka oikeasti pyörivät. Älä sulje niitä käsin." },
-      s3:     { en:"Then your agency opens, where you set up your first agent step by step.",
-                fi:"Sitten agency aukeaa, jossa otat ensimmäisen agentin käyttöön vaihe vaiheelta." },
-      note:   { en:"Nothing runs until you click Begin. To close everything safely (the windows too), use the “Shut down” button in the app — don't just close the windows.",
-                fi:"Mitään ei käynnisty ennen kuin painat Aloita. Sulje kaikki turvallisesti (myös ikkunat) sovelluksen “Sammuta”-napilla — älä sulje ikkunoita itse." },
+      title:  { en:"When you click Begin, here's what happens:", fi:"Kun painat Aloita, tapahtuu näin:" },
+      s1:     { en:"It downloads the files it needs (a few minutes, needs an internet connection — first time only).",
+                fi:"Ladataan tarvittavat tiedostot (muutama minuutti, vaatii nettiyhteyden — vain ensimmäisellä kerralla)." },
+      s2:     { en:"A few small black command windows open and stay open — this is normal. They are the engine that runs your agents. Please don't close them yourself.",
+                fi:"Näytölle avautuu muutama pieni musta komentoikkuna, jotka jäävät auki — tämä on normaalia. Ne ovat moottori, joka pyörittää agenttejasi. Älä sulje niitä itse." },
+      s3:     { en:"Then the app opens, and you set up your first agent step by step.",
+                fi:"Sen jälkeen sovellus avautuu, ja luot ensimmäisen agenttisi vaihe vaiheelta." },
+      note:   { en:"Nothing happens until you click Begin. To close everything safely (the windows too), use the “Shut down” button in the app — don't close the windows yourself.",
+                fi:"Mitään ei tapahdu ennen kuin painat Aloita. Kun haluat sulkea kaiken turvallisesti (myös komentoikkunat), käytä sovelluksen “Sammuta”-painiketta — älä sulje ikkunoita itse." },
       begin:  { en:"Begin", fi:"Aloita" },
-      starting:{ en:"Starting your agency…", fi:"Käynnistetään agencyäsi…" },
+      starting:{ en:"Starting…", fi:"Avataan…" },
     };
     let LANG = localStorage.getItem("agencyLang") || "en";
     const t = (k) => (T[k] && T[k][LANG]) || (T[k] && T[k].en) || k;

@@ -80,30 +80,48 @@ fn uv_path() -> Option<String> {
     None
 }
 
+/// Localized splash status text (EN/FI) — so the progress the user sees matches the language they chose.
+fn status(lang: &str, key: &str) -> String {
+    let fi = lang == "fi";
+    match key {
+        "setup" => if fi { "Otetaan agency käyttöön (ensimmäinen kerta)…" } else { "Setting up the agency (first run)…" },
+        "update" => if fi { "Päivitetään uusimpaan versioon…" } else { "Updating to the latest version…" },
+        "deps" => if fi { "Asennetaan tarvittavat osat (hetki)…" } else { "Installing dependencies (a moment)…" },
+        "starting" => if fi { "Avataan agency…" } else { "Starting your agency…" },
+        "err_uv" => if fi { "uv-työkalua ei löytynyt (asennus on vajaa)." } else { "uv not found (the bundled uv.exe is missing)." },
+        "err_layout" => if fi { "Ajoympäristön luonti epäonnistui" } else { "could not lay out the runtime" },
+        "err_deps" => if fi { "Osien asennus epäonnistui. Tarkista nettiyhteys ja avaa sovellus uudelleen." } else { "Dependency install failed. Check your connection and reopen." },
+        "err_cockpit" => if fi { "Agency ei käynnistynyt — katso loki." } else { "The cockpit did not start — see the logs." },
+        "err_start" => if fi { "Agencyä ei voitu käynnistää" } else { "Could not start the cockpit" },
+        _ => key,
+    }
+    .to_string()
+}
+
 /// First run AND version change → (re)copy the bundled source (preserves .aimeat/.venv), then uv sync.
-fn provision(handle: &AppHandle, say: &dyn Fn(&str)) -> Result<(String, PathBuf), String> {
+fn provision(handle: &AppHandle, lang: &str, say: &dyn Fn(&str)) -> Result<(String, PathBuf), String> {
     let repo = runtime_dir().join("crewaimeat");
     std::fs::create_dir_all(repo.parent().unwrap()).ok();
 
-    let uv = uv_path().ok_or("uv not found (the bundled uv.exe is missing).")?;
+    let uv = uv_path().ok_or_else(|| status(lang, "err_uv"))?;
 
     let version = env!("CARGO_PKG_VERSION");
     let marker = repo.join(".agency_version");
     let installed = std::fs::read_to_string(&marker).unwrap_or_default();
     let fresh = !repo.join("pyproject.toml").exists();
     if fresh || installed.trim() != version {
-        say(if fresh { "Setting up the agency (first run)…" } else { "Updating to the latest version…" });
+        say(&status(lang, if fresh { "setup" } else { "update" }));
         let res = handle.path().resource_dir().map_err(|e| e.to_string())?;
         let a = res.join("resources").join("runtime-src");
         let bundled = if a.exists() { a } else { res.join("runtime-src") };
-        copy_dir(&bundled, &repo).map_err(|e| format!("could not lay out the runtime: {e}"))?;
+        copy_dir(&bundled, &repo).map_err(|e| format!("{}: {e}", status(lang, "err_layout")))?;
         std::fs::write(&marker, version).ok();
     }
 
-    say("Installing dependencies (a moment)…");
+    say(&status(lang, "deps"));
     let s = run(&uv, &["sync", "--extra", "agency"], Some(&repo));
     if !ok(&s) {
-        return Err("Dependency install failed (uv sync). Check your connection and reopen.".into());
+        return Err(status(lang, "err_deps"));
     }
     Ok((uv, repo))
 }
@@ -153,9 +171,9 @@ fn start_provisioning(handle: AppHandle) {
     let lang = handle.state::<AppState>().lang.lock().unwrap().clone();
     std::thread::spawn(move || {
         let say = |m: &str| splash_say(&handle, m);
-        match provision(&handle, &say) {
+        match provision(&handle, &lang, &say) {
             Ok((uv, repo)) => {
-                say("Starting your agency…");
+                say(&status(&lang, "starting"));
                 match spawn_cockpit(&uv, &repo, &token) {
                     Ok(mut child) => {
                         *handle.state::<AppState>().pid.lock().unwrap() = Some(child.id());
@@ -165,12 +183,12 @@ fn start_provisioning(handle: AppHandle) {
                                 let _ = win.eval(&format!("window.location.replace('{}')", url));
                             }
                         } else {
-                            say("The cockpit did not start — see the logs.");
+                            say(&status(&lang, "err_cockpit"));
                         }
                         let _ = child.wait(); // cockpit exited (e.g. in-app Shut down) -> quit the app
                         handle.exit(0);
                     }
-                    Err(e) => say(&format!("Could not start the cockpit: {e}")),
+                    Err(e) => say(&format!("{}: {e}", status(&lang, "err_start"))),
                 }
             }
             Err(e) => say(&e),
