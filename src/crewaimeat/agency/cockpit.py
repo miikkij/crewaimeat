@@ -31,7 +31,7 @@ from pydantic import BaseModel
 from crewaimeat import brain_templates, brains, local_memory
 from crewaimeat.agency import account, events
 
-COCKPIT_VERSION = "0.8.7"
+COCKPIT_VERSION = "0.8.8"
 _TOKEN_ENV = "AIMEAT_AGENCY_TOKEN"
 _STATIC = Path(__file__).parent / "static"
 
@@ -776,6 +776,7 @@ def create_app(token: str | None = None) -> FastAPI:
             # agent loaded — a brand-new agent registered after the serve daemon started isn't attached
             # until the daemon reloads. This is the missing 'approve -> run' link, now automatic.
             brains.write_crew_stub(agent)
+            fleet_ops.ensure_serve_alive()  # one serve daemon + a supervisor that KEEPS it alive (the fix)
             attach = fleet_ops.ensure_attached(agent)
         result = fn(agent)
         events.record(agent, action, {"result": (result or "")[:200]})
