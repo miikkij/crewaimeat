@@ -233,6 +233,7 @@ function renderNav(){
 
 async function render(){
   if(editorStream){ editorStream.close(); editorStream=null; }   // close the Manage-page live stream on nav
+  if(window._logsIv){ clearInterval(window._logsIv); window._logsIv=null; }   // stop the live-logs poll on nav
   latestState=null;
   renderNav();
   const m=document.getElementById("main"); m.innerHTML="<p class='muted'>…</p>";
@@ -250,7 +251,7 @@ function renderConnect(m, acc){
   m.innerHTML=`<h2>${t("connect.title")}</h2><div class="sub">${t("connect.sub")}</div>`;
   const form=el(`<div class="card" style="max-width:480px"></div>`);
   form.appendChild(el(`<label>${t("owner")}</label>`));
-  const owner=el(`<input placeholder="e.g. happydude500001" value="${esc(acc.owner||"")}">`); form.appendChild(owner);
+  const owner=el(`<input placeholder="e.g. jdoe2026" value="${esc(acc.owner||"")}">`); form.appendChild(owner);
   form.appendChild(el(`<label>${t("node")}</label>`));
   const node=el(`<input value="${esc(acc.node||"https://aimeat.io")}">`); form.appendChild(node);
   const btn=el(`<button class="btn" style="margin-top:16px">${t("connectbtn")}</button>`);
@@ -310,7 +311,7 @@ async function renderSetup(m){
 async function setupStep(p, key, s, refresh){
   if(key==="account"){
     p.innerHTML=`<h3>1. ${t("w.account")}</h3><p class="muted">${t("w.account.desc")}</p>`;
-    p.appendChild(el(`<label>${t("w.lbl.account")}</label>`)); const o=el(`<input placeholder="e.g. happydude500001" value="${esc(s.owner||"")}">`); p.appendChild(o);
+    p.appendChild(el(`<label>${t("w.lbl.account")}</label>`)); const o=el(`<input placeholder="e.g. jdoe2026" value="${esc(s.owner||"")}">`); p.appendChild(o);
     p.appendChild(el(`<label>${t("w.lbl.node")}</label>`)); const n=el(`<input value="${esc(s.node||"https://aimeat.io")}">`); p.appendChild(n);
     const b=el(`<button class="btn" style="margin-top:12px">${t("w.next")}</button>`);
     b.onclick=async()=>{ const ov=o.value.trim(); if(!ov) return toast(t("w.err.account"));
@@ -370,10 +371,11 @@ async function setupStep(p, key, s, refresh){
     // Render the code panel + poll. Reused on first click AND on re-entry (e.g. after a language switch),
     // so an in-flight approval is never lost.
     const showCode=(d)=>{
-      pendingAuth={agent, code:d.code, verify_url:d.verify_url};
+      const link=d.verify_link||d.verify_url;   // the deep link WITH the code (the bare /verify errors)
+      pendingAuth={agent, code:d.code, verify_link:link};
       slot.innerHTML="";
-      slot.appendChild(el(`<div class="card" style="margin-top:10px"><div><label>${t("code")} (${t("w.copied")})</label><div style="font-size:24px;font-weight:700;letter-spacing:2px">${esc(d.code||"—")}</div></div><div class="muted" style="margin-top:8px">${t("approveinstr")} <a href="${esc(d.verify_url||'#')}">${esc(d.verify_url||'')}</a></div></div>`));
-      const od=el(`<button class="btn ghost" style="margin-top:8px">${t("w.opendash")}</button>`); od.onclick=()=>openExt(d.verify_url); slot.appendChild(od);
+      slot.appendChild(el(`<div class="card" style="margin-top:10px"><div><label>${t("code")} (${t("w.copied")})</label><div style="font-size:24px;font-weight:700;letter-spacing:2px">${esc(d.code||"—")}</div></div><div class="muted" style="margin-top:8px">${t("approveinstr")} <a href="${esc(link||'#')}">${esc(link||'')}</a></div></div>`));
+      const od=el(`<button class="btn ghost" style="margin-top:8px">${t("w.opendash")}</button>`); od.onclick=()=>openExt(link); slot.appendChild(od);
       slot.appendChild(el(`<div class="row" style="margin-top:10px"><span class="spin"></span> <span class="muted">${t("waiting")}</span></div>`));
       if(window._authIv) clearInterval(window._authIv);
       window._authIv=setInterval(async()=>{ try{ const a=await api("/api/agents/"+encodeURIComponent(agent)+"/auth-status"); if(a.authorized){ clearInterval(window._authIv); pendingAuth=null; refresh(); } }catch{} }, 4000);
@@ -384,7 +386,7 @@ async function setupStep(p, key, s, refresh){
       go.onclick=async()=>{ go.disabled=true; slot.innerHTML=`<div class="row" style="margin-top:10px"><span class="spin"></span> <span class="muted">${t("connecting")}</span></div>`;
         try{ const d=await api("/api/agents/"+encodeURIComponent(agent)+"/register",{method:"POST"});
           if(d.code) try{ navigator.clipboard.writeText(d.code); }catch{}
-          if(d.verify_url) openExt(d.verify_url);
+          const link=d.verify_link||d.verify_url; if(link) openExt(link);
           showCode(d);
         }catch(e){ go.disabled=false; toast(e.message); } };
       p.appendChild(go);
@@ -492,7 +494,12 @@ function renderEditor(m){
     const hist=el(`<button class="btn ghost">${t("history")}</button>`);
     hist.onclick=async()=>{ try{ const h=await api("/api/agents/"+encodeURIComponent(brain.agent_name)+"/activity"); showActivity(m,brain.agent_name,h.events); }catch(e){ toast(e.message); } };
     const logs=el(`<button class="btn ghost">${t("logs")}</button>`);
-    logs.onclick=async()=>{ try{ const l=await api("/api/fleet/"+encodeURIComponent(brain.agent_name)+"/logs"); showLogs(m,l); }catch(e){ toast(e.message); } };
+    logs.onclick=async()=>{ if(window._logsIv) clearInterval(window._logsIv);
+      const out=m.querySelector("#editorout"); out.dataset.view="logs"; out.innerHTML=`<p class="muted">…</p>`;
+      const load=async()=>{ const o=m.querySelector("#editorout"); if(!o||o.dataset.view!=="logs"){ if(window._logsIv) clearInterval(window._logsIv); return; }
+        try{ const l=await api("/api/fleet/"+encodeURIComponent(brain.agent_name)+"/logs"); showLogs(m,l); }catch(e){} };
+      await load(); window._logsIv=setInterval(load,3000);   // live tail while the Logs view is open
+    };
     const approve=el(`<button class="btn">${t("approve")}</button>`);
     approve.onclick=async()=>{ approve.disabled=true;
       const out=m.querySelector("#editorout"); out.innerHTML=`<div class="card"><div class="row"><span class="spin"></span> <span>${t("connecting")}</span></div></div>`;
@@ -583,11 +590,12 @@ async function refreshAuth(m, agent, authState){
 }
 function showApprove(m, agent, d, authState){
   const out=m.querySelector("#editorout"); out.dataset.view="approve"; out.innerHTML="";
-  if(!d.code || !d.verify_url){ out.appendChild(el(`<pre>${esc(d.message||"started")}</pre>`)); }
+  const link=d.verify_link||d.verify_url;   // deep link WITH the code (bare /verify errors with "missing code")
+  if(!d.code || !link){ out.appendChild(el(`<pre>${esc(d.message||"started")}</pre>`)); }
   else {
     out.appendChild(el(`<div class="sub">${t("approveinstr")}</div>`));
     out.appendChild(el(`<div class="card"><div class="row" style="gap:20px">
-      <div><label>URL</label><a href="${esc(d.verify_url)}" target="_blank">${esc(d.verify_url)}</a></div>
+      <div><label>URL</label><a href="${esc(link)}">${esc(link)}</a></div>
       <div><label>${t("code")}</label><div style="font-size:22px;font-weight:700;letter-spacing:2px">${esc(d.code)}</div></div>
     </div></div>`));
   }
@@ -677,9 +685,10 @@ async function loadOffer(box, m, agent, authState){
 }
 function showLogs(m,l){
   const out=m.querySelector("#editorout"); out.dataset.view="logs";
-  if(!l.lines.length){ out.innerHTML=`<p class="muted">${t("logs")}: —</p>`; return; }
-  out.innerHTML=`<h3>${t("logs")} <span class="muted" style="font-size:12px">${esc(l.file||"")}</span></h3>`;
-  out.appendChild(el(`<pre>${esc(l.lines.join("\n"))}</pre>`));
+  out.innerHTML=`<h3>${t("logs")} <span class="muted" style="font-size:12px">${esc(l.file||"")}</span> <span class="muted" style="font-size:11px">· live</span></h3>`;
+  if(!l.lines||!l.lines.length){ out.appendChild(el(`<p class="muted">—</p>`)); return; }
+  const pre=el(`<pre style="max-height:60vh;overflow:auto">${esc(l.lines.join("\n"))}</pre>`);
+  out.appendChild(pre); pre.scrollTop=pre.scrollHeight;   // keep the newest lines in view
 }
 
 async function renderFleet(m){

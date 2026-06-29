@@ -417,9 +417,21 @@ def create_app(token: str | None = None) -> FastAPI:
         except Exception as e:  # noqa: BLE001
             raise HTTPException(status_code=502, detail=f"could not start device-auth: {e}") from e
         m = _re.search(r"open (\S+) and enter code (\S+)", msg or "")
+        verify_url = m.group(1) if m else None
         code = m.group(2) if m else None
+        # The verify page needs the code IN the URL (it errors on a bare /verify) — build the deep link.
+        verify_link = None
+        if verify_url and code:
+            verify_link = verify_url + ("&" if "?" in verify_url else "?") + "code=" + code
         events.record(agent, "connect_requested", {"code": code})
-        return {"agent": agent, "ok": ok, "message": msg, "verify_url": m.group(1) if m else None, "code": code}
+        return {
+            "agent": agent,
+            "ok": ok,
+            "message": msg,
+            "verify_url": verify_url,
+            "verify_link": verify_link,
+            "code": code,
+        }
 
     @app.get("/api/agents/{agent}/auth-status", dependencies=[require_token])
     def agent_auth_status(agent: str) -> dict:
