@@ -725,7 +725,7 @@ def _run_onboarding_only(agent_name: str, services: list[dict] | None = None) ->
     with create_liaison_agent(
         mcp_server_params=liaison_params,
         agent_name=agent_name,
-        llm=get_llm(),
+        llm=get_llm(agent_name=agent_name),  # honor the agent's model override (e.g. local Ollama) — no cloud key
         tool_filter=DAEMON_DEFAULT_TOOL_FILTER,  # ~24 tools, not 95 (smaller models cope)
         verbose=True,
     ) as liaison:
@@ -1369,7 +1369,7 @@ def _publish_readme(agent_name: str, readme_md: str, commands: list[dict] | None
     if hash_file.is_file() and body_file.is_file() and hash_file.read_text(encoding="utf-8").strip() == src_hash:
         expanded = body_file.read_text(encoding="utf-8")  # unchanged -> reuse, no LLM call
     if expanded is None:
-        expanded = _expand_readme(readme_md, get_llm(for_tool_use=False), commands)
+        expanded = _expand_readme(readme_md, get_llm(for_tool_use=False, agent_name=agent_name), commands)
         try:
             cache_dir.mkdir(parents=True, exist_ok=True)
             body_file.write_text(expanded, encoding="utf-8")
@@ -1542,7 +1542,7 @@ def run_crew(spec: CrewSpec) -> None:
                     role="Self-monitor",
                     goal="Acknowledge a handled control message tersely",
                     backstory="You quietly acknowledge internal control messages.",
-                    llm=get_llm(for_tool_use=False),
+                    llm=get_llm(for_tool_use=False, agent_name=spec.agent_name),
                     verbose=False,
                 )
                 _at = Task(description="Output exactly: ok", expected_output="ok", agent=_ack)
@@ -1552,7 +1552,11 @@ def run_crew(spec: CrewSpec) -> None:
         shared_key, shared_tag, prompt = _parse_publish_directive(raw_prompt)
         verify_override, prompt = _parse_verify_directive(prompt)
         # Task-nature gate: fact work runs cool + grounded + faithfulness-verified; creative runs warm.
-        gate = _classify_task_nature(prompt, get_llm(for_tool_use=False)) if spec.adapt_to_task else None
+        gate = (
+            _classify_task_nature(prompt, get_llm(for_tool_use=False, agent_name=spec.agent_name))
+            if spec.adapt_to_task
+            else None
+        )
         if gate:
             print(
                 f"[{spec.agent_name}] task nature={gate['nature']} temp={gate['temperature']} verify={gate['verify']}",
@@ -1887,7 +1891,7 @@ def run_crew(spec: CrewSpec) -> None:
         record_spaces=_records,  # subscribe to workspace-record PUSH events for these spaces (0.7.0)
         on_record=spec.on_record,  # handler for a pushed record event (or None -> synthetic task)
         on_dm=_on_dm,  # federated-inbox DM wake: caller's on_dm, else the dm_serviceable generic, else None
-        llm=get_llm(),
+        llm=get_llm(agent_name=spec.agent_name),
         owner=spec.owner,
         on_idle=_on_idle,
         max_concurrent_tasks=spec.max_concurrent_tasks,  # None = read owner-set value from AIMEAT

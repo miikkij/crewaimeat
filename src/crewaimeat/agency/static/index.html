@@ -121,6 +121,9 @@ const STR = {
   "w.approve.desc":{en:"Your agent must be approved by you on aimeat.io before it can act — this proves it's really yours. Click below: we'll open your dashboard and copy a code for you to paste there.",fi:"Sinun on hyväksyttävä agenttisi aimeat.io:ssa ennen kuin se voi toimia — tämä todistaa, että se on todella sinun. Napsauta alta: avaamme hallintapaneelisi ja kopioimme koodin, jonka liität sinne."},
   "w.start.desc":{en:"Last step — start your agent so it's live and ready to work.",fi:"Viimeinen vaihe — käynnistä agenttisi, jotta se on käynnissä ja valmis työhön."},
   "w.err.account":{en:"account name required",fi:"tilin nimi vaaditaan"}, "w.err.name":{en:"name required",fi:"nimi vaaditaan"}, "w.saved":{en:"saved",fi:"tallennettu"},
+  "w.chooselang":{en:"Choose your language",fi:"Valitse kielesi"}, "w.whatscoming":{en:"Here's what we'll set up together:",fi:"Näin otamme agenttisi käyttöön yhdessä:"},
+  "w.begin":{en:"Begin",fi:"Aloita"}, "w.copied":{en:"copied",fi:"kopioitu"},
+  "w.langnote":{en:"You can change this anytime in the top-right — but it's smoothest to pick it now, before we start.",fi:"Voit vaihtaa tätä milloin vain oikeasta yläkulmasta — mutta sujuvinta on valita se nyt, ennen aloitusta."},
   "nav.memory":{en:"Memory",fi:"Muisti"}, "nav.sync":{en:"Sync",fi:"Synkronointi"},
   "manage":{en:"Manage",fi:"Hallinnoi"}, "logs":{en:"Logs",fi:"Lokit"},
   "notconnected":{en:"not connected",fi:"ei yhteyttä"}, "livesat":{en:"lives at",fi:"sijaitsee"},
@@ -156,6 +159,8 @@ const STR = {
   "offer.none":{en:"This template has nothing to offer others.",fi:"Tällä pohjalla ei ole tarjottavaa muille."},
   "offer.needsconnect":{en:"Connect the agent first, then advertise it.",fi:"Yhdistä agentti ensin, sitten mainosta."},
   "testrun":{en:"Test run",fi:"Koeajo"}, "tasks":{en:"Tasks",fi:"Tehtävät"},
+  "dryrunhint":{en:"Preview the plan (no AI call)",fi:"Esikatsele suunnitelma (ei tekoälykutsua)"},
+  "testrunhint":{en:"Run it once for real",fi:"Aja se kerran oikeasti"},
   "testprompt":{en:"What should it do for this test? (e.g. a topic to summarize)",fi:"Mitä sen pitäisi tehdä tässä testissä? (esim. aihe tiivistettäväksi)"},
   "run":{en:"Run",fi:"Aja"}, "queued":{en:"queued — waiting for the agent…",fi:"jonossa — odotetaan agenttia…"},
   "working":{en:"working…",fi:"työskentelee…"}, "result":{en:"Result",fi:"Tulos"},
@@ -171,7 +176,7 @@ const STR = {
   "gallery.sub":{en:"Choose a template, give it a brain (prose + policy), and put it to work.",fi:"Valitse pohja, anna sille aivot (teksti + säännöt) ja laita töihin."},
   "gallery.your":{en:"Your agents",fi:"Agenttisi"},
   "use":{en:"Use this brain",fi:"Käytä näitä aivoja"},
-  "edit":{en:"Edit",fi:"Muokkaa"}, "dryrun":{en:"Dry-run",fi:"Koeajo"},
+  "edit":{en:"Edit",fi:"Muokkaa"}, "dryrun":{en:"Preview",fi:"Esikatselu"},
   "start":{en:"Start",fi:"Käynnistä"}, "stop":{en:"Stop",fi:"Pysäytä"}, "restart":{en:"Restart",fi:"Uudelleen"},
   "save":{en:"Save brain",fi:"Tallenna aivot"}, "instantiate":{en:"Add to fleet",fi:"Lisää laivueeseen"},
   "agentname":{en:"Agent name (identity)",fi:"Agentin nimi (identiteetti)"},
@@ -207,6 +212,7 @@ function esc(s){ return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;
 
 const VIEWS = ["setup","gallery","fleet","memory","sync"];
 let view = "gallery", editing = null, editorStream = null, latestState = null, skipSetup = false;
+let wizardStarted = false, pendingAuth = null;   // wizard: intro shown? + in-flight device-auth (survives re-render)
 
 function renderNav(){
   const nav=document.getElementById("nav"); nav.innerHTML="";
@@ -243,7 +249,11 @@ function renderConnect(m, acc){
   form.appendChild(btn); m.appendChild(form);
 }
 
-function openExt(url){ try{ window.open(url,"_blank"); }catch{ location.href=url; } }
+// Open in the operator's real browser. The cockpit (a local process) does it, so this works inside the
+// Tauri shell too — its webview silently swallows window.open. Falls back to window.open in a plain browser.
+async function openExt(url){ try{ await api("/api/open",{method:"POST",body:JSON.stringify({url})}); }catch(e){ try{ window.open(url,"_blank"); }catch{} } }
+// Catch every <a href="http…"> (incl. links inside i18n strings) and route it through openExt.
+document.addEventListener("click", (e)=>{ const a=e.target.closest && e.target.closest('a[href^="http"]'); if(a){ e.preventDefault(); openExt(a.getAttribute("href")); } });
 
 async function renderSetup(m){
   let s; try{ s=await api("/api/setup/status"); }catch(e){ m.innerHTML=`<p class="muted">${esc(e.message)}</p>`; return; }
@@ -255,6 +265,23 @@ async function renderSetup(m){
     {key:"start",   title:t("w.start"),   done:s.first_agent_running},
   ];
   const cur=steps.findIndex(x=>!x.done);
+  // Intro (first run, nothing done yet): pick the LANGUAGE first, see the whole plan, then Begin.
+  if(cur===0 && !wizardStarted){
+    m.innerHTML=`<h2>${t("w.title")}</h2><div class="sub">${t("w.sub")}</div>`;
+    const card=el(`<div class="card" style="max-width:560px"></div>`);
+    card.appendChild(el(`<label>${t("w.chooselang")}</label>`));
+    const langSel=el(`<select class="f" style="max-width:220px"><option value="en" ${LANG==="en"?"selected":""}>English</option><option value="fi" ${LANG==="fi"?"selected":""}>Suomi</option></select>`);
+    langSel.onchange=()=>{ LANG=langSel.value; localStorage.setItem("agencyLang",LANG); const h=document.getElementById("lang"); if(h) h.value=LANG; pollAccount(); renderSetup(m); };
+    card.appendChild(langSel);
+    card.appendChild(el(`<div class="muted" style="font-size:12px;margin-top:6px">${t("w.langnote")}</div>`));
+    card.appendChild(el(`<div style="margin-top:16px"><b>${t("w.whatscoming")}</b></div>`));
+    const ul=el(`<div style="margin-top:6px"></div>`);
+    steps.forEach((st,i)=> ul.appendChild(el(`<div class="muted" style="padding:3px 0">${i+1}. ${esc(st.title)}</div>`)));
+    card.appendChild(ul);
+    const begin=el(`<button class="btn" style="margin-top:16px">${t("w.begin")}</button>`);
+    begin.onclick=()=>{ wizardStarted=true; renderSetup(m); };
+    card.appendChild(begin); m.appendChild(card); return;
+  }
   m.innerHTML=`<h2>${t("w.title")}</h2><div class="sub">${t("w.sub")}</div>`;
   // the FULL checklist, always visible, so the user sees what's coming
   const list=el(`<div class="card" style="max-width:560px;margin-bottom:14px"></div>`);
@@ -326,27 +353,39 @@ async function setupStep(p, key, s, refresh){
     const agent=s.first_agent;
     p.innerHTML=`<h3>4. ${t("w.approve")}</h3><p class="muted">${t("w.approve.desc")}</p>`;
     const slot=el(`<div></div>`); p.appendChild(slot);
-    const go=el(`<button class="btn">${t("w.approve")}</button>`);
-    go.onclick=async()=>{ go.disabled=true; slot.innerHTML=`<div class="row" style="margin-top:10px"><span class="spin"></span> <span class="muted">${t("connecting")}</span></div>`;
-      try{ const d=await api("/api/agents/"+encodeURIComponent(agent)+"/register",{method:"POST"});
-        if(d.code) try{ navigator.clipboard.writeText(d.code); }catch{}
-        if(d.verify_url) openExt(d.verify_url);
-        slot.innerHTML="";
-        slot.appendChild(el(`<div class="card" style="margin-top:10px"><div><label>${t("code")} (copied)</label><div style="font-size:24px;font-weight:700;letter-spacing:2px">${esc(d.code||"—")}</div></div><div class="muted" style="margin-top:8px">${t("approveinstr")} <a href="${esc(d.verify_url||'#')}" target="_blank">${esc(d.verify_url||'')}</a></div></div>`));
-        const od=el(`<button class="btn ghost" style="margin-top:8px">${t("w.opendash")}</button>`); od.onclick=()=>openExt(d.verify_url); slot.appendChild(od);
-        const status=el(`<div class="row" style="margin-top:10px"><span class="spin"></span> <span class="muted">${t("waiting")}</span></div>`); slot.appendChild(status);
-        const iv=setInterval(async()=>{ try{ const a=await api("/api/agents/"+encodeURIComponent(agent)+"/auth-status"); if(a.authorized){ clearInterval(iv); refresh(); } }catch{} }, 4000);
-      }catch(e){ go.disabled=false; toast(e.message); } };
-    p.appendChild(go);
+    // Render the code panel + poll. Reused on first click AND on re-entry (e.g. after a language switch),
+    // so an in-flight approval is never lost.
+    const showCode=(d)=>{
+      pendingAuth={agent, code:d.code, verify_url:d.verify_url};
+      slot.innerHTML="";
+      slot.appendChild(el(`<div class="card" style="margin-top:10px"><div><label>${t("code")} (${t("w.copied")})</label><div style="font-size:24px;font-weight:700;letter-spacing:2px">${esc(d.code||"—")}</div></div><div class="muted" style="margin-top:8px">${t("approveinstr")} <a href="${esc(d.verify_url||'#')}">${esc(d.verify_url||'')}</a></div></div>`));
+      const od=el(`<button class="btn ghost" style="margin-top:8px">${t("w.opendash")}</button>`); od.onclick=()=>openExt(d.verify_url); slot.appendChild(od);
+      slot.appendChild(el(`<div class="row" style="margin-top:10px"><span class="spin"></span> <span class="muted">${t("waiting")}</span></div>`));
+      if(window._authIv) clearInterval(window._authIv);
+      window._authIv=setInterval(async()=>{ try{ const a=await api("/api/agents/"+encodeURIComponent(agent)+"/auth-status"); if(a.authorized){ clearInterval(window._authIv); pendingAuth=null; refresh(); } }catch{} }, 4000);
+    };
+    if(pendingAuth && pendingAuth.agent===agent){ showCode(pendingAuth); }
+    else {
+      const go=el(`<button class="btn">${t("w.approve")}</button>`);
+      go.onclick=async()=>{ go.disabled=true; slot.innerHTML=`<div class="row" style="margin-top:10px"><span class="spin"></span> <span class="muted">${t("connecting")}</span></div>`;
+        try{ const d=await api("/api/agents/"+encodeURIComponent(agent)+"/register",{method:"POST"});
+          if(d.code) try{ navigator.clipboard.writeText(d.code); }catch{}
+          if(d.verify_url) openExt(d.verify_url);
+          showCode(d);
+        }catch(e){ go.disabled=false; toast(e.message); } };
+      p.appendChild(go);
+    }
   }
   else if(key==="start"){
     const agent=s.first_agent;
     p.innerHTML=`<h3>5. ${t("w.start")}</h3><p class="muted">${t("w.start.desc")}</p>`;
     const b=el(`<button class="btn">${t("start")}</button>`);
-    b.onclick=async()=>{ b.disabled=true; b.textContent="…";
+    b.onclick=async()=>{ b.disabled=true;
+      let dots=1; const anim=setInterval(()=>{ b.textContent=".".repeat(dots); dots=dots%3+1; }, 350);  // "live" working indicator
+      const stop=()=>{ clearInterval(anim); };
       try{ await api("/api/fleet/"+encodeURIComponent(agent)+"/start",{method:"POST"});
-        let n=0; const iv=setInterval(async()=>{ n++; try{ const st=await api("/api/setup/status"); if(st.first_agent_running||n>20){ clearInterval(iv); refresh(); } }catch{} }, 3000);
-      }catch(e){ b.disabled=false; b.textContent=t("start"); toast(e.message); } };
+        let n=0; const iv=setInterval(async()=>{ n++; try{ const st=await api("/api/setup/status"); if(st.first_agent_running||n>20){ clearInterval(iv); stop(); refresh(); } }catch{} }, 3000);
+      }catch(e){ stop(); b.disabled=false; b.textContent=t("start"); toast(e.message); } };
     p.appendChild(b);
   }
 }
@@ -434,7 +473,7 @@ function renderEditor(m){
   bar.appendChild(save);
 
   if(!isNew){
-    const dry=el(`<button class="btn ghost">${t("dryrun")}</button>`);
+    const dry=el(`<button class="btn ghost" title="${t("dryrunhint")}">${t("dryrun")}</button>`);
     dry.onclick=async()=>{ try{ const d=await api("/api/brains/"+encodeURIComponent(brain.agent_name)+"/dry-run"); showPreview(m,d); }catch(e){ toast(e.message); } };
     const hist=el(`<button class="btn ghost">${t("history")}</button>`);
     hist.onclick=async()=>{ try{ const h=await api("/api/agents/"+encodeURIComponent(brain.agent_name)+"/activity"); showActivity(m,brain.agent_name,h.events); }catch(e){ toast(e.message); } };
@@ -446,7 +485,7 @@ function renderEditor(m){
       try{ const d=await api("/api/agents/"+encodeURIComponent(brain.agent_name)+"/register",{method:"POST"});
         showApprove(m, brain.agent_name, d, authState); }catch(e){ out.innerHTML=`<p class="muted">${esc(e.message)}</p>`; toast(e.message); }
       finally{ approve.disabled=false; } };
-    const test=el(`<button class="btn ghost">${t("testrun")}</button>`);
+    const test=el(`<button class="btn ghost" title="${t("testrunhint")}">${t("testrun")}</button>`);
     test.onclick=()=>showTestRun(m, brain.agent_name, authState);
     const tasks=el(`<button class="btn ghost">${t("tasks")}</button>`);
     tasks.onclick=async()=>{ try{ const r=await api("/api/agents/"+encodeURIComponent(brain.agent_name)+"/tasks"); showTasks(m,r,brain.agent_name); }catch(e){ toast(e.message); } };

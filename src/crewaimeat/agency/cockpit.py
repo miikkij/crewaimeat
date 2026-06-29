@@ -31,7 +31,7 @@ from pydantic import BaseModel
 from crewaimeat import brain_templates, brains, local_memory
 from crewaimeat.agency import account, events
 
-COCKPIT_VERSION = "0.8.1"
+COCKPIT_VERSION = "0.8.2"
 _TOKEN_ENV = "AIMEAT_AGENCY_TOKEN"
 _STATIC = Path(__file__).parent / "static"
 
@@ -76,6 +76,10 @@ class KeyIn(BaseModel):
 
 class PullIn(BaseModel):
     model: str = "gemma4"
+
+
+class UrlIn(BaseModel):
+    url: str
 
 
 def _brain_diff(prev: dict | None, new: dict) -> list[str]:
@@ -312,6 +316,21 @@ def create_app(token: str | None = None) -> FastAPI:
         if not body.key or not body.key.strip():
             raise HTTPException(status_code=400, detail="key is required")
         _set_openrouter_key(body.key.strip())
+        return {"ok": True}
+
+    @app.post("/api/open", dependencies=[require_token])
+    def open_external(body: UrlIn) -> dict:
+        """Open a URL in the operator's DEFAULT browser. The cockpit is a local process, so this works in
+        the Tauri shell too (its webview swallows window.open). Only http(s) is allowed."""
+        import webbrowser
+
+        url = (body.url or "").strip()
+        if not (url.startswith("http://") or url.startswith("https://")):
+            raise HTTPException(status_code=400, detail="only http(s) URLs are allowed")
+        try:
+            webbrowser.open(url)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=f"could not open browser: {e}") from e
         return {"ok": True}
 
     @app.post("/api/agents/{agent}/register", dependencies=[require_token])

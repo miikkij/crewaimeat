@@ -70,6 +70,18 @@ def test_openrouter_key_requires_value(client):
     assert client.post("/api/setup/openrouter-key", json={"key": "  "}).status_code == 400
 
 
+def test_open_external_rejects_non_http(client):
+    assert client.post("/api/open", json={"url": "file:///etc/passwd"}).status_code == 400
+    assert client.post("/api/open", json={"url": "javascript:alert(1)"}).status_code == 400
+
+
+def test_open_external_opens_http(client, monkeypatch):
+    opened = {}
+    monkeypatch.setattr("webbrowser.open", lambda u: opened.setdefault("url", u))
+    r = client.post("/api/open", json={"url": "https://aimeat.io"})
+    assert r.status_code == 200 and opened["url"] == "https://aimeat.io"
+
+
 def test_models_catalogue(client, monkeypatch):
     from crewaimeat import llm
 
