@@ -72,14 +72,16 @@ def test_reset_wipes_state(client, monkeypatch, tmp_path):
     # chdir so the 'crews' glob in reset can never touch the dev repo's real crews/
     monkeypatch.chdir(tmp_path)
     import crewaimeat.tui.actions as actions
+    from crewaimeat import brains
 
     monkeypatch.setattr(actions, "stop_fleet", lambda: "stopped")
+    brains.save_brain("reset-test-agent", "topic-watcher", prose="hi")  # a real brain in the DB
     (tmp_path / "agency_account.json").write_text("{}", encoding="utf-8")
-    (tmp_path / "brains.db").write_text("x", encoding="utf-8")
+    assert brains.list_brains(), "precondition: a brain exists"
     r = client.post("/api/reset").json()
-    assert r["ok"] is True and "agency_account.json" in r["removed"]
-    assert not (tmp_path / "agency_account.json").exists()
-    assert not (tmp_path / "brains.db").exists()
+    assert r["ok"] is True
+    assert brains.list_brains() == []  # the bug was: brains/agents SURVIVED reset
+    assert not (tmp_path / "agency_account.json").exists()  # plain files still go too
 
 
 def test_openrouter_key_requires_value(client):
