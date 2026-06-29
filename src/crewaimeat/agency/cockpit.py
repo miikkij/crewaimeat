@@ -188,6 +188,38 @@ def _set_openrouter_key(key: str) -> None:
     os.environ["OPENROUTER_API_KEY"] = key
 
 
+def _ver_tuple(v: str | None) -> tuple[int, ...]:
+    import re
+
+    nums = re.findall(r"\d+", v or "")
+    return tuple(int(n) for n in nums[:3]) if nums else (0,)
+
+
+def _latest_agency_release() -> tuple[str | None, str | None]:
+    """(latest agency version, release html_url) from GitHub, or (None, None). Best-effort, short timeout."""
+    import requests
+
+    try:
+        r = requests.get(
+            "https://api.github.com/repos/miikkij/crewaimeat/releases",
+            timeout=4,
+            headers={"Accept": "application/vnd.github+json"},
+        )
+        if r.status_code != 200:
+            return None, None
+        best, url = None, None
+        for rel in r.json():
+            tag = rel.get("tag_name") or ""
+            if not tag.startswith("agency-v"):
+                continue
+            v = tag[len("agency-v") :]
+            if best is None or _ver_tuple(v) > _ver_tuple(best):
+                best, url = v, rel.get("html_url")
+        return best, url
+    except Exception:  # noqa: BLE001 — offline / rate-limited is fine
+        return None, None
+
+
 def _task_brief(tt: dict) -> dict:
     """Normalize a node task to what the UI shows: id/title/status + input + start/finish times."""
     return {
@@ -332,6 +364,40 @@ def create_app(token: str | None = None) -> FastAPI:
         except Exception as e:  # noqa: BLE001
             raise HTTPException(status_code=502, detail=f"could not open browser: {e}") from e
         return {"ok": True}
+
+    @app.get("/api/update-check", dependencies=[require_token])
+    def update_check() -> dict:
+        """Is a newer aimeat-agency published? Compares this build to the latest GitHub agency-v* release.
+        The UI shows a banner with a Download link (opened via /api/open) when one is available."""
+        latest, url = _latest_agency_release()
+        available = bool(latest and _ver_tuple(latest) > _ver_tuple(COCKPIT_VERSION))
+        return {
+            "current": COCKPIT_VERSION,
+            "latest": latest,
+            "update_available": available,
+            "url": url or "https://github.com/miikkij/crewaimeat/releases",
+        }
+
+    @app.post("/api/shutdown", dependencies=[require_token])
+    def shutdown() -> dict:
+        """Stop THIS install's fleet (crews + serve, repo/home-scoped — never another fleet), then, when
+        launched by the Tauri shell, self-exit so the shell can quit the app. The UI shows 'safely stopped'
+        from the returned detail before the window closes."""
+        import threading
+        import time
+
+        from crewaimeat.tui import actions
+
+        detail = actions.stop_fleet()
+        events.record("_agency", "shutdown", {"detail": detail[:200]})
+        if os.environ.get(_TOKEN_ENV):  # shell-launched -> exit so the shell's child-watcher quits the app
+
+            def _bye() -> None:
+                time.sleep(1.0)
+                os._exit(0)
+
+            threading.Thread(target=_bye, daemon=True).start()
+        return {"ok": True, "detail": detail}
 
     @app.post("/api/agents/{agent}/register", dependencies=[require_token])
     def register_agent_route(agent: str) -> dict:

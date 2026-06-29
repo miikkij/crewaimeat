@@ -1,6 +1,6 @@
 [package]
 name = "aimeat-agency"
-version = "0.8.0"
+version = "0.8.2"
 description = "aimeat-agency — desktop appliance for running an agency of agents on AIMEAT"
 edition = "2021"
 rust-version = "1.77"
@@ -9,7 +9,8 @@ rust-version = "1.77"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
+ureq = "2"  # tiny blocking HTTP client — POST /api/shutdown to the cockpit on tray-quit
 
 # Keep release builds small/fast.
 [profile.release]

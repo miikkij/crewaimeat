@@ -82,6 +82,26 @@ def test_open_external_opens_http(client, monkeypatch):
     assert r.status_code == 200 and opened["url"] == "https://aimeat.io"
 
 
+def test_update_check(client, monkeypatch):
+    monkeypatch.setattr("crewaimeat.agency.cockpit.COCKPIT_VERSION", "0.8.2")
+    monkeypatch.setattr("crewaimeat.agency.cockpit._latest_agency_release", lambda: ("0.9.0", "http://x/rel"))
+    u = client.get("/api/update-check").json()
+    assert u["update_available"] is True and u["latest"] == "0.9.0" and u["url"] == "http://x/rel"
+    monkeypatch.setattr("crewaimeat.agency.cockpit._latest_agency_release", lambda: ("0.8.2", "http://x"))
+    assert client.get("/api/update-check").json()["update_available"] is False
+
+
+def test_shutdown_stops_fleet_no_selfexit(client, monkeypatch):
+    # Without the shell's env token, /api/shutdown must NOT self-exit (so tests/dev stay alive).
+    monkeypatch.delenv("AIMEAT_AGENCY_TOKEN", raising=False)
+    called = {}
+    import crewaimeat.tui.actions as actions
+
+    monkeypatch.setattr(actions, "stop_fleet", lambda: called.setdefault("v", "stopped 3"))
+    r = client.post("/api/shutdown")
+    assert r.status_code == 200 and r.json()["detail"] == "stopped 3" and called["v"]
+
+
 def test_models_catalogue(client, monkeypatch):
     from crewaimeat import llm
 
