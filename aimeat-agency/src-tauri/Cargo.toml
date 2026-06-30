@@ -11,6 +11,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-updater = "2"  # one-click auto-update: verifies a minisign-signed latest.json, then installs
+serde_json = "1"  # the #[command] macro needs it in scope to serialize a command's return value
 ureq = "2"  # tiny blocking HTTP client — POST /api/shutdown to the cockpit on tray-quit
 
 # Keep release builds small/fast.
