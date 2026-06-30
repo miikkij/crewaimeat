@@ -1,6 +1,6 @@
 {
   "name": "aimeat-agency",
-  "version": "0.8.26",
+  "version": "0.8.27",
   "private": true,
   "description": "Desktop appliance for running an agency of agents on AIMEAT — a thin Tauri shell over the Python cockpit.",
   "scripts": {
