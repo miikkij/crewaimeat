@@ -1,6 +1,6 @@
 [package]
 name = "aimeat-agency"
-version = "0.8.13"
+version = "0.8.14"
 description = "aimeat-agency — desktop appliance for running an agency of agents on AIMEAT"
 edition = "2021"
 rust-version = "1.77"
@@ -10,6 +10,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-updater = "2"  # one-click auto-update: verifies a minisign-signed latest.json, then installs
 ureq = "2"  # tiny blocking HTTP client — POST /api/shutdown to the cockpit on tray-quit
 
 # Keep release builds small/fast.

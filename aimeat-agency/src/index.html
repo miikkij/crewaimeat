@@ -27,6 +27,13 @@
   <div class="box">
     <div class="brand">aimeat-agency</div>
 
+    <!-- One-click update offer (shown only if a newer signed release exists; before Begin = clean install). -->
+    <div id="updatebanner" class="card hidden" style="border:1px solid #a78bfa;margin-bottom:12px">
+      <div id="update-text" style="font-weight:600"></div>
+      <div id="update-note" class="note"></div>
+      <button id="update-btn" class="btn" style="margin-top:12px"></button>
+    </div>
+
     <!-- FIRST-RUN GATE: choose language + see what will happen, BEFORE anything runs. -->
     <div id="gate" class="card">
       <label id="lbl-lang">Choose your language</label>
@@ -93,8 +100,44 @@
     document.getElementById("begin").onclick = begin;
     paint();
 
-    // Returning users (a language was already chosen): skip the gate and proceed automatically.
-    if (localStorage.getItem("agencyLang")) { begin(); }
+    // --- one-click update: wait briefly for the shell's update check before proceeding ---
+    let _decided = false;
+    function proceed() {
+      if (_decided) return; _decided = true;
+      if (localStorage.getItem("agencyLang")) begin();   // returning user → start; first-run → stay on the gate
+    }
+    function showUpdate(v) {
+      _decided = true;
+      const fi = (LANG === "fi");
+      document.getElementById("gate").classList.add("hidden");
+      document.getElementById("update-text").textContent = (fi ? "Uusi versio saatavilla: " : "A new version is available: ") + v;
+      document.getElementById("update-note").textContent = fi
+        ? "Päivitys latautuu ja asentuu itse, sitten sovellus aukeaa uudelleen."
+        : "It downloads and installs itself, then the app reopens.";
+      const btn = document.getElementById("update-btn");
+      btn.textContent = fi ? "Päivitä nyt" : "Update now"; btn.disabled = false;
+      btn.onclick = async () => {
+        btn.disabled = true; btn.textContent = fi ? "Päivitetään…" : "Updating…";
+        const inv = invoke();
+        if (inv) { try { await inv("install_update"); } catch (e) { btn.disabled = false; btn.textContent = fi ? "Päivitys epäonnistui — yritä uudelleen" : "Update failed — retry"; } }
+      };
+      let cont = document.getElementById("update-cont");
+      if (!cont) {
+        cont = document.createElement("div");
+        cont.id = "update-cont"; cont.className = "note"; cont.style.cssText = "cursor:pointer;margin-top:10px;text-decoration:underline";
+        cont.onclick = () => {
+          document.getElementById("updatebanner").classList.add("hidden");
+          _decided = false; proceed();
+          if (!localStorage.getItem("agencyLang")) document.getElementById("gate").classList.remove("hidden");
+        };
+        document.getElementById("updatebanner").appendChild(cont);
+      }
+      cont.textContent = fi ? "Jatka ilman päivitystä" : "Continue without updating";
+      document.getElementById("updatebanner").classList.remove("hidden");
+    }
+    window.agencyUpdate = (v) => showUpdate(v);
+    window.agencyNoUpdate = () => proceed();
+    setTimeout(proceed, 6000);   // fallback if the shell never signals (offline / older shell)
   </script>
 </body>
 </html>

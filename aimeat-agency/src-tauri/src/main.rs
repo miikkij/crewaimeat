@@ -17,6 +17,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, WindowEvent,
 };
+use tauri_plugin_updater::UpdaterExt;
 
 const PORT: u16 = 8753;
 const TRAY_ID: &str = "aimeat_agency_tray";
@@ -242,6 +243,19 @@ fn shutdown_and_quit(handle: &AppHandle) {
     });
 }
 
+/// Download + install the available signed update, then relaunch. Called from the splash's "Update now"
+/// button (BEFORE Begin, so no fleet is running and nothing locks uv.exe → a clean install). Returns
+/// false if there was nothing to install.
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<bool, String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    if let Some(update) = updater.check().await.map_err(|e| e.to_string())? {
+        update.download_and_install(|_, _| {}, || {}).await.map_err(|e| e.to_string())?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     let h = app.handle();
     let open = MenuItem::with_id(h, ID_OPEN, "Open Window", true, None::<&str>)?;
@@ -288,9 +302,30 @@ fn main() {
             lang: Mutex::new("en".into()),
             started: Mutex::new(false),
         })
-        .invoke_handler(tauri::generate_handler![begin])
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .invoke_handler(tauri::generate_handler![begin, install_update])
         .setup(move |app| {
             setup_tray(app)?;
+            // Check for a newer signed release at startup (before provisioning, so an install is clean —
+            // no fleet locking uv.exe). If one exists, tell the splash to offer "Update now".
+            let h = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut offered = false;
+                if let Ok(updater) = h.updater() {
+                    if let Ok(Some(update)) = updater.check().await {
+                        let v = update.version.replace('\'', "");
+                        if let Some(win) = h.get_webview_window("splash") {
+                            let _ = win.eval(&format!("if(window.agencyUpdate)window.agencyUpdate('{}')", v));
+                            offered = true;
+                        }
+                    }
+                }
+                if !offered {
+                    if let Some(win) = h.get_webview_window("splash") {
+                        let _ = win.eval("if(window.agencyNoUpdate)window.agencyNoUpdate()");
+                    }
+                }
+            });
             // Do NOT provision yet — the splash gathers language + consent (Begin) first.
             Ok(())
         })

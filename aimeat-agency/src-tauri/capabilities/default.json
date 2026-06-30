@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Default capabilities for the aimeat-agency shell window.",
   "windows": ["splash", "main"],
-  "permissions": ["core:default", "core:window:default", "core:webview:default"]
+  "permissions": ["core:default", "core:window:default", "core:webview:default", "updater:default"]
 }

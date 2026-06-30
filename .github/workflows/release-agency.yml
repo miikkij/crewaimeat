@@ -78,9 +78,12 @@ jobs:
         run: pnpm install --frozen-lockfile
         working-directory: aimeat-agency
 
-      - name: Build installers (NSIS + MSI)
+      - name: Build installers (NSIS + MSI) — signed for the updater
         run: pnpm tauri build
         working-directory: aimeat-agency
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: List built bundles
         shell: bash
@@ -88,12 +91,27 @@ jobs:
 
       # The installer is self-contained: the crewaimeat source + uv are staged above and bundled, so first
       # run provisions with no git and no pre-installed tools (uv fetches Python + deps online once).
-      - name: Assemble release files
+      - name: Assemble release files + updater latest.json
         shell: bash
         run: |
           mkdir -p dist
-          cp aimeat-agency/src-tauri/target/release/bundle/nsis/*-setup.exe dist/ 2>/dev/null || true
+          NSIS=aimeat-agency/src-tauri/target/release/bundle/nsis
+          cp "$NSIS"/*-setup.exe dist/ 2>/dev/null || true
           cp aimeat-agency/src-tauri/target/release/bundle/msi/*.msi dist/ 2>/dev/null || true
+          # Build the updater manifest the app polls: version + the minisign signature + the download URL.
+          if [ -n "$GITHUB_REF_NAME" ] && [[ "$GITHUB_REF_NAME" == agency-v* ]]; then
+            VER="${GITHUB_REF_NAME#agency-v}"
+            SIGFILE="$NSIS/aimeat-agency_${VER}_x64-setup.exe.sig"
+            if [ -f "$SIGFILE" ]; then
+              SIG="$(cat "$SIGFILE")"
+              URL="https://github.com/miikkij/crewaimeat/releases/download/${GITHUB_REF_NAME}/aimeat-agency_${VER}_x64-setup.exe"
+              printf '{\n  "version": "%s",\n  "notes": "aimeat-agency %s",\n  "pub_date": "%s",\n  "platforms": { "windows-x86_64": { "signature": "%s", "url": "%s" } }\n}\n' \
+                "$VER" "$VER" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SIG" "$URL" > dist/latest.json
+              echo "wrote dist/latest.json"; cat dist/latest.json
+            else
+              echo "WARNING: no .sig at $SIGFILE — updater latest.json NOT written (signing secret missing?)"
+            fi
+          fi
           ls -la dist
 
       - name: Upload build artifacts (every run)

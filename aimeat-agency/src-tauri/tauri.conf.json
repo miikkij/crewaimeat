@@ -1,9 +1,15 @@
 {
   "productName": "aimeat-agency",
-  "version": "0.8.13",
+  "version": "0.8.14",
   "identifier": "io.aimeat.agency",
   "build": {
     "frontendDist": "../src"
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": ["https://github.com/miikkij/crewaimeat/releases/latest/download/latest.json"],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDc1NUFCNzVFNUY1NDU1Q0EKUldUS1ZWUmZYcmRhZGNYZnZmS3pGaWNaK2tSMUkvOUJBb3Y5bW0zd1VYbFp5bHBVSXVZZ1A0Vk8K"
+    }
   },
   "app": {
     "withGlobalTauri": true,
@@ -23,6 +29,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
