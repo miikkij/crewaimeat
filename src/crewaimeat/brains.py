@@ -167,6 +167,30 @@ def delete_brain(agent_name: str) -> bool:
         return cur.rowcount > 0
 
 
+def rename_brain(old: str, new: str) -> bool:
+    """Rename a brain in place (and its version history). True on success. No-op if `old` is missing, or
+    `new` already exists / isn't a valid agent slug."""
+    new = slug_agent_name(new)
+    if old == new or len(new) < 3 or get_brain(old) is None or get_brain(new) is not None:
+        return False
+    with _conn() as c:
+        c.execute("UPDATE brains SET agent_name=? WHERE agent_name=?", (new, old))
+        c.execute("UPDATE brain_versions SET agent_name=? WHERE agent_name=?", (new, old))
+    return True
+
+
+def migrate_invalid_names() -> list[tuple[str, str]]:
+    """One-time self-heal: rename any brain whose name isn't the connector's required slug (3-64 lowercase
+    alphanumeric + hyphens) to its slug, so device-auth can succeed. Run at startup. Returns [(old, new)].
+    An older brain created as e.g. 'Mapmaker' becomes 'mapmaker' with no action from the user."""
+    fixed = []
+    for b in list_brains():
+        old = b["agent_name"]
+        if slug_agent_name(old) != old and rename_brain(old, slug_agent_name(old)):
+            fixed.append((old, slug_agent_name(old)))
+    return fixed
+
+
 # --------------------------------------------------------------------------------------------------
 # Runtime — turn a brain into a live crew. Heavy imports are lazy so the store stays cheap to import.
 # --------------------------------------------------------------------------------------------------

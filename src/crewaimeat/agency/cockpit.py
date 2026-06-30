@@ -31,7 +31,7 @@ from pydantic import BaseModel
 from crewaimeat import brain_templates, brains, local_memory
 from crewaimeat.agency import account, events
 
-COCKPIT_VERSION = "0.8.19"
+COCKPIT_VERSION = "0.8.20"
 _TOKEN_ENV = "AIMEAT_AGENCY_TOKEN"
 _STATIC = Path(__file__).parent / "static"
 # Default local model for the wizard. gemma4 is capable enough for the agentic onboarding + news task
@@ -252,6 +252,11 @@ def create_app(token: str | None = None) -> FastAPI:
     app = FastAPI(title="aimeat-agency cockpit", version=COCKPIT_VERSION)
     app.state.token = token or os.environ.get(_TOKEN_ENV) or secrets.token_urlsafe(32)
     account.apply_env()  # export a previously-saved owner as AIMEAT_OWNER for this process
+    try:
+        for old, new in brains.migrate_invalid_names():  # self-heal e.g. 'Mapmaker' -> 'mapmaker' so connect works
+            print(f"[cockpit] renamed agent '{old}' -> '{new}' (connector requires a lowercase slug)")
+    except Exception:  # noqa: BLE001 — never block startup on the migration
+        pass
     require_token = Depends(_require_token_dependency(app))
 
     @app.get("/healthz")

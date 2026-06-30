@@ -208,3 +208,16 @@ def test_slug_agent_name_matches_connector_rule():
     assert brains.slug_agent_name("News Paska!") == "news-paska"
     assert brains.slug_agent_name("  Map Maker 2 ") == "map-maker-2"
     assert brains.slug_agent_name("ÄÖ###") == ""  # nothing usable
+
+
+def test_migrate_invalid_names_self_heals(tmp_path, monkeypatch):
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    from crewaimeat import brains
+
+    # an OLD brain stored with an invalid uppercase name (save_brain doesn't slug; only the API did)
+    brains.save_brain("Mapmaker", "map-snapshot", prose="keep me")
+    fixed = brains.migrate_invalid_names()
+    assert ("Mapmaker", "mapmaker") in fixed
+    assert brains.get_brain("Mapmaker") is None
+    got = brains.get_brain("mapmaker")
+    assert got is not None and got["prose"] == "keep me"  # content preserved through the rename
