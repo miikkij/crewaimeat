@@ -40,7 +40,7 @@ Created {rel}  (AIMEAT agent: '{name}')
 Next steps
 ──────────
 1. Register the agent on AIMEAT, then approve it in the dashboard (Profile → Agents):
-     npx aimeat@latest connect add --agent {name} --mode task-runner --url https://aimeat.io --owner <your-aimeat-account>
+     npx aimeat@1.34.0 connect --url https://aimeat.io --owner <your-aimeat-account> --agent {name}
    (<your-aimeat-account> is the AIMEAT username you sign in with — the agent's owner.)
 
 2. Create .env from the template and add your keys:

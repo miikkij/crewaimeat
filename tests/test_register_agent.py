@@ -39,6 +39,7 @@ def test_register_agent_uses_current_connect_command_and_parses_code(tmp_path, m
     assert "add" not in cmd, "the removed 'connect add' subcommand must not come back"
     assert "--mode" not in cmd and "task-runner" not in cmd, "the removed --mode flag must not come back"
     assert "connect" in cmd
+    assert "aimeat@1.34.0" in cmd and "aimeat@latest" not in cmd, "the connector version is pinned, not @latest"
     for need in ("--url", "https://aimeat.io", "--owner", "happydude500001", "--agent", "Mapmaker"):
         assert need in cmd, f"missing {need} in {cmd}"
     assert ok and "ABCD-1234" in msg and "verify" in msg  # the output was parsed into a code + verify URL
