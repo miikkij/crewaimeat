@@ -44,6 +44,10 @@ def ensure_serve_watchdog() -> bool:
     global _WATCHDOG_STARTED
     if _WATCHDOG_STARTED:
         return True
+    # NEVER spawn the DETACHED supervisor under pytest — it outlives the test process (CREATE_NO_WINDOW /
+    # close_fds) and leaks real serve daemons onto the machine. A test must never mutate live/shared state.
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return False
     import sys
 
     try:

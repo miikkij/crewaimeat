@@ -39,3 +39,13 @@ def test_restarts_serve_when_approved_but_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(fleet_ops, "_kill", lambda pid: None)
     monkeypatch.setattr(sg, "ensure_single_serve", lambda: {"agents": [{"agent": "w"}]})  # fresh daemon loaded it
     assert fleet_ops.ensure_attached("w") == {"attached": True, "restarted": True}
+
+
+def test_watchdog_never_spawns_under_pytest():
+    """The detached serve_watchdog supervisor must NEVER spawn during tests — it outlives the test
+    process and leaks real serve daemons onto the machine. pytest sets PYTEST_CURRENT_TEST, which the
+    guard checks."""
+    from crewaimeat.agency import fleet_ops
+
+    fleet_ops._WATCHDOG_STARTED = False  # reset the per-process latch
+    assert fleet_ops.ensure_serve_watchdog() is False
