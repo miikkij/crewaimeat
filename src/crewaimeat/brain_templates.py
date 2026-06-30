@@ -313,6 +313,76 @@ def _searcher_agent(ctx: Any, agent_name: str, *, role: str, goal: str, backstor
     )
 
 
+# What each new agent advertises others can request from it (crew_offer shape, same as topic-watcher).
+# Defined here but OFF by default (policy.offer_enabled=False) — the operator opts in.
+_RESEARCH_OFFER = {
+    "id": "research-answer",
+    "title": "A researched answer, with sources",
+    "ask": "Give me a question and I research the live web and return a clear, source-cited answer. I do "
+    "NOT give opinions or unsourced claims, and I say plainly when something is uncertain.",
+    "example": "Question: 'What are the EU's 2026 AI-transparency rules?' → a direct answer with source URLs.",
+    "cost": "cheap",
+    "latency": "minutes",
+    "repeatability": "idempotent",
+    "verification": "ungated",
+    "consequences": [],
+    "sample": None,
+}
+_BRIEFING_OFFER = {
+    "id": "topic-briefing",
+    "title": "A short briefing across your topics",
+    "ask": "Give me a few topics and I return a short, scannable digest of what's genuinely new on each, "
+    "with sources. No opinions, no filler.",
+    "example": "Topics: 'Finnish startups, EU AI act, Nordic energy' → a 3-section digest, each item sourced.",
+    "cost": "cheap",
+    "latency": "minutes",
+    "repeatability": "idempotent",
+    "verification": "ungated",
+    "consequences": [],
+    "sample": None,
+}
+_PAGE_WATCHER_OFFER = {
+    "id": "page-change-report",
+    "title": "What changed on a web page",
+    "ask": "Give me a page URL and I fetch it, compare it to the last time I checked, and report what is "
+    "meaningfully new or changed — ignoring cosmetic noise.",
+    "example": "URL: a competitor's pricing page → 'the Pro tier rose 19€→24€; a new Team tier was added.'",
+    "cost": "cheap",
+    "latency": "minutes",
+    "repeatability": "accumulative",  # it builds a history of snapshots over time
+    "verification": "ungated",
+    "consequences": [],
+    "sample": None,
+}
+_COMPANY_WATCHER_OFFER = {
+    "id": "company-watch",
+    "title": "Notable news about a company",
+    "ask": "Give me a company name and I return the genuinely notable recent news — funding, launches, "
+    "leadership, partnerships, incidents — each with its source. I skip routine noise.",
+    "example": "Company: 'Wolt' → a short list of notable recent items, each with a source URL.",
+    "cost": "cheap",
+    "latency": "minutes",
+    "repeatability": "idempotent",
+    "verification": "ungated",
+    "consequences": [],
+    "sample": None,
+}
+_MAP_SNAPSHOT_OFFER = {
+    "id": "map-image",
+    "title": "A map image of a location",
+    "ask": "Give me an address (or 'lat,lon') and a precision (20km / 5km / 500m) and I return a static "
+    "OpenStreetMap image of that spot, stored with a memory entry linking it (address, coordinates, "
+    "precision, timestamp).",
+    "example": "Location: 'Helsinki Central Station', precision '500m' → a map image + a linked memory entry.",
+    "cost": "cheap",
+    "latency": "seconds",
+    "repeatability": "idempotent",
+    "verification": "deterministic",  # the image is rendered deterministically from the coordinates
+    "consequences": [],
+    "sample": None,
+}
+
+
 # ── research-assistant — one-shot Q&A with citations ──────────────────────────────────────────────
 _RESEARCH_PROSE = (
     "Answer the question given in the task by researching the live web. Read several independent sources, "
@@ -369,6 +439,7 @@ register(
         default_prose=_RESEARCH_PROSE,
         default_policy=_default_policy(cron=None),  # reactive Q&A, no default schedule
         build=_build_research_assistant,
+        offer=_RESEARCH_OFFER,
         i18n={
             "fi": {
                 "title": "Tutkimusassistentti",
@@ -440,6 +511,7 @@ register(
         default_prose=_BRIEFING_PROSE,
         default_policy=_default_policy(cron="0 7 * * *"),  # 07:00 every morning
         build=_build_daily_briefing,
+        offer=_BRIEFING_OFFER,
         i18n={
             "fi": {
                 "title": "Aamukatsaus",
@@ -514,6 +586,7 @@ register(
         default_prose=_PAGE_WATCHER_PROSE,
         default_policy=_default_policy(cron="0 8 * * *"),
         build=_build_page_watcher,
+        offer=_PAGE_WATCHER_OFFER,
         i18n={
             "fi": {
                 "title": "Sivuvahti",
@@ -585,6 +658,7 @@ register(
         default_prose=_COMPANY_WATCHER_PROSE,
         default_policy=_default_policy(cron="0 8 * * *"),
         build=_build_company_watcher,
+        offer=_COMPANY_WATCHER_OFFER,
         i18n={
             "fi": {
                 "title": "Yritysvahti",
@@ -660,6 +734,7 @@ register(
         default_prose=_MAP_SNAPSHOT_PROSE,
         default_policy=_default_policy(cron=None),  # on-demand by default; set a schedule to repeat
         build=_build_map_snapshot,
+        offer=_MAP_SNAPSHOT_OFFER,
         i18n={
             "fi": {
                 "title": "Karttavahti",
