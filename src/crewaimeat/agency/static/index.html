@@ -381,8 +381,16 @@ async function setupStep(p, key, s, refresh){
     // so an in-flight approval is never lost.
     const showCode=(d)=>{
       const link=d.verify_link||d.verify_url;   // the deep link WITH the code (the bare /verify errors)
-      pendingAuth={agent, code:d.code, verify_link:link};
       slot.innerHTML="";
+      if(!d.code || !link){
+        // No code = device-auth never started. Show what the connector ACTUALLY said (not a dead "Waiting…")
+        // + a button to try again. pendingAuth stays null so we don't poll for an approval that can't come.
+        pendingAuth=null;
+        slot.appendChild(el(`<div class="card" style="margin-top:10px;border:1px solid #c0506e"><div class="muted" style="white-space:pre-wrap">${esc(d.message||"No verification code was returned.")}</div></div>`));
+        const rb=el(`<button class="btn" style="margin-top:8px">${t("w.approve")}</button>`); rb.onclick=()=>{ slot.innerHTML=""; render(); }; slot.appendChild(rb);
+        return;
+      }
+      pendingAuth={agent, code:d.code, verify_link:link};
       slot.appendChild(el(`<div class="card" style="margin-top:10px"><div><label>${t("code")} (${t("w.copied")})</label><div style="font-size:24px;font-weight:700;letter-spacing:2px">${esc(d.code||"—")}</div></div><div class="muted" style="margin-top:8px">${t("approveinstr")} <a href="${esc(link||'#')}">${esc(link||'')}</a></div></div>`));
       const od=el(`<button class="btn ghost" style="margin-top:8px">${t("w.opendash")}</button>`); od.onclick=()=>openExt(link); slot.appendChild(od);
       slot.appendChild(el(`<div class="row" style="margin-top:10px"><span class="spin"></span> <span class="muted">${t("waiting")}</span></div>`));
@@ -615,14 +623,16 @@ async function refreshAuth(m, agent, authState){
 function showApprove(m, agent, d, authState){
   const out=m.querySelector("#editorout"); out.dataset.view="approve"; out.innerHTML="";
   const link=d.verify_link||d.verify_url;   // deep link WITH the code (bare /verify errors with "missing code")
-  if(!d.code || !link){ out.appendChild(el(`<pre>${esc(d.message||"started")}</pre>`)); }
-  else {
-    out.appendChild(el(`<div class="sub">${t("approveinstr")}</div>`));
-    out.appendChild(el(`<div class="card"><div class="row" style="gap:20px">
-      <div><label>URL</label><a href="${esc(link)}">${esc(link)}</a></div>
-      <div><label>${t("code")}</label><div style="font-size:22px;font-weight:700;letter-spacing:2px">${esc(d.code)}</div></div>
-    </div></div>`));
+  if(!d.code || !link){
+    // No code = device-auth never started. Show what the connector ACTUALLY said + nothing to wait for.
+    out.appendChild(el(`<div class="card" style="border:1px solid #c0506e"><div class="muted" style="white-space:pre-wrap">${esc(d.message||"No verification code was returned.")}</div></div>`));
+    return;
   }
+  out.appendChild(el(`<div class="sub">${t("approveinstr")}</div>`));
+  out.appendChild(el(`<div class="card"><div class="row" style="gap:20px">
+    <div><label>URL</label><a href="${esc(link)}">${esc(link)}</a></div>
+    <div><label>${t("code")}</label><div style="font-size:22px;font-weight:700;letter-spacing:2px">${esc(d.code)}</div></div>
+  </div></div>`));
   const status=el(`<div class="row" style="margin-top:10px"><span class="spin"></span> <span class="muted">${t("waiting")}</span></div>`); out.appendChild(status);
   const iv=setInterval(async()=>{
     try{ const s=await api("/api/agents/"+encodeURIComponent(agent)+"/auth-status");

@@ -152,8 +152,12 @@ def validate_crew_file(path: Path) -> tuple[bool, str]:
     return proc.returncode == 0, out
 
 
-_VERIFY_CODE_RE = re.compile(r"Verification code:\s*([A-Za-z0-9][A-Za-z0-9-]*)")
-_VERIFY_URL_RE = re.compile(r"(https?://\S*verif\S*)")
+# Broad enough to survive small wording changes in the connector's device-auth output.
+_VERIFY_CODE_RE = re.compile(
+    r"(?:verification code|one-time code|your code|enter (?:this )?code)[:\s]+([A-Za-z0-9][A-Za-z0-9-]{3,})",
+    re.IGNORECASE,
+)
+_VERIFY_URL_RE = re.compile(r"(https?://\S*(?:verif|activate|device|connect|auth)\S*)", re.IGNORECASE)
 
 
 def register_fleet(owner: str, url: str = "https://aimeat.io", agents: list[str] | None = None) -> str:
@@ -188,19 +192,19 @@ def register_agent(agent_name: str, owner: str, url: str = "https://aimeat.io") 
     read the code + URL it prints within a few seconds, and return them so the owner can approve.
     Non-blocking: returns in ~seconds, not after the full poll.
     """
+    # v1.33+ connector: device-auth is `connect --url --owner --agent`. The old `connect add … --mode
+    # task-runner` form is gone — the connector tolerated the extra args but the node rejected the request,
+    # so NO code was ever issued and our fallback misreported it as "already registered".
     base = [
         "npx",
         "aimeat@latest",
         "connect",
-        "add",
-        "--agent",
-        agent_name,
-        "--mode",
-        "task-runner",
         "--url",
         url,
         "--owner",
         owner,
+        "--agent",
+        agent_name,
     ]
     cmd = ["cmd", "/c", *base] if os.name == "nt" else base
     logs = _project_root() / "logs"
@@ -250,9 +254,21 @@ def register_agent(agent_name: str, owner: str, url: str = "https://aimeat.io") 
             True,
             f"APPROVE to activate: open {verify_url} and enter code {code} (it registers automatically once approved).",
         )
-    if proc.poll() is not None:
-        return True, "connect add finished (the agent may already be registered)."
-    return True, f"Registration started for '{agent_name}'; approve it in the dashboard (Profile -> Agents)."
+    # No code parsed — surface what the connector ACTUALLY printed instead of guessing "already
+    # registered" (that misled diagnosis when the device-auth request itself was failing).
+    try:
+        raw_tail = "\n".join(out_path.read_text(encoding="utf-8", errors="replace").splitlines()[-15:]).strip()
+    except OSError:
+        raw_tail = ""
+    if proc.poll() is None:
+        return True, (
+            "The connector is waiting for approval but didn't print a code we recognise. "
+            f"Its output was:\n{raw_tail or '(no output captured)'}"
+        )
+    return False, (
+        "Device authorization did not complete (the connector exited without a code). "
+        f"Its output was:\n{raw_tail or '(no output captured)'}"
+    )
 
 
 def _is_running_file(fname: str) -> bool:

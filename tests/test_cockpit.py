@@ -179,8 +179,9 @@ def test_tasks_agent_not_attached(client, monkeypatch):
 
 
 def test_templates_localized_fi(client):
-    en = client.get("/api/templates?lang=en").json()["templates"][0]
-    fi = client.get("/api/templates?lang=fi").json()["templates"][0]
+    # look up topic-watcher by id (the list is sorted, so it isn't necessarily first)
+    en = next(t for t in client.get("/api/templates?lang=en").json()["templates"] if t["id"] == "topic-watcher")
+    fi = next(t for t in client.get("/api/templates?lang=fi").json()["templates"] if t["id"] == "topic-watcher")
     assert en["title"] == "Topic watcher" and fi["title"] == "Aiheen vahti"
     assert "aiheesta" in fi["default_prose"]  # the starting prose is Finnish (generic: topic from the task)
     assert "fi" in fi["languages"]
