@@ -691,6 +691,32 @@ def _onboarding_completed(agent_name: str) -> bool:
     return bool(data) and data.get("onboarding", {}).get("status") == "completed"
 
 
+def _onboarding_marker(agent_name: str) -> Path:
+    from crewaimeat._home import aimeat_home
+
+    return aimeat_home() / "logs" / ".locks" / f"onboarding_{agent_name}.attempt"
+
+
+def _onboarding_attempted_recently(agent_name: str, within_seconds: int = 3600) -> bool:
+    """True if we already TRIED onboarding within the window. Guards against re-onboarding (and blocking
+    domain work) on every watchdog restart when the node has an optional step with no matching tool that
+    can never reach 'completed'. Partial onboarding is fine — the agent is already authorized."""
+    p = _onboarding_marker(agent_name)
+    try:
+        return p.is_file() and (time.time() - p.stat().st_mtime) < within_seconds
+    except OSError:
+        return False
+
+
+def _mark_onboarding_attempt(agent_name: str) -> None:
+    p = _onboarding_marker(agent_name)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(str(time.time()), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def _memory_key(agent_name: str, prefix: str | None, task: dict) -> str:
     tid = task.get("id") or "manual"
     short = tid.split("-", 1)[0] if "-" in tid else tid[:8]
@@ -734,18 +760,28 @@ def _run_onboarding_only(agent_name: str, services: list[dict] | None = None) ->
                 "Complete AIMEAT Hello Integration. Work carefully and in order — do NOT "
                 "rush, and do NOT fire several tool calls in the same turn.\n"
                 "1. aimeat_onboarding_status to see pending steps.\n"
-                "2. Complete each pending step with its matching aimeat_onboarding_* tool.\n"
+                "2. Complete each pending step with its matching aimeat_onboarding_* tool. "
+                "IMPORTANT: if a step's tool returns 'Tool not found' / is unavailable, or you get "
+                "INVALID_STEP / STEP_NOT_IN_FLOW, that step is OPTIONAL on this node — SKIP it and move "
+                "to the next pending step. NEVER retry a tool that returned 'Tool not found'.\n"
                 f"{services_step}"
                 "4. Test task: aimeat_task_propose_todos ONCE, then mark TODOs done with "
                 "aimeat_task_todo ONE AT A TIME (wait for each result). Then you MUST call "
                 "aimeat_task_complete with the test task's id to complete it. Do NOT re-mark "
                 "done TODOs.\n"
-                "5. aimeat_onboarding_status once more and report. No domain work."
+                "5. aimeat_onboarding_status once more and report. No domain work. It is fine to finish "
+                "with some optional steps still pending — do NOT loop trying to force them."
             ),
-            expected_output="All onboarding steps passed; test task completed.",
+            expected_output="The reachable onboarding steps passed and the test task completed (optional "
+            "steps with no matching tool may remain pending).",
             agent=liaison,
         )
-        Crew(agents=[liaison], tasks=[task], process=Process.sequential, verbose=True, cache=False).kickoff()
+        # Best-effort: onboarding must NEVER crash the daemon (e.g. a new node step with no tool) — if it
+        # throws, log and move on to domain work. The agent is already authorized; partial onboarding is OK.
+        try:
+            Crew(agents=[liaison], tasks=[task], process=Process.sequential, verbose=True, cache=False).kickoff()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[{agent_name}] onboarding crew ended with an error (continuing): {exc!r}", file=sys.stderr)
         print(f"\n=== {agent_name}: ONBOARDING-ONLY done ===", file=sys.stderr)
 
 
@@ -1420,8 +1456,11 @@ def run_crew(spec: CrewSpec) -> None:
     #    come online by itself once approved (no console needed).
     _wait_for_auth(spec.agent_name, spec.owner, spec.wait_for_approval_seconds)
 
-    # 1) Ensure Hello Integration once (one-shot) before the daemon.
-    if not _onboarding_completed(spec.agent_name):
+    # 1) Ensure Hello Integration once (one-shot, best-effort) before the daemon. Skip if we already tried
+    #    recently: a node step with no matching tool can never reach "completed", and re-onboarding on every
+    #    restart would block the real task forever. Partial onboarding is fine — the agent is authorized.
+    if not _onboarding_completed(spec.agent_name) and not _onboarding_attempted_recently(spec.agent_name):
+        _mark_onboarding_attempt(spec.agent_name)
         _run_onboarding_only(spec.agent_name, services=spec.services)
 
     # 1b) Publish the slash-command palette so the dashboard (Data Access) and the Messages UI

@@ -31,7 +31,7 @@ from pydantic import BaseModel
 from crewaimeat import brain_templates, brains, local_memory
 from crewaimeat.agency import account, events
 
-COCKPIT_VERSION = "0.8.20"
+COCKPIT_VERSION = "0.8.21"
 _TOKEN_ENV = "AIMEAT_AGENCY_TOKEN"
 _STATIC = Path(__file__).parent / "static"
 # Default local model for the wizard. gemma4 is capable enough for the agentic onboarding + news task
@@ -825,7 +825,16 @@ def create_app(token: str | None = None) -> FastAPI:
             p = Path("logs") / name
             try:
                 if p.is_file():
-                    lines = p.read_text(encoding="utf-8", errors="replace").splitlines()[-n:]
+                    # Tail by BYTES — a stuck crew can grow the log to GBs, and read_text() of the whole file
+                    # OOMs (MemoryError -> 500). Read only the last chunk and keep the last `n` lines.
+                    cap = max(n, 1) * 4096  # ~4KB/line ceiling is plenty for the tail
+                    size = p.stat().st_size
+                    with p.open("rb") as f:
+                        if size > cap:
+                            f.seek(size - cap)
+                            f.readline()  # drop the partial first line after the seek
+                        data = f.read()
+                    lines = data.decode("utf-8", errors="replace").splitlines()[-n:]
                     return {"agent": agent, "file": name, "lines": lines}
             except OSError:
                 pass
