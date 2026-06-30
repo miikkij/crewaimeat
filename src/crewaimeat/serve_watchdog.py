@@ -24,6 +24,12 @@ INTERVAL = 20  # seconds between liveness checks
 _LOCK = Path("logs/.locks/serve-watchdog.lock")
 
 
+def _say(msg: str, *, err: bool = False) -> None:
+    """Print one timestamped line so the supervisor log reads as a timeline (when each daemon
+    restart/reap/liveness check happened). Local time, sortable format."""
+    print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}", file=sys.stderr if err else sys.stdout, flush=True)
+
+
 def _acquire_singleton_lock(path: Path):
     """Acquire an EXCLUSIVE, process-lifetime lock. Returns the open file handle if WE are the only
     supervisor, or None if another live supervisor already holds it.
@@ -56,9 +62,9 @@ def run() -> None:
 
     lock_fh = _acquire_singleton_lock(_LOCK)
     if lock_fh is None:
-        print("[serve-watchdog] another supervisor already holds the lock — exiting", file=sys.stderr)
+        _say("[serve-watchdog] another supervisor already holds the lock — exiting", err=True)
         return
-    print(f"[serve-watchdog] supervising the shared serve daemon (every {INTERVAL}s)", flush=True)
+    _say(f"[serve-watchdog] supervising the shared serve daemon (every {INTERVAL}s)")
     last_pid = None
     try:
         while True:
@@ -66,27 +72,22 @@ def run() -> None:
                 doc = ensure_single_serve()  # idempotent: returns live, spawns only if dead, reaps duplicates
                 pid = doc.get("pid")
                 if doc.get("_reaped_duplicates"):
-                    print(
+                    _say(
                         f"[serve-watchdog] reaped {doc['_reaped_duplicates']} duplicate serve daemon(s) "
-                        f"— enforcing single instance (kept pid {pid})",
-                        flush=True,
+                        f"— enforcing single instance (kept pid {pid})"
                     )
                 if pid != last_pid:
                     n = len(doc.get("agents") or [])
                     if last_pid is not None:
-                        print(
+                        _say(
                             f"[serve-watchdog] RESTARTED the shared tunnel — it had died "
-                            f"(was pid {last_pid}); now pid {pid}, port {doc.get('port')}, {n} agents",
-                            flush=True,
+                            f"(was pid {last_pid}); now pid {pid}, port {doc.get('port')}, {n} agents"
                         )
                     else:
-                        print(
-                            f"[serve-watchdog] serve daemon live: pid {pid}, port {doc.get('port')}, {n} agents",
-                            flush=True,
-                        )
+                        _say(f"[serve-watchdog] serve daemon live: pid {pid}, port {doc.get('port')}, {n} agents")
                     last_pid = pid
             except Exception as exc:  # noqa: BLE001 — a transient discover/spawn error must not kill the supervisor
-                print(f"[serve-watchdog] ensure_serve failed (will retry): {exc!r}", file=sys.stderr, flush=True)
+                _say(f"[serve-watchdog] ensure_serve failed (will retry): {exc!r}", err=True)
             time.sleep(INTERVAL)
     finally:
         try:

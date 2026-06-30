@@ -28,6 +28,11 @@ from pathlib import Path
 _LOCK = Path("logs/.locks/serve-spawn.lock")
 
 
+def _say(msg: str, *, err: bool = False) -> None:
+    """Print one timestamped line so reap/re-point/error events line up on the supervisor log timeline."""
+    print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}", file=sys.stderr if err else sys.stdout, flush=True)
+
+
 def _aimeat_home() -> Path:
     """The connector home for THIS process. AIMEAT_HOME env wins (matches the connector +
     aimeat_crewai), else the legacy global ~/.aimeat. Every home gets its OWN serve daemon —
@@ -169,7 +174,7 @@ class _CrossProcessLock:
                 return self
             except OSError:
                 if time.time() > deadline:
-                    print("[serve-guard] lock wait timed out — proceeding (dedup will enforce one)", file=sys.stderr)
+                    _say("[serve-guard] lock wait timed out — proceeding (dedup will enforce one)", err=True)
                     return self
                 time.sleep(0.3)
 
@@ -211,7 +216,7 @@ def _serve_pids() -> list[int]:
         ).stdout
         return [int(x) for x in out.split() if x.strip().isdigit()]
     except Exception as exc:  # noqa: BLE001
-        print(f"[serve-guard] could not enumerate serve daemons: {exc}", file=sys.stderr)
+        _say(f"[serve-guard] could not enumerate serve daemons: {exc}", err=True)
         return []
 
 
@@ -222,7 +227,7 @@ def _kill(pid: int) -> None:
         else:
             os.kill(pid, 9)
     except Exception as exc:  # noqa: BLE001
-        print(f"[serve-guard] failed to kill stray serve daemon {pid}: {exc}", file=sys.stderr)
+        _say(f"[serve-guard] failed to kill stray serve daemon {pid}: {exc}", err=True)
 
 
 def _reap_duplicates(keep_pid: int | None) -> int:
@@ -252,9 +257,7 @@ def _reap_duplicates(keep_pid: int | None) -> int:
         if pid != keep_pid:
             _kill(pid)
             reaped += 1
-            print(
-                f"[serve-guard] reaped duplicate serve daemon pid {pid} (kept {keep_pid}, home {our_home})", flush=True
-            )
+            _say(f"[serve-guard] reaped duplicate serve daemon pid {pid} (kept {keep_pid}, home {our_home})")
     if reaped:  # prune the killed pids from the registry so a future reused pid can't match
         _save_registry((registry | {keep_pid}) & set(_serve_pids()))
     return reaped
@@ -268,19 +271,86 @@ def this_home_serve_pids() -> list[int]:
     return [p for p in _serve_pids() if _process_aimeat_home(p) == our_home]
 
 
+def _assert_serve_json_owner(doc: dict) -> bool:
+    """Make serve.json name the kept LIVE daemon described by `doc`, atomically.
+
+    The Node daemon owns serve.json writes, but a LOSER daemon that wrote serve.json naming itself
+    right before we reaped it leaves serve.json pointing at a now-dead pid — the exact stale window a
+    crew's `ensure_serve(auto_start=False)` hard-crashes on ("No live serve daemon … auto_start=False"),
+    which then crash-loops the crew. After the reap we re-assert the kept daemon as serve.json's owner:
+    only when its pid is alive AND answers /local/status (so we never publish a doc for a dead daemon),
+    and only when serve.json doesn't already name it. The write is atomic (temp file + os.replace) so a
+    concurrent reader never sees a half-written file. Returns True when serve.json names the kept live
+    daemon afterwards."""
+    pid = doc.get("pid")
+    port = doc.get("port")
+    if not pid or not isinstance(port, int):
+        return False
+    try:
+        from aimeat_crewai.mcp_client import _pid_alive, _probe_serve, _read_discovery, serve_discovery_path
+    except Exception:  # noqa: BLE001 — a future version moving these -> skip (the Node daemon still owns the file)
+        return False
+    path = serve_discovery_path()
+    cur = _read_discovery(path)
+    if cur and cur.get("pid") == pid and _pid_alive(pid):
+        return True  # serve.json already names the kept live daemon — nothing to do
+    # Only ever publish a doc for a daemon we can PROVE is live right now.
+    if not (_pid_alive(pid) and _probe_serve(port, pid)):
+        return False
+    clean = {k: v for k, v in doc.items() if not str(k).startswith("_")}  # drop internal markers
+    tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(clean, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, path)  # atomic on Windows + POSIX
+        _say(f"[serve-guard] serve.json re-pointed to kept live daemon pid {pid} port {port}")
+        return True
+    except OSError as exc:
+        _say(f"[serve-guard] could not rewrite stale serve.json: {exc}", err=True)
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        return False
+
+
 def ensure_single_serve(timeout: float = 60.0) -> dict:
     """Ensure EXACTLY ONE serve daemon is running and return its discovery doc.
 
     Serializes the check->spawn with a cross-process lock, then reaps any daemon that is not the one
-    serve.json points at. Idempotent + safe to call on a timer."""
+    serve.json points at, and re-asserts serve.json's owner so it never names a reaped/dead pid.
+    Idempotent + safe to call on a timer."""
     from aimeat_crewai import ensure_serve
 
     with _CrossProcessLock(_LOCK, timeout):
         doc = ensure_serve(auto_start=True)  # discovers a live daemon, or spawns one if none
         _record_daemon(doc.get("pid"))  # remember our canonical daemon so the reap can ID our strays by pid
         reaped = _reap_duplicates(doc.get("pid"))
+        # A reaped loser may have left serve.json naming a now-dead pid — re-point it at the kept live
+        # daemon atomically so a crew's auto_start=False discovery never reads a stale (dead) pid.
+        _assert_serve_json_owner(doc)
         if reaped:
             doc["_reaped_duplicates"] = reaped
+        return doc
+
+
+def restart_serve(timeout: float = 60.0) -> dict:
+    """Replace THIS home's serve daemon with a single fresh one — atomically vs the watchdog/guard.
+
+    The connector loads its agent set ONLY at startup (no hot-reload route), so attaching a brand-new
+    agent needs a restart. Doing the kill+respawn OUTSIDE the spawn lock is what produced the churn: the
+    watchdog could spawn a second daemon in the gap, and serve.json transiently named the just-killed pid
+    (the crew's crash trigger). Here the kill and the single respawn happen UNDER the spawn lock, and
+    serve.json is re-pointed at the fresh daemon before returning — one coordinated replacement, no race."""
+    from aimeat_crewai import ensure_serve
+
+    with _CrossProcessLock(_LOCK, timeout):
+        for pid in this_home_serve_pids():
+            _kill(pid)
+        doc = ensure_serve(auto_start=True)  # serve.json's dead pid -> spawns one fresh, waits until live
+        _record_daemon(doc.get("pid"))
+        _reap_duplicates(doc.get("pid"))
+        _assert_serve_json_owner(doc)
         return doc
 
 

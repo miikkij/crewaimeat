@@ -63,3 +63,59 @@ def test_no_reap_when_single(monkeypatch, tmp_path):
     g._save_registry({7})
     monkeypatch.setattr(g, "_kill", lambda pid: (_ for _ in ()).throw(AssertionError("should not kill")))
     assert g._reap_duplicates(keep_pid=None) == 0
+
+
+def test_this_home_serve_pids_scopes_by_home(monkeypatch, tmp_path):
+    """The home-scoping terminate_fleet.ps1 relies on: only OUR home's serve pids, never another fleet's.
+    An unreadable env (None) is treated as NOT ours (fail-safe) so we never kill a foreign/dev daemon."""
+    home = _home(monkeypatch, tmp_path)
+    our = g._norm(home)
+    monkeypatch.setattr(g, "_serve_pids", lambda: [1, 2, 3])
+    monkeypatch.setattr(g, "_process_aimeat_home", lambda pid: {1: our, 2: "C:\\dev\\other", 3: None}[pid])
+    assert g.this_home_serve_pids() == [1]
+
+
+# ── Fix C: serve.json's owner is re-asserted atomically after a reap ──────────────────────────────
+import json  # noqa: E402
+
+import aimeat_crewai.mcp_client as mc  # noqa: E402
+
+
+def test_assert_serve_json_owner_rewrites_stale(monkeypatch, tmp_path):
+    """A reaped LOSER may leave serve.json naming a now-dead pid — the exact stale window a crew's
+    ensure_serve(auto_start=False) crashes on. After the reap we re-point it at the kept LIVE daemon."""
+    sj = tmp_path / "serve.json"
+    sj.write_text(json.dumps({"pid": 999, "port": 1, "agents": []}), encoding="utf-8")  # stale: dead 999
+    monkeypatch.setattr(mc, "serve_discovery_path", lambda: sj)
+    monkeypatch.setattr(mc, "_pid_alive", lambda pid: pid == 42)
+    monkeypatch.setattr(mc, "_probe_serve", lambda port, pid, timeout=2.0: pid == 42)
+    doc = {"pid": 42, "port": 1234, "agents": [{"agent": "w"}], "_reaped_duplicates": 1}
+    assert g._assert_serve_json_owner(doc) is True
+    written = json.loads(sj.read_text(encoding="utf-8"))
+    assert written["pid"] == 42 and written["port"] == 1234
+    assert "_reaped_duplicates" not in written  # internal markers stripped from the published file
+
+
+def test_assert_serve_json_owner_noop_when_correct(monkeypatch, tmp_path):
+    sj = tmp_path / "serve.json"
+    sj.write_text(json.dumps({"pid": 42, "port": 1234, "agents": []}), encoding="utf-8")
+    monkeypatch.setattr(mc, "serve_discovery_path", lambda: sj)
+    monkeypatch.setattr(mc, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(
+        mc, "_probe_serve", lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not re-probe"))
+    )
+    before = sj.read_text(encoding="utf-8")
+    assert g._assert_serve_json_owner({"pid": 42, "port": 1234, "agents": []}) is True
+    assert sj.read_text(encoding="utf-8") == before  # already correct -> untouched
+
+
+def test_assert_serve_json_owner_skips_dead_daemon(monkeypatch, tmp_path):
+    """Never publish a doc for a daemon we cannot PROVE is live right now."""
+    sj = tmp_path / "serve.json"
+    sj.write_text(json.dumps({"pid": 999, "port": 1, "agents": []}), encoding="utf-8")
+    monkeypatch.setattr(mc, "serve_discovery_path", lambda: sj)
+    monkeypatch.setattr(mc, "_pid_alive", lambda pid: False)
+    monkeypatch.setattr(mc, "_probe_serve", lambda *a, **k: False)
+    before = sj.read_text(encoding="utf-8")
+    assert g._assert_serve_json_owner({"pid": 42, "port": 1234, "agents": []}) is False
+    assert sj.read_text(encoding="utf-8") == before

@@ -84,11 +84,19 @@ def ensure_serve_alive() -> dict:
     return {"serve_pid": doc.get("pid"), "port": doc.get("port"), "watchdog": True}
 
 
+# Per-agent cooldown so rapid repeated start/restart clicks can't hammer the serve daemon with
+# back-to-back restarts (each restart drops the tunnel for every agent). Once we restart to attach an
+# agent, a fresh daemon loads ALL approved tokens, so a second restart within the window is pointless.
+_LAST_ATTACH_RESTART: dict[str, float] = {}
+_ATTACH_RESTART_COOLDOWN = 20.0  # seconds
+
+
 def ensure_attached(agent: str) -> dict:
-    """Ensure `agent` is loaded in the serve daemon. If it already is, no-op. Otherwise restart THIS
-    home's serve daemon (kill + respawn one via serve_guard) so it reloads and attaches the agent; the
-    crews stay running and reconnect. Returns {attached, restarted}. Only an APPROVED agent (one with a
-    token) can attach — for an unapproved agent this returns attached=False (it needs approval first)."""
+    """Ensure `agent` is loaded in the serve daemon. If it already is, no-op (NO restart — the steady
+    state must never drop the tunnel). Otherwise, for an APPROVED agent the running daemon never loaded,
+    do ONE coordinated restart via serve_guard.restart_serve (kill+respawn under the spawn lock, serve.json
+    re-pointed) so it reloads and attaches the agent; crews stay running and ride out the blip (they wait
+    for the bridge). Returns {attached, restarted}. An unapproved agent (no token) returns attached=False."""
     if agent in serve_agents():
         return {"attached": True, "restarted": False}
     # An unapproved agent has no token; a serve restart can't attach it — don't disrupt the fleet for it.
@@ -97,13 +105,30 @@ def ensure_attached(agent: str) -> dict:
 
     if not _token_exists(agent, account.load()["owner"]):
         return {"attached": False, "restarted": False}
-    from crewaimeat.serve_guard import ensure_single_serve, this_home_serve_pids
+    # Cooldown: if we just restarted to attach (for any agent), a fresh daemon already loaded every
+    # approved token — re-check rather than restart again. Prevents a restart storm on repeated clicks.
+    last = _LAST_ATTACH_RESTART.get("_any", 0.0)
+    if time.monotonic() - last < _ATTACH_RESTART_COOLDOWN:
+        return {"attached": agent in serve_agents(), "restarted": False}
+    from crewaimeat.serve_guard import restart_serve
 
-    for pid in this_home_serve_pids():
-        _kill(pid)
-    time.sleep(1.5)
-    doc = ensure_single_serve()  # spawns one fresh daemon that loads every registered agent
-    ensure_serve_watchdog()  # and keep it alive from now on (revive on death/tunnel-drop)
-    time.sleep(2)
+    doc = restart_serve()  # ONE coordinated kill+respawn under the spawn lock; serve.json re-pointed
+    _LAST_ATTACH_RESTART["_any"] = time.monotonic()
+    ensure_serve_watchdog()  # keep the fresh daemon alive (revive on death/tunnel-drop)
     loaded = {a.get("agent") for a in (doc.get("agents") or []) if a.get("agent")}
     return {"attached": agent in loaded, "restarted": True}
+
+
+def ensure_bridge(agent: str) -> dict:
+    """The 'approve -> run' bridge with MINIMUM disruption — what fleet_action calls before starting a crew.
+
+    Fast path: the daemon already serves `agent` -> only make sure the supervisor is running (no reap, no
+    restart, no tunnel drop). Otherwise ensure one live, supervised daemon (idempotent), then attach the
+    agent (a no-op if the just-ensured daemon already has it, else one coordinated restart). Folding the
+    old two unconditional calls (ensure_serve_alive + ensure_attached on EVERY action) into this fast path
+    is what stops the steady-state churn."""
+    if agent in serve_agents():
+        ensure_serve_watchdog()
+        return {"attached": True, "restarted": False}
+    ensure_serve_alive()  # one daemon + supervisor (idempotent: reaps, re-points serve.json, no restart)
+    return ensure_attached(agent)

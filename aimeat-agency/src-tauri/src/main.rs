@@ -9,6 +9,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -23,6 +24,10 @@ const PORT: u16 = 8753;
 const TRAY_ID: &str = "aimeat_agency_tray";
 const ID_OPEN: &str = "open_window";
 const ID_QUIT: &str = "shutdown_quit";
+
+// Set once the fleet teardown (/api/shutdown -> terminate_fleet.ps1, home-scoped) has been kicked off,
+// so the tray-quit path and the ExitRequested fallback never double-tear-down (or double-block on exit).
+static TEARDOWN_DONE: AtomicBool = AtomicBool::new(false);
 
 struct AppState {
     token: String,
@@ -230,6 +235,7 @@ fn shutdown_and_quit(handle: &AppHandle) {
     let token = state.token.clone();
     let pid = *state.pid.lock().unwrap();
     let h = handle.clone();
+    TEARDOWN_DONE.store(true, Ordering::SeqCst); // claim the teardown so ExitRequested doesn't repeat it
     std::thread::spawn(move || {
         let _ = ureq::post(&format!("http://127.0.0.1:{PORT}/api/shutdown"))
             .set("Authorization", &format!("Bearer {token}"))
@@ -339,8 +345,22 @@ fn main() {
         .expect("error while building aimeat-agency")
         .run(|app_handle, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {
-                if let Some(pid) = *app_handle.state::<AppState>().pid.lock().unwrap() {
-                    let _ = run("taskkill", &["/PID", &pid.to_string(), "/T", "/F"], None);
+                let state = app_handle.state::<AppState>();
+                // The serve daemon + crews are DETACHED, so taskkill /T on the cockpit never reaches them.
+                // Tear down THIS home's fleet (home-scoped terminate_fleet.ps1 via /api/shutdown) on any
+                // exit path that didn't already (tray "Shut down & Quit" claims it first) — otherwise they
+                // orphan and the next launch wastes time reaping them. Blocks briefly; we're exiting anyway.
+                if !TEARDOWN_DONE.swap(true, Ordering::SeqCst) {
+                    let token = state.token.clone();
+                    let _ = ureq::post(&format!("http://127.0.0.1:{PORT}/api/shutdown"))
+                        .set("Authorization", &format!("Bearer {token}"))
+                        .timeout(Duration::from_secs(30))
+                        .call();
+                    std::thread::sleep(Duration::from_secs(2));
+                }
+                let pid = *state.pid.lock().unwrap(); // copy out so the MutexGuard drops before the if-let
+                if let Some(p) = pid {
+                    let _ = run("taskkill", &["/PID", &p.to_string(), "/T", "/F"], None);
                 }
             }
         });

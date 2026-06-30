@@ -31,7 +31,7 @@ from pydantic import BaseModel
 from crewaimeat import brain_templates, brains, local_memory
 from crewaimeat.agency import account, events
 
-COCKPIT_VERSION = "0.8.25"
+COCKPIT_VERSION = "0.8.26"
 _TOKEN_ENV = "AIMEAT_AGENCY_TOKEN"
 _STATIC = Path(__file__).parent / "static"
 # Default local model for the wizard. gemma4 is capable enough for the agentic onboarding + news task
@@ -882,9 +882,10 @@ def create_app(token: str | None = None) -> FastAPI:
             # Write the brain's crew stub (so the host finds it) AND make sure the connector has this
             # agent loaded — a brand-new agent registered after the serve daemon started isn't attached
             # until the daemon reloads. This is the missing 'approve -> run' link, now automatic.
+            # ensure_bridge takes the FAST PATH when the agent is already attached (no reap, no restart,
+            # no tunnel drop) and only restarts the daemon for a genuinely-new approved agent.
             brains.write_crew_stub(agent)
-            fleet_ops.ensure_serve_alive()  # one serve daemon + a supervisor that KEEPS it alive (the fix)
-            attach = fleet_ops.ensure_attached(agent)
+            attach = fleet_ops.ensure_bridge(agent)
         result = fn(agent)
         events.record(agent, action, {"result": (result or "")[:200]})
         return {"agent": agent, "action": action, "result": result, "attach": attach}

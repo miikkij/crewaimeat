@@ -65,6 +65,7 @@ from aimeat_crewai import (  # noqa: E402
     stdio_params,
 )
 from aimeat_crewai.daemon import DAEMON_DEFAULT_TOOL_FILTER  # noqa: E402
+from aimeat_crewai.mcp_client import AimeatServeError  # noqa: E402 — raised when no live serve daemon
 from crewai import Agent, Crew, Process, Task  # noqa: E402
 
 try:  # private helper; degrade gracefully if a future version moves it
@@ -468,6 +469,39 @@ def _wait_for_auth(agent_name: str, owner: str | None, max_wait_seconds: int | N
         waited += interval
 
 
+# A crew NEVER spawns the serve daemon (the single-spawner discipline that prevents tunnel-stealing
+# storms — only the appliance supervisor / start_fleet spawns). But the supervisor restarts the daemon
+# on death/tunnel-drop, and during that brief window serve.json transiently names a dead pid. A crew
+# that called ensure_serve(auto_start=False) right then hard-crashed ("No live serve daemon …") and the
+# per-crew watchdog burned its quick-exit budget (give up at 5) — the appliance startup crash-loop. So
+# the crew WAITS for the supervisor's daemon to come back instead of crashing.
+SERVE_WAIT_SECONDS = 120  # how long a crew waits for the shared daemon before giving up
+SERVE_DAEMON_RETRIES = 3  # re-wait + retry the daemon start this many times on a transient drop
+
+
+def _wait_for_serve(agent_name: str, max_wait_seconds: int = SERVE_WAIT_SECONDS, interval: int = 2) -> dict:
+    """Block (do NOT spawn) until the shared serve daemon is live, returning its discovery doc.
+
+    `ensure_serve(auto_start=False)` returns only when serve.json names a daemon whose pid is alive AND
+    answers /local/status — so this rides out both a dead-pid window and a not-yet-bound port. Raises
+    AimeatServeError after `max_wait_seconds` so a genuinely-missing supervisor still surfaces."""
+    deadline = time.monotonic() + max_wait_seconds
+    announced = False
+    while True:
+        try:
+            return ensure_serve(auto_start=False)
+        except AimeatServeError:
+            if time.monotonic() >= deadline:
+                raise
+            if not announced:
+                print(
+                    f"[{agent_name}] waiting for the shared serve daemon (the supervisor is bringing it up)…",
+                    file=sys.stderr,
+                )
+                announced = True
+            time.sleep(interval)
+
+
 # Shared loopback serve daemon (aimeat connect serve --http): discovered once per process,
 # then every deterministic call is ONE keep-alive POST on this Session — the daemon multiplexes
 # everything over one persistent WebSocket per agent to the node. No subprocess, no per-call TLS.
@@ -744,6 +778,9 @@ def _run_onboarding_only(agent_name: str, services: list[dict] | None = None) ->
     try:
         # Loopback serve daemon: the liaison's MCP calls ride the shared persistent WS tunnel.
         # auto_start=False — crews NEVER spawn the daemon (only start_fleet does); see _serve_api.
+        # WAIT for the supervisor's daemon first so a transient restart mid-startup doesn't drop the
+        # tunnel under onboarding (the 6/16-stall symptom) before falling back to slow stdio.
+        _wait_for_serve(agent_name)
         liaison_params = serve_params(agent_name=agent_name, auto_start=False)
     except Exception as exc:  # noqa: BLE001 — no local daemon (e.g. CI) -> legacy stdio subprocess
         print(f"[{agent_name}] serve daemon unavailable ({exc}) -> stdio fallback", file=sys.stderr)
@@ -1921,18 +1958,38 @@ def run_crew(spec: CrewSpec) -> None:
     if spec.discover:
         print(f"[{spec.agent_name}] discover ON -> liaison tool_filter += aimeat_discover", file=sys.stderr)
 
-    run_crew_daemon(
-        agent_name=spec.agent_name,
-        build_crew=_build,
-        poll_interval_seconds=spec.poll_seconds,
-        tool_filter=_tool_filter,
-        listen_for=_listen,
-        record_spaces=_records,  # subscribe to workspace-record PUSH events for these spaces (0.7.0)
-        on_record=spec.on_record,  # handler for a pushed record event (or None -> synthetic task)
-        on_dm=_on_dm,  # federated-inbox DM wake: caller's on_dm, else the dm_serviceable generic, else None
-        llm=get_llm(agent_name=spec.agent_name),
-        owner=spec.owner,
-        on_idle=_on_idle,
-        max_concurrent_tasks=spec.max_concurrent_tasks,  # None = read owner-set value from AIMEAT
-        serve_options={"auto_start": False},  # crews never spawn the daemon — only start_fleet does
-    )
+    # Wait for the supervisor's shared serve daemon to be live before binding the daemon loop. A crew
+    # never spawns it (single-spawner discipline), but riding out a transient restart/tunnel-drop beats
+    # hard-crashing on AimeatServeError and burning the per-crew watchdog's quick-exit budget (the
+    # appliance startup crash-loop). If the bridge still drops in the gap before run_crew_daemon's own
+    # ensure_serve, re-wait and retry a few times rather than exiting the process.
+    _wait_for_serve(spec.agent_name)
+    _serve_attempt = 0
+    while True:
+        try:
+            run_crew_daemon(
+                agent_name=spec.agent_name,
+                build_crew=_build,
+                poll_interval_seconds=spec.poll_seconds,
+                tool_filter=_tool_filter,
+                listen_for=_listen,
+                record_spaces=_records,  # subscribe to workspace-record PUSH events for these spaces (0.7.0)
+                on_record=spec.on_record,  # handler for a pushed record event (or None -> synthetic task)
+                on_dm=_on_dm,  # federated-inbox DM wake: caller's on_dm, else the dm_serviceable generic, else None
+                llm=get_llm(agent_name=spec.agent_name),
+                owner=spec.owner,
+                on_idle=_on_idle,
+                max_concurrent_tasks=spec.max_concurrent_tasks,  # None = read owner-set value from AIMEAT
+                serve_options={"auto_start": False},  # crews never spawn the daemon — only start_fleet does
+            )
+            return
+        except AimeatServeError as exc:
+            _serve_attempt += 1
+            if _serve_attempt > SERVE_DAEMON_RETRIES:
+                raise
+            print(
+                f"[{spec.agent_name}] serve bridge dropped at daemon start ({exc}); re-waiting for the "
+                f"supervisor and retrying ({_serve_attempt}/{SERVE_DAEMON_RETRIES}).",
+                file=sys.stderr,
+            )
+            _wait_for_serve(spec.agent_name)

@@ -18,11 +18,20 @@ param(
 $root = (Resolve-Path "$PSScriptRoot\..").Path
 if (-not $env:AIMEAT_HOME) { $env:AIMEAT_HOME = Join-Path $root '.aimeat' }
 
+# Timestamp every line so the log reads as a timeline (when each crew start/exit/restart happened, and
+# when each crew line was emitted) — `Log` for the watchdog's own markers, `Add-Stamp` for piped crew
+# output. Local time, sortable format. NB the crew's stderr lines (tracebacks, [agent]/[llm] prints) are
+# unbuffered, so their stamps are accurate; buffered stdout may batch.
+function Log($msg) { Write-Host ("{0} {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $msg) }
+filter Add-Stamp { "{0} {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $_ }
+
 $fails = 0
 while ($true) {
     $start = Get-Date
-    Write-Host "[watchdog] starting $Crew ..."
-    uv run python $Crew
+    Log "[watchdog] starting $Crew ..."
+    # 2>&1 | Add-Stamp prepends a timestamp to each crew line; $LASTEXITCODE still reflects `uv` (a native
+    # command at the head of the pipe), so the re-auth/quick-exit logic below is unaffected.
+    uv run python $Crew 2>&1 | Add-Stamp
     $code = $LASTEXITCODE
     $elapsed = [int]((Get-Date) - $start).TotalSeconds
 
@@ -30,22 +39,22 @@ while ($true) {
     # pushed auth_revoked). Either way the token needs re-approval — stop, don't crash-loop.
     if ($code -eq 78 -or $code -eq 2) {
         Write-Host ""
-        Write-Host "[watchdog] The agent's token is no longer valid (exit $code). Stopping."
-        Write-Host "[watchdog] Re-approve it on AIMEAT (Profile -> Agents), then run this watchdog again."
+        Log "[watchdog] The agent's token is no longer valid (exit $code). Stopping."
+        Log "[watchdog] Re-approve it on AIMEAT (Profile -> Agents), then run this watchdog again."
         break
     }
 
     if ($elapsed -lt $RapidWindowSeconds) { $fails++ } else { $fails = 0 }
-    Write-Host "[watchdog] crew exited (code $code) after ${elapsed}s. quick-exits=$fails/$MaxRapidFailures"
+    Log "[watchdog] crew exited (code $code) after ${elapsed}s. quick-exits=$fails/$MaxRapidFailures"
 
     if ($fails -ge $MaxRapidFailures) {
         Write-Host ""
-        Write-Host "[watchdog] The crew keeps stopping quickly. The agent likely needs attention on AIMEAT."
-        Write-Host "[watchdog] Open the dashboard (Profile -> Agents) and approve / re-authenticate it, then run this watchdog again."
+        Log "[watchdog] The crew keeps stopping quickly. The agent likely needs attention on AIMEAT."
+        Log "[watchdog] Open the dashboard (Profile -> Agents) and approve / re-authenticate it, then run this watchdog again."
         break
     }
 
     $delay = [Math]::Min(30, 5 * $fails + 5)
-    Write-Host "[watchdog] restarting in ${delay}s ... (Ctrl+C to stop)"
+    Log "[watchdog] restarting in ${delay}s ... (Ctrl+C to stop)"
     Start-Sleep -Seconds $delay
 }
