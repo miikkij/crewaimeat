@@ -31,7 +31,7 @@ from pydantic import BaseModel
 from crewaimeat import brain_templates, brains, local_memory
 from crewaimeat.agency import account, events
 
-COCKPIT_VERSION = "0.8.27"
+COCKPIT_VERSION = "0.8.28"
 _TOKEN_ENV = "AIMEAT_AGENCY_TOKEN"
 _STATIC = Path(__file__).parent / "static"
 # Default local model for the wizard. gemma4 is capable enough for the agentic onboarding + news task
