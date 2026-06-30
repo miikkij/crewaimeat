@@ -665,7 +665,8 @@ function showApprove(m, agent, d, authState){
         status.innerHTML="";
         const done=el(`<div class="row" style="margin-top:10px"><span class="pill published">${t("approveddone")}</span></div>`);
         const dismiss=el(`<button class="btn ghost" style="padding:4px 10px">${t("dismiss")}</button>`);
-        dismiss.onclick=()=>{ out.innerHTML=""; }; done.appendChild(dismiss); status.replaceWith(done);
+        // Reload the editor (now connected) — robust even if `out` is a stale ref; just clearing it did nothing.
+        dismiss.onclick=()=>{ clearInterval(iv); openEditor(agent); }; done.appendChild(dismiss); status.replaceWith(done);
         toast(t("approveddone")); }
     }catch{}
   }, 4000);
