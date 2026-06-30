@@ -599,3 +599,79 @@ register(
         policy_fields=_STD_POLICY_FIELDS,
     )
 )
+
+
+# ── map-snapshot — capture a static map image of a location, stored + published for an app to use ──
+_MAP_SNAPSHOT_PROSE = (
+    "Take a map snapshot of this location (put an address, place name, or 'lat,lon' here): "
+    "Helsinki Central Station\n"
+    "Use this precision (one of 20km / 5km / 500m — the area shown): 5km"
+)
+
+
+def _build_map_snapshot(ctx: Any, brain: dict) -> tuple[list, list]:
+    from crewai import Agent, Task
+
+    from crewaimeat.local_memory import make_local_memory_tools
+    from crewaimeat.map_snapshot import make_map_tools
+
+    agent_name = brain["agent_name"]
+    prose, request, _visibility, _publish_key = _run_inputs(ctx, brain, _MAP_SNAPSHOT_PROSE, f"maps.{agent_name}")
+    agent = Agent(
+        role="Map Snapshotter",
+        goal="Capture a static map image of the requested location and store it with a linked memory entry",
+        backstory=(
+            "You capture map images. Given a location (an address or coordinates) and a precision, you take "
+            "a static OpenStreetMap snapshot with your map_snapshot tool, which stores the image and records "
+            "a memory entry linking it — data an app can later read and display."
+        ),
+        tools=[*make_map_tools(agent_name), *make_local_memory_tools(agent_name)],
+        llm=ctx.llm,
+        verbose=True,
+    )
+    task = Task(
+        description=(
+            f"{ctx.today}\n\n"
+            "YOUR STANDING INSTRUCTIONS (from the operator):\n"
+            f"{prose}\n\n"
+            "THE LOCATION + PRECISION FOR THIS RUN (if given here, use it):\n"
+            f"{request or '(none — use the location + precision in your standing instructions above)'}\n\n"
+            "Do this:\n"
+            "1. Work out the LOCATION (an address / place name, or 'lat,lon') and the PRECISION (one of "
+            "'20km', '5km', '500m') from the request above; fall back to your standing instructions.\n"
+            "2. Call `map_snapshot(location, precision)` EXACTLY ONCE. It renders the map, stores the image "
+            "(public node storage + a local copy), and writes the linked memory entry for you.\n"
+            "3. Report what it returned: the place, coordinates, precision, and the image link.\n\n"
+            "YOUR FINAL ANSWER must be the plain readable summary the tool returned (place, coordinates, "
+            "precision, and image link). Do NOT output JSON or tool-call syntax."
+        ),
+        expected_output="A short readable confirmation: the place, coordinates, precision, and the image URL.",
+        agent=agent,
+    )
+    return [agent], [task]
+
+
+register(
+    Template(
+        id="map-snapshot",
+        title="Map snapshot",
+        description="Capture a static map image of any address or coordinates at a chosen zoom (20km/5km/500m), "
+        "stored with a linked memory entry an app can use.",
+        default_prose=_MAP_SNAPSHOT_PROSE,
+        default_policy=_default_policy(cron=None),  # on-demand by default; set a schedule to repeat
+        build=_build_map_snapshot,
+        i18n={
+            "fi": {
+                "title": "Karttavahti",
+                "description": "Ota karttakuva mistä tahansa osoitteesta tai koordinaateista valitulla "
+                "tarkkuudella (20km/5km/500m), tallennettuna linkitettyyn muistimerkintään jota appi voi käyttää.",
+                "default_prose": (
+                    "Ota karttakuva tästä sijainnista (osoite, paikan nimi tai 'lat,lon'): "
+                    "Helsingin päärautatieasema\n"
+                    "Käytä tätä tarkkuutta (20km / 5km / 500m — näkyvä alue): 5km"
+                ),
+            }
+        },
+        policy_fields=_STD_POLICY_FIELDS,
+    )
+)

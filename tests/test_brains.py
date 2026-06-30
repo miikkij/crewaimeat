@@ -178,7 +178,7 @@ def test_write_crew_stub(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "tid", ["topic-watcher", "research-assistant", "daily-briefing", "page-watcher", "company-watcher"]
+    "tid", ["topic-watcher", "research-assistant", "daily-briefing", "page-watcher", "company-watcher", "map-snapshot"]
 )
 def test_every_template_builds(tid, tmp_path, monkeypatch):
     """Each registered template's build() must construct (agents, tasks) with an interpolated task — this
