@@ -31,7 +31,7 @@ from pydantic import BaseModel
 from crewaimeat import brain_templates, brains, local_memory
 from crewaimeat.agency import account, events
 
-COCKPIT_VERSION = "0.8.18"
+COCKPIT_VERSION = "0.8.19"
 _TOKEN_ENV = "AIMEAT_AGENCY_TOKEN"
 _STATIC = Path(__file__).parent / "static"
 # Default local model for the wizard. gemma4 is capable enough for the agentic onboarding + news task
@@ -534,11 +534,16 @@ def create_app(token: str | None = None) -> FastAPI:
 
     @app.post("/api/brains", dependencies=[require_token])
     def create_brain(body: BrainIn) -> dict:
-        try:
-            prev = brains.get_brain(body.agent_name)
-            saved = brains.save_brain(
-                body.agent_name, body.template_id, prose=body.prose, policy=body.policy, title=body.title
+        # The agent name becomes the connector identity, which must be 3-64 lowercase alphanumeric + hyphens
+        # (the connector rejects e.g. 'Mapmaker' and device-auth then fails). Slug it at the boundary.
+        name = brains.slug_agent_name(body.agent_name)
+        if len(name) < 3:
+            raise HTTPException(
+                status_code=400, detail="agent name must be 3–64 lowercase letters, numbers, or hyphens"
             )
+        try:
+            prev = brains.get_brain(name)
+            saved = brains.save_brain(name, body.template_id, prose=body.prose, policy=body.policy, title=body.title)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         events.record(
@@ -565,7 +570,20 @@ def create_app(token: str | None = None) -> FastAPI:
 
     @app.delete("/api/brains/{agent}", dependencies=[require_token])
     def delete_brain(agent: str) -> dict:
-        return {"deleted": brains.delete_brain(agent)}
+        # Stop the crew first so we don't orphan a running daemon, then drop the brain + its model override.
+        from crewaimeat import llm
+        from crewaimeat.tui import actions
+
+        try:
+            actions.stop_crew(agent)
+        except Exception:  # noqa: BLE001 — not running / already stopped is fine
+            pass
+        deleted = brains.delete_brain(agent)
+        try:
+            llm.clear_override(agent)
+        except Exception:  # noqa: BLE001
+            pass
+        return {"deleted": deleted}
 
     @app.get("/api/brains/{agent}/history", dependencies=[require_token])
     def brain_history(agent: str) -> dict:

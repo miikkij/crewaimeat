@@ -171,11 +171,11 @@ def test_token_via_query_param_for_sse(client):
 
 
 def test_tasks_agent_not_attached(client, monkeypatch):
-    client.post("/api/brains", json={"agent_name": "w", "template_id": "topic-watcher"})
+    client.post("/api/brains", json={"agent_name": "watcher", "template_id": "topic-watcher"})
     import crewaimeat.aimeat_crew as ac
 
     monkeypatch.setattr(ac, "_aimeat_call", lambda *a, **k: None)  # connector swallowed the error
-    assert client.get("/api/agents/w/tasks").json()["error"] == "agent_not_attached"
+    assert client.get("/api/agents/watcher/tasks").json()["error"] == "agent_not_attached"
 
 
 def test_templates_localized_fi(client):
@@ -235,9 +235,9 @@ def test_agent_auth_status(client, tmp_path, monkeypatch):
 
 def test_activity_log_records_brain_saves_with_diff(client, tmp_path, monkeypatch):
     monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
-    client.post("/api/brains", json={"agent_name": "w", "template_id": "topic-watcher", "prose": "v1"})
-    client.patch("/api/brains/w", json={"prose": "v2", "policy": {"autonomy": "act"}})
-    evs = client.get("/api/agents/w/activity").json()["events"]
+    client.post("/api/brains", json={"agent_name": "watcher", "template_id": "topic-watcher", "prose": "v1"})
+    client.patch("/api/brains/watcher", json={"prose": "v2", "policy": {"autonomy": "act"}})
+    evs = client.get("/api/agents/watcher/activity").json()["events"]
     kinds = [e["kind"] for e in evs]
     assert kinds == ["brain_saved", "brain_saved"]  # newest first, two saves
     assert evs[1]["detail"]["changed"] == ["created"]  # first save
@@ -245,9 +245,9 @@ def test_activity_log_records_brain_saves_with_diff(client, tmp_path, monkeypatc
 
 
 def test_offer_surface_and_publish(client, monkeypatch):
-    client.post("/api/brains", json={"agent_name": "w", "template_id": "topic-watcher", "prose": "watch x"})
+    client.post("/api/brains", json={"agent_name": "watcher", "template_id": "topic-watcher", "prose": "watch x"})
     # the template advertises an offer; not yet opted in
-    info = client.get("/api/agents/w/offer").json()
+    info = client.get("/api/agents/watcher/offer").json()
     assert info["available"] is True and info["enabled"] is False
     assert info["offer"]["id"] == "topic-summary"
 
@@ -260,24 +260,24 @@ def test_offer_surface_and_publish(client, monkeypatch):
         "publish_meta_offer",
         lambda agent, meta, with_sample=False: published.update(agent=agent, id=meta["id"]) or (True, "ok"),
     )
-    r = client.post("/api/agents/w/offer/publish", json={}).json()
+    r = client.post("/api/agents/watcher/offer/publish", json={}).json()
     assert r["ok"] is True and r["offer_id"] == "topic-summary"
-    assert published == {"agent": "w", "id": "topic-summary"}
-    assert client.get("/api/agents/w/offer").json()["enabled"] is True
-    assert any(e["kind"] == "offer_published" for e in client.get("/api/agents/w/activity").json()["events"])
+    assert published == {"agent": "watcher", "id": "topic-summary"}
+    assert client.get("/api/agents/watcher/offer").json()["enabled"] is True
+    assert any(e["kind"] == "offer_published" for e in client.get("/api/agents/watcher/activity").json()["events"])
 
 
 def test_offer_publish_surfaces_failure(client, monkeypatch):
-    client.post("/api/brains", json={"agent_name": "w", "template_id": "topic-watcher"})
+    client.post("/api/brains", json={"agent_name": "watcher", "template_id": "topic-watcher"})
     from crewaimeat import offers
 
     monkeypatch.setattr(offers, "publish_meta_offer", lambda *a, **k: (False, "node rejected the offer"))
-    r = client.post("/api/agents/w/offer/publish", json={})
+    r = client.post("/api/agents/watcher/offer/publish", json={})
     assert r.status_code == 502 and "rejected" in r.json()["detail"]
 
 
 def test_tasks_list_and_test_run(client, monkeypatch):
-    client.post("/api/brains", json={"agent_name": "w", "template_id": "topic-watcher"})
+    client.post("/api/brains", json={"agent_name": "watcher", "template_id": "topic-watcher"})
     import crewaimeat.aimeat_crew as ac
 
     tid = "12345678-1234-1234-1234-1234567890ab"
@@ -288,7 +288,7 @@ def test_tasks_list_and_test_run(client, monkeypatch):
         if tool == "aimeat_task_create":
             return {"id": tid}
         if tool == "aimeat_memory_list":
-            return {"items": [{"key": f"crews.w.{tid.split('-')[0]}.latest_output"}]}
+            return {"items": [{"key": f"crews.watcher.{tid.split('-')[0]}.latest_output"}]}
         if tool == "aimeat_memory_read":
             return {"value": "the summary output"}
         return None
@@ -296,16 +296,16 @@ def test_tasks_list_and_test_run(client, monkeypatch):
     monkeypatch.setattr(ac, "_aimeat_call", fake_call)
 
     # queue view
-    tasks = client.get("/api/agents/w/tasks").json()["tasks"]
+    tasks = client.get("/api/agents/watcher/tasks").json()["tasks"]
     assert tasks[0]["status"] == "active" and tasks[0]["id"] == tid
 
     # test run -> creates a task, returns its id, logs an event
-    r = client.post("/api/agents/w/test", json={"prompt": "summarize fusion"}).json()
+    r = client.post("/api/agents/watcher/test", json={"prompt": "summarize fusion"}).json()
     assert r["task_id"] == tid
-    assert any(e["kind"] == "test_run" for e in client.get("/api/agents/w/activity").json()["events"])
+    assert any(e["kind"] == "test_run" for e in client.get("/api/agents/watcher/activity").json()["events"])
 
     # poll the result -> deliverable landed
-    res = client.get(f"/api/agents/w/task/{tid}/result").json()
+    res = client.get(f"/api/agents/watcher/task/{tid}/result").json()
     assert res["done"] is True and res["result"] == "the summary output"
 
 
@@ -332,29 +332,29 @@ def test_register_surfaces_code_and_url(client, monkeypatch):
 
 def test_brain_crud_and_versioning(client):
     # create
-    r = client.post("/api/brains", json={"agent_name": "w1", "template_id": "topic-watcher", "prose": "v1"})
+    r = client.post("/api/brains", json={"agent_name": "watcher1", "template_id": "topic-watcher", "prose": "v1"})
     assert r.status_code == 200 and r.json()["version"] == 1
 
     # bad template -> 400
-    assert client.post("/api/brains", json={"agent_name": "x", "template_id": "nope"}).status_code == 400
+    assert client.post("/api/brains", json={"agent_name": "xyz", "template_id": "nope"}).status_code == 400
 
     # edit (patch) keeps template, bumps version
-    r = client.patch("/api/brains/w1", json={"prose": "v2"})
+    r = client.patch("/api/brains/watcher1", json={"prose": "v2"})
     assert r.json()["version"] == 2 and r.json()["prose"] == "v2"
 
     # list + get
-    assert "w1" in {b["agent_name"] for b in client.get("/api/brains").json()["brains"]}
-    assert client.get("/api/brains/w1").json()["prose"] == "v2"
+    assert "watcher1" in {b["agent_name"] for b in client.get("/api/brains").json()["brains"]}
+    assert client.get("/api/brains/watcher1").json()["prose"] == "v2"
     assert client.get("/api/brains/missing").status_code == 404
 
     # history + rollback
-    assert [v["version"] for v in client.get("/api/brains/w1/history").json()["versions"]] == [2, 1]
-    r = client.post("/api/brains/w1/rollback", json={"version": 1})
+    assert [v["version"] for v in client.get("/api/brains/watcher1/history").json()["versions"]] == [2, 1]
+    r = client.post("/api/brains/watcher1/rollback", json={"version": 1})
     assert r.json()["version"] == 3 and r.json()["prose"] == "v1"
 
     # delete
-    assert client.delete("/api/brains/w1").json()["deleted"] is True
-    assert client.get("/api/brains/w1").status_code == 404
+    assert client.delete("/api/brains/watcher1").json()["deleted"] is True
+    assert client.get("/api/brains/watcher1").status_code == 404
 
 
 def test_dry_run_preview(client):
@@ -412,3 +412,12 @@ def test_fleet_local_read(client):
     # node=0 default: local-only snapshot, no network/daemon. Just assert the shape comes back.
     data = client.get("/api/fleet").json()
     assert "rows" in data and "n_locks" in data
+
+
+def test_create_brain_normalizes_uppercase_name(client):
+    # 'Mapmaker' would break device-auth (connector rejects uppercase) — the API must slug it.
+    r = client.post("/api/brains", json={"agent_name": "Mapmaker", "template_id": "map-snapshot"})
+    assert r.status_code == 200 and r.json()["agent_name"] == "mapmaker"
+    # too short after slugging -> rejected with a clear 400
+    r2 = client.post("/api/brains", json={"agent_name": "@@", "template_id": "map-snapshot"})
+    assert r2.status_code == 400

@@ -199,6 +199,11 @@ const STR = {
   "start":{en:"Start",fi:"Käynnistä"}, "stop":{en:"Stop",fi:"Pysäytä"}, "restart":{en:"Restart",fi:"Uudelleen"},
   "save":{en:"Save brain",fi:"Tallenna aivot"}, "instantiate":{en:"Add to fleet",fi:"Lisää laivueeseen"},
   "agentname":{en:"Agent name (identity)",fi:"Agentin nimi (identiteetti)"},
+  "agentname.hint":{en:"Lowercase letters, numbers and hyphens only (e.g. map-maker). The connector requires this.",fi:"Vain pienet kirjaimet, numerot ja väliviivat (esim. map-maker). Liitin vaatii tämän."},
+  "agentname.req":{en:"Agent name needs at least 3 lowercase letters/numbers/hyphens.",fi:"Agentin nimessä tarvitaan vähintään 3 pientä kirjainta/numeroa/väliviivaa."},
+  "delete":{en:"Delete",fi:"Poista"}, "deleted":{en:"Agent deleted",fi:"Agentti poistettu"},
+  "renamed":{en:"Renamed",fi:"Nimetty uudelleen"},
+  "delete.confirm":{en:"Delete the agent “%s” and its brain for good? This cannot be undone.",fi:"Poistetaanko agentti ”%s” ja sen aivot pysyvästi? Tätä ei voi peruuttaa."},
   "prose":{en:"What it should do (your words)",fi:"Mitä sen pitäisi tehdä (omin sanoin)"},
   "policy":{en:"Policy",fi:"Säännöt"}, "autonomy":{en:"Autonomy",fi:"Autonomia"},
   "schedule":{en:"Schedule (cron)",fi:"Ajastus (cron)"}, "publishkey":{en:"Publish to (memory key)",fi:"Julkaise (muistiavain)"},
@@ -228,6 +233,8 @@ function toast(msg){ const el=document.getElementById("toast"); el.textContent=m
 // NB: a <template> parses ANY fragment incl. <tr>/<td> (a <div> silently drops table rows → null).
 function el(html){ const t=document.createElement("template"); t.innerHTML=html.trim(); return t.content.firstChild; }
 function esc(s){ return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+// The connector requires agent ids to be 3-64 lowercase alphanumeric + hyphens, so normalize names client-side.
+function slugAgent(s){ return (s||"").toLowerCase().replace(/[^a-z0-9-]+/g,"-").replace(/^-+|-+$/g,"").slice(0,64); }
 
 const VIEWS = ["setup","gallery","fleet","memory","sync"];
 let view = "gallery", editing = null, editorStream = null, latestState = null, skipSetup = false;
@@ -460,7 +467,9 @@ function renderEditor(m){
   const authState = {authorized:false};
   const form=el(`<div class="card"></div>`);
   form.appendChild(el(`<label>${t("agentname")}</label>`));
-  const name=el(`<input ${isNew?"":"disabled"} value="${esc(brain.agent_name)}" placeholder="e.g. news-watcher-1">`); form.appendChild(name);
+  const name=el(`<input value="${esc(brain.agent_name)}" placeholder="e.g. news-watcher-1">`); form.appendChild(name);
+  form.appendChild(el(`<div class="muted" style="font-size:12px;margin-top:-4px">${t("agentname.hint")}</div>`));
+  name.onchange=()=>{ name.value=slugAgent(name.value); };   // normalize when they leave the field (rename allowed)
   form.appendChild(el(`<label>${t("prose")}</label>`));
   const prose=el(`<textarea>${esc(brain.prose||"")}</textarea>`); form.appendChild(prose);
   form.appendChild(el(`<label>${t("policy")}</label>`));
@@ -513,10 +522,20 @@ function renderEditor(m){
   const bar=el(`<div class="row" style="margin-top:16px"></div>`);
   const save=el(`<button class="btn">${t("save")}</button>`);
   save.onclick=async()=>{ try{
-    if(isNew){ const an=name.value.trim(); if(!an) return toast("agent name required");
-      await api("/api/brains",{method:"POST",body:JSON.stringify({agent_name:an,template_id:brain.template_id,prose:prose.value,policy:collectPolicy(),title:brain.title})});
-    } else { await api("/api/brains/"+encodeURIComponent(brain.agent_name),{method:"PATCH",body:JSON.stringify({prose:prose.value,policy:collectPolicy()})}); }
-    toast(t("saved")); openEditor(isNew?name.value.trim():brain.agent_name);
+    const newName=slugAgent(name.value); name.value=newName;
+    if(isNew){ if(newName.length<3) return toast(t("agentname.req"));
+      await api("/api/brains",{method:"POST",body:JSON.stringify({agent_name:newName,template_id:brain.template_id,prose:prose.value,policy:collectPolicy(),title:brain.title})});
+      toast(t("saved")); openEditor(newName);
+    } else if(newName && newName!==brain.agent_name){
+      if(newName.length<3) return toast(t("agentname.req"));
+      // RENAME: create under the new (valid) name carrying prose/policy, then delete the old brain.
+      await api("/api/brains",{method:"POST",body:JSON.stringify({agent_name:newName,template_id:brain.template_id,prose:prose.value,policy:collectPolicy(),title:brain.title})});
+      try{ await api("/api/brains/"+encodeURIComponent(brain.agent_name),{method:"DELETE"}); }catch{}
+      toast(t("renamed")); openEditor(newName);
+    } else {
+      await api("/api/brains/"+encodeURIComponent(brain.agent_name),{method:"PATCH",body:JSON.stringify({prose:prose.value,policy:collectPolicy()})});
+      toast(t("saved")); openEditor(brain.agent_name);
+    }
   }catch(e){ toast(e.message); } };
   bar.appendChild(save);
 
@@ -547,6 +566,11 @@ function renderEditor(m){
       b.onclick=async()=>{ if(act==="start" && !authState.authorized) return toast(t("approvefirst"));
         setRunBadge(m, act==="stop"?"stopping":act==="restart"?"restarting":"starting");   // SSE confirms the real state next tick
         try{ const r=await api(`/api/fleet/${encodeURIComponent(brain.agent_name)}/${act}`,{method:"POST"}); toast((r.result||"").slice(0,120)); }catch(e){ toast(e.message); } }; bar.appendChild(b); });
+    // Delete the agent + its brain (the DELETE route existed but had no button). Stops it first server-side.
+    const del=el(`<button class="btn ghost" style="margin-left:auto;border-color:#c0506e;color:#ff9bb5">${t("delete")}</button>`);
+    del.onclick=async()=>{ if(!confirm(t("delete.confirm").replace("%s",brain.agent_name))) return;
+      try{ await api("/api/brains/"+encodeURIComponent(brain.agent_name),{method:"DELETE"}); toast(t("deleted")); editing=null; view="gallery"; render(); }catch(e){ toast(e.message); } };
+    bar.appendChild(del);
     refreshAuth(m, brain.agent_name, authState);
     // LIVE updates via SSE — the cockpit pushes run-status + task changes; no browser polling.
     const es=new EventSource(`/api/agents/${encodeURIComponent(brain.agent_name)}/stream?token=${encodeURIComponent(TOKEN)}`);

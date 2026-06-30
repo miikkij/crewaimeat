@@ -60,6 +60,16 @@ def _row_to_brain(row) -> dict:
     return d
 
 
+def slug_agent_name(name: str) -> str:
+    """Normalize to the connector's agent-id rule (v1.33+): 3-64 LOWERCASE alphanumeric + hyphens. The
+    connector REJECTS anything else (e.g. an uppercase 'Mapmaker'), which silently breaks device-auth, so
+    every agent name must be slugged before it becomes an identity. Returns '' if nothing usable remains."""
+    import re as _re
+
+    s = _re.sub(r"[^a-z0-9-]+", "-", (name or "").strip().lower()).strip("-")
+    return s[:64]
+
+
 def save_brain(
     agent_name: str,
     template_id: str,

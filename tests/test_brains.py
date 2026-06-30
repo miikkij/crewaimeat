@@ -199,3 +199,12 @@ def test_every_template_builds(tid, tmp_path, monkeypatch):
     agents, tasks = t.build(ctx, brain)
     assert agents and tasks
     assert tasks[0].description and "Tesla" in tasks[0].description  # this-run request reached the task
+
+
+def test_slug_agent_name_matches_connector_rule():
+    from crewaimeat import brains
+
+    assert brains.slug_agent_name("Mapmaker") == "mapmaker"  # the bug: uppercase rejected by the connector
+    assert brains.slug_agent_name("News Paska!") == "news-paska"
+    assert brains.slug_agent_name("  Map Maker 2 ") == "map-maker-2"
+    assert brains.slug_agent_name("ÄÖ###") == ""  # nothing usable
