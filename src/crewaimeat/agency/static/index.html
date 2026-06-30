@@ -145,6 +145,7 @@ const STR = {
   "reset.done":{en:"Reset done — starting fresh.",fi:"Nollattu — aloitetaan alusta."},
   "nav.memory":{en:"Memory",fi:"Muisti"}, "nav.sync":{en:"Sync",fi:"Synkronointi"},
   "manage":{en:"Manage",fi:"Hallinnoi"}, "logs":{en:"Logs",fi:"Lokit"},
+  "copylog":{en:"Copy whole log",fi:"Kopioi koko loki"}, "logcopied":{en:"Log copied to clipboard",fi:"Loki kopioitu leikepöydälle"},
   "notconnected":{en:"not connected",fi:"ei yhteyttä"}, "livesat":{en:"lives at",fi:"sijaitsee"},
   "connect.title":{en:"Connect your aimeat account",fi:"Yhdistä aimeat-tilisi"},
   "connect.sub":{en:"Your agents live under one account on a home node. You approve each agent in your aimeat.io dashboard before it can do anything — nothing runs without your OK.",fi:"Agenttisi elävät yhden tilin alla kotinodessa. Hyväksyt jokaisen agentin aimeat.io-hallinnassasi ennen kuin se voi tehdä mitään — mikään ei käynnisty ilman lupaasi."},
@@ -548,7 +549,7 @@ function renderEditor(m){
     logs.onclick=async()=>{ if(window._logsIv) clearInterval(window._logsIv);
       const out=m.querySelector("#editorout"); out.dataset.view="logs"; out.innerHTML=`<p class="muted">…</p>`;
       const load=async()=>{ const o=m.querySelector("#editorout"); if(!o||o.dataset.view!=="logs"){ if(window._logsIv) clearInterval(window._logsIv); return; }
-        try{ const l=await api("/api/fleet/"+encodeURIComponent(brain.agent_name)+"/logs"); showLogs(m,l); }catch(e){} };
+        try{ const l=await api("/api/fleet/"+encodeURIComponent(brain.agent_name)+"/logs?n=1500"); showLogs(m,l); }catch(e){} };
       await load(); window._logsIv=setInterval(load,3000);   // live tail while the Logs view is open
     };
     const approve=el(`<button class="btn">${t("approve")}</button>`);
@@ -749,10 +750,20 @@ async function loadOffer(box, m, agent, authState){
 }
 function showLogs(m,l){
   const out=m.querySelector("#editorout"); out.dataset.view="logs";
+  // Preserve the reader's scroll: only auto-follow to the bottom if they were ALREADY near it (so scrolling
+  // up to read older lines isn't yanked back down every 3s refresh).
+  const old=out.querySelector("pre.loglines");
+  const followBottom = !old || (old.scrollHeight - old.scrollTop - old.clientHeight < 60);
+  const keep = old ? old.scrollTop : 0;
+  const text = (l.lines||[]).join("\n");
   out.innerHTML=`<h3>${t("logs")} <span class="muted" style="font-size:12px">${esc(l.file||"")}</span> <span class="muted" style="font-size:11px">· live</span></h3>`;
+  const copy=el(`<button class="btn ghost" style="margin-bottom:8px;padding:4px 10px">${t("copylog")}</button>`);
+  copy.onclick=()=>{ navigator.clipboard.writeText(text).then(()=>toast(t("logcopied"))).catch(()=>toast(t("logcopied"))); };
+  out.appendChild(copy);
   if(!l.lines||!l.lines.length){ out.appendChild(el(`<p class="muted">—</p>`)); return; }
-  const pre=el(`<pre style="max-height:60vh;overflow:auto">${esc(l.lines.join("\n"))}</pre>`);
-  out.appendChild(pre); pre.scrollTop=pre.scrollHeight;   // keep the newest lines in view
+  const pre=el(`<pre class="loglines" style="max-height:64vh;overflow:auto">${esc(text)}</pre>`);
+  out.appendChild(pre);
+  pre.scrollTop = followBottom ? pre.scrollHeight : keep;   // follow the tail only if the reader was at the bottom
 }
 
 async function renderFleet(m){

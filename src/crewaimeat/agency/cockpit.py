@@ -835,8 +835,8 @@ def create_app(token: str | None = None) -> FastAPI:
             f"{agent}.log",
             f"{agent.replace('-', '_')}_crew.log",
         ]
-        n = max(1, min(int(n or 80), 1000))  # clamp so a caller can't blow up the read
-        READ_CAP = 256 * 1024  # HARD ceiling on bytes ever loaded — independent of n, so this can't OOM
+        n = max(1, min(int(n or 80), 5000))  # clamp so a caller can't blow up the read
+        READ_CAP = 1024 * 1024  # HARD ceiling on bytes ever loaded (1MB) — independent of n, so this can't OOM
         for name in candidates:
             p = Path("logs") / name
             try:
