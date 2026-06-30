@@ -761,6 +761,29 @@ def _memory_key(agent_name: str, prefix: str | None, task: dict) -> str:
     return f"{base}.{token}.latest_output"
 
 
+# Onboarding gets a TIGHT tool set, NOT the daemon's full ~24-tool working set. A small local model
+# (e.g. gemma4) picks the right tool far more reliably from ~14 Hello-Integration-relevant tools than
+# from 24 where ~10 are irrelevant noise here (task_list/event/fail/create, memory_read/list,
+# knowledge_*, agents_list, message_inbox). The 2 local offers tools (aimeat_offers_check/_publish) are
+# added by create_liaison_agent regardless of this MCP filter, so they need not be listed.
+_ONBOARDING_TOOL_FILTER: tuple[str, ...] = (
+    "aimeat_handbook_get",
+    "aimeat_onboarding_status",
+    "aimeat_onboarding_identify_platform",
+    "aimeat_onboarding_confirm_skill_installed",
+    "aimeat_onboarding_confirm_directives_read",
+    "aimeat_onboarding_declare_services",
+    "aimeat_agent_capabilities_report",
+    "aimeat_agent_telemetry_report",
+    "aimeat_message_send",  # the REAL tool for the send_test_message step (no aimeat_onboarding_* exists)
+    "aimeat_task_propose_todos",
+    "aimeat_task_todo",
+    "aimeat_task_get",
+    "aimeat_task_complete",
+    "aimeat_memory_write",  # publish_commands / publish_config land in agent memory keys
+)
+
+
 def _run_onboarding_only(agent_name: str, services: list[dict] | None = None) -> None:
     """One-shot Hello Integration (liaison alone, no domain work)."""
     print(
@@ -769,9 +792,8 @@ def _run_onboarding_only(agent_name: str, services: list[dict] | None = None) ->
     )
     if services:
         services_step = (
-            "3. Declare this agent's services so they are discoverable: call "
-            f"aimeat_onboarding_declare_services with services={json.dumps(services, ensure_ascii=False)} "
-            "(do this even if it is not listed as a pending step).\n"
+            "When you reach declare_services, call aimeat_onboarding_declare_services with "
+            f"services={json.dumps(services, ensure_ascii=False)} (do this even if it is not pending).\n"
         )
     else:
         services_step = ""
@@ -789,25 +811,38 @@ def _run_onboarding_only(agent_name: str, services: list[dict] | None = None) ->
         mcp_server_params=liaison_params,
         agent_name=agent_name,
         llm=get_llm(agent_name=agent_name),  # honor the agent's model override (e.g. local Ollama) — no cloud key
-        tool_filter=DAEMON_DEFAULT_TOOL_FILTER,  # ~24 tools, not 95 (smaller models cope)
+        tool_filter=_ONBOARDING_TOOL_FILTER,  # tight Hello-Integration set, not the daemon's full ~24
         verbose=True,
     ) as liaison:
         task = Task(
             description=(
-                "Complete AIMEAT Hello Integration. Work carefully and in order — do NOT "
-                "rush, and do NOT fire several tool calls in the same turn.\n"
-                "1. aimeat_onboarding_status to see pending steps.\n"
-                "2. Complete each pending step with its matching aimeat_onboarding_* tool. "
-                "IMPORTANT: if a step's tool returns 'Tool not found' / is unavailable, or you get "
-                "INVALID_STEP / STEP_NOT_IN_FLOW, that step is OPTIONAL on this node — SKIP it and move "
-                "to the next pending step. NEVER retry a tool that returned 'Tool not found'.\n"
+                "Complete AIMEAT Hello Integration (no domain work). Work IN ORDER, ONE tool call per "
+                "turn, and wait for each result.\n\n"
+                "FIRST call aimeat_onboarding_status to see the pending steps.\n\n"
+                "There are ONLY FIVE aimeat_onboarding_* tools: status, identify_platform, "
+                "confirm_skill_installed, confirm_directives_read, declare_services. Do NOT invent any "
+                "other aimeat_onboarding_* name — there is NO aimeat_onboarding_send_test_message / "
+                "_publish_config / _configure_delivery / _publish_commands / _declare_offerings / "
+                "_make_workflow_compatible / _price_offer. For every pending step use the REAL tool below; "
+                "if a step is not listed here, OR any tool replies 'Tool not found' / INVALID_STEP / "
+                "STEP_NOT_IN_FLOW, that step is OPTIONAL — SKIP it and NEVER retry it:\n"
+                "  - identify_platform   -> aimeat_onboarding_identify_platform\n"
+                "  - install_skill       -> aimeat_onboarding_confirm_skill_installed\n"
+                "  - read_directives     -> aimeat_onboarding_confirm_directives_read\n"
+                "  - report_capabilities -> aimeat_agent_capabilities_report (often already done at startup)\n"
+                "  - report_telemetry    -> aimeat_agent_telemetry_report\n"
+                "  - send_test_message   -> aimeat_message_send (a short hello to the owner)\n"
+                "  - publish_commands    -> aimeat_memory_write (key 'agents.<you>.commands')\n"
+                "  - declare_services    -> aimeat_onboarding_declare_services\n"
+                "  - declare_offerings / make_workflow_compatible / price_offer -> aimeat_offers_publish "
+                "(publish ONE offer; add a price only if you intend to sell, else SKIP price_offer)\n"
+                "  - configure_delivery, publish_config -> no tool exists; SKIP if they stay pending\n"
                 f"{services_step}"
-                "4. Test task: aimeat_task_propose_todos ONCE, then mark TODOs done with "
-                "aimeat_task_todo ONE AT A TIME (wait for each result). Then you MUST call "
-                "aimeat_task_complete with the test task's id to complete it. Do NOT re-mark "
-                "done TODOs.\n"
-                "5. aimeat_onboarding_status once more and report. No domain work. It is fine to finish "
-                "with some optional steps still pending — do NOT loop trying to force them."
+                "TEST TASK (accept_test_task / complete_test_task): aimeat_task_propose_todos ONCE, then "
+                "aimeat_task_todo ONE AT A TIME (wait for each), then aimeat_task_complete with the test "
+                "task's id. Do NOT re-mark done TODOs.\n\n"
+                "FINALLY call aimeat_onboarding_status once more and report. It is FINE to finish with some "
+                "optional steps still pending — do NOT loop trying to force them."
             ),
             expected_output="The reachable onboarding steps passed and the test task completed (optional "
             "steps with no matching tool may remain pending).",
