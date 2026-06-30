@@ -58,9 +58,11 @@ for _s in (sys.stdout, sys.stderr):
 
 import requests  # noqa: E402 — ships with aimeat-crewai
 from aimeat_crewai import (  # noqa: E402
+    OnboardingError,
     create_liaison_agent,
     ensure_serve,
     run_crew_daemon,
+    run_hello_integration,
     serve_params,
     stdio_params,
 )
@@ -722,7 +724,13 @@ def record_event_targets(event: dict) -> list[tuple[str, str]] | None:
 
 def _onboarding_completed(agent_name: str) -> bool:
     data = _aimeat_call(agent_name, "aimeat_onboarding_status", {})
-    return bool(data) and data.get("onboarding", {}).get("status") == "completed"
+    if not data:
+        return False
+    # AIMEAT node >=1.35: completion gates on the 12 REQUIRED steps via summary.completable (the optional
+    # offers ladder never blocks). Fall back to the pre-1.35 onboarding.status field on an older node.
+    if (data.get("summary") or {}).get("completable"):
+        return True
+    return data.get("onboarding", {}).get("status") == "completed"
 
 
 def _onboarding_marker(agent_name: str) -> Path:
@@ -761,11 +769,11 @@ def _memory_key(agent_name: str, prefix: str | None, task: dict) -> str:
     return f"{base}.{token}.latest_output"
 
 
-# Onboarding gets a TIGHT tool set, NOT the daemon's full ~24-tool working set. A small local model
-# (e.g. gemma4) picks the right tool far more reliably from ~14 Hello-Integration-relevant tools than
-# from 24 where ~10 are irrelevant noise here (task_list/event/fail/create, memory_read/list,
-# knowledge_*, agents_list, message_inbox). The 2 local offers tools (aimeat_offers_check/_publish) are
-# added by create_liaison_agent regardless of this MCP filter, so they need not be listed.
+# The toolset the deterministic Hello-Integration driver needs — every tool the REQUIRED steps map to
+# in the node's howTo contract (status + the 4 confirm tools, capabilities/telemetry reports,
+# message_send for send_test_message, the task tools for the test task, memory_write for
+# publish_commands/publish_config). declare_services (optional) is included so we can seed services.
+# A tight set, not the daemon's full ~24-tool working set.
 _ONBOARDING_TOOL_FILTER: tuple[str, ...] = (
     "aimeat_handbook_get",
     "aimeat_onboarding_status",
@@ -780,23 +788,26 @@ _ONBOARDING_TOOL_FILTER: tuple[str, ...] = (
     "aimeat_task_todo",
     "aimeat_task_get",
     "aimeat_task_complete",
-    "aimeat_memory_write",  # publish_commands / publish_config land in agent memory keys
+    "aimeat_memory_write",  # publish_commands -> agents.<name>.commands; publish_config -> agents.config.<name>.*
 )
 
 
-def _run_onboarding_only(agent_name: str, services: list[dict] | None = None) -> None:
-    """One-shot Hello Integration (liaison alone, no domain work)."""
+def _run_onboarding_only(
+    agent_name: str, services: list[dict] | None = None, commands: list[dict] | None = None
+) -> None:
+    """One-shot Hello Integration, driven DETERMINISTICALLY from the node's howTo contract.
+
+    aimeat-crewai 0.12.0's run_hello_integration reads aimeat_onboarding_status (which on AIMEAT
+    node >=1.35 returns a per-step howTo + a top-level step_guide + a summary), calls the tool named in
+    each pending REQUIRED step's howTo and stops at summary.completable — NO LLM tool-guessing, so a
+    small/local model can't invent toolless aimeat_onboarding_<step> names (the old 'Tool not found'
+    stall). The optional offers ladder (declare_offerings/make_workflow_compatible/price_offer) is left
+    pending; declare_services is seeded separately below. On an older node (no howTo/summary) the driver
+    reports it can't proceed and we continue — the agent is already authorized; partial onboarding is OK."""
     print(
-        f"[{agent_name}] Hello Integration not done -> running ONBOARDING ONLY (liaison alone, no domain work).",
+        f"[{agent_name}] Hello Integration not done -> running ONBOARDING ONLY (deterministic driver).",
         file=sys.stderr,
     )
-    if services:
-        services_step = (
-            "When you reach declare_services, call aimeat_onboarding_declare_services with "
-            f"services={json.dumps(services, ensure_ascii=False)} (do this even if it is not pending).\n"
-        )
-    else:
-        services_step = ""
     try:
         # Loopback serve daemon: the liaison's MCP calls ride the shared persistent WS tunnel.
         # auto_start=False — crews NEVER spawn the daemon (only start_fleet does); see _serve_api.
@@ -807,54 +818,58 @@ def _run_onboarding_only(agent_name: str, services: list[dict] | None = None) ->
     except Exception as exc:  # noqa: BLE001 — no local daemon (e.g. CI) -> legacy stdio subprocess
         print(f"[{agent_name}] serve daemon unavailable ({exc}) -> stdio fallback", file=sys.stderr)
         liaison_params = stdio_params(agent_name=agent_name)
-    with create_liaison_agent(
-        mcp_server_params=liaison_params,
-        agent_name=agent_name,
-        llm=get_llm(agent_name=agent_name),  # honor the agent's model override (e.g. local Ollama) — no cloud key
-        tool_filter=_ONBOARDING_TOOL_FILTER,  # tight Hello-Integration set, not the daemon's full ~24
-        verbose=True,
-    ) as liaison:
-        task = Task(
-            description=(
-                "Complete AIMEAT Hello Integration (no domain work). Work IN ORDER, ONE tool call per "
-                "turn, and wait for each result.\n\n"
-                "FIRST call aimeat_onboarding_status to see the pending steps.\n\n"
-                "There are ONLY FIVE aimeat_onboarding_* tools: status, identify_platform, "
-                "confirm_skill_installed, confirm_directives_read, declare_services. Do NOT invent any "
-                "other aimeat_onboarding_* name — there is NO aimeat_onboarding_send_test_message / "
-                "_publish_config / _configure_delivery / _publish_commands / _declare_offerings / "
-                "_make_workflow_compatible / _price_offer. For every pending step use the REAL tool below; "
-                "if a step is not listed here, OR any tool replies 'Tool not found' / INVALID_STEP / "
-                "STEP_NOT_IN_FLOW, that step is OPTIONAL — SKIP it and NEVER retry it:\n"
-                "  - identify_platform   -> aimeat_onboarding_identify_platform\n"
-                "  - install_skill       -> aimeat_onboarding_confirm_skill_installed\n"
-                "  - read_directives     -> aimeat_onboarding_confirm_directives_read\n"
-                "  - report_capabilities -> aimeat_agent_capabilities_report (often already done at startup)\n"
-                "  - report_telemetry    -> aimeat_agent_telemetry_report\n"
-                "  - send_test_message   -> aimeat_message_send (a short hello to the owner)\n"
-                "  - publish_commands    -> aimeat_memory_write (key 'agents.<you>.commands')\n"
-                "  - declare_services    -> aimeat_onboarding_declare_services\n"
-                "  - declare_offerings / make_workflow_compatible / price_offer -> aimeat_offers_publish "
-                "(publish ONE offer; add a price only if you intend to sell, else SKIP price_offer)\n"
-                "  - configure_delivery, publish_config -> no tool exists; SKIP if they stay pending\n"
-                f"{services_step}"
-                "TEST TASK (accept_test_task / complete_test_task): aimeat_task_propose_todos ONCE, then "
-                "aimeat_task_todo ONE AT A TIME (wait for each), then aimeat_task_complete with the test "
-                "task's id. Do NOT re-mark done TODOs.\n\n"
-                "FINALLY call aimeat_onboarding_status once more and report. It is FINE to finish with some "
-                "optional steps still pending — do NOT loop trying to force them."
-            ),
-            expected_output="The reachable onboarding steps passed and the test task completed (optional "
-            "steps with no matching tool may remain pending).",
-            agent=liaison,
+    # Override publish_commands with THIS crew's real palette (else the driver publishes the node's
+    # example commands). Other steps use the node's howTo.args verbatim.
+    step_args: dict[str, dict] = {}
+    if commands:
+        step_args["publish_commands"] = {
+            "key": f"agents.{agent_name}.commands",
+            "value": commands,
+            "visibility": "owner",
+        }
+    try:
+        # create_liaison_agent gives the same MCP tool objects the driver needs (.name + .run) AND
+        # context-managed cleanup of the adapter; the built agent's LLM is never invoked (the driver
+        # selects tools from the node contract, not the model).
+        with create_liaison_agent(
+            mcp_server_params=liaison_params,
+            agent_name=agent_name,
+            llm=get_llm(agent_name=agent_name),
+            tool_filter=_ONBOARDING_TOOL_FILTER,
+            verbose=False,
+        ) as liaison:
+            run_hello_integration(
+                liaison.tools,
+                agent_name=agent_name,
+                step_args=step_args,
+                sleep_seconds=1.0,  # a beat between rounds so passive steps (configure_delivery) register
+                logger=lambda m: print(f"[{agent_name}] {m}", file=sys.stderr),
+            )
+            # declare_services is OPTIONAL (the required-only driver skips it) — seed it for discoverability.
+            if services:
+                ds = next(
+                    (t for t in liaison.tools if getattr(t, "name", None) == "aimeat_onboarding_declare_services"),
+                    None,
+                )
+                if ds is not None:
+                    try:
+                        ds.run(services=services)
+                        print(f"[{agent_name}] declared {len(services)} service(s).", file=sys.stderr)
+                    except Exception as exc:  # noqa: BLE001 — optional; never block the daemon
+                        print(
+                            f"[{agent_name}] declare_services failed (optional, continuing): {exc!r}", file=sys.stderr
+                        )
+    except OnboardingError as exc:
+        # Node/connector out of sync, or node <1.35 (no machine-readable howTo/summary). The agent is
+        # already authorized; partial onboarding is fine — log and continue to domain work.
+        print(
+            f"[{agent_name}] deterministic onboarding could not complete ({exc}) — continuing "
+            "(the agent is already authorized; needs AIMEAT node >=1.35 for full Hello Integration).",
+            file=sys.stderr,
         )
-        # Best-effort: onboarding must NEVER crash the daemon (e.g. a new node step with no tool) — if it
-        # throws, log and move on to domain work. The agent is already authorized; partial onboarding is OK.
-        try:
-            Crew(agents=[liaison], tasks=[task], process=Process.sequential, verbose=True, cache=False).kickoff()
-        except Exception as exc:  # noqa: BLE001
-            print(f"[{agent_name}] onboarding crew ended with an error (continuing): {exc!r}", file=sys.stderr)
-        print(f"\n=== {agent_name}: ONBOARDING-ONLY done ===", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 — onboarding must NEVER crash the daemon
+        print(f"[{agent_name}] onboarding ended with an error (continuing): {exc!r}", file=sys.stderr)
+    print(f"\n=== {agent_name}: ONBOARDING-ONLY done ===", file=sys.stderr)
 
 
 def _finalize_task(agent_name: str, tid: str, mem_key: str, liaison: Agent) -> Task:
@@ -1533,7 +1548,7 @@ def run_crew(spec: CrewSpec) -> None:
     #    restart would block the real task forever. Partial onboarding is fine — the agent is authorized.
     if not _onboarding_completed(spec.agent_name) and not _onboarding_attempted_recently(spec.agent_name):
         _mark_onboarding_attempt(spec.agent_name)
-        _run_onboarding_only(spec.agent_name, services=spec.services)
+        _run_onboarding_only(spec.agent_name, services=spec.services, commands=spec.commands)
 
     # 1b) Publish the slash-command palette so the dashboard (Data Access) and the Messages UI
     #     can surface it. Key agents.<agent>.commands, owner-visible. Rewritten on every start
