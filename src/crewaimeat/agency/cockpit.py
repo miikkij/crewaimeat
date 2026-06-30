@@ -31,7 +31,7 @@ from pydantic import BaseModel
 from crewaimeat import brain_templates, brains, local_memory
 from crewaimeat.agency import account, events
 
-COCKPIT_VERSION = "0.8.22"
+COCKPIT_VERSION = "0.8.23"
 _TOKEN_ENV = "AIMEAT_AGENCY_TOKEN"
 _STATIC = Path(__file__).parent / "static"
 # Default local model for the wizard. gemma4 is capable enough for the agentic onboarding + news task
@@ -588,6 +588,20 @@ def create_app(token: str | None = None) -> FastAPI:
             llm.clear_override(agent)
         except Exception:  # noqa: BLE001
             pass
+        # Remove the connector TOKEN(s) too — otherwise the serve daemon keeps loading a deleted agent from
+        # its leftover token file (the 'news-paska is still served though I deleted it' zombie).
+        try:
+            import glob
+
+            from crewaimeat._home import aimeat_home
+
+            for tokf in glob.glob(str(aimeat_home() / "tokens" / f"{agent}@*.token")):
+                try:
+                    os.remove(tokf)
+                except OSError:
+                    pass
+        except Exception:  # noqa: BLE001
+            pass
         return {"deleted": deleted}
 
     @app.get("/api/brains/{agent}/history", dependencies=[require_token])
@@ -821,23 +835,27 @@ def create_app(token: str | None = None) -> FastAPI:
             f"{agent}.log",
             f"{agent.replace('-', '_')}_crew.log",
         ]
+        n = max(1, min(int(n or 80), 1000))  # clamp so a caller can't blow up the read
+        READ_CAP = 256 * 1024  # HARD ceiling on bytes ever loaded — independent of n, so this can't OOM
         for name in candidates:
             p = Path("logs") / name
             try:
-                if p.is_file():
-                    # Tail by BYTES — a stuck crew can grow the log to GBs, and read_text() of the whole file
-                    # OOMs (MemoryError -> 500). Read only the last chunk and keep the last `n` lines.
-                    cap = max(n, 1) * 4096  # ~4KB/line ceiling is plenty for the tail
-                    size = p.stat().st_size
-                    with p.open("rb") as f:
-                        if size > cap:
-                            f.seek(size - cap)
-                            f.readline()  # drop the partial first line after the seek
-                        data = f.read()
-                    lines = data.decode("utf-8", errors="replace").splitlines()[-n:]
-                    return {"agent": agent, "file": name, "lines": lines}
-            except OSError:
-                pass
+                if not p.is_file():
+                    continue
+                # Tail by BYTES — a stuck crew can grow the log to GBs; never read more than READ_CAP.
+                size = p.stat().st_size
+                with p.open("rb") as f:
+                    if size > READ_CAP:
+                        f.seek(size - READ_CAP)
+                        f.readline()  # drop the partial first line after the seek
+                    data = f.read(READ_CAP + 8192)  # BOUNDED read — never the whole (possibly huge) file
+                lines = data.decode("utf-8", errors="replace").splitlines()[-n:]
+                return {"agent": agent, "file": name, "lines": lines}
+            except MemoryError:
+                # the machine is momentarily out of memory — degrade gracefully, never 500 the log view
+                return {"agent": agent, "file": name, "lines": ["(log temporarily unavailable — low memory)"]}
+            except Exception:  # noqa: BLE001 — a locked/odd file must not crash the endpoint; try the next one
+                continue
         return {"agent": agent, "file": None, "lines": []}
 
     @app.get("/api/fleet/{agent}/status", dependencies=[require_token])

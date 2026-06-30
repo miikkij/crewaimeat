@@ -421,3 +421,15 @@ def test_create_brain_normalizes_uppercase_name(client):
     # too short after slugging -> rejected with a clear 400
     r2 = client.post("/api/brains", json={"agent_name": "@@", "template_id": "map-snapshot"})
     assert r2.status_code == 400
+
+
+def test_delete_removes_connector_token(client, tmp_path):
+    # Deleting an agent must also remove its connector token, else the serve daemon keeps serving a
+    # deleted agent (the 'news-paska still served' zombie).
+    client.post("/api/brains", json={"agent_name": "zombie-test", "template_id": "topic-watcher"})
+    toks = tmp_path / "tokens"
+    toks.mkdir(exist_ok=True)
+    tokf = toks / "zombie-test@owner1.token"
+    tokf.write_text("t", encoding="utf-8")
+    assert client.delete("/api/brains/zombie-test").json()["deleted"] is True
+    assert not tokf.exists()  # token gone -> no zombie

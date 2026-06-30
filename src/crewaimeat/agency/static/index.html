@@ -552,11 +552,12 @@ function renderEditor(m){
       await load(); window._logsIv=setInterval(load,3000);   // live tail while the Logs view is open
     };
     const approve=el(`<button class="btn">${t("approve")}</button>`);
-    approve.onclick=async()=>{ approve.disabled=true;
+    approve.onclick=async()=>{ if(window._editorBusy) return;
+      window._editorBusy=true; const allBtns=bar.querySelectorAll("button"); allBtns.forEach(x=>x.disabled=true);
       const out=m.querySelector("#editorout"); out.innerHTML=`<div class="card"><div class="row"><span class="spin"></span> <span>${t("connecting")}</span></div></div>`;
       try{ const d=await api("/api/agents/"+encodeURIComponent(brain.agent_name)+"/register",{method:"POST"});
         showApprove(m, brain.agent_name, d, authState); }catch(e){ out.innerHTML=`<p class="muted">${esc(e.message)}</p>`; toast(e.message); }
-      finally{ approve.disabled=false; } };
+      finally{ window._editorBusy=false; allBtns.forEach(x=>x.disabled=false); } };
     const test=el(`<button class="btn ghost" title="${t("testrunhint")}">${t("testrun")}</button>`);
     test.onclick=()=>showTestRun(m, brain.agent_name, authState);
     const tasks=el(`<button class="btn ghost">${t("tasks")}</button>`);
@@ -564,8 +565,12 @@ function renderEditor(m){
     bar.appendChild(approve); bar.appendChild(dry); bar.appendChild(test); bar.appendChild(tasks); bar.appendChild(hist); bar.appendChild(logs);
     ["start","stop","restart"].forEach(act=>{ const b=el(`<button class="btn ghost">${t(act)}</button>`);
       b.onclick=async()=>{ if(act==="start" && !authState.authorized) return toast(t("approvefirst"));
+        if(window._editorBusy) return;   // ONE action at a time — block spamming start/stop/restart (the restart storms)
+        window._editorBusy=true; const allBtns=bar.querySelectorAll("button"); allBtns.forEach(x=>x.disabled=true);
         setRunBadge(m, act==="stop"?"stopping":act==="restart"?"restarting":"starting");   // SSE confirms the real state next tick
-        try{ const r=await api(`/api/fleet/${encodeURIComponent(brain.agent_name)}/${act}`,{method:"POST"}); toast((r.result||"").slice(0,120)); }catch(e){ toast(e.message); } }; bar.appendChild(b); });
+        try{ const r=await api(`/api/fleet/${encodeURIComponent(brain.agent_name)}/${act}`,{method:"POST"}); toast((r.result||"").slice(0,120)); }
+        catch(e){ toast(e.message); }
+        finally{ window._editorBusy=false; allBtns.forEach(x=>x.disabled=false); } }; bar.appendChild(b); });
     // Delete the agent + its brain (the DELETE route existed but had no button). Stops it first server-side.
     const del=el(`<button class="btn ghost" style="margin-left:auto;border-color:#c0506e;color:#ff9bb5">${t("delete")}</button>`);
     del.onclick=async()=>{ if(!confirm(t("delete.confirm").replace("%s",brain.agent_name))) return;
