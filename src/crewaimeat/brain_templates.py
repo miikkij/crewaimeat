@@ -227,3 +227,375 @@ register(
         ],
     )
 )
+
+
+# --------------------------------------------------------------------------------------------------
+# More built-in templates. All reuse the SAME proven loop as topic-watcher (search the live web ->
+# read the best sources with fetch_article_text -> keep raw findings in LOCAL memory -> publish only
+# the refined result upward). Only the role + the task instructions differ, so each one is reliable.
+# --------------------------------------------------------------------------------------------------
+
+# Editor hints shared by these search-based templates (same controls as topic-watcher).
+_STD_POLICY_FIELDS = [
+    {"key": "schedule", "label": "When to run", "type": "schedule", "help": "e.g. every morning at 8"},
+    {"key": "autonomy", "label": "Autonomy", "type": "enum", "help": "act / draft / ask / off"},
+    {"key": "spend_cap", "label": "Spend limit", "type": "money", "help": "hard cap per period"},
+    {"key": "model", "label": "Model", "type": "model", "help": "local (free) or cloud (stronger)"},
+    {"key": "publish_key", "label": "Publish to", "type": "text", "help": "owner memory key for the result"},
+    {"key": "visibility", "label": "Visibility", "type": "enum", "help": "owner / public"},
+]
+
+# The final-answer discipline that keeps a stray record-JSON / tool-call from leaking to the user (the
+# same rule the 0.8.13 work proved is needed for small local models).
+_FINAL_ANSWER_RULE = (
+    "YOUR FINAL ANSWER must be ONLY the clean result itself — plain, readable prose with the source URLs, "
+    "exactly as a person would want to read it. Do NOT output JSON, tool-call syntax, key/visibility "
+    "fields, or the raw record. Just the text."
+)
+_EXPECTED = "Plain readable prose with source URLs, exactly as a person would read it — NOT JSON, not a record."
+
+
+def _default_policy(cron: str | None = "0 8 * * *", autonomy: str = "draft") -> dict:
+    """A fresh policy with the topic-watcher defaults; cron=None means on-demand (no schedule)."""
+    return {
+        "autonomy": autonomy,  # act | draft | ask | off
+        "spend_cap": {"amount": 2, "period": "day", "currency": "EUR"},
+        "model": None,
+        "schedule": {"cron": cron, "timezone": "Europe/Helsinki"} if cron else None,
+        "publish_key": "",
+        "key_mode": "date",
+        "visibility": "owner",
+        "offer_enabled": False,
+    }
+
+
+def _resolve_publish_key(agent_name: str, policy: dict, default_base: str) -> str:
+    """base.<suffix> where suffix follows policy.key_mode (latest|date|timestamp) — same rule as topic-watcher."""
+    import datetime as _dt
+
+    base = (policy.get("publish_key") or "").strip().rstrip(".")
+    if base.endswith(".latest"):
+        base = base[: -len(".latest")]
+    base = base or default_base
+    mode = (policy.get("key_mode") or "date").strip().lower()
+    _now = _dt.datetime.now()
+    suffix = {"date": _now.strftime("%Y-%m-%d"), "timestamp": _now.strftime("%Y-%m-%dT%H-%M-%S")}.get(mode, "latest")
+    return f"{base}.{suffix}"
+
+
+def _run_inputs(ctx: Any, brain: dict, default_prose: str, default_base: str) -> tuple[str, str, str, str]:
+    """(operator prose, this-run request, visibility, publish_key) — shared by the search-based templates."""
+    prose = (brain.get("prose") or default_prose).strip()
+    _task = getattr(ctx, "task", None) or {}
+    _parts = [str(_task.get("title") or "").strip(), str(_task.get("description") or "").strip()]
+    request = "\n".join(p for p in _parts if p) or (getattr(ctx, "prompt", "") or "").strip()
+    policy = brain.get("policy") or {}
+    visibility = (policy.get("visibility") or "owner").strip().lower()
+    publish_key = _resolve_publish_key(brain["agent_name"], policy, default_base)
+    return prose, request, visibility, publish_key
+
+
+def _searcher_agent(ctx: Any, agent_name: str, *, role: str, goal: str, backstory: str):
+    """A web-research agent with the proven toolset: web search + article fetch + local memory + publish."""
+    from crewai import Agent
+
+    from crewaimeat.article_extract import fetch_article_text
+    from crewaimeat.crew import _web_tools
+    from crewaimeat.local_memory import make_local_memory_tools
+
+    return Agent(
+        role=role,
+        goal=goal,
+        backstory=backstory,
+        tools=[*_web_tools(), fetch_article_text, *make_local_memory_tools(agent_name)],
+        llm=ctx.llm,
+        verbose=True,
+    )
+
+
+# ── research-assistant — one-shot Q&A with citations ──────────────────────────────────────────────
+_RESEARCH_PROSE = (
+    "Answer the question given in the task by researching the live web. Read several independent sources, "
+    "give a clear and direct answer, and cite every source you used. Say plainly when something is "
+    "uncertain rather than guessing."
+)
+
+
+def _build_research_assistant(ctx: Any, brain: dict) -> tuple[list, list]:
+    from crewai import Task
+
+    agent_name = brain["agent_name"]
+    prose, request, visibility, publish_key = _run_inputs(ctx, brain, _RESEARCH_PROSE, f"answers.{agent_name}")
+    agent = _searcher_agent(
+        ctx,
+        agent_name,
+        role="Research Assistant",
+        goal="Answer the question accurately by researching the live web and citing every source",
+        backstory=(
+            "You answer questions by doing real research: you search the live web, open the most relevant "
+            "results to read their full text, and you base your answer only on what you actually read — "
+            "always citing the sources. You say plainly when something is unknown or unclear, never guess."
+        ),
+    )
+    task = Task(
+        description=(
+            f"{ctx.today}\n\n"
+            "YOUR STANDING INSTRUCTIONS (from the operator):\n"
+            f"{prose}\n\n"
+            "THE QUESTION TO ANSWER FOR THIS RUN:\n"
+            f"{request or '(none was given — ask the operator to provide a question)'}\n\n"
+            "Do this, in order:\n"
+            "1. Search the live web for the question and open the best results with fetch_article_text to "
+            "read them. Use several independent sources.\n"
+            "2. Save useful findings to your LOCAL memory with `remember` (topic='research', source=the "
+            "site) as you go.\n"
+            "3. Write a clear, direct answer grounded ONLY in what you read, with the source URLs next to "
+            "the claims they support. If the sources disagree or the answer is uncertain, say so.\n"
+            f"4. Publish the answer upward: first `remember` it to get its id, then "
+            f"`publish_memory(id, key='{publish_key}', visibility='{visibility}')`.\n\n"
+            f"{_FINAL_ANSWER_RULE}"
+        ),
+        expected_output=_EXPECTED,
+        agent=agent,
+    )
+    return [agent], [task]
+
+
+register(
+    Template(
+        id="research-assistant",
+        title="Research assistant",
+        description="Ask it a question; it researches the live web, reads sources, and answers with citations.",
+        default_prose=_RESEARCH_PROSE,
+        default_policy=_default_policy(cron=None),  # reactive Q&A, no default schedule
+        build=_build_research_assistant,
+        i18n={
+            "fi": {
+                "title": "Tutkimusassistentti",
+                "description": "Kysy kysymys — se tutkii verkkoa livenä, lukee lähteet ja vastaa lähdeviittauksin.",
+                "default_prose": (
+                    "Vastaa tehtävässä annettuun kysymykseen tutkimalla verkkoa. Lue useita riippumattomia "
+                    "lähteitä, anna selkeä ja suora vastaus ja viittaa jokaiseen käyttämääsi lähteeseen. "
+                    "Sano suoraan jos jokin on epävarmaa, älä arvaa."
+                ),
+            }
+        },
+        policy_fields=_STD_POLICY_FIELDS,
+    )
+)
+
+
+# ── daily-briefing — a short multi-topic morning digest ───────────────────────────────────────────
+_BRIEFING_PROSE = (
+    "Each morning, brief me on these topics (replace this with your own, one per line):\n"
+    "- topic one\n- topic two\n- topic three\n"
+    "For each topic, give the few genuinely new and notable items with their sources, and skip routine noise."
+)
+
+
+def _build_daily_briefing(ctx: Any, brain: dict) -> tuple[list, list]:
+    from crewai import Task
+
+    agent_name = brain["agent_name"]
+    prose, request, visibility, publish_key = _run_inputs(ctx, brain, _BRIEFING_PROSE, f"briefing.{agent_name}")
+    agent = _searcher_agent(
+        ctx,
+        agent_name,
+        role="Briefing Editor",
+        goal="Produce a short, scannable daily briefing across the chosen topics",
+        backstory=(
+            "You write a concise morning briefing. You take a handful of topics, check the live web for what "
+            "is genuinely new on each, and distil it into a short digest a busy person can read in a minute. "
+            "You group by topic and keep only what matters, with sources."
+        ),
+    )
+    task = Task(
+        description=(
+            f"{ctx.today}\n\n"
+            "YOUR STANDING INSTRUCTIONS (the topics to cover + how — from the operator):\n"
+            f"{prose}\n\n"
+            "ANY EXTRA FOCUS FOR THIS RUN (optional):\n"
+            f"{request or '(none — use your standing topics above)'}\n\n"
+            "Do this, in order:\n"
+            "1. Work out the list of TOPICS from your standing instructions (and any extra focus above).\n"
+            "2. For EACH topic, search the live web for what is genuinely new and open the best results with "
+            "fetch_article_text. Save raw findings to LOCAL memory with `remember` (topic='briefing').\n"
+            "3. Write ONE briefing: a short section per topic (a heading + a few lines), each notable item "
+            "with its source URL. For a topic with nothing new, say 'nothing notable'.\n"
+            f"4. Publish the briefing upward: `remember` it, then "
+            f"`publish_memory(id, key='{publish_key}', visibility='{visibility}')`.\n\n"
+            f"{_FINAL_ANSWER_RULE}"
+        ),
+        expected_output=_EXPECTED,
+        agent=agent,
+    )
+    return [agent], [task]
+
+
+register(
+    Template(
+        id="daily-briefing",
+        title="Daily briefing",
+        description="Give it a few topics; each morning it posts a short digest of what's new, with sources.",
+        default_prose=_BRIEFING_PROSE,
+        default_policy=_default_policy(cron="0 7 * * *"),  # 07:00 every morning
+        build=_build_daily_briefing,
+        i18n={
+            "fi": {
+                "title": "Aamukatsaus",
+                "description": "Anna muutama aihe — joka aamu se julkaisee lyhyen koosteen uutuuksista lähteineen.",
+                "default_prose": (
+                    "Tee joka aamu katsaus näistä aiheista (korvaa omillasi, yksi per rivi):\n"
+                    "- aihe yksi\n- aihe kaksi\n- aihe kolme\n"
+                    "Kerro kustakin aiheesta muutama aidosti uusi ja merkittävä kohta lähteineen, ja ohita rutiini."
+                ),
+            }
+        },
+        policy_fields=_STD_POLICY_FIELDS,
+    )
+)
+
+
+# ── page-watcher — watch one URL, report what changed ─────────────────────────────────────────────
+_PAGE_WATCHER_PROSE = (
+    "Watch this page (paste the URL here): https://example.com\n"
+    "Each run, fetch it and tell me what is meaningfully new or changed since last time. Ignore cosmetic "
+    "changes like dates, view counts, or ads."
+)
+
+
+def _build_page_watcher(ctx: Any, brain: dict) -> tuple[list, list]:
+    from crewai import Task
+
+    agent_name = brain["agent_name"]
+    prose, request, visibility, publish_key = _run_inputs(ctx, brain, _PAGE_WATCHER_PROSE, f"page.{agent_name}")
+    agent = _searcher_agent(
+        ctx,
+        agent_name,
+        role="Page Watcher",
+        goal="Report what meaningfully changed on the watched page since last time",
+        backstory=(
+            "You watch one specific web page over time. Each run you fetch its current content, compare it to "
+            "the snapshot you saved last time, and report only what is meaningfully new or changed — ignoring "
+            "cosmetic noise like dates, counters, or ads."
+        ),
+    )
+    task = Task(
+        description=(
+            f"{ctx.today}\n\n"
+            "YOUR STANDING INSTRUCTIONS (which page to watch + what counts as a meaningful change):\n"
+            f"{prose}\n\n"
+            "URL FOR THIS RUN (if given here, use it):\n"
+            f"{request or '(none — use the URL in your standing instructions above)'}\n\n"
+            "Do this, in order:\n"
+            "1. Determine the URL to watch. Fetch its current text with fetch_article_text.\n"
+            "2. Look up your PREVIOUS snapshot: `browse_memory(topic='page-snapshot', limit=1)`; if one "
+            "exists, read it with recall_memory(id).\n"
+            "3. Compare. If there is NO previous snapshot, say this is the first snapshot. Otherwise describe "
+            "what is meaningfully NEW or CHANGED (ignore cosmetic differences). If nothing meaningful "
+            "changed, say so plainly.\n"
+            "4. Save the current content as the new baseline: `remember(topic='page-snapshot', source=the "
+            "URL, body=the current text)`.\n"
+            f"5. Publish your change report upward: `remember` it (topic='page-change'), then "
+            f"`publish_memory(id, key='{publish_key}', visibility='{visibility}')`.\n\n"
+            f"{_FINAL_ANSWER_RULE}"
+        ),
+        expected_output=_EXPECTED,
+        agent=agent,
+    )
+    return [agent], [task]
+
+
+register(
+    Template(
+        id="page-watcher",
+        title="Page watcher",
+        description="Watch one webpage; it reports when something meaningful changes, with the URL.",
+        default_prose=_PAGE_WATCHER_PROSE,
+        default_policy=_default_policy(cron="0 8 * * *"),
+        build=_build_page_watcher,
+        i18n={
+            "fi": {
+                "title": "Sivuvahti",
+                "description": "Seuraa yhtä verkkosivua — raportoi kun jotain merkittävää muuttuu.",
+                "default_prose": (
+                    "Seuraa tätä sivua (liitä URL tähän): https://example.com\n"
+                    "Kerro joka ajolla mikä on merkittävästi uutta tai muuttunut edellisestä kerrasta. Ohita "
+                    "kosmeettiset muutokset kuten päivämäärät, katselukerrat tai mainokset."
+                ),
+            }
+        },
+        policy_fields=_STD_POLICY_FIELDS,
+    )
+)
+
+
+# ── company-watcher — track one company's news ────────────────────────────────────────────────────
+_COMPANY_WATCHER_PROSE = (
+    "Track news and updates about the company named in the task — funding, product launches, leadership "
+    "changes, partnerships, and incidents. Surface only what is genuinely notable, with sources, and skip "
+    "routine noise."
+)
+
+
+def _build_company_watcher(ctx: Any, brain: dict) -> tuple[list, list]:
+    from crewai import Task
+
+    agent_name = brain["agent_name"]
+    prose, request, visibility, publish_key = _run_inputs(ctx, brain, _COMPANY_WATCHER_PROSE, f"company.{agent_name}")
+    agent = _searcher_agent(
+        ctx,
+        agent_name,
+        role="Company Watcher",
+        goal="Surface notable news and updates about the watched company, with sources",
+        backstory=(
+            "You track one company over time. You search the live web for news and updates about it — "
+            "funding, product launches, leadership changes, partnerships, incidents — read the best sources, "
+            "and surface only what is genuinely notable, skipping routine noise."
+        ),
+    )
+    task = Task(
+        description=(
+            f"{ctx.today}\n\n"
+            "YOUR STANDING INSTRUCTIONS (from the operator):\n"
+            f"{prose}\n\n"
+            "THE COMPANY TO TRACK FOR THIS RUN:\n"
+            f"{request or '(none was given — use the company named in your standing instructions above)'}\n\n"
+            "Do this, in order:\n"
+            "1. Identify the COMPANY. Search the live web for its recent news and updates (funding, launches, "
+            "leadership, partnerships, incidents) and open the best results with fetch_article_text.\n"
+            "2. Save raw findings to LOCAL memory with `remember` (topic='company', source=the site).\n"
+            "3. Write a concise summary of the notable items only, each with its source URL. Skip routine "
+            "noise and repeats.\n"
+            f"4. Publish the summary upward: `remember` it, then "
+            f"`publish_memory(id, key='{publish_key}', visibility='{visibility}')`.\n\n"
+            f"{_FINAL_ANSWER_RULE}"
+        ),
+        expected_output=_EXPECTED,
+        agent=agent,
+    )
+    return [agent], [task]
+
+
+register(
+    Template(
+        id="company-watcher",
+        title="Company watcher",
+        description="Track news and updates about a specific company; flags notable items with sources.",
+        default_prose=_COMPANY_WATCHER_PROSE,
+        default_policy=_default_policy(cron="0 8 * * *"),
+        build=_build_company_watcher,
+        i18n={
+            "fi": {
+                "title": "Yritysvahti",
+                "description": "Seuraa tietyn yrityksen uutisia ja päivityksiä — nostaa merkittävät lähteineen.",
+                "default_prose": (
+                    "Seuraa tehtävässä nimetyn yrityksen uutisia ja päivityksiä — rahoitus, tuotejulkaisut, "
+                    "johdon muutokset, kumppanuudet ja häiriöt. Nosta vain aidosti merkittävät kohdat "
+                    "lähteineen ja ohita rutiini."
+                ),
+            }
+        },
+        policy_fields=_STD_POLICY_FIELDS,
+    )
+)

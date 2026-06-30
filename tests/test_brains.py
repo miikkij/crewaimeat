@@ -175,3 +175,27 @@ def test_write_crew_stub(tmp_path, monkeypatch):
     text = (tmp_path / "crews" / "news_watcher_1_crew.py").read_text(encoding="utf-8")
     assert 'AGENT_NAME = "News Watcher 1"' in text
     assert "from crewaimeat.brains import run_brain" in text
+
+
+@pytest.mark.parametrize(
+    "tid", ["topic-watcher", "research-assistant", "daily-briefing", "page-watcher", "company-watcher"]
+)
+def test_every_template_builds(tid, tmp_path, monkeypatch):
+    """Each registered template's build() must construct (agents, tasks) with an interpolated task — this
+    catches a broken prompt/format in any template, not just topic-watcher."""
+    import types
+
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    from crewaimeat import brain_templates as templates
+
+    t = templates.get(tid)
+    ctx = types.SimpleNamespace(
+        llm="ollama/gemma4",  # crewai accepts a string model id; no real LLM needed to build
+        today="Today is 2026-06-30.",
+        task={"title": "Tesla", "description": "latest news"},
+        prompt="",
+    )
+    brain = {"agent_name": "smoke", "prose": t.default_prose, "policy": t.default_policy}
+    agents, tasks = t.build(ctx, brain)
+    assert agents and tasks
+    assert tasks[0].description and "Tesla" in tasks[0].description  # this-run request reached the task
