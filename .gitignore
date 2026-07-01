@@ -25,9 +25,18 @@ logs/
 
 # Self-evolution staging — ehdokas-crewit ennen promootiota (ei committaa, ei skannata fleettiin)
 crews/.candidates/
-.claude
+# Ignore .claude scratch (ad-hoc scripts, local settings, snapshots) but version-control the
+# shared Claude Code agents + skills so the team/next agent inherits the project's conventions.
+.claude/*
+!.claude/agents/
+!.claude/skills/
 blueprint_test.json
 
 # user-specific provider/model priority config (the .example is committed)
 llm_providers.json
 docs/internal/
+
+# Enterprise "Secretary" agent/agency — PRIVATE. Its own nested git repo + private
+# GitHub remote (mirrors the aimeat-protocol `ee/` open-core seam). Never committed
+# to this public repo.
+/secretary/
