@@ -25,8 +25,14 @@ from pathlib import Path
 
 from crewai.tools import tool
 
+from crewaimeat import forge_catalog
+
 # Reads `AGENT_NAME = "..."` from a generated crew file (to check its token/approval).
 _AGENT_NAME_RE = re.compile(r'^\s*AGENT_NAME\s*=\s*["\']([^"\']+)["\']', re.M)
+
+# The legacy top-level web-search import, kept for tool-less crews (no capabilities selected). When
+# crew-forge wires capabilities it emits a `_tools(ctx)` helper instead, which imports what it needs.
+_WEB_IMPORT = "from crewaimeat.crew import _web_tools  # web search: SearXNG if reachable, else keyless DuckDuckGo"
 
 # How the assembled crew file looks. The LLM supplies only build_domain (+ optional
 # helper defs and extra imports); everything else is fixed scaffold wiring.
@@ -46,16 +52,16 @@ from __future__ import annotations
 from crewai import Agent, Task
 
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
-from crewaimeat.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is set, else []
+{imports_block}
 
 AGENT_NAME = "{agent_name}"
-{readme_block}
+{readme_block}{tools_block}{identity_block}{offer_block}
 
 {build_domain_code}
 
 
 def run() -> None:
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain{readme_arg}{temp_arg}))
+    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain{readme_arg}{temp_arg}{crewspec_extra}))
 
 
 if __name__ == "__main__":
@@ -99,6 +105,10 @@ def write_crew_file(
     readme_md: str = "",
     temperature: float | None = None,
     subdir: str | None = None,
+    capabilities: str | list[str] = "",
+    domain: str = "",
+    discover: bool = False,
+    offer: dict | None = None,
 ) -> Path:
     """Assemble crews/<name>_crew.py from the scaffold template + generated build_domain.
 
@@ -122,10 +132,39 @@ def write_crew_file(
         readme_block = ""
         readme_arg = ""
     temp_arg = f", temperature={float(temperature)}" if temperature is not None else ""
+    # crew-forge OWNS the tool bindings: emit a `_tools(ctx)` helper for the selected capabilities so
+    # the generated build_domain only references _tools(ctx)["<id>"], never the factory calls. When no
+    # capability resolves, the file stays tool-less and keeps the legacy _web_tools import available.
+    tools_src, _usable, _dropped = forge_catalog.emit_tools_function(capabilities)
+    tools_block = ("\n" + tools_src + "\n") if tools_src else ""
+    imports_block = "" if tools_src else _WEB_IMPORT
+    # Real identity: derive tags + capabilities from the selected tools + the crew's DOMAIN so a forged
+    # agent is discoverable by what it does (not the generic onboarding defaults). Emit only when there
+    # is signal beyond the bare role tag, so a truly generic crew stays minimal.
+    tags, caps_dict = forge_catalog.derive_identity(capabilities, domain)
+    if domain.strip() or len(tags) > 1 or caps_dict["technical"]:
+        identity_block = f"\n_TAGS = {tags!r}\n_CAPABILITIES = {caps_dict!r}\n"
+        identity_arg = ", tags=_TAGS, capabilities=_CAPABILITIES"
+    else:
+        identity_block = ""
+        identity_arg = ""
+    # Inline offer: the crew advertises its value on the node without a central offers.py entry.
+    if offer:
+        offer_block = f"\n_OFFER = {offer!r}\n"
+        offer_arg = ", offer=_OFFER"
+    else:
+        offer_block = ""
+        offer_arg = ""
+    crewspec_extra = (", discover=True" if discover else "") + identity_arg + offer_arg
     content = _FILE_TEMPLATE.format(
         agent_name=agent_name,
         fname=fname,
         extra_imports=extra,
+        imports_block=imports_block,
+        tools_block=tools_block,
+        identity_block=identity_block,
+        offer_block=offer_block,
+        crewspec_extra=crewspec_extra,
         build_domain_code=build_domain_code.strip("\n"),
         readme_block=readme_block,
         readme_arg=readme_arg,
@@ -150,6 +189,42 @@ def validate_crew_file(path: Path) -> tuple[bool, str]:
         return False, f"validator could not run: {exc}"
     out = (proc.stdout or "").strip() or (proc.stderr or "").strip()
     return proc.returncode == 0, out
+
+
+def dry_run_build(
+    agent_name: str,
+    build_domain_code: str,
+    *,
+    capabilities: str | list[str] = "",
+    domain: str = "",
+    discover: bool = False,
+    offer: dict | None = None,
+    extra_imports: str = "",
+    readme_md: str = "",
+    temperature: float | None = None,
+    subdir: str = ".candidates",
+) -> tuple[bool, str, Path]:
+    """Write a candidate crew to crews/<subdir>/ and validate it — WITHOUT registering or launching.
+
+    The staging subdir (default ``.candidates``) is not scanned by reconcile_fleet, so a dry-run crew
+    is never auto-started, and nothing touches aimeat.io. Returns (ok, detail, path). This is the safe
+    way to prove a generated crew compiles + wires its tools + emits its identity; the eval harness and
+    tests use it.
+    """
+    path = write_crew_file(
+        agent_name,
+        build_domain_code,
+        extra_imports,
+        readme_md,
+        temperature,
+        subdir=subdir,
+        capabilities=capabilities,
+        domain=domain,
+        discover=discover,
+        offer=offer,
+    )
+    ok, detail = validate_crew_file(path)
+    return ok, detail, path
 
 
 # Broad enough to survive small wording changes in the connector's device-auth output.
@@ -461,6 +536,18 @@ def reconcile_fleet() -> str:
 # --------------------------------------------------------------------------- #
 # CrewAI tools handed to the builder agent
 # --------------------------------------------------------------------------- #
+def _capabilities_note(usable: list[str], dropped: list[str]) -> str:
+    """A one-line report of which tool capabilities crew-forge wired vs. could not."""
+    parts = []
+    if usable:
+        parts.append("Wired tools you can reference: " + ", ".join(f'_tools(ctx)["{i}"]' for i in usable) + ".")
+    if dropped:
+        parts.append(
+            "NOT wired (unknown, or unavailable on this machine — do NOT reference these): " + ", ".join(dropped) + "."
+        )
+    return ("\n" + " ".join(parts)) if parts else ""
+
+
 @tool("write_and_validate_crew")
 def write_and_validate_crew(
     agent_name: str,
@@ -468,14 +555,38 @@ def write_and_validate_crew(
     extra_imports: str = "",
     readme_md: str = "",
     temperature: float | None = None,
+    capabilities: str = "",
+    domain: str = "",
+    discover: str = "",
+    offer_ask: str = "",
+    offer_example: str = "",
+    offer_title: str = "",
 ) -> str:
     """Write crews/<agent_name>_crew.py on the locked AIMEAT scaffold and validate it.
 
     Pass ONLY the build_domain function in build_domain_code:
         def build_domain(ctx): ...; return (agents, tasks)
     (plus any helper defs it needs). The scaffold imports, AGENT_NAME, run() and the
-    __main__ guard are added for you; Agent, Task, BuildContext and _web_tools are
-    already imported in the file. Put any additional import lines in extra_imports.
+    __main__ guard are added for you; Agent, Task and BuildContext are already imported.
+    Put any additional NON-tool import lines in extra_imports.
+
+    TOOLS — pass `capabilities` as the comma-separated ids of the tools the crew needs (from the
+    catalog you were given). crew-forge writes a `_tools(ctx)` helper into the file that binds exactly
+    those tools; your build_domain gets them via `T = _tools(ctx)` then e.g. `tools=[*T["web"]]`. You do
+    NOT import tools or call their factories — reference `_tools(ctx)["<id>"]` for each id you listed.
+    Attach only what the job needs; leave capabilities empty for a pure-reasoning crew. Ids that are
+    unknown or unavailable on this machine are dropped and reported (do not reference a dropped id).
+
+    IDENTITY — pass `domain` as a few kebab words for the crew's subject area (e.g.
+    "competitive-intelligence market-research"), and `discover` as "yes" for a researcher / planner /
+    coordinator that should survey the node before acting (else "no"). crew-forge derives real agent
+    tags + capabilities from the selected tools + the domain, so the new agent is discoverable by what
+    it does instead of shipping the generic onboarding defaults.
+
+    OFFER — pass `offer_ask` (what to send the agent + what it returns + what it does NOT do — state the
+    negative scope) and `offer_example` (one concrete example request) so the new agent ADVERTISES its
+    value on the node and others can discover + order it. Leave offer_ask empty to advertise nothing.
+    crew-forge fills the strict enums and derives a title from the agent name.
 
     Pass `readme_md` with the crew's README tab markdown (start it with a FIGLET logo, e.g.
     [[FIGLET:slant]["New Crew"]], then a short description and a "How to task me" line). It is
@@ -487,30 +598,51 @@ def write_and_validate_crew(
     analytical/precise work (research, code, data, summarization, extraction, fact-checking) → ~0.25;
     mixed → ~0.5. Without it the crew runs at the cool .env default, which under-serves creative work.
 
-    Returns 'VALID: ...' when it compiles and build_domain returns a non-empty
-    (agents, tasks). Otherwise returns 'INVALID: <error>' — fix the build_domain code
-    and call this tool again until it is VALID. Overwrites the file each call.
+    Returns 'VALID: ...' (plus which tools were wired) when it compiles and build_domain returns a
+    non-empty (agents, tasks). Otherwise returns 'INVALID: <error>' — fix the build_domain code and
+    call this tool again until it is VALID. Overwrites the file each call.
     """
-    path = write_crew_file(agent_name, build_domain_code, extra_imports, readme_md, temperature)
+    usable, dropped = forge_catalog.resolve(capabilities)
+    disc = str(discover).strip().lower() in ("yes", "true", "1", "on", "y")
+    offer_meta = forge_catalog.build_offer_meta(agent_name, offer_ask, offer_example, title=offer_title)
+    path = write_crew_file(
+        agent_name,
+        build_domain_code,
+        extra_imports,
+        readme_md,
+        temperature,
+        capabilities=capabilities,
+        domain=domain,
+        discover=disc,
+        offer=offer_meta,
+    )
     ok, detail = validate_crew_file(path)
     rel = _rel(path)
+    note = _capabilities_note(usable, dropped)
     if ok:
-        return f"VALID: wrote {rel}. {detail}"
-    return f"INVALID ({rel}): {detail}\nFix the build_domain code and call write_and_validate_crew again."
+        return f"VALID: wrote {rel}. {detail}{note}"
+    return f"INVALID ({rel}): {detail}{note}\nFix the build_domain code and call write_and_validate_crew again."
 
 
-@tool("register_and_launch_crew")
-def register_and_launch_crew(agent_name: str) -> str:
-    """Register the new agent on AIMEAT and launch its crew under the watchdog.
-
-    Call this ONCE, only after write_and_validate_crew returned VALID. Runs
-    `aimeat connect add` (owner from the AIMEAT_OWNER env var) and then starts the crew
-    as a detached background process. Returns a report including the approve step the
-    human must complete on the AIMEAT dashboard and the watchdog log path.
+def register_and_launch(agent_name: str) -> str:
+    """Validate, register, and launch a built crew. PLAIN function (callable from code/tests); the
+    @tool wrapper below is what the builder agent calls. REFUSES to register/launch a crew that does
+    not validate, so a broken crew never reaches the watchdog / crash-loops.
     """
     rel = f"crews/{_fname(agent_name)}"
-    if not (_project_root() / rel).exists():
+    path = _project_root() / rel
+    if not path.exists():
         return f"ERROR: {rel} does not exist. Call write_and_validate_crew first."
+
+    # Guard: NEVER register/launch a crew that does not validate. write_and_validate_crew is meant to
+    # loop to VALID first, but if the builder skipped ahead (or gave up mid-retry), a broken crew would
+    # otherwise get registered + crash-loop under the watchdog. Re-validate here and refuse loudly.
+    ok, detail = validate_crew_file(path)
+    if not ok:
+        return (
+            f"REFUSED to register/launch '{agent_name}': {rel} does not validate.\n{detail}\n"
+            "Fix the build_domain with write_and_validate_crew until it returns VALID, then call this again."
+        )
 
     owner = os.getenv("AIMEAT_OWNER", "").strip()
     if owner:
@@ -536,6 +668,18 @@ def register_and_launch_crew(agent_name: str) -> str:
         f"{launch_line}\n"
         f"Once approved, queue a task for '{agent_name}' from its Tasks tab."
     )
+
+
+@tool("register_and_launch_crew")
+def register_and_launch_crew(agent_name: str) -> str:
+    """Register the new agent on AIMEAT and launch its crew under the watchdog.
+
+    Call this ONCE, only after write_and_validate_crew returned VALID. It RE-VALIDATES first and refuses
+    an invalid crew; on success it runs device-auth (owner from the AIMEAT_OWNER env var) and launches
+    the crew as a detached background process. Returns a report including the approve step the human must
+    complete on the AIMEAT dashboard and the watchdog log path.
+    """
+    return register_and_launch(agent_name)
 
 
 def start_crew(agent_name: str) -> str:

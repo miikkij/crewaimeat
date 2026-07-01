@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from crewai import Agent, Task
 
+from crewaimeat import forge_catalog
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 from crewaimeat.forge import make_forge_tools, make_manage_tools
 
@@ -172,15 +173,20 @@ def _command_domain(ctx: BuildContext, cmd: str, arg: str) -> tuple[list[Agent],
 def _build_domain(ctx: BuildContext, request: str | None = None) -> tuple[list[Agent], list[Task]]:
     llm, today = ctx.llm, ctx.today
     request = request if request is not None else ctx.prompt
+    # Preflight-before-design: the brief lists ONLY the tools actually usable on this machine right
+    # now (e.g. image generation is hidden without OPENROUTER_API_KEY), so the Architect can never
+    # pick a tool that would fail at run time.
+    catalog_brief = forge_catalog.render_catalog_brief()
 
     architect = Agent(
         role="Crew Architect",
         goal="Turn a plain-language request into a concrete new crew: a kebab agent name and a complete build_domain",
         backstory=(
             "You design small, focused CrewAI task-runner crews. You know the AIMEAT scaffold inside "
-            "out: the author writes only build_domain(ctx), passes ctx.llm to every agent, uses "
-            "_web_tools() for web search, and the last task's output is the published deliverable. "
-            "You write clean, minimal Python that the builder can use verbatim."
+            "out: the author writes only build_domain(ctx), passes ctx.llm to every agent, and the last "
+            "task's output is the published deliverable. Tools come from a catalog crew-forge wires for "
+            'you — you pick the ids a job needs and reference them as _tools(ctx)["<id>"], never '
+            "importing a tool or calling its factory. You write clean, minimal Python the builder uses verbatim."
         ),
         llm=llm,
         verbose=True,
@@ -213,42 +219,54 @@ def _build_domain(ctx: BuildContext, request: str | None = None) -> tuple[list[A
             "data, code, summarization, extraction, fact-checking, calculation, classification) -> 0.25; "
             "a genuine mix of both -> 0.5. Pick the single number that best fits the crew's main job.\n"
             "- Write a complete `def build_domain(ctx):` that:\n"
-            "    * builds those Agents, passing llm=ctx.llm to each; add tools=_web_tools() to any "
-            "agent that needs web search;\n"
-            "    * for an agent that must READ or WRITE the owner's MEMORY at specific keys (content / "
-            "data pipelines — e.g. fetch raw material and store it, write own-words articles or an "
-            "editorial to PUBLIC keys an app reads, or read upstream material), add the line "
-            "`from crewaimeat.memory_tools import make_memory_tools` to EXTRA_IMPORTS and give that agent "
-            "tools=[*make_memory_tools(AGENT_NAME)] — write_memory(key, value, visibility) / "
-            "read_memory(key) / list_memory(prefix); AGENT_NAME is a module global in the generated file. "
-            "Use these for EXACT keys with a chosen visibility ('public' = readable with no login), "
-            "because the scaffold's default publish writes only ONE derived owner-visibility key. In that "
-            "agent's Task, name the exact keys to read/write and tell it to READ its inputs first and STOP "
-            "without fabricating if a key is missing;\n"
-            "    * creates Tasks in order; the LAST task's output is the published deliverable;\n"
-            "    * gives the agent that needs the user's request ctx.prompt; prepend ctx.today to any "
-            "time-sensitive Task; set context=[...] on a Task that builds on earlier ones;\n"
+            "    * builds those Agents, passing llm=ctx.llm to each;\n"
+            "    * ATTACHES TOOLS via the catalog below: if any agent needs a tool, make the FIRST line "
+            'of build_domain `T = _tools(ctx)` and pass the lists an agent needs, e.g. tools=[*T["web"]] '
+            'or tools=[*T["web"], *T["schedule"]]. Reference ONLY ids you list in CAPABILITIES; never '
+            "import a tool or call its factory — crew-forge writes _tools(ctx) for you. For an agent "
+            'that reads/writes the owner\'s memory at EXACT keys, use _tools(ctx)["memory"] and, in its '
+            "Task, name the exact keys and tell it to READ its inputs first and STOP without fabricating "
+            "if a key is missing;\n"
+            "    * builds Tasks using ONLY real CrewAI fields — "
+            'Task(description="...", expected_output="...", agent=<agent>[, context=[earlier_task, ...]]). '
+            "Do NOT invent kwargs: there is NO name=, prompt=, output_key=, or config= on Task or Agent. "
+            "EVERY Task needs a string description AND a string expected_output. The LAST task's output "
+            "is the published deliverable;\n"
+            "    * MUST weave the user's request into a task by putting ctx.prompt INSIDE a description "
+            'string (e.g. description=f"...{ctx.prompt}..."), NOT as a prompt= kwarg — do this for EVERY '
+            "crew, including app builders, so the crew acts on what the user actually asked. Prepend "
+            "ctx.today to time-sensitive Tasks. To chain, set context=[earlier_task] where the items are "
+            "Task VARIABLES you defined above — never strings;\n"
             "    * returns (agents, tasks) as a 2-tuple of lists.\n"
-            "- Do NOT write imports, AGENT_NAME, run(), or any AIMEAT/onboarding/daemon/memory code — "
-            "the scaffold provides all of it. Agent, Task, BuildContext and _web_tools are already "
-            "imported in the target file.\n"
+            "- Do NOT write imports, AGENT_NAME, run(), tool factory calls, or any AIMEAT/onboarding/"
+            "daemon code — the scaffold and crew-forge provide all of it. Agent, Task and BuildContext "
+            "are already imported; tools arrive through _tools(ctx).\n\n"
+            f"{catalog_brief}\n\n"
             "- Also write a short README for the new crew's README tab: start with a FIGLET logo "
             'directive like [[FIGLET:slant]["New Crew"]] (use the agent name, words spaced), then a '
             "one-line description of what it does and a short 'How to task me' line. Plain markdown.\n\n"
-            "Output EXACTLY these five labeled sections, nothing else, so the builder can use them "
+            "Output EXACTLY these ten labeled sections, nothing else, so the builder can use them "
             "verbatim:\n"
             "AGENT_NAME: <kebab-name>\n"
             "TEMPERATURE: <single number, e.g. 0.7 / 0.5 / 0.25, chosen from the role per the rule above>\n"
+            "CAPABILITIES: <comma-separated tool ids you used from the catalog, or leave empty for none>\n"
+            "DOMAIN: <a few kebab-case words naming the subject area, e.g. competitive-intelligence "
+            "market-research — used to give the agent a real, discoverable identity>\n"
+            "DISCOVER: <yes if this is a researcher / planner / coordinator that should survey what "
+            "already exists on the node before acting; otherwise no>\n"
+            "OFFER_ASK: <one sentence: what to send this agent + what it returns + what it does NOT do "
+            "(state the negative scope), so others can discover and order it; leave empty to advertise nothing>\n"
+            "OFFER_EXAMPLE: <one concrete example request, or leave empty>\n"
             "EXTRA_IMPORTS:\n"
-            "<extra import lines, or leave this empty>\n"
+            "<extra NON-tool import lines, or leave this empty>\n"
             "README:\n"
             "<the README markdown for the new crew>\n"
             "BUILD_DOMAIN:\n"
             "<the full def build_domain(ctx): ... function text>"
         ),
         expected_output=(
-            "The five labeled sections AGENT_NAME, TEMPERATURE, EXTRA_IMPORTS, README, BUILD_DOMAIN, "
-            "with a complete, ready-to-write build_domain function."
+            "The ten labeled sections AGENT_NAME, TEMPERATURE, CAPABILITIES, DOMAIN, DISCOVER, OFFER_ASK, "
+            "OFFER_EXAMPLE, EXTRA_IMPORTS, README, BUILD_DOMAIN, with a complete build_domain function."
         ),
         agent=architect,
     )
@@ -257,9 +275,11 @@ def _build_domain(ctx: BuildContext, request: str | None = None) -> tuple[list[A
             "Bring the Crew Architect's design above to life. Work ONE tool call at a time — never "
             "fire several in the same turn.\n"
             "1. Call write_and_validate_crew with the architect's AGENT_NAME (as agent_name), the "
-            "BUILD_DOMAIN code (as build_domain_code), EXTRA_IMPORTS (as extra_imports), the "
-            "README markdown (as readme_md), and the architect's TEMPERATURE number (as temperature) "
-            "so the new crew runs at the temperature its role calls for.\n"
+            "BUILD_DOMAIN code (as build_domain_code), the CAPABILITIES ids (as capabilities), the "
+            "DOMAIN words (as domain), the DISCOVER flag (as discover), OFFER_ASK (as offer_ask), "
+            "OFFER_EXAMPLE (as offer_example), EXTRA_IMPORTS (as extra_imports), the README markdown "
+            "(as readme_md), and the architect's TEMPERATURE number (as temperature) so the new crew "
+            "runs at the temperature its role calls for.\n"
             "2. If it returns INVALID, fix the build_domain code from the error and call "
             "write_and_validate_crew again. Repeat until it returns VALID.\n"
             "3. Once VALID, call register_and_launch_crew ONCE with the same agent_name.\n"

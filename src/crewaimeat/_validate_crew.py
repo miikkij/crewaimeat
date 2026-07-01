@@ -16,6 +16,12 @@ import sys
 import traceback
 
 
+def _is_toollike(t: object) -> bool:
+    """True if `t` is a real crewai tool object, not a raw container. Catches the classic mistake of
+    attaching a factory's (tools, state) tuple without unpacking (a list/dict/tuple/str slips in)."""
+    return not isinstance(t, (list, tuple, dict, str)) and hasattr(t, "name")
+
+
 def _validate(path: str) -> tuple[bool, str]:
     spec = importlib.util.spec_from_file_location("_candidate_crew", path)
     if spec is None or spec.loader is None:
@@ -50,6 +56,19 @@ def _validate(path: str) -> tuple[bool, str]:
     bad_task = next((t for t in tasks if not isinstance(t, Task)), None)
     if bad_task is not None:
         return False, f"every task must be a crewai Task (got {type(bad_task).__name__})"
+
+    # Tool sanity: every entry an agent carries in `tools` must be a real tool object, not a raw
+    # container. The classic mistake is attaching a factory's (tools, state) tuple without unpacking
+    # (tools=make_x(...) instead of tools=[*make_x(...)]), or splatting a tuple so a state dict lands
+    # in the list. Catch it here with a clear message instead of a confusing failure at kickoff.
+    for a in agents:
+        for t in getattr(a, "tools", None) or []:
+            if not _is_toollike(t):
+                role = getattr(a, "role", "?")
+                return False, (
+                    f"agent '{role}' has a non-tool in its tools ({type(t).__name__}) — a tool factory "
+                    "likely returned (tools, state) and was not unpacked; use tools=[*make_x(AGENT_NAME)]"
+                )
 
     return True, f"{len(agents)} agents, {len(tasks)} tasks"
 
