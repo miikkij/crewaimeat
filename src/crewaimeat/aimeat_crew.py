@@ -214,6 +214,12 @@ class CrewSpec:
     #   agent receives text it already advertised, and its LLM interprets the filled params (no rigid
     #   parse). May be a CALLABLE(agent_name)->list so an agent can GENERATE commands from LIVE state (e.g.
     #   one "Ask <specialist>" command per live agent it can delegate to — the menu reflects who's up now).
+    mode: str | None = None  # AIMEAT agent MODE, set on every start via aimeat_agent_mode_set (self). One
+    #   of autonomous|interactive|task-runner|coordinator|workstation. None -> DERIVED: dm_serviceable /
+    #   self_monitor crews keep the interactive message surface; every other crewaimeat crew is a
+    #   "task-runner". WHY it matters: the node defaults a device-authed agent with no mode to 'interactive',
+    #   which gates every created task behind a manual 'Start this task'. task-runner mode makes the node
+    #   AUTO-ACTIVATE tasks on create (test runs + real work just run) and serves the shorter 7-step onboarding.
     tags: list[str] | None = None  # capability TAGS set on the agent via aimeat_agent_tags_set
     #   on every start (idempotent, so they survive re-onboarding). The ecosystem-app agent picker
     #   matches on these (+ capabilities/domain), so e.g. tags=["feedback-analysis"] makes the agent the
@@ -1508,6 +1514,17 @@ def _publish_readme(agent_name: str, readme_md: str, commands: list[dict] | None
     print(f"[{agent_name}] published README to agents.{agent_name}.readme: {bool(res)}", file=sys.stderr)
 
 
+def _effective_mode(spec: CrewSpec) -> str:
+    """The AIMEAT agent mode to set on start. Explicit `spec.mode` wins; otherwise crewaimeat crews are
+    task-runners — EXCEPT DM-serviceable / self-monitoring crews, which need the interactive message
+    surface (chat/inbox) that task-runner mode drops, so they stay 'interactive'."""
+    if spec.mode:
+        return spec.mode
+    if spec.dm_serviceable or spec.self_monitor:
+        return "interactive"
+    return "task-runner"
+
+
 def run_crew(spec: CrewSpec) -> None:
     """Entry point: ensure onboarding once, then run the daemon forever.
 
@@ -1542,6 +1559,17 @@ def run_crew(spec: CrewSpec) -> None:
     #    to be accepted rather than crash-looping in onboarding. Lets an unattended crew
     #    come online by itself once approved (no console needed).
     _wait_for_auth(spec.agent_name, spec.owner, spec.wait_for_approval_seconds)
+
+    # 0b) Set the agent's MODE (idempotent, every start, BEFORE onboarding so the node serves the mode's
+    #     step list). crewaimeat crews are task-runners; the node otherwise defaults a device-authed agent
+    #     with no mode to 'interactive', which gates every created task behind a manual 'Start this task' in
+    #     the dashboard. task-runner mode makes the node AUTO-ACTIVATE tasks on create — test runs and real
+    #     work just run. (The connector dropped device-auth's --mode flag, so we set it here, not at register.)
+    _mode = _effective_mode(spec)
+    _mres = _aimeat_call(
+        spec.agent_name, "aimeat_agent_mode_set", {"target_agent_name": spec.agent_name, "mode": _mode}
+    )
+    print(f"[{spec.agent_name}] set agent mode = {_mode}: {bool(_mres)}", file=sys.stderr)
 
     # 1) Ensure Hello Integration once (one-shot, best-effort) before the daemon. Skip if we already tried
     #    recently: a node step with no matching tool can never reach "completed", and re-onboarding on every

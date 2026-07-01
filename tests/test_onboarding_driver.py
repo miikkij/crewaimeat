@@ -85,6 +85,25 @@ def test_run_onboarding_only_handles_old_node(monkeypatch):
     ac._run_onboarding_only("my-crew")  # must NOT raise
 
 
+# ── _effective_mode: crewaimeat crews are task-runners (so tasks auto-activate, no manual Start) ──
+def _spec(**kw):
+    return ac.CrewSpec(agent_name="x", build_domain=lambda ctx: ([], []), **kw)
+
+
+def test_effective_mode_defaults_task_runner():
+    assert ac._effective_mode(_spec()) == "task-runner"
+
+
+def test_effective_mode_dm_or_self_monitor_stays_interactive():
+    assert ac._effective_mode(_spec(dm_serviceable=True)) == "interactive"
+    assert ac._effective_mode(_spec(self_monitor=True)) == "interactive"
+
+
+def test_effective_mode_explicit_override_wins():
+    assert ac._effective_mode(_spec(mode="coordinator")) == "coordinator"
+    assert ac._effective_mode(_spec(mode="task-runner", dm_serviceable=True)) == "task-runner"
+
+
 def test_run_onboarding_only_seeds_services(monkeypatch):
     _patch_serve(monkeypatch)
     calls: list = []
