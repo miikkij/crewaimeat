@@ -229,6 +229,11 @@ class CrewSpec:
     #   self-reported via aimeat_agent_capabilities_report on every start (OVERWRITES the set). Advertise
     #   SPECIFIC capabilities (what this agent actually does — e.g. domain "consumes:feedback-stats@1")
     #   over the liaison's generic onboarding defaults; the picker's matcher reads technical + domain.
+    offer: dict | None = None  # an inline crew_offer-shape offer META (id/title/ask/example/cost/latency/
+    #   repeatability/verification/consequences[/sample]) this agent ADVERTISES so others can discover +
+    #   request its value. Published on every start via publish_meta_offer — for a forged crew this is how
+    #   it advertises WITHOUT a central offers.py entry. None = advertise nothing. Mirrors brain_templates
+    #   Template.offer.
     temperature: float | None = None  # ENFORCE a fixed LLM temperature for this crew, regardless of
     #   the .env LLM_TEMPERATURE default and without per-task classification. Use it for single-purpose
     #   crews whose nature is fixed: a creative service (jokes, jingles, taglines) should declare
@@ -531,7 +536,13 @@ def _serve_api() -> tuple[str, requests.Session] | None:
         try:
             doc = ensure_serve(auto_start=False)
             _SERVE_STATE["base"] = f"http://127.0.0.1:{doc['port']}"
-            _SERVE_STATE["session"] = requests.Session()
+            # All loopback calls hit ONE host (127.0.0.1), and this one shared Session is used by every
+            # agent thread in the fleet host — so requests' default per-host pool (10) fills under the
+            # fleet's concurrency (46 agents + parallel EXECUTE) and urllib3 logs "Connection pool is
+            # full, discarding connection" (harmless, but it churns TCP). A bigger pool reuses instead.
+            _sess = requests.Session()
+            _sess.mount("http://", requests.adapters.HTTPAdapter(pool_connections=16, pool_maxsize=64))
+            _SERVE_STATE["session"] = _sess
             return _SERVE_STATE["base"], _SERVE_STATE["session"]
         except Exception as exc:  # noqa: BLE001
             if not _SERVE_STATE["warned"]:
@@ -798,6 +809,62 @@ _ONBOARDING_TOOL_FILTER: tuple[str, ...] = (
 )
 
 
+def _finish_pending_onboarding(tools, agent_name: str, step_args: dict) -> None:
+    """Safety net for the mode-change re-derivation race.
+
+    ``aimeat_agent_mode_set`` (run just before onboarding) triggers a node-side re-derivation of the
+    onboarding step list to fit the new mode. If that write lands AFTER the deterministic driver's first
+    ``aimeat_onboarding_status`` read, the driver sees a stale ``completable=true`` and returns without
+    driving the api_call steps (identify_platform / install_skill / publish_config) — leaving a fully
+    functional agent stuck at e.g. 4/7. So settle for the re-derivation, then drive ANY still-pending
+    REQUIRED step directly from its ``step_guide`` howTo (the same tool + node-supplied args the driver
+    would use). This acts on the real pending set, not the racy ``completable`` flag, so it is robust even
+    if the flag is momentarily stale. Best-effort — never raises."""
+    status_tool = next((t for t in tools if getattr(t, "name", None) == "aimeat_onboarding_status"), None)
+    if status_tool is None:
+        return
+    time.sleep(1.5)  # let the node's mode re-derivation land before we read the pending set
+    try:
+        raw = status_tool.run()
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception as exc:  # noqa: BLE001 — verification is best-effort
+        print(f"[{agent_name}] onboarding verify: status re-read failed ({exc!r})", file=sys.stderr)
+        return
+    data = data or {}
+    steps = (data.get("onboarding") or {}).get("steps") or []
+    guide = data.get("step_guide") or {}
+    pending_required = [s for s in steps if s.get("required") and s.get("status") != "passed"]
+    if not pending_required:
+        return
+    print(
+        f"[{agent_name}] onboarding: {len(pending_required)} required step(s) still pending after the "
+        "driver (mode re-derivation race) — driving them directly.",
+        file=sys.stderr,
+    )
+    for s in pending_required:
+        sid = s.get("id")
+        how = guide.get(sid) or {}
+        tool_name = how.get("tool")
+        if not tool_name:
+            continue  # passive step: the final status re-read below refreshes lastSeen so it auto-passes
+        tool = next((t for t in tools if getattr(t, "name", None) == tool_name), None)
+        if tool is None:
+            continue
+        args = dict(step_args.get(sid) or how.get("args") or {})
+        if tool_name == "aimeat_memory_write":
+            args.setdefault("visibility", "owner")
+        try:
+            tool.run(**args)
+            print(f"[{agent_name}]   {sid} -> {tool_name}: ok", file=sys.stderr)
+        except Exception as exc:  # noqa: BLE001 — report; a functional agent is already authorized
+            print(f"[{agent_name}]   {sid} -> {tool_name} raised: {exc!r}", file=sys.stderr)
+    # A final status read lets checkAutoSteps pass the automatic steps (e.g. publish_config).
+    try:
+        status_tool.run()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _run_onboarding_only(
     agent_name: str, services: list[dict] | None = None, commands: list[dict] | None = None
 ) -> None:
@@ -851,6 +918,9 @@ def _run_onboarding_only(
                 sleep_seconds=1.0,  # a beat between rounds so passive steps (configure_delivery) register
                 logger=lambda m: print(f"[{agent_name}] {m}", file=sys.stderr),
             )
+            # Safety net: if the mode-change re-derivation landed after the driver's first status read,
+            # the driver may have returned on a stale completable=true — drive any leftover required step.
+            _finish_pending_onboarding(liaison.tools, agent_name, step_args)
             # declare_services is OPTIONAL (the required-only driver skips it) — seed it for discoverability.
             if services:
                 ds = next(
@@ -1657,9 +1727,16 @@ def run_crew(spec: CrewSpec) -> None:
     #      'untested'). Only agents with an authored offer publish; best-effort — a publish failure is
     #      logged loud but never blocks the daemon start. Lazy import avoids an import cycle with offers.
     try:
-        from crewaimeat.offers import CREW_AGENTS, PILOT_AGENTS, publish_offers_any
+        from crewaimeat.offers import CREW_AGENTS, PILOT_AGENTS, publish_meta_offer, publish_offers_any
 
-        if spec.agent_name in CREW_AGENTS or spec.agent_name in PILOT_AGENTS:
+        if spec.offer:
+            # A forged / template crew advertises its ONE inline offer without a central offers.py entry.
+            ok, detail = publish_meta_offer(spec.agent_name, spec.offer, with_sample=True)
+            print(
+                f"[{spec.agent_name}] inline offer {'published' if ok else 'publish failed: ' + detail}",
+                file=sys.stderr,
+            )
+        elif spec.agent_name in CREW_AGENTS or spec.agent_name in PILOT_AGENTS:
             publish_offers_any(spec.agent_name, with_samples=True)
     except Exception as exc:  # noqa: BLE001
         print(f"[{spec.agent_name}] offer publish skipped ({exc!r})", file=sys.stderr)
