@@ -109,6 +109,7 @@ def write_crew_file(
     domain: str = "",
     discover: bool = False,
     offer: dict | None = None,
+    remember: bool = False,
 ) -> Path:
     """Assemble crews/<name>_crew.py from the scaffold template + generated build_domain.
 
@@ -155,7 +156,11 @@ def write_crew_file(
     else:
         offer_block = ""
         offer_arg = ""
-    crewspec_extra = (", discover=True" if discover else "") + identity_arg + offer_arg
+    # memory=True is a CrewSpec-level toggle emitted exactly like discover (the template already renders
+    # CrewSpec fields via crewspec_extra). It gives the forged crew persistent CrewAI memory across runs.
+    crewspec_extra = (
+        (", discover=True" if discover else "") + (", memory=True" if remember else "") + identity_arg + offer_arg
+    )
     content = _FILE_TEMPLATE.format(
         agent_name=agent_name,
         fname=fname,
@@ -199,6 +204,7 @@ def dry_run_build(
     domain: str = "",
     discover: bool = False,
     offer: dict | None = None,
+    remember: bool = False,
     extra_imports: str = "",
     readme_md: str = "",
     temperature: float | None = None,
@@ -222,6 +228,7 @@ def dry_run_build(
         domain=domain,
         discover=discover,
         offer=offer,
+        remember=remember,
     )
     ok, detail = validate_crew_file(path)
     return ok, detail, path
@@ -548,6 +555,104 @@ def _capabilities_note(usable: list[str], dropped: list[str]) -> str:
     return ("\n" + " ".join(parts)) if parts else ""
 
 
+# --------------------------------------------------------------------------- #
+# Precedent memory — crew-forge remembers what it built and recalls it as priors
+# --------------------------------------------------------------------------- #
+_FORGE_STORE: list = []  # lazy one-shot cache: [PipelineStore | None] once opened (embedder probe once/run)
+
+
+def _forge_store():
+    """crew-forge's own build-experience store (scope=agent: ONE brain across all requesters — orders
+    are rarely owner-specific and design experience compounds). None (logged loud once) when no
+    embedder is reachable; every precedent feature then just switches off for the run."""
+    if not _FORGE_STORE:
+        from crewaimeat.pipeline_memory import open_store
+
+        _FORGE_STORE.append(open_store("crew-forge"))
+    return _FORGE_STORE[0]
+
+
+def _precedent_rating(built_agent: str) -> str:
+    """The built agent's CURRENT field reputation as a compact suffix (fetched LIVE at recall time so
+    a precedent shows today's score, never a stale snapshot). "" when unrated/unreachable — advisory."""
+    try:
+        # Same-package reuse of the coordinator-side reputation reader (roster gaii map + public
+        # selection/benchmark keys) — ratings live on the node, memory only links to them by name.
+        from crewaimeat.workflow import _gaii_map, _reputation
+
+        gaii = _gaii_map(AGENT_NAME_FORGE).get(built_agent)
+        suffix, _sel, _bench = _reputation(AGENT_NAME_FORGE, built_agent, gaii)
+        return suffix or ""
+    except Exception as exc:  # noqa: BLE001 — reputation is advisory; a node hiccup must not block a design
+        print(f"[forge] precedent rating unavailable for {built_agent} ({type(exc).__name__})", file=sys.stderr)
+        return ""
+
+
+AGENT_NAME_FORGE = "crew-forge"  # forge's own AIMEAT identity (token used for public reputation reads)
+
+
+def forge_precedent_block(request: str, k: int = 3) -> str:
+    """A PRECEDENT prompt block for the Architect: the most similar past orders crew-forge built,
+    each with its design summary and live field rating. "" when memory is unavailable, the store is
+    empty, or nothing is similar enough — always safe to concatenate."""
+    store = _forge_store()
+    if store is None or not (request or "").strip():
+        return ""
+    # 0.5 bar measured empirically (E2E on nomic): a genuinely-similar order scored 0.55, an unrelated
+    # one 0.467 — 0.45 let the unrelated one through, 0.5 cuts it while keeping the true match.
+    hits = [h for h in store.recall(request, k=k, category="build") if h.score >= 0.5]
+    if not hits:
+        return ""
+    lines = [
+        "PRECEDENT — the most similar crews you have designed before, with their CURRENT field "
+        "reputation. Use them as priors: lean toward what a well-rated similar build chose "
+        "(capabilities, agent count, temperature); do not copy blindly — the catalog and the rules "
+        "above still govern, and this order's specifics win:"
+    ]
+    for i, h in enumerate(hits, 1):
+        name = str(h.metadata.get("agent_name") or "?")
+        rating = _precedent_rating(name)
+        body = h.content if len(h.content) <= 400 else h.content[:400] + " ..."
+        lines.append(f"{i}. agent '{name}'{rating}\n   {body}")
+    return "\n".join(lines)
+
+
+def _remember_build(
+    request: str,
+    agent_name: str,
+    *,
+    capabilities: str,
+    domain: str,
+    discover: bool,
+    remember: bool,
+    temperature: float | None,
+    detail: str,
+) -> None:
+    """Store one VALID build as forge experience (order -> design). Only called with a non-empty
+    original request (evals/tests never pass one, so they never write) and only for a VALID result
+    (the Builder retries INVALID ones in a loop — storing each retry would spam near-duplicates)."""
+    store = _forge_store()
+    if store is None:
+        return
+    import datetime as _dt
+
+    text = (
+        f"ORDER: {request.strip()[:600]}\n"
+        f"DESIGN: agent={agent_name}; capabilities={capabilities or '(none)'}; domain={domain or '-'}; "
+        f"discover={discover}; memory={remember}; temperature={temperature}\n"
+        f"RESULT: VALID — {detail[:150]}"
+    )
+    store.remember(
+        text,
+        source="forge-build",
+        metadata={
+            "category": "build",
+            "agent_name": agent_name,
+            "date": _dt.date.today().isoformat(),
+        },
+    )
+
+
 @tool("write_and_validate_crew")
 def write_and_validate_crew(
     agent_name: str,
@@ -558,9 +663,11 @@ def write_and_validate_crew(
     capabilities: str = "",
     domain: str = "",
     discover: str = "",
+    memory: str = "",
     offer_ask: str = "",
     offer_example: str = "",
     offer_title: str = "",
+    request: str = "",
 ) -> str:
     """Write crews/<agent_name>_crew.py on the locked AIMEAT scaffold and validate it.
 
@@ -583,6 +690,15 @@ def write_and_validate_crew(
     tags + capabilities from the selected tools + the domain, so the new agent is discoverable by what
     it does instead of shipping the generic onboarding defaults.
 
+    MEMORY — pass `memory` as "yes" ONLY when the crew genuinely needs to REMEMBER across separate runs
+    (a personal assistant that recalls preferences, an agent that builds on its own prior work). This is
+    CrewAI's built-in persistent memory (embedder-backed) — distinct from the `memory` CAPABILITY, which
+    is an in-crew tool for reading/writing the owner's node memory at exact keys. Default "no" — most
+    task-runners are stateless and should stay so. PREREQUISITE (state it to the user): memory needs a
+    reachable embedder — local ollama with an embedding model pulled (`ollama pull nomic-embed-text`,
+    free/private), else NVIDIA_API_KEY (free cloud) or DASHSCOPE_API_KEY (paid). Without one the crew
+    fails loud at run time.
+
     OFFER — pass `offer_ask` (what to send the agent + what it returns + what it does NOT do — state the
     negative scope) and `offer_example` (one concrete example request) so the new agent ADVERTISES its
     value on the node and others can discover + order it. Leave offer_ask empty to advertise nothing.
@@ -598,12 +714,17 @@ def write_and_validate_crew(
     analytical/precise work (research, code, data, summarization, extraction, fact-checking) → ~0.25;
     mixed → ~0.5. Without it the crew runs at the cool .env default, which under-serves creative work.
 
+    PRECEDENT — pass `request` as the user's ORIGINAL plain-language order (verbatim). A VALID build
+    is remembered as forge experience (order -> design), so future similar orders get your design +
+    its field rating as a prior. Leave empty only if no original order text exists.
+
     Returns 'VALID: ...' (plus which tools were wired) when it compiles and build_domain returns a
     non-empty (agents, tasks). Otherwise returns 'INVALID: <error>' — fix the build_domain code and
     call this tool again until it is VALID. Overwrites the file each call.
     """
     usable, dropped = forge_catalog.resolve(capabilities)
     disc = str(discover).strip().lower() in ("yes", "true", "1", "on", "y")
+    remember = str(memory).strip().lower() in ("yes", "true", "1", "on", "y")
     offer_meta = forge_catalog.build_offer_meta(agent_name, offer_ask, offer_example, title=offer_title)
     path = write_crew_file(
         agent_name,
@@ -615,11 +736,33 @@ def write_and_validate_crew(
         domain=domain,
         discover=disc,
         offer=offer_meta,
+        remember=remember,
     )
     ok, detail = validate_crew_file(path)
     rel = _rel(path)
     note = _capabilities_note(usable, dropped)
+    if remember:
+        # Surface the memory prerequisite at build time (never gate — memory is a runtime concern that
+        # fails loud in run_crew if no embedder is reachable). A non-blocking heads-up for the operator.
+        try:
+            from crewaimeat.embedder_cascade import memory_preflight
+
+            _ok, _why = memory_preflight()
+            note += f"\nMEMORY ON: {'embedder ready — ' + _why if _ok else 'PREREQUISITE NOT MET — ' + _why}"
+        except Exception as exc:  # noqa: BLE001 — the preflight note is best-effort, never blocks validation
+            note += f"\nMEMORY ON: could not check the embedder prerequisite here ({type(exc).__name__}; checked at run time)."
     if ok:
+        if request.strip():  # evals/tests pass no request -> no memory writes (offline-safe by design)
+            _remember_build(
+                request,
+                agent_name,
+                capabilities=capabilities,
+                domain=domain,
+                discover=disc,
+                remember=remember,
+                temperature=temperature,
+                detail=detail,
+            )
         return f"VALID: wrote {rel}. {detail}{note}"
     return f"INVALID ({rel}): {detail}{note}\nFix the build_domain code and call write_and_validate_crew again."
 

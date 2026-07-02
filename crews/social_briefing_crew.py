@@ -78,7 +78,29 @@ CHAT_COMMANDS = [
 
 def _curate(pasted: str, topics: list[str], today: str, llm) -> str:
     """LLM curation: raw pasted Grok/Reddit text -> a structured digest (signals by topic + assessment +
-    thread suggestions). No tools — the human already gathered the data; the crew only structures it."""
+    thread suggestions). No tools — the human already gathered the data; the crew only structures it.
+
+    DELTA MEMORY: the most similar PAST digests are shown to the analyst so a recurring signal is
+    reported as its delta ("seen 30.6 — what's new: ..."), not re-announced daily as fresh. Optional
+    enhancement — memory degrades LOUD to None and the briefing still ships."""
+    from crewaimeat.pipeline_memory import open_store
+
+    store = open_store(AGENT_NAME)
+    seen = (
+        store.prior_art_block(
+            pasted[:4000],
+            k=3,
+            min_score=0.45,
+            label="ALREADY BRIEFED (recent digests)",
+            category="briefing",
+            instruction=(
+                "these went to the user in earlier briefings. A signal repeated below is NOT news — "
+                "either omit it or mark it '(seen before)' and report only what CHANGED:"
+            ),
+        )
+        if store
+        else ""
+    )
     analyst = Agent(
         role="Social Signal Analyst",
         goal=(
@@ -109,7 +131,7 @@ def _curate(pasted: str, topics: list[str], today: str, llm) -> str:
             "Specific posts/threads worth replying to, each with a one-line ANGLE for how to engage "
             "(only ones actually present in the pasted text; if none, say so).\n\n"
             "Rules: never fabricate posts or links that aren't in the pasted text; if a topic has no "
-            "signal, omit it; be concise and skimmable."
+            "signal, omit it; be concise and skimmable." + (f"\n\n{seen}" if seen else "")
         ),
         expected_output="A skimmable markdown briefing: By topic / What matters today / Threads to join.",
         agent=analyst,

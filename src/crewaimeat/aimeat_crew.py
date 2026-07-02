@@ -163,6 +163,24 @@ class CrewSpec:
     #   I/O-bound crews (mostly waiting on the LLM). PROPOSE + inbox stay serial on the shared liaison.
     memory_key_prefix: str | None = None  # default: crews.<agent_name>
     manager_agent: Any = None  # only for Process.hierarchical
+    memory: bool = False  # opt-in CrewAI crew memory (remember across runs). OFF by default so crews stay
+    #   stateless. When True the per-task Crew gets an embedder-backed, scoped Memory so it recalls prior
+    #   runs, with its analysis LLM routed through this crew's own get_llm chain (NOT the OpenAI default).
+    #   PREREQUISITE: a reachable embedder — local ollama with an embedding model pulled (free/private;
+    #   `ollama pull nomic-embed-text`), else NVIDIA_API_KEY (free cloud) or DASHSCOPE_API_KEY (qwen, paid).
+    #   If memory is ON and NONE is reachable the crew FAILS LOUD at build (no silent stateless fallback).
+    #   Storage is scoped per owner/agent/principal under AIMEAT_HOME so crews never cross-read. See
+    #   crewaimeat.embedder_cascade. Spreads like `verify` — opt-in per crew.
+    memory_embedder: dict | None = None  # explicit CrewAI embedder config ({provider, config}) that
+    #   BYPASSES the ollama->nvidia->qwen cascade. None -> the cascade probes and picks the first reachable
+    #   tier. Ignored when memory is False.
+    memory_scope: str = "principal"  # storage isolation when memory is ON: "principal" (default: a
+    #   SEPARATE memory per caller — a DM sender's ghii, a delegating agent, else the owner — so a crew never
+    #   recalls the wrong caller's data), "agent" (ONE shared brain across all the owner's callers, for a
+    #   deliberate knowledge accumulator), or "session" (ephemeral, resets per task).
+    embedder_bias: str | None = None  # cost-vs-privacy bias for the embedder cascade: "privacy" (default:
+    #   local ollama first, then paid-private qwen; the free-but-cloud nvidia tier is DROPPED) or "cost"
+    #   (promote the FREE nvidia tier ahead of paid qwen). None -> the EMBEDDER_BIAS env default ("privacy").
     owner: str | None = None  # AIMEAT owner; set only if the agent name is ambiguous
     max_idle_auth_failures: int = 10  # idle cycles with a rejected token before exiting for re-auth
     idle_hook: Any = None  # optional DETERMINISTIC callable run on idle cycles (throttled to
@@ -784,6 +802,42 @@ def _memory_key(agent_name: str, prefix: str | None, task: dict) -> str:
     token = f"{slug}-{short}" if slug else short
     base = prefix or f"crews.{agent_name}"
     return f"{base}.{token}.latest_output"
+
+
+def _build_crew_memory(spec: CrewSpec, task: dict) -> Any:
+    """Construct a scoped CrewAI Memory for a memory-opted crew (spec.memory is True).
+
+    This is the ONE difference from crewai's `Crew(memory=True)`: we hand Crew a fully-built `Memory`
+    instance so its analysis LLM is THIS crew's own get_llm chain (crewai would otherwise default it to
+    gpt-4o-mini/OpenAI and crash without OPENAI_API_KEY), the embedder is the cascade-selected tier, and
+    storage is a PER-INSTANCE path (not the global CREWAI_STORAGE_DIR env — that would race under the
+    threaded fleet_host) scoped per owner/agent/principal so crews never cross-read. Fails LOUD (raises)
+    if no embedder is reachable — a crew that asked for memory must not silently run stateless."""
+    from crewai.memory.unified_memory import Memory
+
+    from crewaimeat.embedder_cascade import memory_store_path, resolve_embedder, resolve_principal
+
+    embedder, tag = resolve_embedder(spec.agent_name, bias=spec.embedder_bias, override=spec.memory_embedder)
+    principal = resolve_principal(task)
+    store = memory_store_path(
+        spec.agent_name,
+        owner=spec.owner,
+        principal=principal,
+        embedder_tag=tag,
+        scope=spec.memory_scope,
+        session=task.get("id"),
+    )
+    print(
+        f"[{spec.agent_name}] crew memory ON: scope={spec.memory_scope} principal={principal} "
+        f"embedder={tag} -> {store}",
+        file=sys.stderr,
+    )
+    return Memory(
+        llm=get_llm(agent_name=spec.agent_name),
+        embedder=embedder,
+        storage=str(store),
+        root_scope=f"/crew/{spec.agent_name}",
+    )
 
 
 # The toolset the deterministic Hello-Integration driver needs — every tool the REQUIRED steps map to
@@ -2039,6 +2093,10 @@ def run_crew(spec: CrewSpec) -> None:
         }
         if spec.manager_agent is not None:
             crew_kwargs["manager_agent"] = spec.manager_agent
+        # Opt-in CrewAI memory: hand Crew a scoped Memory (its analysis LLM = this crew's chain, embedder =
+        # cascade, storage = per-instance scoped path). Fails loud if no embedder is reachable.
+        if spec.memory:
+            crew_kwargs["memory"] = _build_crew_memory(spec, task)
         crew = Crew(**crew_kwargs)
         _crew_holder["crew"] = crew  # so the publish callback can read usage_metrics after kickoff
         return crew
@@ -2087,9 +2145,21 @@ def run_crew(spec: CrewSpec) -> None:
                 llm=get_llm(agent_name=spec.agent_name),
                 today=_now_context(),
             )
+            # Build memory BEFORE the try so a missing-embedder RuntimeError fails LOUD (a memory
+            # misconfiguration must surface, not hide behind the generic per-DM apology below). Memory on
+            # the DM path isolates by the SENDER's ghii so each federation requester keeps a separate
+            # memory (no cross-peer bleed) — the cross-owner privacy boundary.
+            _dm_mem = (
+                _build_crew_memory(spec, {"id": f"dm-{mid}", "_source": "dm", "_dm_sender": _sender})
+                if spec.memory
+                else None
+            )
             try:
                 agents, tasks = spec.build_domain(ctx)
-                result = Crew(agents=agents, tasks=tasks, process=spec.process, verbose=False).kickoff()
+                _dm_kwargs: dict[str, Any] = dict(agents=agents, tasks=tasks, process=spec.process, verbose=False)
+                if _dm_mem is not None:
+                    _dm_kwargs["memory"] = _dm_mem
+                result = Crew(**_dm_kwargs).kickoff()
             except Exception as exc:  # noqa: BLE001
                 print(f"[{spec.agent_name}] DM service crew failed: {exc!r}", file=sys.stderr)
                 return "Sorry — I couldn't complete that request."

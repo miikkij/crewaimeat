@@ -188,7 +188,35 @@ def scan_hn(hours: int = 48, limit: int = 12) -> dict:
             }
     ranked = sorted(seen.values(), key=lambda r: r["score"], reverse=True)[:limit]
 
-    date = datetime.date.today().isoformat()
+    # SEMANTIC DEDUP (on top of the objectID + workspace-id checks, which only catch the SAME post):
+    # a story that resurfaced from an EARLIER DAY as a new HN submission with new wording is dropped.
+    # The scan runs several times per day, so a SAME-DAY match is kept (re-scans stay idempotent — the
+    # radar shows today's current top list, not a shrinking delta) and an item is remembered only once.
+    # Skips are LOGGED with the match. Memory degrades LOUD to None -> the full ranked list stands.
+    from crewaimeat.pipeline_memory import open_store
+
+    today = datetime.date.today().isoformat()
+    store = open_store("some-listener")
+    if store:
+        kept = []
+        for r in ranked:
+            item_text = f"{r['title']} — {r['snippet']}"
+            dup = store.dedup_check(item_text, threshold=0.9, category="radar")
+            if dup.is_dup and dup.best_metadata.get("date") != today:
+                print(
+                    f"[some-radar] drop resurfaced story (score {dup.best_score:.2f}, "
+                    f"seen {dup.best_metadata.get('date')}): {r['title'][:80]!r}",
+                    file=sys.stderr,
+                )
+                continue
+            if not dup.is_dup:  # first sighting -> remember once; same-day re-scans don't re-store
+                store.remember(
+                    item_text, source="radar", metadata={"category": "radar", "hn_id": r["id"], "date": today}
+                )
+            kept.append(r)
+        ranked = kept
+
+    date = today
     out = [f"# some-radar {date} — Hacker News, last {hours}h — {len(ranked)} hits (SCAN ONLY, human decides)\n"]
     for r in ranked:
         out.append(

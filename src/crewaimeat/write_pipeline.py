@@ -123,6 +123,12 @@ def write_edition_articles(agent_name: str, date: str, edition: str, categories:
     the rest — then, if anything failed, it raises WriteIncomplete so the step is honestly RED (and
     retried) rather than a silent partial. Idempotent — re-running fills only the gaps."""
     llm = get_llm(for_tool_use=False, temperature=0.7, agent_name=agent_name)
+    # DESK MEMORY (delta reporting): recall what this desk already published on a similar story and
+    # show it to the writer — news that resurfaces gets framed as "what changed", not retold from
+    # zero. Optional enhancement: open_store degrades LOUD to None and the desk writes without it.
+    from crewaimeat.pipeline_memory import open_store
+
+    store = open_store(agent_name)
     lines = [f"deterministic write — {date} {edition} ({agent_name})"]
     failed: list[str] = []
     for cat in categories:
@@ -140,12 +146,31 @@ def write_edition_articles(agent_name: str, date: str, edition: str, categories:
         persona = PERSONAS.get(cat, cat.capitalize())
         extra = _NEEDS.get(cat, "")
         src = json.dumps(raw, ensure_ascii=False)[:10000]
+        # Prior coverage for THIS category, matched on today's raw sources: a resurfacing story is
+        # written as its delta ("mitä uutta"), a fresh one is unaffected ("" when nothing similar).
+        prior = (
+            store.prior_art_block(
+                src[:4000],
+                k=3,
+                min_score=0.45,
+                label="AIEMMIN JULKAISTUA (tämä osasto)",
+                category=cat,
+                instruction=(
+                    "olet jo kirjoittanut näistä aiheista alla olevat jutut. ÄLÄ toista niitä: jos päivän "
+                    "lähteet ovat samaa tarinaa, kirjoita MITÄ UUTTA on tapahtunut ja viittaa aiempaan "
+                    "lyhyesti; muuten jätä nämä huomiotta:"
+                ),
+            )
+            if store
+            else ""
+        )
         prompt = (
             f"Kirjoita TÄYSIMITTAINEN, syvällinen suomenkielinen uutisartikkeli kategoriaan '{cat}' näistä "
             "lähteistä. VÄHINTÄÄN 4-6 kappaletta — ei stub, ei yksi kappale. Journalistinen ote, omin "
             "sanoin (älä kopioi suoraan), taustoita ja yhdistä lähteet luontevaksi jutuksi. Aloita "
             f"otsikolla. {extra} Lopeta omalle rivilleen '— {persona}'."
             + FINNISH_NATIVE_STYLE
+            + (f"\n\n{prior}" if prior else "")
             + f"\n\nLÄHTEET (JSON):\n{src}"
         )
         try:
@@ -162,6 +187,8 @@ def write_edition_articles(agent_name: str, date: str, edition: str, categories:
             lines.append(f"  {cat:18s} {len(art)} chars — PUBLISH FAILED (tunnel/transport)")
             failed.append(cat)
             continue
+        if store:  # remembered only when actually published — memory mirrors the paper
+            store.remember(art, source="article", metadata={"date": date, "edition": edition, "category": cat})
         lines.append(f"  {cat:18s} {len(art)} chars")
     report = "\n".join(lines)
     if failed:

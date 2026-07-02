@@ -33,6 +33,8 @@ class Order:
     request: str
     expect: frozenset[str] = frozenset()  # capability ids the crew MUST wire
     forbid: frozenset[str] = frozenset()  # capability ids the crew must NOT wire
+    expect_memory: bool = False  # the crew MUST enable persistent CrewAI memory (CrewSpec memory=True) —
+    #   a CrewSpec-level toggle, so it is checked separately from the in-crew tool capabilities above
     min_agents: int = 1
     note: str = ""
 
@@ -89,6 +91,17 @@ ORDERS: list[Order] = [
         min_agents=1,
         note="no external tools needed — pure LLM transform of ctx.prompt",
     ),
+    Order(
+        id="assistant-memory",
+        request=(
+            "a personal assistant agent that remembers my preferences and the things I told it in earlier "
+            "conversations, and uses that memory to help me better on later runs"
+        ),
+        expect=frozenset(),
+        forbid=frozenset({"image", "app_build"}),
+        expect_memory=True,
+        note="must remember across runs -> persistent CrewAI memory (CrewSpec memory=True)",
+    ),
 ]
 
 
@@ -104,6 +117,8 @@ class Grade:
     prompt_used: bool = False
     has_identity: bool = False  # emitted _TAGS/_CAPABILITIES (real identity) — informational
     has_offer: bool = False  # emitted an inline _OFFER (advertises value) — informational
+    has_memory: bool = False  # emitted CrewSpec memory=True (persistent CrewAI memory) — informational
+    memory_missing: bool = False  # the order expected persistent memory but the crew did not enable it
     detail: str = ""
 
     @property
@@ -116,7 +131,7 @@ class Grade:
 
     @property
     def passed(self) -> bool:
-        return self.built and self.caps_ok and self.structure_ok
+        return self.built and self.caps_ok and self.structure_ok and not self.memory_missing
 
 
 def grade(order: Order, path: Path | None) -> Grade:
@@ -128,6 +143,9 @@ def grade(order: Order, path: Path | None) -> Grade:
     wired = forge_catalog.capabilities_in_source(src)
     m = _COUNTS_RE.search(detail or "")
     agents, tasks = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+    # Persistent CrewAI memory is a CrewSpec toggle (memory=True), not an in-crew tool, so
+    # capabilities_in_source can't see it — detect it directly from the rendered CrewSpec.
+    has_memory = bool(re.search(r"\bmemory\s*=\s*True", src))
     return Grade(
         order_id=order.id,
         built=ok,
@@ -139,6 +157,8 @@ def grade(order: Order, path: Path | None) -> Grade:
         prompt_used=("ctx.prompt" in src),
         has_identity=("_TAGS" in src),
         has_offer=("_OFFER" in src),
+        has_memory=has_memory,
+        memory_missing=(order.expect_memory and not has_memory),
         detail=detail,
     )
 
@@ -205,23 +225,31 @@ def run_eval(build_domain, orders: list[Order] | None = None, *, root: Path, llm
 def format_scorecard(grades: list[Grade]) -> str:
     """A compact human-readable table + summary."""
     lines = [
-        f"{'ORDER':<18} {'BUILT':<6} {'CAPS':<26} {'A/T':<7} {'PROMPT':<7} {'ID/OF':<7} RESULT",
+        f"{'ORDER':<18} {'BUILT':<6} {'CAPS':<26} {'A/T':<7} {'PROMPT':<7} {'ID/OF/M':<10} RESULT",
         "-" * 90,
     ]
     for g in grades:
         caps = ",".join(g.wired) or "(none)"
         if g.missing:
             caps += f"  MISSING:{','.join(g.missing)}"
+        if g.memory_missing:
+            caps += "  MISSING:memory(crew)"
         if g.forbidden_used:
             caps += f"  FORBIDDEN:{','.join(g.forbidden_used)}"
-        idof = ("id" if g.has_identity else "-") + "/" + ("of" if g.has_offer else "-")
+        idof = (
+            ("id" if g.has_identity else "-")
+            + "/"
+            + ("of" if g.has_offer else "-")
+            + "/"
+            + ("mem" if g.has_memory else "-")
+        )
         result = "PASS" if g.passed else "FAIL"
         lines.append(
             f"{g.order_id:<18} {('yes' if g.built else 'NO'):<6} {caps[:26]:<26} "
-            f"{f'{g.agents}/{g.tasks}':<7} {('yes' if g.prompt_used else 'NO'):<7} {idof:<7} {result}"
+            f"{f'{g.agents}/{g.tasks}':<7} {('yes' if g.prompt_used else 'NO'):<7} {idof:<10} {result}"
         )
         if not g.passed and g.detail:
             lines.append(f"    -> {g.detail[:200]}")
     passed = sum(1 for g in grades if g.passed)
-    lines += ["-" * 90, f"{passed}/{len(grades)} orders passed  (ID/OF = emitted identity / offer)"]
+    lines += ["-" * 90, f"{passed}/{len(grades)} orders passed  (ID/OF/M = emitted identity / offer / memory)"]
     return "\n".join(lines)

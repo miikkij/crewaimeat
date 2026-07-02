@@ -29,7 +29,7 @@ from crewai import Agent, Task
 
 from crewaimeat import forge_catalog
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
-from crewaimeat.forge import make_forge_tools, make_manage_tools
+from crewaimeat.forge import forge_precedent_block, make_forge_tools, make_manage_tools
 
 AGENT_NAME = "crew-forge"
 
@@ -177,6 +177,9 @@ def _build_domain(ctx: BuildContext, request: str | None = None) -> tuple[list[A
     # now (e.g. image generation is hidden without OPENROUTER_API_KEY), so the Architect can never
     # pick a tool that would fail at run time.
     catalog_brief = forge_catalog.render_catalog_brief()
+    # Precedent-before-design (deterministic): the most similar past builds + their live field
+    # ratings become the Architect's priors. "" when forge memory is unavailable/empty.
+    precedent = forge_precedent_block(request)
 
     architect = Agent(
         role="Crew Architect",
@@ -208,7 +211,8 @@ def _build_domain(ctx: BuildContext, request: str | None = None) -> tuple[list[A
             f"{today}\n\n"
             "A user wants a NEW AIMEAT task-runner crew. Design it and write its code. Request:\n"
             f"{request}\n\n"
-            "The new crew runs on the same locked scaffold this crew uses, so you design ONLY "
+            + (f"{precedent}\n\n" if precedent else "")
+            + "The new crew runs on the same locked scaffold this crew uses, so you design ONLY "
             "build_domain. Rules:\n"
             "- Pick a short, descriptive kebab-case agent name (e.g. 'release-notes-writer'), "
             "distinct from obvious existing ones.\n"
@@ -245,7 +249,7 @@ def _build_domain(ctx: BuildContext, request: str | None = None) -> tuple[list[A
             "- Also write a short README for the new crew's README tab: start with a FIGLET logo "
             'directive like [[FIGLET:slant]["New Crew"]] (use the agent name, words spaced), then a '
             "one-line description of what it does and a short 'How to task me' line. Plain markdown.\n\n"
-            "Output EXACTLY these ten labeled sections, nothing else, so the builder can use them "
+            "Output EXACTLY these eleven labeled sections, nothing else, so the builder can use them "
             "verbatim:\n"
             "AGENT_NAME: <kebab-name>\n"
             "TEMPERATURE: <single number, e.g. 0.7 / 0.5 / 0.25, chosen from the role per the rule above>\n"
@@ -254,6 +258,10 @@ def _build_domain(ctx: BuildContext, request: str | None = None) -> tuple[list[A
             "market-research — used to give the agent a real, discoverable identity>\n"
             "DISCOVER: <yes if this is a researcher / planner / coordinator that should survey what "
             "already exists on the node before acting; otherwise no>\n"
+            "MEMORY: <yes ONLY if the crew must REMEMBER across separate runs (e.g. a personal assistant "
+            "that recalls the user's preferences and past requests, or an agent that builds on its own "
+            "prior work); otherwise no. This is persistent CrewAI memory and needs a reachable embedder "
+            "(local ollama, free, or a cloud key), so answer no unless remembering is core to the job>\n"
             "OFFER_ASK: <one sentence: what to send this agent + what it returns + what it does NOT do "
             "(state the negative scope), so others can discover and order it; leave empty to advertise nothing>\n"
             "OFFER_EXAMPLE: <one concrete example request, or leave empty>\n"
@@ -265,8 +273,8 @@ def _build_domain(ctx: BuildContext, request: str | None = None) -> tuple[list[A
             "<the full def build_domain(ctx): ... function text>"
         ),
         expected_output=(
-            "The ten labeled sections AGENT_NAME, TEMPERATURE, CAPABILITIES, DOMAIN, DISCOVER, OFFER_ASK, "
-            "OFFER_EXAMPLE, EXTRA_IMPORTS, README, BUILD_DOMAIN, with a complete build_domain function."
+            "The eleven labeled sections AGENT_NAME, TEMPERATURE, CAPABILITIES, DOMAIN, DISCOVER, MEMORY, "
+            "OFFER_ASK, OFFER_EXAMPLE, EXTRA_IMPORTS, README, BUILD_DOMAIN, with a complete build_domain function."
         ),
         agent=architect,
     )
@@ -274,12 +282,15 @@ def _build_domain(ctx: BuildContext, request: str | None = None) -> tuple[list[A
         description=(
             "Bring the Crew Architect's design above to life. Work ONE tool call at a time — never "
             "fire several in the same turn.\n"
+            f'THE ORIGINAL USER REQUEST (pass it VERBATIM as the `request` param in step 1):\n"""{request}"""\n\n'
             "1. Call write_and_validate_crew with the architect's AGENT_NAME (as agent_name), the "
             "BUILD_DOMAIN code (as build_domain_code), the CAPABILITIES ids (as capabilities), the "
-            "DOMAIN words (as domain), the DISCOVER flag (as discover), OFFER_ASK (as offer_ask), "
+            "DOMAIN words (as domain), the DISCOVER flag (as discover), the MEMORY flag (as memory), "
+            "OFFER_ASK (as offer_ask), "
             "OFFER_EXAMPLE (as offer_example), EXTRA_IMPORTS (as extra_imports), the README markdown "
-            "(as readme_md), and the architect's TEMPERATURE number (as temperature) so the new crew "
-            "runs at the temperature its role calls for.\n"
+            "(as readme_md), the architect's TEMPERATURE number (as temperature) so the new crew "
+            "runs at the temperature its role calls for, and the ORIGINAL USER REQUEST above (as "
+            "request) so this build is remembered as design experience for similar future orders.\n"
             "2. If it returns INVALID, fix the build_domain code from the error and call "
             "write_and_validate_crew again. Repeat until it returns VALID.\n"
             "3. Once VALID, call register_and_launch_crew ONCE with the same agent_name.\n"

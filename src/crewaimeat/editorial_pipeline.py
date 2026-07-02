@@ -61,12 +61,32 @@ def build_editorial_and_index(agent_name: str, date: str, edition: str) -> str:
     if not heads:
         return f"NO_ARTICLES for {date} {edition} — editorial skipped."
 
+    # EDITORIAL MEMORY (continuity + anti-repetition): recall the most similar PAST editorials for
+    # tonight's headlines and hand them to the drafting model as prior art — don't repeat an angle,
+    # optionally call back to one by date (a real editorial voice across days). Optional enhancement:
+    # open_store degrades LOUD to None when no embedder is reachable and the paper still ships.
+    from crewaimeat.pipeline_memory import open_store
+
+    store = open_store(agent_name)
+    prior = (
+        store.prior_art_block("\n".join(heads), k=3, label="YOUR PREVIOUS COLUMNS (in Finnish)", category="editorial")
+        if store
+        else ""
+    )
+    if prior:
+        prior = (
+            "\n\n" + prior + "\n"
+            "Those are YOUR previous columns. DO NOT reuse their angles or punchlines — find a fresh "
+            "attack. You MAY call back to ONE of them by its date in a single line (continuity, not reruns).\n"
+        )
+
     # STEP 1: English gonzo draft (high temperature for voice).
+    en_prompt = _PROMPT_EN + "\n".join(heads) + prior
     llm_en = get_llm(for_tool_use=False, temperature=0.95, agent_name=agent_name)
-    en = llm_en.call([{"role": "user", "content": _PROMPT_EN + "\n".join(heads)}])
+    en = llm_en.call([{"role": "user", "content": en_prompt}])
     en = en if isinstance(en, str) else str(en)
     if len(en.strip()) < 400:  # grok hiccup → one retry
-        en = llm_en.call([{"role": "user", "content": _PROMPT_EN + "\n".join(heads)}])
+        en = llm_en.call([{"role": "user", "content": en_prompt}])
         en = en if isinstance(en, str) else str(en)
 
     # STEP 2: native-Finnish gonzo localisation (lower temperature for fidelity — anchored to the English).
@@ -84,6 +104,10 @@ def build_editorial_and_index(agent_name: str, date: str, edition: str) -> str:
         "aimeat_memory_write",
         {"key": f"news.{date}.{edition}.editorial", "value": ed, "visibility": "public"},
     )
+    # Remember the PUBLISHED Finnish column (query language = storage language, so tomorrow's FI
+    # headlines match against FI columns) — this is what future prior-art recalls rank against.
+    if store:
+        store.remember(ed, source="editorial", metadata={"date": date, "edition": edition, "category": "editorial"})
     auto = {t.name: t for t in make_memory_tools(agent_name)}["index_frontpage_auto"]
     try:
         idx = auto.run(date=date, edition=edition)

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 
 from crewaimeat.aimeat_crew import _aimeat_call
 from crewaimeat.llm import get_llm
@@ -33,6 +34,13 @@ _QUIZ_EXCL = {"koodaus", "prompt-niksi", "matikka"}
 
 
 def build_features(agent_name: str, date: str, edition: str) -> str:
+    # SECTION MEMORY (anti-repetition): the tidbit briefs are CONSTANT prompts, so over weeks the model
+    # converges on retelling the same tips/facts. Deterministic loop: generate -> semantic dedup-check
+    # against everything this section has published -> ONE retry with the near-duplicate shown as a
+    # negative example -> publish regardless (the paper ships; a repeat is logged, never a hole).
+    from crewaimeat.pipeline_memory import open_store
+
+    store = open_store(agent_name)
     llm = get_llm(for_tool_use=False, temperature=0.7, agent_name=agent_name)
     lines = []
     for cat, brief in _TIDBITS.items():
@@ -42,11 +50,40 @@ def build_features(agent_name: str, date: str, edition: str) -> str:
         if len(out.strip()) < 80:  # hiccup → retry once
             out = llm.call([{"role": "user", "content": content}])
             out = out if isinstance(out, str) else str(out)
+        if store:
+            # 0.83 (not the 0.87 default): tidbits are short, so a same-tip-other-words rerun scores a
+            # touch lower than long-form near-duplicates do.
+            dup = store.dedup_check(out, threshold=0.83, category=cat)
+            if dup.is_dup:
+                print(
+                    f"[features] {cat}: near-duplicate of a past item (score {dup.best_score:.2f}) — retrying "
+                    f"with the old item as a negative example",
+                    file=sys.stderr,
+                )
+                retry = (
+                    content
+                    + "\n\nHUOM: Olet JO julkaissut tämän aiemmin:\n---\n"
+                    + dup.best_content[:600]
+                    + "\n---\nKirjoita SELVÄSTI ERI aihe tai vinkki — ei samaa asiaa eri sanoin."
+                )
+                out2 = llm.call([{"role": "user", "content": retry}])
+                out2 = out2 if isinstance(out2, str) else str(out2)
+                if len(out2.strip()) >= 80:
+                    out = out2
+                    still = store.dedup_check(out, threshold=0.83, category=cat)
+                    if still.is_dup:
+                        print(
+                            f"[features] {cat}: STILL similar after retry (score {still.best_score:.2f}) — "
+                            f"publishing anyway (logged, no hole in the paper)",
+                            file=sys.stderr,
+                        )
         _aimeat_call(
             agent_name,
             "aimeat_memory_write",
             {"key": f"news.{date}.{edition}.article.{cat}", "value": out, "visibility": "public"},
         )
+        if store:
+            store.remember(out, source="tidbit", metadata={"date": date, "edition": edition, "category": cat})
         lines.append(f"{cat}={len(out)}c")
 
     lines.append(build_quiz(agent_name, date, edition))

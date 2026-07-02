@@ -114,4 +114,12 @@ def write_digest(agent: str, date_str: str, digest_text: str, topics: list[str])
     for key in (f"social.briefing.digest.{date_str}", "social.briefing.latest"):
         res = _aimeat_call(agent, "aimeat_memory_write", {"key": key, "value": value, "visibility": "owner"})
         ok = ok and bool(res)
+    if ok:
+        # Remember the delivered digest so tomorrow's curation reports deltas, not reruns (the
+        # _curate prior-art block reads this). Memory mirrors what the user actually received.
+        from crewaimeat.pipeline_memory import open_store
+
+        store = open_store(agent)
+        if store:
+            store.remember(digest_text, source="briefing", metadata={"date": date_str, "category": "briefing"})
     return ok

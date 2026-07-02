@@ -82,8 +82,36 @@ CRAFT = (
 )
 
 
+def _remember_lineup(text: str) -> str:
+    """Chained clean_deliverable: strip leaked editor meta (the original cleaner), then remember the
+    published set so future sets avoid retelling it. Memory degrades LOUD to None; jokes still ship."""
+    text = _strip_editor_meta(text)
+    from crewaimeat.pipeline_memory import open_store
+
+    store = open_store(AGENT_NAME)
+    if store and isinstance(text, str):
+        store.remember(text, source="joke-lineup", metadata={"category": "jokes"})
+    return text
+
+
 def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     llm, topic = ctx.llm, ctx.prompt
+    # ANTI-RERUN MEMORY (same as joker v1, so the A/B stays design-only): comedians see the most
+    # similar already-told jokes and must find fresh material. "" when memory is unavailable.
+    from crewaimeat.pipeline_memory import open_store
+
+    store = open_store(AGENT_NAME)
+    told = (
+        store.prior_art_block(
+            topic or "jokes",
+            k=4,
+            label="ALREADY TOLD (past sets)",
+            category="jokes",
+            instruction="you have already performed these — do NOT retell or lightly rephrase any of them:",
+        )
+        if store
+        else ""
+    )
 
     punslinger = Agent(
         role="Punslinger",
@@ -139,7 +167,7 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
                 f"obvious first ideas (the first thing that comes to mind is usually the groaner everyone "
                 f"else writes). Then judge your own six honestly and output ONLY your single best one, "
                 f"polished and tight.\n\n{CRAFT}\n\n"
-                f"Match the language of the topic."
+                f"Match the language of the topic." + (f"\n\n{told}" if told else "")
             ),
             expected_output="Your single funniest joke, in your style, in the language of the topic (the six drafts are scratch work — do not include them).",
             agent=agent,
@@ -189,7 +217,7 @@ def run() -> None:
             build_domain=build_domain,
             readme_md=README,
             temperature=0.7,
-            clean_deliverable=_strip_editor_meta,  # enforce: no leaked KEPT/CUT scaffolding in the deliverable
+            clean_deliverable=_remember_lineup,  # strip leaked KEPT/CUT scaffolding, then remember the set
             self_monitor=True,  # propose an evolution if own reputation shows a WEAK/SPLIT signal (doc 20)
         )
     )

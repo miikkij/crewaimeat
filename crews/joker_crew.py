@@ -30,8 +30,36 @@ Queue a task with whatever you want jokes about:
 """
 
 
+def _remember_lineup(text: str) -> str:
+    """clean_deliverable seam doubling as the publish hook: remember the published lineup so future
+    sets can avoid retelling it, then return the text unchanged. Memory is an optional enhancement —
+    open_store degrades LOUD to None and the jokes still ship."""
+    from crewaimeat.pipeline_memory import open_store
+
+    store = open_store(AGENT_NAME)
+    if store and isinstance(text, str):
+        store.remember(text, source="joke-lineup", metadata={"category": "jokes"})
+    return text
+
+
 def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     llm, topic = ctx.llm, ctx.prompt
+    # ANTI-RERUN MEMORY: show every comedian the most similar jokes already told about this kind of
+    # topic — fresh material instead of the same pun with new words. "" when memory is unavailable.
+    from crewaimeat.pipeline_memory import open_store
+
+    store = open_store(AGENT_NAME)
+    told = (
+        store.prior_art_block(
+            topic or "jokes",
+            k=4,
+            label="ALREADY TOLD (past sets)",
+            category="jokes",
+            instruction="you have already performed these — do NOT retell or lightly rephrase any of them:",
+        )
+        if store
+        else ""
+    )
 
     punslinger = Agent(
         role="Punslinger",
@@ -78,7 +106,7 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
         return Task(
             description=(
                 f"Tell exactly ONE joke about the following, in your {style} style. "
-                f"Keep it tight, and match the language of the topic. Topic:\n{topic}"
+                f"Keep it tight, and match the language of the topic. Topic:\n{topic}" + (f"\n\n{told}" if told else "")
             ),
             expected_output="One joke, in your style, in the language of the topic.",
             agent=agent,
@@ -110,7 +138,14 @@ def run() -> None:
     # Comedy is a creative service — enforce a warm temperature (no per-task classification needed).
     # self_monitor: after each task, check own reputation and propose an evolution if a signal fires (doc 20).
     run_crew(
-        CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README, temperature=0.7, self_monitor=True)
+        CrewSpec(
+            agent_name=AGENT_NAME,
+            build_domain=build_domain,
+            readme_md=README,
+            temperature=0.7,
+            self_monitor=True,
+            clean_deliverable=_remember_lineup,
+        )
     )
 
 
