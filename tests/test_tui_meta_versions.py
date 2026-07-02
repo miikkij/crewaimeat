@@ -6,11 +6,11 @@ from crewaimeat.tui import agent_meta, render, versions
 
 
 # ── agent_meta (B) — local, from llm_providers.json + offers ────────────────────
-def test_model_chain_routes_news_fetcher_to_content_xai_first():
+def test_model_chain_routes_news_fetcher_to_content_glm_first():
     profile, labels = agent_meta.model_chain("news-fetcher")
     assert profile == "content"
-    assert labels and labels[0] == "xai:grok-4.3"  # content desk → grok first
-    assert any(l.startswith("openrouter:") for l in labels)  # then the OpenRouter fallbacks
+    assert labels and labels[0] == "openrouter:z-ai/glm-5.2"  # 2026-07-02: ALL profiles → GLM 5.2 first
+    assert any(l.startswith("xai:") for l in labels)  # grok stays as the content fallback
 
 
 def test_model_chain_coding_profile_is_openrouter_first():
