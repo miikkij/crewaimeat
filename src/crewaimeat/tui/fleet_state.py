@@ -220,23 +220,40 @@ def _scope_to_repo(cmdlines: list[str]) -> list[str]:
     return scoped or cmdlines
 
 
+# A full process-table scan spawns a PowerShell each time (~1-2s of CPU on Windows). The cockpit's SSE
+# stream, its /healthz-adjacent polls and the TUI all call this on short timers, so an open Manage page
+# was burning a scan every 4s. A short TTL cache keeps every consumer fresh-enough while collapsing the
+# concurrent callers onto one scan. Disabled under pytest (test isolation over speed).
+_CMDLINES_TTL_S = 5.0
+_CMDLINES_CACHE: tuple[float, list[str]] | None = None
+
+
 def collect_cmdlines() -> list[str]:
     """Command lines of fleet-relevant processes (crew daemons, watchdogs, the serve daemon),
-    scoped to THIS checkout. Cross-platform: Win32_Process on Windows, `ps` elsewhere. Read-only."""
+    scoped to THIS checkout. Cross-platform: Win32_Process on Windows, `ps` elsewhere. Read-only.
+    Results are cached for a few seconds (see _CMDLINES_TTL_S)."""
+    global _CMDLINES_CACHE
+    caching = not os.environ.get("PYTEST_CURRENT_TEST")
+    if caching and _CMDLINES_CACHE and (time.time() - _CMDLINES_CACHE[0]) < _CMDLINES_TTL_S:
+        return _CMDLINES_CACHE[1]
     if os.name == "nt":
         ps = "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine } | ForEach-Object { $_.CommandLine }"
         try:
             out = subprocess.run(
                 ["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=25
             ).stdout
-            return _scope_to_repo([ln for ln in out.splitlines() if ln.strip()])
+            lines = _scope_to_repo([ln for ln in out.splitlines() if ln.strip()])
         except Exception:  # noqa: BLE001
             return []
-    try:
-        out = subprocess.run(["ps", "-eo", "args"], capture_output=True, text=True, timeout=20).stdout
-        return _scope_to_repo([ln for ln in out.splitlines() if ln.strip()])
-    except Exception:  # noqa: BLE001
-        return []
+    else:
+        try:
+            out = subprocess.run(["ps", "-eo", "args"], capture_output=True, text=True, timeout=20).stdout
+            lines = _scope_to_repo([ln for ln in out.splitlines() if ln.strip()])
+        except Exception:  # noqa: BLE001
+            return []
+    if caching:
+        _CMDLINES_CACHE = (time.time(), lines)
+    return lines
 
 
 def collect_roster() -> dict[str, str]:

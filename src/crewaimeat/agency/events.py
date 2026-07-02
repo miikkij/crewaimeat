@@ -38,14 +38,23 @@ def _conn() -> sqlite3.Connection:
     return c
 
 
+_KEEP_PER_AGENT = 1000  # History shows ~100; keep a deep tail but stop the db growing forever
+
+
 def record(agent: str, kind: str, detail: dict | None = None) -> None:
-    """Append one activity event for `agent` (e.g. kind='started', or 'brain_saved' with a detail dict).
+    """Append one activity event for `agent` (e.g. kind='started', or 'brain_saved' with a detail dict),
+    trimming that agent's history to the newest _KEEP_PER_AGENT rows.
     Best-effort: never raise into the caller (an audit write must not break the action it logs)."""
     try:
         with _conn() as c:
             c.execute(
                 "INSERT INTO events(agent, ts, kind, detail) VALUES(?,?,?,?)",
                 (agent, time.time(), kind, json.dumps(detail or {}, ensure_ascii=False)),
+            )
+            c.execute(
+                "DELETE FROM events WHERE agent=? AND rowid IN ("
+                "SELECT rowid FROM events WHERE agent=? ORDER BY ts DESC LIMIT -1 OFFSET ?)",
+                (agent, agent, _KEEP_PER_AGENT),
             )
     except Exception:  # noqa: BLE001 — logging the action must not fail the action
         pass

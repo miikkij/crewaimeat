@@ -23,11 +23,18 @@ def client(tmp_path, monkeypatch):
 
 
 def test_index_serves_ui_with_token(client):
-    r = client.get("/", headers={"Authorization": ""})  # the page itself is open (localhost-only)
+    # `/` injects the token into the page, so it must only answer a caller that ALREADY knows it
+    # (?boot=) — otherwise any local process could GET / and the whole /api/* token gate is decorative.
+    r = client.get(f"/?boot={TOKEN}", headers={"Authorization": ""})
     assert r.status_code == 200
     assert "aimeat-agency" in r.text
     assert TOKEN in r.text  # the per-launch token is injected into the page
     assert "__AGENCY_TOKEN__" not in r.text  # placeholder fully replaced
+
+
+def test_index_requires_boot_token(client):
+    assert client.get("/", headers={"Authorization": ""}).status_code == 401
+    assert client.get("/?boot=wrong", headers={"Authorization": ""}).status_code == 401
 
 
 def test_healthz_is_open(client):
@@ -74,6 +81,9 @@ def test_setup_status_sees_default_model(client, monkeypatch):
 def test_reset_wipes_state(client, monkeypatch, tmp_path):
     # chdir so the 'crews' glob in reset can never touch the dev repo's real crews/
     monkeypatch.chdir(tmp_path)
+    # reset pops OPENROUTER_API_KEY from the process env — set it via monkeypatch so the ORIGINAL
+    # machine value is restored after this test (other tests' capability preflights need it)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "dummy-for-reset-test")
     import crewaimeat.tui.actions as actions
     from crewaimeat import brains
 
@@ -321,6 +331,7 @@ def test_register_surfaces_code_and_url(client, monkeypatch):
     client.post("/api/account/connect", json={"owner": "happydude500001"})
     from crewaimeat import forge
 
+    monkeypatch.setattr("crewaimeat.node_engine.npx_bin", lambda: "npx")  # engine present, hermetically
     monkeypatch.setattr(
         forge,
         "register_agent",
@@ -464,3 +475,106 @@ def test_stop_agency_ollama_only_touches_own_pidfile(client, monkeypatch):
 
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     assert cp._stop_agency_ollama() == "ollama not agency-started (left running)"
+
+
+def test_stop_agency_ollama_never_kills_a_reused_pid(client, tmp_path, monkeypatch):
+    # Windows reuses pids: a pidfile surviving a reboot may now name an INNOCENT process. The stop
+    # must verify the pid is really ollama — here it's this very python process, so: no kill, pidfile
+    # cleaned. (If the old blind taskkill came back, this test would kill its own test runner.)
+    import os as _os
+
+    import crewaimeat.agency.cockpit as cp
+
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    pidfile = tmp_path / "agency_ollama.pid"
+    pidfile.write_text(str(_os.getpid()), encoding="utf-8")
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    msg = cp._stop_agency_ollama()
+    assert "not ollama" in msg
+    assert not pidfile.exists()  # stale pidfile cleaned so it can't mislead the next shutdown
+
+
+def test_ollama_pull_pytest_guarded(client):
+    # under pytest the pull endpoint must NEVER download real models — guard answers instead
+    r = client.post("/api/ollama/pull", json={})
+    assert r.status_code == 200 and r.json() == {"started": False, "reason": "pytest"}
+
+
+def test_engine_install_pytest_guarded(client):
+    # under pytest the engine install must NEVER npm-install into the real machine
+    r = client.post("/api/engine/install")
+    assert r.status_code == 200 and r.json() == {"started": False, "reason": "pytest"}
+
+
+def test_setup_status_reports_engine_and_pull_state(client, monkeypatch):
+    # The wizard's engine step + pull-failure surfacing read these; their absence = silent dead-ends.
+    monkeypatch.setattr("crewaimeat.agency.cockpit._ollama_probe", lambda: (False, []))
+    s = client.get("/api/setup/status").json()
+    eng = s["engine"]
+    for k in ("node", "npx", "connector_cli", "ready", "install_running", "install_error"):
+        assert k in eng
+    assert "pull_running" in s["ollama"] and "pull_error" in s["ollama"]
+
+
+def test_register_requires_node_engine(client, monkeypatch):
+    # A fresh machine without Node.js must get the fix ("finish the engine step"), not a WinError dump.
+    client.post("/api/account/connect", json={"owner": "happydude500001"})
+    monkeypatch.setattr("crewaimeat.node_engine.npx_bin", lambda: None)
+    r = client.post("/api/agents/watch-1/register", json={})
+    assert r.status_code == 400 and "engine" in r.json()["detail"]
+
+
+def test_reset_cleans_pidfile_logs_and_openrouter_key(client, monkeypatch, tmp_path):
+    # Reset promises a COMPLETE fresh start: the ollama pidfile (else a later shutdown acts on a stale
+    # pid), the logs (prompts/outputs/device codes), and the saved OpenRouter key must all go.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "dummy-for-reset-test")  # restored to the machine value after
+    import crewaimeat.tui.actions as actions
+
+    monkeypatch.setattr(actions, "stop_fleet", lambda: "stopped")
+    (tmp_path / "agency_ollama.pid").write_text("12345", encoding="utf-8")
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "logs" / "x.watchdog.log").write_text("log", encoding="utf-8")
+    (tmp_path / ".env").write_text("OTHER=1\nOPENROUTER_API_KEY=sk-or-secret\n", encoding="utf-8")
+    r = client.post("/api/reset").json()
+    assert r["ok"] is True
+    assert not (tmp_path / "agency_ollama.pid").exists()
+    assert not (tmp_path / "logs").exists()
+    env = (tmp_path / ".env").read_text(encoding="utf-8")
+    assert "OPENROUTER_API_KEY" not in env and "OTHER=1" in env  # only the key line goes
+
+
+def test_fleet_view_shows_only_brain_agents(client, monkeypatch):
+    # The appliance bundle ships the repo's example crews; the cockpit fleet view must show ONLY the
+    # operator's own (brain-backed) agents, not ~40 unfamiliar dev crews.
+    client.post("/api/brains", json={"agent_name": "watcher", "template_id": "topic-watcher"})
+    from crewaimeat.tui import fleet_state as fs
+
+    def row(a):
+        return fs.AgentRow(
+            agent=a,
+            crew_file=f"{a}_crew.py",
+            watchdog_procs=0,
+            daemon_procs=0,
+            lock=False,
+            in_tunnel=False,
+            last_seen=None,
+            last_seen_age_s=None,
+            mode=None,
+            status="down",
+        )
+
+    def fake_snapshot(**_kw):
+        return fs.FleetSnapshot(
+            serve_pid=None,
+            serve_port=None,
+            n_watchdogs=0,
+            n_connectors=0,
+            n_locks=0,
+            rows=[row("watcher"), row("joker"), row("sanomat")],
+            zombies=[],
+        )
+
+    monkeypatch.setattr(fs, "build_snapshot", fake_snapshot)
+    rows = client.get("/api/fleet").json()["rows"]
+    assert [r["agent"] for r in rows] == ["watcher"]

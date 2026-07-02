@@ -1,6 +1,6 @@
 [package]
 name = "aimeat-agency"
-version = "0.8.29"
+version = "0.8.30"
 description = "aimeat-agency — desktop appliance for running an agency of agents on AIMEAT"
 edition = "2021"
 rust-version = "1.77"
@@ -13,6 +13,7 @@ tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-updater = "2"  # one-click auto-update: verifies a minisign-signed latest.json, then installs
 serde_json = "1"  # the #[command] macro needs it in scope to serialize a command's return value
 ureq = "2"  # tiny blocking HTTP client — POST /api/shutdown to the cockpit on tray-quit
+getrandom = "0.3"  # OS entropy for the per-launch cockpit token (must be unguessable locally)
 
 # Keep release builds small/fast.
 [profile.release]

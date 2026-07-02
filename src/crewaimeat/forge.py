@@ -269,6 +269,11 @@ def register_fleet(owner: str, url: str = "https://aimeat.io", agents: list[str]
     return "\n".join(lines)
 
 
+# The pristine Popen, stashed at import: register_agent's pytest guard triggers only when a test did
+# NOT mock the spawn (the parsing tests replace subprocess.Popen module-wide and must keep working).
+_REAL_POPEN = subprocess.Popen
+
+
 def register_agent(agent_name: str, owner: str, url: str = "https://aimeat.io") -> tuple[bool, str]:
     """Start `connect add` for a new task-runner agent and SURFACE its device verification code + URL.
 
@@ -278,11 +283,25 @@ def register_agent(agent_name: str, owner: str, url: str = "https://aimeat.io") 
     read the code + URL it prints within a few seconds, and return them so the owner can approve.
     Non-blocking: returns in ~seconds, not after the full poll.
     """
+    # A test that forgot to mock would spawn a REAL device-auth request against the node. The parsing
+    # tests mock subprocess.Popen (module-wide), so gate only when the spawn would be the real one.
+    if os.environ.get("PYTEST_CURRENT_TEST") and subprocess.Popen is _REAL_POPEN:
+        return False, "device-auth skipped under pytest (mock subprocess.Popen in the test)"
     # v1.33+ connector: device-auth is `connect --url --owner --agent`. The old `connect add … --mode
     # task-runner` form is gone — the connector tolerated the extra args but the node rejected the request,
     # so NO code was ever issued and our fallback misreported it as "already registered".
+    # npx: resolved via node_engine — a JUST-installed Node.js is on the user PATH only after re-login,
+    # and a machine without Node at all gets a clear message instead of a WinError 2 dump.
+    from crewaimeat.node_engine import npx_bin
+
+    npx = npx_bin()
+    if not npx:
+        return False, (
+            "Node.js is required to connect an agent but was not found. "
+            "Install it from https://nodejs.org/ (the agency's Setup wizard walks you through it)."
+        )
     base = [
-        "npx",
+        npx,
         AIMEAT_CONNECTOR,
         "connect",
         "--url",
@@ -298,24 +317,27 @@ def register_agent(agent_name: str, owner: str, url: str = "https://aimeat.io") 
     out_path = logs / f".register_{_fname(agent_name)}.log"
     try:
         outf = open(out_path, "w+b")
-        if os.name == "nt":
-            proc = subprocess.Popen(
-                cmd,
-                stdout=outf,
-                stderr=outf,
-                stdin=subprocess.DEVNULL,
-                creationflags=0x08000000,
-                close_fds=True,  # CREATE_NO_WINDOW
-            )
-        else:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=outf,
-                stderr=outf,
-                stdin=subprocess.DEVNULL,
-                start_new_session=True,
-                close_fds=True,
-            )
+        try:
+            if os.name == "nt":
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=outf,
+                    stderr=outf,
+                    stdin=subprocess.DEVNULL,
+                    creationflags=0x08000000,
+                    close_fds=True,  # CREATE_NO_WINDOW
+                )
+            else:
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=outf,
+                    stderr=outf,
+                    stdin=subprocess.DEVNULL,
+                    start_new_session=True,
+                    close_fds=True,
+                )
+        finally:
+            outf.close()  # the child holds its own inherited handle; ours leaked once per Approve click
     except Exception as exc:  # noqa: BLE001
         return False, f"could not start connect add: {exc}"
 
@@ -403,6 +425,10 @@ def launch_crew(rel_path: str) -> tuple[int | None, str]:
     Returns (pid, log_path). The process outlives this crew's task and keeps the new
     crew alive across restarts.
     """
+    # A detached watchdog outlives the test run and keeps a REAL crew daemon alive on the machine.
+    # Tests exercise launch flows by mocking launch_crew itself; this backstop catches a forgotten mock.
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return None, "launch skipped (pytest — mock forge.launch_crew in the test)"
     root = _project_root()
     logs = root / "logs"
     logs.mkdir(exist_ok=True)

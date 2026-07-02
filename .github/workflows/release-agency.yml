@@ -65,8 +65,10 @@ jobs:
           $ag = "aimeat-agency/src-tauri"
           $src = "$ag/resources/runtime-src"
           New-Item -ItemType Directory -Force $src | Out-Null
-          # crewaimeat source snapshot (exclude dev/heavy dirs; robocopy exit <8 = success)
-          robocopy . $src /E /XD .git aimeat-agency .github node_modules .venv .aimeat logs docs .ruff_cache .pytest_cache /XF *.pyc *.log | Out-Null
+          # crewaimeat source snapshot (exclude dev/heavy dirs; robocopy exit <8 = success).
+          # crews/tests/infra/benchmarks/output/secretary are DEV-fleet material: shipping crews/ made
+          # the appliance's Fleet page show ~40 unfamiliar dev agents to a non-dev operator.
+          robocopy . $src /E /XD .git aimeat-agency .github node_modules .venv .aimeat logs docs crews tests infra benchmarks output secretary .ruff_cache .pytest_cache /XF *.pyc *.log | Out-Null
           if ($LASTEXITCODE -ge 8) { throw "robocopy failed ($LASTEXITCODE)" }; $global:LASTEXITCODE = 0
           # uv sidecar, named for the Rust host triple Tauri expects (windows-latest = msvc)
           $triple = (((rustc -vV) -split "`n" | Select-String '^host:') -replace '^host:\s*','').Trim()

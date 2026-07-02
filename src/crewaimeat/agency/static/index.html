@@ -222,6 +222,27 @@ const STR = {
   "preview.note":{en:"Plan preview — no spend. Full PROPOSE runs when the agent is live.",fi:"Suunnitelman esikatselu — ei kuluja. Täysi PROPOSE ajetaan kun agentti on käynnissä."},
   "noagents":{en:"No agents yet — pick a brain from the gallery.",fi:"Ei agentteja vielä — valitse aivot galleriasta."},
   "pickagent":{en:"Pick an agent",fi:"Valitse agentti"}, "saved":{en:"Saved",fi:"Tallennettu"},
+  "w.engine":{en:"Set up the agent engine",fi:"Asenna agenttimoottori"},
+  "w.engine.desc":{en:"Your agents talk to aimeat.io through a small helper program (the connector). It runs on <b>Node.js</b> — a free, widely-used platform. This is a one-time setup.",fi:"Agenttisi keskustelevat aimeat.io:n kanssa pienen apuohjelman (liittimen) kautta. Se toimii <b>Node.js</b>-alustalla — ilmainen ja laajasti käytetty. Tämä tehdään vain kerran."},
+  "w.engine.node":{en:"First, install <b>Node.js</b> (choose the LTS version, then click through the installer with its defaults).",fi:"Asenna ensin <b>Node.js</b> (valitse LTS-versio ja hyväksy asentimen oletukset)."},
+  "w.installnode":{en:"Download Node.js",fi:"Lataa Node.js"},
+  "w.engine.cli":{en:"Node.js found ✓ — now install the connector (one click, ~30 seconds).",fi:"Node.js löytyi ✓ — asenna nyt liitin (yksi napsautus, ~30 sekuntia)."},
+  "w.installengine":{en:"Install the connector",fi:"Asenna liitin"},
+  "w.engine.installing":{en:"Installing the connector…",fi:"Asennetaan liitintä…"},
+  "w.retry":{en:"Try again",fi:"Yritä uudelleen"},
+  "w.pull.failed":{en:"The download did not finish:",fi:"Lataus ei onnistunut:"},
+  "w.pull.gone":{en:"The download ended but the model isn't there yet — check your internet connection and disk space, then try again.",fi:"Lataus päättyi, mutta mallia ei näy — tarkista nettiyhteys ja levytila, ja yritä uudelleen."},
+  "w.ollama.failed":{en:"Ollama did not start. Try starting the Ollama app yourself, then Re-check.",fi:"Ollama ei käynnistynyt. Kokeile käynnistää Ollama-sovellus itse ja paina sitten Tarkista uudelleen."},
+  "w.start.slow":{en:"The agent hasn't come up yet. What the fleet said:",fi:"Agentti ei ole vielä käynnistynyt. Laivueen vastaus:"},
+  "approve.expired":{en:"Nothing happened for 10 minutes — the code has likely expired. Get a fresh code and try again.",fi:"Mitään ei tapahtunut 10 minuuttiin — koodi on todennäköisesti vanhentunut. Hae uusi koodi ja yritä uudelleen."},
+  "w.gemma.cpuwarn":{en:"Tip: without a recent graphics card the local model can be slow. If it feels sluggish, the cloud option below is faster.",fi:"Vinkki: ilman uudehkoa näytönohjainta paikallinen malli voi olla hidas. Jos se tuntuu tahmealta, alla oleva pilvivaihtoehto on nopeampi."},
+  "th.when":{en:"when",fi:"aika"}, "th.event":{en:"event",fi:"tapahtuma"}, "th.detail":{en:"detail",fi:"tiedot"},
+  "th.agent":{en:"agent",fi:"agentti"}, "th.status":{en:"status",fi:"tila"},
+  "th.procs":{en:"processes",fi:"prosessit"}, "th.lastseen":{en:"last seen",fi:"nähty viimeksi"},
+  "th.key":{en:"key",fi:"avain"}, "th.visibility":{en:"visibility",fi:"näkyvyys"}, "th.updated":{en:"updated",fi:"päivitetty"},
+  "th.topic":{en:"topic",fi:"aihe"}, "th.source":{en:"source",fi:"lähde"}, "th.body":{en:"content",fi:"sisältö"},
+  "mem.empty":{en:"empty",fi:"tyhjä"}, "mem.topics":{en:"topics",fi:"aiheet"},
+  "fleet.conn":{en:"connection",fi:"yhteys"}, "fleet.down":{en:"down",fi:"ei käynnissä"},
 };
 const t = k => (STR[k]&&STR[k][LANG]) || (STR[k]&&STR[k].en) || k;
 
@@ -289,6 +310,7 @@ async function renderSetup(m){
   let s; try{ s=await api("/api/setup/status"); }catch(e){ m.innerHTML=`<p class="muted">${esc(e.message)}</p>`; return; }
   const steps=[
     {key:"account", title:t("w.account"), done:s.owner_set},
+    {key:"engine",  title:t("w.engine"),  done:!!(s.engine&&s.engine.ready)},
     {key:"model",   title:t("w.model"),   done:s.ollama.has_model||s.openrouter_key},
     {key:"agent",   title:t("w.agent"),   done:s.brain_count>0},
     {key:"approve", title:t("w.approve"), done:s.first_agent_connected},
@@ -322,13 +344,13 @@ async function renderSetup(m){
     const b=el(`<button class="btn">${t("w.open")}</button>`); b.onclick=()=>{ skipSetup=true; openEditor(s.first_agent); }; c.appendChild(b); m.appendChild(c);
     m.appendChild(el(`<div style="margin-top:10px"><a class="muted" style="cursor:pointer" onclick="skipSetup=true;view='gallery';render()">${t("nav.gallery")} →</a></div>`)); return; }
   const panel=el(`<div class="card" style="max-width:660px"></div>`); m.appendChild(panel);
-  setupStep(panel, steps[cur].key, s, ()=>renderSetup(m));
+  setupStep(panel, steps[cur].key, s, ()=>renderSetup(m), cur+1);
   m.appendChild(el(`<div style="margin-top:14px"><a class="muted" style="cursor:pointer;font-size:13px" onclick="skipSetup=true;view='gallery';render()">${t("w.skip")}</a></div>`));
 }
 
-async function setupStep(p, key, s, refresh){
+async function setupStep(p, key, s, refresh, num){
   if(key==="account"){
-    p.innerHTML=`<h3>1. ${t("w.account")}</h3><p class="muted">${t("w.account.desc")}</p>`;
+    p.innerHTML=`<h3>${num}. ${t("w.account")}</h3><p class="muted">${t("w.account.desc")}</p>`;
     p.appendChild(el(`<label>${t("w.lbl.account")}</label>`)); const o=el(`<input placeholder="e.g. jdoe2026" value="${esc(s.owner||"")}">`); p.appendChild(o);
     p.appendChild(el(`<label>${t("w.lbl.node")}</label>`)); const n=el(`<input value="${esc(s.node||"https://aimeat.io")}">`); p.appendChild(n);
     const b=el(`<button class="btn" style="margin-top:12px">${t("w.next")}</button>`);
@@ -336,8 +358,35 @@ async function setupStep(p, key, s, refresh){
       try{ await api("/api/account/connect",{method:"POST",body:JSON.stringify({owner:ov,node:n.value.trim()})}); pollAccount(); refresh(); }catch(e){ toast(e.message); } };
     p.appendChild(b); p.appendChild(el(`<div style="margin-top:10px;font-size:13px"><a href="https://aimeat.io" target="_blank">${t("w.noacct")}</a></div>`));
   }
+  else if(key==="engine"){
+    const eng=s.engine||{};
+    p.innerHTML=`<h3>${num}. ${t("w.engine")}</h3><p class="muted">${t("w.engine.desc")}</p>`;
+    if(!eng.node && !eng.npx){
+      p.appendChild(el(`<p>${t("w.engine.node")}</p>`));
+      const dl=el(`<button class="btn">${t("w.installnode")}</button>`); dl.onclick=()=>openExt("https://nodejs.org/en/download");
+      const rc=el(`<button class="btn ghost" style="margin-left:8px">${t("w.recheck")}</button>`); rc.onclick=refresh;
+      const r=el(`<div class="row" style="margin-top:6px"></div>`); r.appendChild(dl); r.appendChild(rc); p.appendChild(r);
+    } else {
+      // Node is there -> we can npm-install the connector ourselves (user-scope, no admin).
+      p.appendChild(el(`<p>${t("w.engine.cli")}</p>`));
+      const slot=el(`<div style="margin-top:8px"></div>`);
+      const go=el(`<button class="btn">${t("w.installengine")}</button>`);
+      go.onclick=async()=>{ go.disabled=true;
+        try{ await api("/api/engine/install",{method:"POST"});
+          slot.innerHTML=`<div class="row"><span class="spin"></span> <span class="muted">${t("w.engine.installing")}</span></div>`;
+          const iv=setInterval(async()=>{ try{ const x=await api("/api/setup/status"); const e2=x.engine||{};
+            if(e2.ready){ clearInterval(iv); refresh(); }
+            else if(!e2.install_running && e2.install_error){ clearInterval(iv); go.disabled=false;
+              slot.innerHTML=`<div class="card" style="border:1px solid #c0506e"><div class="muted" style="white-space:pre-wrap">${esc(e2.install_error)}</div></div>`; }
+          }catch{} }, 3000);
+        }catch(e){ go.disabled=false; toast(e.message); } };
+      const rc=el(`<button class="btn ghost" style="margin-left:8px">${t("w.recheck")}</button>`); rc.onclick=refresh;
+      const r=el(`<div class="row" style="margin-top:6px"></div>`); r.appendChild(go); r.appendChild(rc);
+      p.appendChild(r); p.appendChild(slot);
+    }
+  }
   else if(key==="model"){
-    p.innerHTML=`<h3>2. ${t("w.model")}</h3><p class="muted">${t("w.model.desc")}</p>`;
+    p.innerHTML=`<h3>${num}. ${t("w.model")}</h3><p class="muted">${t("w.model.desc")}</p>`;
     if(!s.ollama.running && !s.ollama.installed){
       p.appendChild(el(`<p>${t("w.ollama.install")}</p>`));
       const dl=el(`<button class="btn">${t("w.installollama")}</button>`); dl.onclick=()=>openExt("https://ollama.com/download");
@@ -347,19 +396,31 @@ async function setupStep(p, key, s, refresh){
       // installed but not running (fresh install's first session / autostart off) -> WE start it,
       // agency-owned: the pid is recorded so app shutdown stops it again.
       p.appendChild(el(`<p>${t("w.ollama.start")}</p>`));
+      const slot0=el(`<div style="margin-top:8px"></div>`);
       const st=el(`<button class="btn">${t("w.startollama")}</button>`);
-      st.onclick=async()=>{ st.disabled=true; try{ await api("/api/ollama/start",{method:"POST"});
-        const iv=setInterval(async()=>{ try{ const x=await api("/api/setup/status"); if(x.ollama.running){ clearInterval(iv); refresh(); } }catch{} }, 2000);
+      st.onclick=async()=>{ st.disabled=true; try{ const d=await api("/api/ollama/start",{method:"POST"});
+        if(!d.started && d.reason && d.reason!=="already running"){ st.disabled=false; slot0.innerHTML=`<p class="muted">${esc(d.reason)}</p>`; return; }
+        let n=0; const iv=setInterval(async()=>{ n++; try{ const x=await api("/api/setup/status");
+          if(x.ollama.running){ clearInterval(iv); refresh(); }
+          else if(n>30){ clearInterval(iv); st.disabled=false; slot0.innerHTML=`<p class="muted">${t("w.ollama.failed")}</p>`; }
+        }catch{} }, 2000);
       }catch(e){ st.disabled=false; toast(e.message); } };
       const rc2=el(`<button class="btn ghost" style="margin-left:8px">${t("w.recheck")}</button>`); rc2.onclick=refresh;
-      const r2=el(`<div class="row" style="margin-top:6px"></div>`); r2.appendChild(st); r2.appendChild(rc2); p.appendChild(r2);
+      const r2=el(`<div class="row" style="margin-top:6px"></div>`); r2.appendChild(st); r2.appendChild(rc2); p.appendChild(r2); p.appendChild(slot0);
     } else if(!s.ollama.has_model){
       p.appendChild(el(`<p>${t("w.gemma.desc")}</p>`));
+      p.appendChild(el(`<p class="muted" style="font-size:12px">${t("w.gemma.cpuwarn")}</p>`));
       const slot=el(`<div style="margin-top:8px"></div>`);
       const g=el(`<button class="btn">${t("w.getgemma")}</button>`);
       g.onclick=async()=>{ g.disabled=true; try{ await api("/api/ollama/pull",{method:"POST",body:JSON.stringify({model:s.ollama.default_model})});
         slot.innerHTML=`<div class="row"><span class="spin"></span> <span class="muted">${t("w.downloading")}</span></div>`;
-        const iv=setInterval(async()=>{ try{ const st=await api("/api/setup/status"); if(st.ollama.has_model){ clearInterval(iv); refresh(); } }catch{} }, 5000);
+        const iv=setInterval(async()=>{ try{ const st2=await api("/api/setup/status"); const o=st2.ollama||{};
+          if(o.has_model){ clearInterval(iv); refresh(); }
+          else if(!o.pull_running){ // the pull ENDED without the model — say why instead of spinning forever
+            clearInterval(iv); g.disabled=false;
+            slot.innerHTML=`<div class="card" style="border:1px solid #c0506e"><div class="muted" style="white-space:pre-wrap">${o.pull_error?(t("w.pull.failed")+" "+esc(o.pull_error)):t("w.pull.gone")}</div></div>`;
+          }
+        }catch{} }, 5000);
       }catch(e){ g.disabled=false; toast(e.message); } };
       p.appendChild(g); p.appendChild(slot);
     } else {
@@ -378,7 +439,7 @@ async function setupStep(p, key, s, refresh){
     body.appendChild(sk); adv.appendChild(body); p.appendChild(adv);
   }
   else if(key==="agent"){
-    p.innerHTML=`<h3>3. ${t("w.agent")}</h3><p class="muted">${t("w.agent.desc")}</p>`;
+    p.innerHTML=`<h3>${num}. ${t("w.agent")}</h3><p class="muted">${t("w.agent.desc")}</p>`;
     p.appendChild(el(`<label>${t("w.lbl.agentname")}</label>`)); const nm=el(`<input placeholder="e.g. news-watcher">`); p.appendChild(nm);
     p.appendChild(el(`<label>${t("w.lbl.dowhat")}</label>`));
     const pr=el(`<textarea>${t("w.defaultprose")}</textarea>`); p.appendChild(pr);
@@ -395,7 +456,7 @@ async function setupStep(p, key, s, refresh){
   }
   else if(key==="approve"){
     const agent=s.first_agent;
-    p.innerHTML=`<h3>4. ${t("w.approve")}</h3><p class="muted">${t("w.approve.desc")}</p>`;
+    p.innerHTML=`<h3>${num}. ${t("w.approve")}</h3><p class="muted">${t("w.approve.desc")}</p>`;
     const slot=el(`<div></div>`); p.appendChild(slot);
     // Render the code panel + poll. Reused on first click AND on re-entry (e.g. after a language switch),
     // so an in-flight approval is never lost.
@@ -415,7 +476,14 @@ async function setupStep(p, key, s, refresh){
       const od=el(`<button class="btn ghost" style="margin-top:8px">${t("w.opendash")}</button>`); od.onclick=()=>openExt(link); slot.appendChild(od);
       slot.appendChild(el(`<div class="row" style="margin-top:10px"><span class="spin"></span> <span class="muted">${t("waiting")}</span></div>`));
       if(window._authIv) clearInterval(window._authIv);
-      window._authIv=setInterval(async()=>{ try{ const a=await api("/api/agents/"+encodeURIComponent(agent)+"/auth-status"); if(a.authorized){ clearInterval(window._authIv); pendingAuth=null; refresh(); } }catch{} }, 4000);
+      let ticks=0;   // device codes EXPIRE — after ~10 min stop waiting and offer a fresh code (U1)
+      window._authIv=setInterval(async()=>{ ticks++;
+        try{ const a=await api("/api/agents/"+encodeURIComponent(agent)+"/auth-status"); if(a.authorized){ clearInterval(window._authIv); pendingAuth=null; refresh(); return; } }catch{}
+        if(ticks>=150){ clearInterval(window._authIv); pendingAuth=null;
+          slot.innerHTML=`<div class="card" style="border:1px solid #c0506e"><div class="muted">${t("approve.expired")}</div></div>`;
+          const rb=el(`<button class="btn" style="margin-top:8px">${t("w.approve")}</button>`); rb.onclick=()=>{ refresh(); }; slot.appendChild(rb);
+        }
+      }, 4000);
     };
     if(pendingAuth && pendingAuth.agent===agent){ showCode(pendingAuth); }
     else {
@@ -431,15 +499,24 @@ async function setupStep(p, key, s, refresh){
   }
   else if(key==="start"){
     const agent=s.first_agent;
-    p.innerHTML=`<h3>5. ${t("w.start")}</h3><p class="muted">${t("w.start.desc")}</p>`;
+    p.innerHTML=`<h3>${num}. ${t("w.start")}</h3><p class="muted">${t("w.start.desc")}</p>`;
+    const slot=el(`<div style="margin-top:10px"></div>`);
     const b=el(`<button class="btn">${t("start")}</button>`);
-    b.onclick=async()=>{ b.disabled=true;
+    b.onclick=async()=>{ b.disabled=true; slot.innerHTML="";
       let dots=1; const anim=setInterval(()=>{ b.textContent=".".repeat(dots); dots=dots%3+1; }, 350);  // "live" working indicator
       const stop=()=>{ clearInterval(anim); };
-      try{ await api("/api/fleet/"+encodeURIComponent(agent)+"/start",{method:"POST"});
-        let n=0; const iv=setInterval(async()=>{ n++; try{ const st=await api("/api/setup/status"); if(st.first_agent_running||n>20){ clearInterval(iv); stop(); refresh(); } }catch{} }, 3000);
+      try{ const r=await api("/api/fleet/"+encodeURIComponent(agent)+"/start",{method:"POST"});
+        let n=0; const iv=setInterval(async()=>{ n++; try{ const st=await api("/api/setup/status");
+          if(st.first_agent_running){ clearInterval(iv); stop(); refresh(); }
+          else if(n>20){ // ~60s and still not up: SAY what the fleet answered instead of silently resetting (U2)
+            clearInterval(iv); stop(); b.disabled=false; b.textContent=t("start");
+            const why=[(r.attach&&r.attach.error)||"", r.result||""].filter(Boolean).join(" · ");
+            slot.innerHTML=`<div class="card" style="border:1px solid #c0506e"><div class="muted" style="white-space:pre-wrap">${t("w.start.slow")} ${esc(why||"—")}</div></div>`;
+            const rc=el(`<button class="btn ghost" style="margin-top:8px">${t("w.recheck")}</button>`); rc.onclick=refresh; slot.appendChild(rc);
+          }
+        }catch{} }, 3000);
       }catch(e){ stop(); b.disabled=false; b.textContent=t("start"); toast(e.message); } };
-    p.appendChild(b);
+    p.appendChild(b); p.appendChild(slot);
   }
 }
 
@@ -622,7 +699,7 @@ function showActivity(m, agent, evs){
   const out=m.querySelector("#editorout"); out.dataset.view="history";
   out.innerHTML=`<h3>${t("history")}</h3><div class="muted" style="font-size:12px;margin-bottom:8px">${t("openresult")}</div>`;
   if(!evs || !evs.length){ out.appendChild(el(`<p class="muted">—</p>`)); return; }
-  const tb=el(`<table><tr><th>when</th><th>event</th><th>detail</th><th></th></tr></table>`);
+  const tb=el(`<table><tr><th>${t("th.when")}</th><th>${t("th.event")}</th><th>${t("th.detail")}</th><th></th></tr></table>`);
   evs.forEach(e=>{
     const d=e.detail||{}; const when=e.ts?new Date(e.ts*1000).toLocaleString():"—";
     let label=t("ev."+e.kind)!=="ev."+e.kind ? t("ev."+e.kind) : e.kind; let detail=""; let clickable=false;
@@ -676,7 +753,8 @@ function showApprove(m, agent, d, authState){
     <div><label>${t("code")}</label><div style="font-size:22px;font-weight:700;letter-spacing:2px">${esc(d.code)}</div></div>
   </div></div>`));
   const status=el(`<div class="row" style="margin-top:10px"><span class="spin"></span> <span class="muted">${t("waiting")}</span></div>`); out.appendChild(status);
-  const iv=setInterval(async()=>{
+  let ticks=0;   // device codes EXPIRE — stop waiting after ~10 min and say so (U1)
+  const iv=setInterval(async()=>{ ticks++;
     try{ const s=await api("/api/agents/"+encodeURIComponent(agent)+"/auth-status");
       if(s.authorized){ clearInterval(iv); authState.authorized=true;
         const b=m.querySelector("#authbadge"); if(b) b.innerHTML=`<span class="pill published">${t("approved")}</span>`;
@@ -685,8 +763,10 @@ function showApprove(m, agent, d, authState){
         const dismiss=el(`<button class="btn ghost" style="padding:4px 10px">${t("dismiss")}</button>`);
         // Reload the editor (now connected) — robust even if `out` is a stale ref; just clearing it did nothing.
         dismiss.onclick=()=>{ clearInterval(iv); openEditor(agent); }; done.appendChild(dismiss); status.replaceWith(done);
-        toast(t("approveddone")); }
+        toast(t("approveddone")); return; }
     }catch{}
+    if(ticks>=150){ clearInterval(iv);
+      status.replaceWith(el(`<div class="card" style="margin-top:10px;border:1px solid #c0506e"><div class="muted">${t("approve.expired")}</div></div>`)); }
   }, 4000);
   out._iv=iv;  // cleared when the panel is dismissed/re-rendered
 }
@@ -780,9 +860,9 @@ function showLogs(m,l){
 
 async function renderFleet(m){
   const snap=await api("/api/fleet");
-  m.innerHTML=`<h2>${t("fleet.title")}</h2><div class="sub">${t("fleet.sub")} · serve ${snap.serve_port?("port "+snap.serve_port):"down"} · ${snap.n_locks} locks</div>`;
+  m.innerHTML=`<h2>${t("fleet.title")}</h2><div class="sub">${t("fleet.sub")} · ${t("fleet.conn")}: ${snap.serve_port?("port "+snap.serve_port):t("fleet.down")}</div>`;
   if(!snap.rows.length){ m.appendChild(el(`<p class="muted">${t("noagents")}</p>`)); return; }
-  const tb=el(`<table><tr><th>agent</th><th>status</th><th>wd/dmn</th><th>last seen</th><th></th></tr></table>`);
+  const tb=el(`<table><tr><th>${t("th.agent")}</th><th>${t("th.status")}</th><th>${t("th.procs")}</th><th>${t("th.lastseen")}</th><th></th></tr></table>`);
   snap.rows.forEach(r=>{
     const age=r.last_seen_age_s==null?"—":(Math.round(r.last_seen_age_s)+"s");
     const tr=el(`<tr><td>${esc(r.agent)}</td><td><span class="pill ${esc(r.status)}">${esc(r.status)}</span></td>
@@ -851,9 +931,9 @@ async function renderMemory(m){
 async function loadMem(out, agent){
   const [recs,facets]=await Promise.all([api("/api/memory/"+encodeURIComponent(agent)),api("/api/memory/"+encodeURIComponent(agent)+"/facets")]);
   const fr=Object.entries(facets.topic||{}).map(([k,n])=>`${esc(k)} (${n})`).join(" · ");
-  out.innerHTML = (fr?`<div class="muted" style="margin-bottom:6px">topics: ${fr}</div>`:"")+`<div class="muted" style="margin-bottom:10px;font-size:12px">${t("mem.open")}</div>`;
-  if(!recs.records.length){ out.appendChild(el(`<p class="muted">empty</p>`)); return; }
-  const tb=el(`<table><tr><th>status</th><th>topic</th><th>source</th><th>body</th></tr></table>`);
+  out.innerHTML = (fr?`<div class="muted" style="margin-bottom:6px">${t("mem.topics")}: ${fr}</div>`:"")+`<div class="muted" style="margin-bottom:10px;font-size:12px">${t("mem.open")}</div>`;
+  if(!recs.records.length){ out.appendChild(el(`<p class="muted">${t("mem.empty")}</p>`)); return; }
+  const tb=el(`<table><tr><th>${t("th.status")}</th><th>${t("th.topic")}</th><th>${t("th.source")}</th><th>${t("th.body")}</th></tr></table>`);
   recs.records.forEach(r=>{ const body=typeof r.body==="string"?r.body:JSON.stringify(r.body);
     const tr=el(`<tr style="cursor:pointer"><td><span class="pill ${esc(r.status)}">${esc(r.status)}</span></td><td>${esc(r.topic||"—")}</td><td class="muted">${esc(r.source||"—")}</td><td class="muted">${esc(body.slice(0,90))}</td></tr>`);
     tr.onclick=()=>showMemRecord(out, agent, r); tb.appendChild(tr); });
@@ -883,7 +963,7 @@ async function loadSync(out, agent){
   const banner=s.in_sync?`<span class="pill published">${t("insync")}</span>`:`<span class="pill stale-heartbeat">${s.raw_count} ${t("notinsync")}</span>`;
   out.innerHTML=`<div class="row" style="gap:18px;margin-bottom:6px">${banner} <span class="muted">${s.raw_count} ${t("raw")} · ${s.published_count} ${t("published")} (aimeat.io)</span></div><div class="muted" style="font-size:12px;margin-bottom:10px">${t("sync.open")}</div>`;
   if(!s.published.length){ out.appendChild(el(`<p class="muted">—</p>`)); return; }
-  const tb=el(`<table><tr><th>key</th><th>visibility</th><th>updated</th></tr></table>`);
+  const tb=el(`<table><tr><th>${t("th.key")}</th><th>${t("th.visibility")}</th><th>${t("th.updated")}</th></tr></table>`);
   s.published.forEach(p=>{ const when=p.updated?new Date(p.updated).toLocaleString():"—";
     const tr=el(`<tr style="cursor:pointer"><td style="font-family:monospace;word-break:break-all;font-size:12px">${esc(p.key)}</td><td class="muted">${esc(p.visibility||"")}</td><td class="muted">${esc(when)}</td></tr>`);
     tr.onclick=()=>showNodeKey(out, agent, p); tb.appendChild(tr); });

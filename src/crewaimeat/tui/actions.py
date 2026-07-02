@@ -60,6 +60,10 @@ def start_fleet() -> str:
 def stop_fleet() -> str:
     """Tear the fleet down in the correct order. Windows: scripts/terminate_fleet.ps1 (kills the
     serve-watchdog → connectors → crews). Elsewhere: best-effort pkill of watchdog/crews/serve."""
+    # terminate_fleet kills REAL processes scoped to this checkout — under pytest that is the live dev
+    # fleet. Tests mock actions.stop_fleet; this backstop catches the one that forgets.
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return "fleet stop skipped (pytest — mock actions.stop_fleet in the test)"
     if os.name == "nt":
         from crewaimeat.forge import _project_root
 

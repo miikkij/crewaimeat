@@ -25,7 +25,9 @@ dependencies = [
 
 [project.optional-dependencies]
 tui = ["textual>=0.60"]  # the fleet TUI (crewaimeat-tui); optional so the core install stays lean
-agency = ["fastapi>=0.110", "uvicorn>=0.27"]  # the aimeat-agency cockpit server (crewaimeat.agency.cockpit)
+# The appliance's watchdog runs crews via a bare `uv run` and today only finds uv.exe in the venv
+# because crewai-cli HAPPENS to depend on the `uv` package — pin that lifeline explicitly.
+agency = ["fastapi>=0.110", "uvicorn>=0.27", "uv>=0.7"]  # the aimeat-agency cockpit server (crewaimeat.agency.cockpit)
 
 [project.scripts]
 crewaimeat = "crewaimeat.scaffold:main"

@@ -31,7 +31,7 @@ from pydantic import BaseModel
 from crewaimeat import brain_templates, brains, local_memory
 from crewaimeat.agency import account, events
 
-COCKPIT_VERSION = "0.8.29"
+COCKPIT_VERSION = "0.8.30"
 _TOKEN_ENV = "AIMEAT_AGENCY_TOKEN"
 _STATIC = Path(__file__).parent / "static"
 # Default local model for the wizard. gemma4 is capable enough for the agentic onboarding + news task
@@ -159,6 +159,23 @@ def _ollama_pidfile() -> str:
     return os.path.join(aimeat_home(), "agency_ollama.pid")
 
 
+def _pid_is_ollama(pid: int) -> bool:
+    """Is `pid` actually an ollama process RIGHT NOW? Windows reuses pids aggressively, so a stale
+    pidfile (reboot, dead spawn) could otherwise make shutdown taskkill an innocent process tree."""
+    import subprocess
+
+    try:
+        if os.name == "nt":
+            r = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"], capture_output=True, text=True, timeout=10
+            )
+            return "ollama" in (r.stdout or "").lower()
+        r = subprocess.run(["ps", "-p", str(pid), "-o", "comm="], capture_output=True, text=True, timeout=10)
+        return "ollama" in (r.stdout or "").lower()
+    except Exception:  # noqa: BLE001 — can't verify -> treat as NOT ollama (never kill blind)
+        return False
+
+
 def _start_agency_ollama() -> dict:
     """Start `ollama serve` as an AGENCY-OWNED child when it is installed but not running (the fresh-
     install first session, or autostart disabled/killed). The pid is recorded so shutdown stops exactly
@@ -182,8 +199,9 @@ def _start_agency_ollama() -> dict:
 
 
 def _stop_agency_ollama() -> str:
-    """Stop the ollama server ONLY if the agency started it (the pidfile we wrote, pid still an ollama
-    process). A user's own/autostart ollama has no pidfile and is left running. Best-effort."""
+    """Stop the ollama server ONLY if the agency started it (the pidfile we wrote, AND the pid is still
+    an ollama process — a reused pid after a reboot must never be killed). A user's own/autostart ollama
+    has no pidfile and is left running. Best-effort."""
     if os.environ.get("PYTEST_CURRENT_TEST"):
         return "agency-ollama stop skipped (pytest)"
     path = _ollama_pidfile()
@@ -193,6 +211,9 @@ def _stop_agency_ollama() -> str:
 
     try:
         pid = int(open(path, encoding="utf-8").read().strip())
+        if not _pid_is_ollama(pid):
+            os.remove(path)  # stale pidfile (reboot / dead spawn) — clean it, kill nothing
+            return f"stale agency-ollama pidfile removed (pid {pid} is not ollama)"
         if os.name == "nt":
             # /T also takes the model runner children (llama-server) that hold the GPU memory
             subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=15)
@@ -233,7 +254,13 @@ def _has_openrouter_key() -> bool:
         from crewaimeat.forge import _project_root
 
         env = _project_root() / ".env"
-        return env.is_file() and "OPENROUTER_API_KEY=" in env.read_text(encoding="utf-8")
+        if not env.is_file():
+            return False
+        for ln in env.read_text(encoding="utf-8").splitlines():
+            # a blank `OPENROUTER_API_KEY=` line is NOT a saved key — don't tell the wizard it is
+            if ln.startswith("OPENROUTER_API_KEY=") and ln.split("=", 1)[1].strip():
+                return True
+        return False
     except Exception:  # noqa: BLE001
         return False
 
@@ -248,6 +275,14 @@ def _set_openrouter_key(key: str) -> None:
     lines.append(f"OPENROUTER_API_KEY={key}")
     env.write_text("\n".join(lines) + "\n", encoding="utf-8")
     os.environ["OPENROUTER_API_KEY"] = key
+
+
+# The wizard drives one model download at a time; this is its outcome so a failed pull (no network,
+# disk full, ollama not on PATH yet) SURFACES in /api/setup/status instead of spinning forever.
+_PULL_STATE: dict = {"running": False, "model": None, "error": None}
+
+# `npm install -g aimeat` progress for the wizard's engine step — same shape, same reason.
+_ENGINE_INSTALL: dict = {"running": False, "error": None}
 
 
 def _ver_tuple(v: str | None) -> tuple[int, ...]:
@@ -331,10 +366,17 @@ def create_app(token: str | None = None) -> FastAPI:
         return {"ok": True, "service": "aimeat-agency-cockpit", "version": COCKPIT_VERSION}
 
     @app.get("/", response_class=HTMLResponse)
-    def index() -> str:
-        # Serve the single-file UI with the per-launch token injected. The page is the legitimate
-        # client (127.0.0.1 only); the token it carries gates /api/* against other local processes.
-        # (The Tauri shell will later deliver the token to the webview directly — a v1 hardening.)
+    def index(boot: str | None = Query(default=None)) -> str:
+        # Serve the single-file UI with the per-launch token injected — but ONLY to a caller that
+        # already knows the token (`?boot=`). Without this gate, any local process could GET / and
+        # read the injected token out of the HTML, making the whole /api/* token gate decorative.
+        # The Tauri shell appends ?boot= when it navigates; standalone main() prints the full URL.
+        if not (boot and app.state.token and secrets.compare_digest(boot.strip(), app.state.token)):
+            raise HTTPException(
+                status_code=401,
+                detail="missing or invalid boot token — open the cockpit via the app window "
+                "(or the ?boot= URL printed at startup)",
+            )
         try:
             html = (_STATIC / "index.html").read_text(encoding="utf-8")
         except OSError:
@@ -374,7 +416,7 @@ def create_app(token: str | None = None) -> FastAPI:
 
         acc = account.load()
         running, names = _ollama_probe()
-        _fam = DEFAULT_OLLAMA_MODEL.split(":")[0]  # e.g. "llama3.2" — present in any variant tag
+        _fam = DEFAULT_OLLAMA_MODEL.split(":")[0]  # e.g. "gemma4" — present in any variant tag (gemma4:latest)
         has_model = any(_fam in n for n in names)
         # The embed model powers the opt-in crew memory (CrewSpec.memory / pipeline_memory) — the
         # cascade's preferred free+private tier. Surfaced so the wizard can show/gate it.
@@ -384,10 +426,19 @@ def create_app(token: str | None = None) -> FastAPI:
         first = bs[0]["agent_name"] if bs else None
         first_auth = account.agent_auth(first, acc["owner"]) if first else {"authorized": False}
         serve_agents = {a.get("agent") for a in (fleet_state.collect_serve().get("agents") or [])}
+        from crewaimeat import node_engine
+
         return {
             "owner_set": acc["owner_set"],
             "owner": acc["owner"],
             "node": acc["node"],
+            # Node.js + the AIMEAT connector CLI — the engine agents run on. Every dev box had both on
+            # PATH, so nothing checked; a fresh machine has neither and device-auth/serve just died.
+            "engine": {
+                **node_engine.engine_status(),
+                "install_running": _ENGINE_INSTALL["running"],
+                "install_error": _ENGINE_INSTALL["error"],
+            },
             "ollama": {
                 "installed": _ollama_bin() is not None,
                 "running": running,
@@ -396,6 +447,8 @@ def create_app(token: str | None = None) -> FastAPI:
                 "embed_model": embed_model,
                 "has_embed_model": has_embed,
                 "models": names,
+                "pull_running": _PULL_STATE["running"],
+                "pull_error": _PULL_STATE["error"],
             },
             "openrouter_key": _has_openrouter_key(),
             "brain_count": len(bs),
@@ -411,26 +464,85 @@ def create_app(token: str | None = None) -> FastAPI:
         it again because we own the pid; a user-started ollama is never ours to stop."""
         return _start_agency_ollama()
 
+    @app.post("/api/engine/install", dependencies=[require_token])
+    def engine_install() -> dict:
+        """Install the AIMEAT connector CLI (`npm install -g aimeat@<pinned>`) in the background — the
+        wizard's engine step drives this once Node.js is present, and polls /api/setup/status until
+        `engine.connector_cli` flips (or `engine.install_error` says why it won't). Node.js itself is a
+        download-and-run installer we only guide to (like Ollama) — we never install system software."""
+        if os.environ.get("PYTEST_CURRENT_TEST"):  # a test must never npm-install into the real machine
+            return {"started": False, "reason": "pytest"}
+        from crewaimeat import node_engine
+        from crewaimeat.forge import AIMEAT_CONNECTOR
+
+        if node_engine.aimeat_cli():
+            return {"started": False, "reason": "already installed"}
+        if _ENGINE_INSTALL["running"]:
+            return {"started": False, "reason": "already installing"}
+        npm = node_engine.npm_bin()
+        if not npm:
+            raise HTTPException(status_code=400, detail="Node.js is not installed yet — install it first")
+        import subprocess
+        import threading
+
+        _ENGINE_INSTALL.update(running=True, error=None)
+        argv = ["cmd", "/c", npm] if os.name == "nt" else [npm]  # npm is a .cmd shim on Windows
+
+        def _install():
+            try:
+                r = subprocess.run(
+                    [*argv, "install", "-g", AIMEAT_CONNECTOR], capture_output=True, text=True, timeout=600
+                )
+                if r.returncode != 0:
+                    tail = ((r.stderr or r.stdout or "").strip().splitlines() or ["(no output)"])[-1]
+                    _ENGINE_INSTALL["error"] = f"npm install failed: {tail[:300]}"
+            except Exception as exc:  # noqa: BLE001 — surfaced via the status poll
+                _ENGINE_INSTALL["error"] = f"npm install failed: {type(exc).__name__}: {exc}"
+            finally:
+                _ENGINE_INSTALL["running"] = False
+
+        threading.Thread(target=_install, daemon=True).start()
+        return {"started": True, "package": AIMEAT_CONNECTOR}
+
     @app.post("/api/ollama/pull", dependencies=[require_token])
     def ollama_pull(body: PullIn) -> dict:
         """Kick off `ollama pull <model>` (default gemma4) in the background; the wizard polls
-        /api/setup/status until the model appears. Needs Ollama installed + on PATH.
+        /api/setup/status until the model appears (or `pull_error` reports why it won't).
+
+        Uses the RESOLVED ollama path (_ollama_bin) — a just-installed ollama is on the user PATH only
+        after a re-login, so the bare "ollama" that worked on every dev box failed the exact first-run
+        flow the wizard exists for, silently. Failures land in _PULL_STATE for the status endpoint.
 
         Also pulls the EMBED model (nomic-embed-text, ~274 MB) right after — it is the embedder
         cascade's preferred free+private tier, so opt-in crew memory (CrewSpec.memory /
         pipeline_memory) works on the appliance out of the box instead of failing its prerequisite."""
+        if os.environ.get("PYTEST_CURRENT_TEST"):  # a test must never download real models
+            return {"started": False, "reason": "pytest"}
+        if _PULL_STATE["running"]:
+            return {"started": False, "reason": "already pulling", "model": _PULL_STATE["model"]}
         import subprocess
         import threading
 
         model = (body.model or DEFAULT_OLLAMA_MODEL).strip()
         embed_model = os.getenv("AIMEAT_EMBED_OLLAMA_MODEL", "nomic-embed-text")
+        exe = _ollama_bin()
+        if not exe:
+            _PULL_STATE.update(running=False, model=model, error="Ollama is not installed (executable not found)")
+            return {"started": False, "reason": "not installed", "download": "https://ollama.com/download"}
+        _PULL_STATE.update(running=True, model=model, error=None)
 
         def _pull():
-            for m in (model, embed_model):
-                try:
-                    subprocess.run(["ollama", "pull", m], capture_output=True, timeout=3600)
-                except Exception:  # noqa: BLE001 — the wizard's status poll shows what actually arrived
-                    pass
+            try:
+                for m in (model, embed_model):
+                    r = subprocess.run([exe, "pull", m], capture_output=True, text=True, timeout=3600)
+                    if r.returncode != 0:
+                        tail = ((r.stderr or r.stdout or "").strip().splitlines() or ["(no output)"])[-1]
+                        _PULL_STATE["error"] = f"ollama pull {m} failed: {tail[:300]}"
+                        return  # the chat model failed -> don't mask it with an embed-pull attempt
+            except Exception as exc:  # noqa: BLE001 — surfaced via the status poll, never a silent spin
+                _PULL_STATE["error"] = f"ollama pull failed: {type(exc).__name__}: {exc}"
+            finally:
+                _PULL_STATE["running"] = False
 
         threading.Thread(target=_pull, daemon=True).start()
         return {"started": True, "model": model, "embed_model": embed_model}
@@ -483,10 +595,13 @@ def create_app(token: str | None = None) -> FastAPI:
         try:
             import requests
 
+            exe = _ollama_bin()  # resolved path — bare "ollama" isn't on PATH on a fresh install
+            if not exe:
+                return "ollama unload skipped (executable not found)"
             base = (os.getenv("OLLAMA_HOST") or "http://localhost:11434").rstrip("/")
             models = [m.get("name") for m in (requests.get(f"{base}/api/ps", timeout=3).json().get("models") or [])]
             for m in filter(None, models):
-                subprocess.run(["ollama", "stop", m], capture_output=True, timeout=15)
+                subprocess.run([exe, "stop", m], capture_output=True, timeout=15)
             return f"unloaded {len(models)} ollama model(s)" if models else "no ollama models loaded"
         except Exception as exc:  # noqa: BLE001 — shutdown hygiene is best-effort; keep-alive unloads anyway
             return f"ollama unload skipped ({type(exc).__name__})"
@@ -541,6 +656,7 @@ def create_app(token: str | None = None) -> FastAPI:
                 llm.clear_override(name)
         except Exception:  # noqa: BLE001
             pass
+        _stop_agency_ollama()  # if WE started ollama, stop it too — reset means a truly cold start
         home = Path(aimeat_home())
         for name in (
             "brains.db",
@@ -549,6 +665,7 @@ def create_app(token: str | None = None) -> FastAPI:
             "agency_account.json",
             "llm_overrides.json",
             "serve.json",
+            "agency_ollama.pid",  # else a later shutdown could act on a stale (reused) pid
         ):
             for suffix in ("", "-wal", "-shm"):
                 p = home / (name + suffix)
@@ -568,6 +685,28 @@ def create_app(token: str | None = None) -> FastAPI:
                 removed.append(f.name)
             except OSError:
                 pass
+        # The reset confirm promises ALL settings go — that includes the saved OpenRouter key (.env)
+        # and this process's copy of it, so the wizard's model step truly starts over.
+        try:
+            from crewaimeat.forge import _project_root
+
+            envf = _project_root() / ".env"
+            if envf.is_file():
+                lines = [
+                    ln
+                    for ln in envf.read_text(encoding="utf-8").splitlines()
+                    if not ln.startswith("OPENROUTER_API_KEY=")
+                ]
+                envf.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+                removed.append(".env:OPENROUTER_API_KEY")
+        except OSError:
+            pass
+        os.environ.pop("OPENROUTER_API_KEY", None)
+        # Crew/register logs are agent data too (prompts, outputs, device codes) — a fresh start drops them.
+        logs = Path("logs")
+        if logs.is_dir():
+            shutil.rmtree(logs, ignore_errors=True)  # best-effort: a file held open just survives
+            removed.append("logs/")
         os.environ.pop("AIMEAT_OWNER", None)  # so the wizard restarts at step 1
         return {"ok": True, "removed": removed}
 
@@ -579,11 +718,17 @@ def create_app(token: str | None = None) -> FastAPI:
         the account until that approval, so the app can never act without the owner's explicit consent."""
         import re as _re
 
-        from crewaimeat import forge
+        from crewaimeat import forge, node_engine
 
         acc = account.load()
         if not acc["owner"]:
             raise HTTPException(status_code=400, detail="connect an owner first (POST /api/account/connect)")
+        if not node_engine.npx_bin():  # device-auth shells out to npx — fail with the fix, not WinError 2
+            raise HTTPException(
+                status_code=400,
+                detail="Node.js is required to connect an agent but was not found — "
+                "finish the 'agent engine' step in Setup first.",
+            )
         try:
             ok, msg = forge.register_agent(agent, acc["owner"], acc["node"])
         except Exception as e:  # noqa: BLE001
@@ -801,8 +946,9 @@ def create_app(token: str | None = None) -> FastAPI:
         if not tid:
             raise HTTPException(
                 status_code=502,
-                detail="the connector doesn't have this agent attached yet (it loads agents at startup). "
-                "Restart the fleet so the new agent is picked up, then try again.",
+                detail="the agent's connection isn't up: either the connector doesn't have this agent "
+                "attached yet (it loads agents at startup — press Start/Restart so it's picked up), or "
+                "the connection to your node is down (check your internet). Then try again.",
             )
         events.record(agent, "test_run", {"task_id": tid, "prompt": body.prompt[:120]})
         return {"ok": True, "task_id": tid}
@@ -933,6 +1079,12 @@ def create_app(token: str | None = None) -> FastAPI:
         # node=0 (default) reads ONLY local state (process table + locks + serve.json) — no network, no
         # daemon spawn. node=1 also makes the one read-only aimeat_agents_list call for last_seen/mode.
         snap = fleet_state.build_snapshot(node_index=None if node else {})
+        # The cockpit manages BRAIN agents only. The appliance bundle ships the repo's example crews/
+        # too, so an unfiltered roster showed a non-dev ~40 unfamiliar dev agents — hide everything the
+        # operator didn't create here. (The dev fleet's full view is the TUI, not the cockpit.)
+        mine = {b["agent_name"] for b in brains.list_brains()}
+        snap.rows = [r for r in snap.rows if r.agent in mine]
+        snap.zombies = [r.agent for r in snap.rows if r.status == "zombie"]
         return dataclasses.asdict(snap)
 
     @app.get("/api/fleet/{agent}/logs", dependencies=[require_token])
@@ -1100,11 +1252,15 @@ def create_app(token: str | None = None) -> FastAPI:
 def main() -> None:
     import uvicorn
 
+    shell_launched = bool(os.environ.get(_TOKEN_ENV))
     token = os.environ.get(_TOKEN_ENV) or secrets.token_urlsafe(32)
     os.environ[_TOKEN_ENV] = token  # so create_app() inside the worker sees the same one
     host = os.environ.get("AIMEAT_AGENCY_HOST", "127.0.0.1")  # 127.0.0.1 only — never bind public
     port = int(os.environ.get("AIMEAT_AGENCY_PORT", "8753"))
-    print(f"[aimeat-agency cockpit] http://{host}:{port}  token={token}", flush=True)
+    if shell_launched:  # the shell knows the token; don't echo it into the visible console
+        print(f"[aimeat-agency cockpit] http://{host}:{port}  (token from env)", flush=True)
+    else:  # standalone/dev: the ?boot= URL is the only way in — print it
+        print(f"[aimeat-agency cockpit] http://{host}:{port}/?boot={token}", flush=True)
     uvicorn.run(create_app(token), host=host, port=port, log_level="info")
 
 

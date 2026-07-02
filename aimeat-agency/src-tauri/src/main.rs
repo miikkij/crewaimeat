@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -151,6 +151,7 @@ fn spawn_cockpit(uv: &str, repo: &Path, token: &str) -> std::io::Result<Child> {
     };
     c.current_dir(repo)
         .env("AIMEAT_HOME", repo.join(".aimeat"))
+        .env("AIMEAT_AGENCY", "1") // lets runtime code branch appliance-vs-dev explicitly
         .env("AIMEAT_AGENCY_TOKEN", token)
         .env("AIMEAT_AGENCY_PORT", PORT.to_string())
         .spawn()
@@ -196,7 +197,9 @@ fn start_provisioning(handle: AppHandle) {
                     Ok(mut child) => {
                         *handle.state::<AppState>().pid.lock().unwrap() = Some(child.id());
                         if wait_up(Duration::from_secs(120)) {
-                            let url = format!("http://127.0.0.1:{}/?lang={}", PORT, lang);
+                            // `boot` proves the caller knows the token — the cockpit refuses to hand
+                            // the UI (with the injected token) to any local process that doesn't.
+                            let url = format!("http://127.0.0.1:{}/?lang={}&boot={}", PORT, lang, token);
                             if let Some(win) = handle.get_webview_window("splash") {
                                 let _ = win.eval(&format!("window.location.replace('{}')", url));
                             }
@@ -298,8 +301,11 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
 }
 
 fn main() {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-    let token = format!("{:x}{:x}", nanos, std::process::id());
+    // The token gates every cockpit /api/* call (start/stop/reset/publish), so it must be
+    // unguessable by other local processes — OS entropy, not the old timestamp+pid (predictable).
+    let mut buf = [0u8; 32];
+    getrandom::fill(&mut buf).expect("OS entropy unavailable");
+    let token: String = buf.iter().map(|b| format!("{:02x}", b)).collect();
 
     tauri::Builder::default()
         .manage(AppState {

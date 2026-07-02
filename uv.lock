@@ -758,6 +758,7 @@ dependencies = [
 [package.optional-dependencies]
 agency = [
     { name = "fastapi" },
+    { name = "uv" },
     { name = "uvicorn" },
 ]
 tui = [
@@ -792,6 +793,7 @@ requires-dist = [
     { name = "textual", marker = "extra == 'tui'", specifier = ">=0.60" },
     { name = "trafilatura", specifier = ">=2.0.0" },
     { name = "tzdata" },
+    { name = "uv", marker = "extra == 'agency'", specifier = ">=0.7" },
     { name = "uvicorn", marker = "extra == 'agency'", specifier = ">=0.27" },
 ]
 provides-extras = ["tui", "agency"]

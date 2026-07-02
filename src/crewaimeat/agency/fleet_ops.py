@@ -72,16 +72,23 @@ def ensure_serve_watchdog() -> bool:
 def ensure_serve_alive() -> dict:
     """Bring up ONE serve daemon AND a supervisor that keeps it alive — the appliance equivalent of the dev
     fleet's start_fleet. Idempotent + single-instance (safe to call on cockpit boot and on every agent
-    start). After this, a crew's `auto_start=False` reliably finds a live, stable bridge."""
+    start). After this, a crew's `auto_start=False` reliably finds a live, stable bridge.
+
+    A failed spawn is REPORTED (the `error` key), not swallowed — a missing connector CLI (fresh machine,
+    engine step skipped) used to vanish here and surface hours later as crews crash-looping on
+    'No live serve daemon'."""
     from crewaimeat.serve_guard import ensure_single_serve
 
-    doc = {}
+    doc, err = {}, None
     try:
         doc = ensure_single_serve()
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001 — keep the supervisor start below, but carry the real cause up
+        err = f"{type(exc).__name__}: {exc}"
     ensure_serve_watchdog()
-    return {"serve_pid": doc.get("pid"), "port": doc.get("port"), "watchdog": True}
+    out = {"serve_pid": doc.get("pid"), "port": doc.get("port"), "watchdog": True}
+    if err:
+        out["error"] = err
+    return out
 
 
 # Per-agent cooldown so rapid repeated start/restart clicks can't hammer the serve daemon with
@@ -112,7 +119,10 @@ def ensure_attached(agent: str) -> dict:
         return {"attached": agent in serve_agents(), "restarted": False}
     from crewaimeat.serve_guard import restart_serve
 
-    doc = restart_serve()  # ONE coordinated kill+respawn under the spawn lock; serve.json re-pointed
+    try:
+        doc = restart_serve()  # ONE coordinated kill+respawn under the spawn lock; serve.json re-pointed
+    except Exception as exc:  # noqa: BLE001 — carry the real cause up (e.g. connector CLI missing), don't 500
+        return {"attached": False, "restarted": False, "error": f"{type(exc).__name__}: {exc}"}
     _LAST_ATTACH_RESTART["_any"] = time.monotonic()
     ensure_serve_watchdog()  # keep the fresh daemon alive (revive on death/tunnel-drop)
     loaded = {a.get("agent") for a in (doc.get("agents") or []) if a.get("agent")}
@@ -130,5 +140,8 @@ def ensure_bridge(agent: str) -> dict:
     if agent in serve_agents():
         ensure_serve_watchdog()
         return {"attached": True, "restarted": False}
-    ensure_serve_alive()  # one daemon + supervisor (idempotent: reaps, re-points serve.json, no restart)
-    return ensure_attached(agent)
+    alive = ensure_serve_alive()  # one daemon + supervisor (idempotent: reaps, re-points serve.json, no restart)
+    out = ensure_attached(agent)
+    if alive.get("error") and not out.get("attached"):
+        out["error"] = alive["error"]  # surface WHY the bridge is down (e.g. connector CLI missing)
+    return out

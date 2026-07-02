@@ -314,16 +314,28 @@ def _assert_serve_json_owner(doc: dict) -> bool:
         return False
 
 
+def _guard_pytest() -> None:
+    """A test must NEVER spawn or kill a real serve daemon. Every existing test mocks these functions;
+    this backstop makes a forgotten mock fail LOUD instead of silently mutating the live machine."""
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        raise RuntimeError("refusing to touch the serve daemon under pytest — mock serve_guard in the test")
+
+
 def ensure_single_serve(timeout: float = 60.0) -> dict:
     """Ensure EXACTLY ONE serve daemon is running and return its discovery doc.
 
     Serializes the check->spawn with a cross-process lock, then reaps any daemon that is not the one
     serve.json points at, and re-asserts serve.json's owner so it never names a reaped/dead pid.
     Idempotent + safe to call on a timer."""
+    _guard_pytest()
     from aimeat_crewai import ensure_serve
 
+    from crewaimeat.node_engine import serve_command
+
     with _CrossProcessLock(_LOCK, timeout):
-        doc = ensure_serve(auto_start=True)  # discovers a live daemon, or spawns one if none
+        # serve_command() resolves the connector CLI even when a JUST-installed one isn't on this
+        # process's PATH yet (the appliance's engine step installs it mid-session).
+        doc = ensure_serve(aimeat_command=serve_command(), auto_start=True)  # discovers, or spawns one
         _record_daemon(doc.get("pid"))  # remember our canonical daemon so the reap can ID our strays by pid
         reaped = _reap_duplicates(doc.get("pid"))
         # A reaped loser may have left serve.json naming a now-dead pid — re-point it at the kept live
@@ -342,12 +354,15 @@ def restart_serve(timeout: float = 60.0) -> dict:
     watchdog could spawn a second daemon in the gap, and serve.json transiently named the just-killed pid
     (the crew's crash trigger). Here the kill and the single respawn happen UNDER the spawn lock, and
     serve.json is re-pointed at the fresh daemon before returning — one coordinated replacement, no race."""
+    _guard_pytest()
     from aimeat_crewai import ensure_serve
+
+    from crewaimeat.node_engine import serve_command
 
     with _CrossProcessLock(_LOCK, timeout):
         for pid in this_home_serve_pids():
             _kill(pid)
-        doc = ensure_serve(auto_start=True)  # serve.json's dead pid -> spawns one fresh, waits until live
+        doc = ensure_serve(aimeat_command=serve_command(), auto_start=True)  # dead pid -> fresh spawn, waits live
         _record_daemon(doc.get("pid"))
         _reap_duplicates(doc.get("pid"))
         _assert_serve_json_owner(doc)
