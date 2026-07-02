@@ -34,11 +34,15 @@ def _say(msg: str, *, err: bool = False) -> None:
 
 
 def _aimeat_home() -> Path:
-    """The connector home for THIS process. AIMEAT_HOME env wins (matches the connector +
-    aimeat_crewai), else the legacy global ~/.aimeat. Every home gets its OWN serve daemon —
-    the desktop's isolated home must NOT reap the user's global fleet serve, and vice versa."""
-    h = os.environ.get("AIMEAT_HOME")
-    return Path(h) if h else (Path(os.path.expanduser("~")) / ".aimeat")
+    """The connector home for THIS process — crewaimeat._home.aimeat_home(), the single source
+    (AIMEAT_HOME env wins, else <cwd>/.aimeat, matching the connector + aimeat_crewai). This used to
+    re-derive with a legacy ~/.aimeat fallback, so an env-less caller inside a repo scoped to a
+    PHANTOM home: this_home_serve_pids() found nothing and restart_serve() silently no-opped while
+    ensure_serve (cwd precedence) adopted the old daemon — a mixed-home resolution in one call.
+    Every home still gets its OWN serve daemon; foreign homes are never reaped."""
+    from crewaimeat._home import aimeat_home
+
+    return aimeat_home()
 
 
 def _norm(p: str | Path | None) -> str | None:

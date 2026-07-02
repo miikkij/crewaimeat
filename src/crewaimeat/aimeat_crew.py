@@ -533,6 +533,46 @@ def _wait_for_serve(agent_name: str, max_wait_seconds: int = SERVE_WAIT_SECONDS,
             time.sleep(interval)
 
 
+def _serve_attach_bridge(agent_name: str) -> None:
+    """The approve→attach bridge: make the SHARED serve daemon actually serve this agent.
+
+    The daemon loads its agent set only at STARTUP, so an agent approved AFTER it started (every
+    crew-forge-born agent; any late device-auth) is unknown to it: every tunnel call fails
+    UNKNOWN_AGENT, Hello Integration strands on its api_call steps, and the daemon-start raises until
+    the watchdog burns its quick-exit budget — a fully-approved agent that just never comes online.
+    Called right after _wait_for_auth (the moment the token provably exists): if a live daemon already
+    serves us this is one serve.json read (the steady state); if there is NO live daemon we do nothing
+    (whoever spawns it next loads every token, ours included); only the genuinely-unattached case does
+    ONE coordinated restart via serve_guard (spawn-lock serialized — running crews ride out the blip).
+    Best-effort: on failure the daemon-start retry loop still gets its chance."""
+    if os.environ.get("PYTEST_CURRENT_TEST"):  # a test must never touch the machine's serve daemon
+        return
+    try:
+        doc = ensure_serve(auto_start=False)  # discovery only — never spawns
+    except AimeatServeError:
+        return  # no live daemon: the next spawn (start_fleet / supervisor) loads all tokens anyway
+    if agent_name in {a.get("agent") for a in (doc.get("agents") or [])}:
+        return
+    print(
+        f"[{agent_name}] approved, but the serve daemon predates my token (it serves "
+        f"{len(doc.get('agents') or [])} agents, not me) — one coordinated reload to attach.",
+        file=sys.stderr,
+    )
+    try:
+        from crewaimeat.serve_guard import restart_serve
+
+        doc = restart_serve()
+    except Exception as exc:  # noqa: BLE001 — best-effort; the daemon-start retries may still recover
+        print(f"[{agent_name}] serve reload for attach failed ({exc!r}) — continuing.", file=sys.stderr)
+        return
+    attached = agent_name in {a.get("agent") for a in (doc.get("agents") or [])}
+    print(
+        f"[{agent_name}] serve daemon reloaded (pid {doc.get('pid')}, {len(doc.get('agents') or [])} agents): "
+        f"attached={attached}",
+        file=sys.stderr,
+    )
+
+
 # Shared loopback serve daemon (aimeat connect serve --http): discovered once per process,
 # then every deterministic call is ONE keep-alive POST on this Session — the daemon multiplexes
 # everything over one persistent WebSocket per agent to the node. No subprocess, no per-call TLS.
@@ -1683,6 +1723,12 @@ def run_crew(spec: CrewSpec) -> None:
     #    to be accepted rather than crash-looping in onboarding. Lets an unattended crew
     #    come online by itself once approved (no console needed).
     _wait_for_auth(spec.agent_name, spec.owner, spec.wait_for_approval_seconds)
+
+    # 0a2) Approve→attach bridge: a running serve daemon predating our token doesn't serve us (it loads
+    #      agents at startup) — one coordinated reload attaches us BEFORE any tunnel call, so the
+    #      publishes below, Hello Integration and the daemon all get a working bridge. No-op (one
+    #      serve.json read) when already attached — the steady state of every normal restart.
+    _serve_attach_bridge(spec.agent_name)
 
     # 0b) Set the agent's MODE (idempotent, every start, BEFORE onboarding so the node serves the mode's
     #     step list). crewaimeat crews are task-runners; the node otherwise defaults a device-authed agent
