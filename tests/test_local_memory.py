@@ -105,7 +105,7 @@ def test_make_local_memory_tools(tmp_path, monkeypatch):
     from crewaimeat import local_memory as lm
 
     tools = lm.make_local_memory_tools("w")
-    assert [t.name for t in tools] == ["remember", "browse_memory", "recall_memory", "publish_memory"]
+    assert [t.name for t in tools] == ["remember", "browse_memory", "search_memory", "recall_memory", "publish_memory"]
 
     remember_tool = tools[0]
     out = remember_tool.run(body='{"finding": "x"}', topic="funding", tags="a, b")
@@ -127,3 +127,49 @@ def test_forget(tmp_path, monkeypatch):
     assert len(lm.browse("w")) == 1
     assert lm.forget("w") == 1  # wipe the rest
     assert lm.browse("w") == []
+
+
+def test_search_full_text_ranked_and_scoped(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    from crewaimeat import local_memory as lm
+
+    a = lm.remember("w", {"note": "Helsinki launch venue booked for March"}, topic="events")
+    lm.remember("w", "Budget approved: 8400 euros for the launch party", topic="money", tags=["launch"])
+    lm.remember("w", "Unrelated grocery list: milk, bread", topic="home")
+    lm.remember("other", "Helsinki weather is nice")  # another agent — must not leak
+
+    hits = lm.search("w", "Helsinki launch")
+    assert hits and hits[0]["id"] == a  # both words hit -> best BM25 rank first
+    assert all("grocery" not in json.dumps(h["body"]) for h in hits[:2])
+    assert {h["id"] for h in hits} <= {r["id"] for r in lm.browse("w", limit=50)}  # agent-scoped
+
+    # tags and topic are searchable too; status filters compose
+    assert lm.search("w", "launch", status="raw")
+    lm.mark_published("w", a, key="k")
+    assert all(h["id"] != a for h in lm.search("w", "Helsinki", status="raw"))
+
+
+def test_search_survives_fts_syntax_and_empty(tmp_path, monkeypatch):
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    from crewaimeat import local_memory as lm
+
+    lm.remember("w", "C++ tips AND tricks (NEAR the edge) - dashes*")
+    assert lm.search("w", 'AND (NEAR) "quoted" -x *star') != []  # syntax chars disarmed, words still match
+    assert lm.search("w", "") == []
+    assert lm.search("w", "!!! ???") == []  # no word tokens -> no query
+
+
+def test_fts_migration_rebuilds_existing_rows(tmp_path, monkeypatch):
+    """A DB created BEFORE the FTS feature becomes searchable on first open after the upgrade."""
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    from crewaimeat import local_memory as lm
+
+    lm.remember("w", "the ancient record about quasars", topic="space")
+    # simulate a pre-FTS database: drop the index + triggers, then reopen (which must rebuild)
+    with lm._conn() as c:
+        for trg in ("records_fts_ai", "records_fts_ad", "records_fts_au"):
+            c.execute(f"DROP TRIGGER {trg}")
+        c.execute("DROP TABLE records_fts")
+    assert [h["topic"] for h in lm.search("w", "quasars")] == ["space"]  # _ensure_fts recreated + rebuilt

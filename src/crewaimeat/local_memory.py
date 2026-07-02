@@ -28,7 +28,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
+import sys
 import time
 import uuid
 
@@ -60,6 +62,46 @@ def _db_path() -> str:
     return os.path.join(home, "local_memory.db")
 
 
+_FTS_UNAVAILABLE = False  # set once (logged loud) if this sqlite build lacks FTS5; storage still works
+
+
+def _ensure_fts(c: sqlite3.Connection) -> None:
+    """Full-text search over topic/body/tags (SQLite FTS5, external-content + sync triggers).
+
+    Created lazily on first open of a DB that lacks it; a pre-existing DB gets a one-time 'rebuild'
+    so history is searchable immediately. If this sqlite build has no FTS5 (rare — python.org builds
+    ship it), STORAGE keeps working and only `search()` fails loud; flagged once to stderr."""
+    global _FTS_UNAVAILABLE
+    if _FTS_UNAVAILABLE:
+        return
+    has = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='records_fts'").fetchone()
+    if has:
+        return
+    try:
+        c.execute(
+            "CREATE VIRTUAL TABLE records_fts USING fts5(topic, body, tags, content='records', content_rowid='rowid')"
+        )
+        c.execute(
+            "CREATE TRIGGER records_fts_ai AFTER INSERT ON records BEGIN "
+            "INSERT INTO records_fts(rowid, topic, body, tags) VALUES (new.rowid, new.topic, new.body, new.tags); END"
+        )
+        c.execute(
+            "CREATE TRIGGER records_fts_ad AFTER DELETE ON records BEGIN "
+            "INSERT INTO records_fts(records_fts, rowid, topic, body, tags) "
+            "VALUES ('delete', old.rowid, old.topic, old.body, old.tags); END"
+        )
+        c.execute(
+            "CREATE TRIGGER records_fts_au AFTER UPDATE ON records BEGIN "
+            "INSERT INTO records_fts(records_fts, rowid, topic, body, tags) "
+            "VALUES ('delete', old.rowid, old.topic, old.body, old.tags); "
+            "INSERT INTO records_fts(rowid, topic, body, tags) VALUES (new.rowid, new.topic, new.body, new.tags); END"
+        )
+        c.execute("INSERT INTO records_fts(records_fts) VALUES('rebuild')")  # index pre-existing rows once
+    except sqlite3.OperationalError as exc:
+        _FTS_UNAVAILABLE = True
+        print(f"[local_memory] FTS5 unavailable in this sqlite build ({exc}); search() disabled", file=sys.stderr)
+
+
 def _conn() -> sqlite3.Connection:
     c = sqlite3.connect(_db_path(), timeout=10)
     c.execute("PRAGMA journal_mode=WAL")
@@ -73,6 +115,7 @@ def _conn() -> sqlite3.Connection:
     )
     # Faceted browse is by (agent, time) and (agent, topic/event/source) — index the hot path.
     c.execute("CREATE INDEX IF NOT EXISTS records_agent_ts ON records(agent, ts DESC)")
+    _ensure_fts(c)
     return c
 
 
@@ -176,6 +219,39 @@ def browse(
     if tag is not None:
         out = [r for r in out if tag in (r.get("tags") or [])][:limit]
     return out
+
+
+def _fts_query(query: str) -> str:
+    """A user/LLM query -> a safe FTS5 MATCH expression: each word double-quoted (disarms FTS syntax
+    like -, *, NEAR, parens) and OR-joined (lenient recall, BM25 puts the best overlap first)."""
+    words = re.findall(r"[\w']+", (query or "").lower())[:16]
+    return " OR ".join(f'"{w}"' for w in words)
+
+
+def search(agent: str, query: str, *, limit: int = 10, status: str | None = None) -> list[dict]:
+    """Full-text search over the agent's records (topic + body + tags), best BM25 match first.
+
+    This is the tier's text search (the semantic/embedding layer is `pipeline_memory` — this one is
+    exact-word, instant, and needs no model). Empty/word-free query -> []. Raises loud if this sqlite
+    build lacks FTS5 (storage still works; see _ensure_fts)."""
+    q = _fts_query(query)
+    if not q:
+        return []
+    where = "records_fts MATCH ? AND r.agent=?"
+    args: list = [q, agent]
+    if status:
+        where += " AND r.status=?"
+        args.append(status)
+    cols = ", ".join(f"r.{c}" for c in _COLUMNS)
+    with _conn() as c:
+        if _FTS_UNAVAILABLE:
+            raise RuntimeError("local_memory.search needs SQLite FTS5, which this python build lacks")
+        rows = c.execute(
+            f"SELECT {cols} FROM records_fts f JOIN records r ON r.rowid = f.rowid "
+            f"WHERE {where} ORDER BY f.rank LIMIT ?",
+            (*args, limit),
+        ).fetchall()
+    return [_row_to_record(r) for r in rows]
 
 
 def facets(agent: str) -> dict:
@@ -310,6 +386,25 @@ def make_local_memory_tools(agent_name: str) -> list:
             rows.append(f"- {r['id']} | {r['status']} | {r.get('topic') or '-'} | {r.get('source') or '-'} | {preview}")
         return "your local memory:\n" + "\n".join(rows)
 
+    @tool("search_memory")
+    def search_tool(query: str, status: str = "", limit: int = 10) -> str:
+        """SEARCH your local memory by words (full-text over topic, content, and tags — instant, exact
+        words; use browse_memory for facet/label filtering instead). Best matches first. Optional
+        status filter: 'raw' or 'published'. Returns `id | status | topic | <preview>` rows — read a
+        full record with recall_memory(id)."""
+        try:
+            recs = search(agent_name, query, status=(status or None), limit=limit)
+        except RuntimeError as exc:  # FTS5 missing in this build — say so instead of pretending no hits
+            return f"SEARCH UNAVAILABLE: {exc}"
+        if not recs:
+            return "No local records match that search."
+        rows = []
+        for r in recs:
+            b = r["body"]
+            preview = (b if isinstance(b, str) else json.dumps(b, ensure_ascii=False))[:80]
+            rows.append(f"- {r['id']} | {r['status']} | {r.get('topic') or '-'} | {preview}")
+        return "search results (best match first):\n" + "\n".join(rows)
+
     @tool("recall_memory")
     def recall_tool(id: str) -> str:
         """Read one full local record by its id (from remember/browse). Returns the stored body."""
@@ -333,7 +428,7 @@ def make_local_memory_tools(agent_name: str) -> list:
             else f"FAILED: {res.get('error')}"
         )
 
-    tools = [remember_tool, browse_tool, recall_tool, publish_tool]
+    tools = [remember_tool, browse_tool, search_tool, recall_tool, publish_tool]
     for _t in tools:  # live local state — never serve a cached result
         try:
             _t.cache_function = lambda *_a, **_k: False
