@@ -477,6 +477,19 @@ def test_stop_agency_ollama_only_touches_own_pidfile(client, monkeypatch):
     assert cp._stop_agency_ollama() == "ollama not agency-started (left running)"
 
 
+def test_unload_leaves_shared_ollama_models_warm(client, tmp_path, monkeypatch):
+    # A machine-wide ollama shared with ANOTHER fleet (the dev box) must keep its warm models on
+    # appliance quit — unload only when the agency started the server (its pidfile exists).
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))  # no agency_ollama.pid here
+    monkeypatch.delenv("AIMEAT_AGENCY_TOKEN", raising=False)
+    import crewaimeat.tui.actions as actions
+
+    monkeypatch.setattr(actions, "stop_fleet", lambda: "stopped")
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)  # exercise the real ownership check
+    detail = client.post("/api/shutdown").json()["detail"]
+    assert "left warm (server not agency-started)" in detail
+
+
 def test_stop_agency_ollama_never_kills_a_reused_pid(client, tmp_path, monkeypatch):
     # Windows reuses pids: a pidfile surviving a reboot may now name an INNOCENT process. The stop
     # must verify the pid is really ollama — here it's this very python process, so: no kill, pidfile

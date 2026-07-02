@@ -586,10 +586,13 @@ def create_app(token: str | None = None) -> FastAPI:
     def _unload_ollama_models() -> str:
         """Best-effort `ollama stop <model>` for every loaded model at appliance shutdown — releases the
         GPU/driver-backed memory (10+ GB with a chat + embed model resident) immediately instead of
-        waiting out the keep-alive. The ollama SERVICE is the user's own autostart app and is never
-        touched — only the models the fleet had loaded. Never blocks the shutdown."""
+        waiting out the keep-alive. ONLY when the agency started the ollama server (our pidfile): a
+        machine-wide ollama shared with another fleet (the dev box!) keeps its warm models — unloading
+        them would cold-start every neighbouring crew's next call. Never blocks the shutdown."""
         if os.environ.get("PYTEST_CURRENT_TEST"):  # a test must never unload the dev box's live models
             return "ollama unload skipped (pytest)"
+        if not os.path.isfile(_ollama_pidfile()):
+            return "ollama models left warm (server not agency-started)"
         import subprocess
 
         try:

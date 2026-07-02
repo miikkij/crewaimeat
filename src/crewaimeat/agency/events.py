@@ -53,7 +53,7 @@ def record(agent: str, kind: str, detail: dict | None = None) -> None:
             )
             c.execute(
                 "DELETE FROM events WHERE agent=? AND rowid IN ("
-                "SELECT rowid FROM events WHERE agent=? ORDER BY ts DESC LIMIT -1 OFFSET ?)",
+                "SELECT rowid FROM events WHERE agent=? ORDER BY ts DESC, rowid DESC LIMIT -1 OFFSET ?)",
                 (agent, agent, _KEEP_PER_AGENT),
             )
     except Exception:  # noqa: BLE001 — logging the action must not fail the action
@@ -64,8 +64,10 @@ def activity(agent: str, limit: int = 100) -> list[dict]:
     """The agent's activity timeline, newest first: [{ts, kind, detail}]."""
     try:
         with _conn() as c:
+            # rowid tie-break: time.time() TIES on rapid consecutive records (Windows clock granularity),
+            # and bare `ts DESC` then returns an arbitrary order — newest-first must be deterministic.
             rows = c.execute(
-                "SELECT ts, kind, detail FROM events WHERE agent=? ORDER BY ts DESC LIMIT ?",
+                "SELECT ts, kind, detail FROM events WHERE agent=? ORDER BY ts DESC, rowid DESC LIMIT ?",
                 (agent, limit),
             ).fetchall()
     except Exception:  # noqa: BLE001
