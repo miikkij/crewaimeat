@@ -120,7 +120,10 @@ def test_shutdown_stops_fleet_no_selfexit(client, monkeypatch):
 
     monkeypatch.setattr(actions, "stop_fleet", lambda: called.setdefault("v", "stopped 3"))
     r = client.post("/api/shutdown")
-    assert r.status_code == 200 and r.json()["detail"] == "stopped 3" and called["v"]
+    detail = r.json()["detail"]
+    # fleet stopped + the ollama-unload note appended (skipped under pytest — never the live models)
+    assert r.status_code == 200 and detail.startswith("stopped 3") and called["v"]
+    assert "ollama unload skipped (pytest)" in detail
 
 
 def test_models_catalogue(client, monkeypatch):

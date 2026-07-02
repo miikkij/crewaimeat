@@ -396,17 +396,39 @@ def create_app(token: str | None = None) -> FastAPI:
             "url": url or "https://github.com/miikkij/crewaimeat/releases",
         }
 
+    def _unload_ollama_models() -> str:
+        """Best-effort `ollama stop <model>` for every loaded model at appliance shutdown — releases the
+        GPU/driver-backed memory (10+ GB with a chat + embed model resident) immediately instead of
+        waiting out the keep-alive. The ollama SERVICE is the user's own autostart app and is never
+        touched — only the models the fleet had loaded. Never blocks the shutdown."""
+        if os.environ.get("PYTEST_CURRENT_TEST"):  # a test must never unload the dev box's live models
+            return "ollama unload skipped (pytest)"
+        import subprocess
+
+        try:
+            import requests
+
+            base = (os.getenv("OLLAMA_HOST") or "http://localhost:11434").rstrip("/")
+            models = [m.get("name") for m in (requests.get(f"{base}/api/ps", timeout=3).json().get("models") or [])]
+            for m in filter(None, models):
+                subprocess.run(["ollama", "stop", m], capture_output=True, timeout=15)
+            return f"unloaded {len(models)} ollama model(s)" if models else "no ollama models loaded"
+        except Exception as exc:  # noqa: BLE001 — shutdown hygiene is best-effort; keep-alive unloads anyway
+            return f"ollama unload skipped ({type(exc).__name__})"
+
     @app.post("/api/shutdown", dependencies=[require_token])
     def shutdown() -> dict:
-        """Stop THIS install's fleet (crews + serve, repo/home-scoped — never another fleet), then, when
-        launched by the Tauri shell, self-exit so the shell can quit the app. The UI shows 'safely stopped'
-        from the returned detail before the window closes."""
+        """Stop THIS install's fleet (crews + serve, repo/home-scoped — never another fleet), unload the
+        ollama models the fleet had loaded (frees the GPU-backed memory right away), then, when launched
+        by the Tauri shell, self-exit so the shell can quit the app. The UI shows 'safely stopped' from
+        the returned detail before the window closes."""
         import threading
         import time
 
         from crewaimeat.tui import actions
 
         detail = actions.stop_fleet()
+        detail += " | " + _unload_ollama_models()
         events.record("_agency", "shutdown", {"detail": detail[:200]})
         if os.environ.get(_TOKEN_ENV):  # shell-launched -> exit so the shell's child-watcher quits the app
 

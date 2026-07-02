@@ -4,6 +4,75 @@ Notable changes to crewaimeat. Format loosely follows [Keep a Changelog](https:/
 Dates are the working dates; entries are **uncommitted and take effect on the next fleet restart**
 (the daemons import the modules at start).
 
+## [0.7.0] — 2026-06-23 → 2026-07-02
+
+### Added
+- **Opt-in CrewAI crew memory (`CrewSpec.memory`, OFF by default).** A crew that must REMEMBER across
+  runs gets CrewAI's built-in persistent memory: the **embedder cascade** (`embedder_cascade.py`)
+  probes **ollama → nvidia-free → qwen** in bias order (the `privacy` default drops the free-but-cloud
+  nvidia tier; `EMBEDDER_BIAS`/`CrewSpec.embedder_bias="cost"` promotes it — testers value money over
+  privacy), LOGS the tier used, and FAILS LOUD when none is reachable. Storage is scoped
+  **owner/agent/principal** under `AIMEAT_HOME/crew_memory/` — a federation DM sender gets a memory of
+  their own (`memory_scope="principal"`), never another caller's; `"agent"` = one deliberate shared
+  brain; `"session"` = ephemeral. The memory's analysis LLM rides the crew's own `get_llm` chain (never
+  the OpenAI default) and is capped at `max_tokens=2048` (an observed gemma4 runaway burned 64k tokens
+  ≈ 10 GPU-minutes per encode; now it fails 30× faster into the same use-defaults path). crew-forge is
+  memory-aware: the Architect decides `MEMORY: yes/no` per order, `write_and_validate_crew` emits the
+  CrewSpec toggle and surfaces the embedder prerequisite (never gates), and the behavioral eval grades it.
+- **`pipeline_memory.py` — semantic-memory primitives for the DETERMINISTIC pipelines** (open_store /
+  remember / recall / dedup_check / prior_art_block; semantic-only scoring so thresholds hold; loud
+  degradation to None — the paper ships even with the embedder host down). Wired across the fleet:
+  - **editorial**: recalls its most similar past columns before drafting (continuity — reference by
+    date, never rerun an angle) and remembers each published Finnish column;
+  - **tidbits** (koodaus/prompt-niksi/matikka): generate → semantic dedup → ONE retry with the
+    near-duplicate as a negative example → publish regardless (logged, never a hole in the paper);
+  - **news desks**: a resurfacing story gets an "AIEMMIN JULKAISTUA" block and is written as its DELTA;
+  - **crew-forge precedent**: every VALID build is remembered as ORDER → DESIGN and similar past builds
+    (bar 0.5, live field rating fetched fresh from the reputation keys) are injected into the Architect
+    prompt as priors — the forge starts learning from its own field-rated work;
+  - **joker v1+v2** ("already told" sets injected + lineups remembered; the A/B stays design-only),
+    **social-briefing** (reports deltas vs past digests), **some-listener** (drops CROSS-day resurfaced
+    HN stories; same-day rescans stay idempotent).
+  - `scripts/backfill_sanomat_memory.py` seeds the stores from the node's published history (read-only
+    on the node, idempotent ≥0.97 skip) — 597 historical editorials/sections seeded on the dev box.
+- **LOCOMO proof harness (`benchmarks/locomo/`, opt-in, offline-first, $0 on local models).** The
+  long-term-conversational-memory benchmark mem0 markets against: mem0-faithful J-score judge
+  (categories 1–4), keyword-floor / CrewSpec-memory / mem0 arms on identical models. Sample verdict
+  (conv-26, 20 QA, gemma4): **keyword 15% / crewai 40% / mem0 60%** — the embedder buys real recall
+  over the floor; mem0 leads via ingest-time fact distillation (n=20, not significant). No further
+  runs planned; the harness stays as the reproducible artifact.
+- **`local_memory` full-text search (SQLite FTS5).** The durable local tier could only recall by id or
+  browse by facets; now an FTS5 index (topic+body+tags, sync triggers, a pre-existing DB migrates
+  itself with a one-time rebuild) powers `search()` (BM25 best-first, agent-scoped) and a
+  `search_memory` tool every local-memory crew gets. Query syntax is disarmed (an LLM string can't
+  break MATCH); a build without FTS5 keeps storage and fails only search, loudly.
+- **crew-forge capability catalog + real identities for generated crews** (`forge_catalog.py`): the
+  Architect designs against a preflight-checked tool catalog (an unavailable tool is never offered);
+  generated crews ship real tags/capabilities/offers/discover instead of Hello-Integration defaults;
+  a behavioral eval (`forge_eval.py`) grades orders end-to-end (dry-runs into `.candidates`, never the
+  live fleet).
+- **agency**: the setup wizard pulls the **embed model** (nomic-embed-text) right after the chat model
+  and `/api/setup/status` reports it — crew memory works on a fresh appliance out of the box; appliance
+  **shutdown now also unloads the ollama models** the fleet had loaded (`ollama stop`, best-effort) so
+  the GPU-backed memory frees immediately instead of waiting out the keep-alive (the ollama service
+  itself — the user's own app — is never touched).
+
+### Changed
+- `CrewSpec.offer` — a crew can pin its offer inline; task-runner registration passes `--mode` so tasks
+  auto-activate (no manual "Start this task" in the dashboard).
+- The repo `.claude` layer was slimmed on owner order: the mandatory read-the-workspace-on-session-start
+  ritual is gone from `CLAUDE.md` (the organism workspace is opt-in, on explicit ask) and the bundled
+  agents/skills (convention-reviewer, fleet-doctor, aimeat-sync, release-prep) are removed.
+
+### Fixed
+- **Onboarding mode-race safety net**: a task-runner could stick at 4/7 when the daemon read a stale
+  `completable=true` mid `mode_set` → `_finish_pending_onboarding` drives the pending api_call steps;
+  loopback pool sized for the fleet host.
+- `serve_watchdog` must never spawn under pytest (it leaked detached serve daemons onto the machine).
+- The LOCOMO mem0 arm neutralizes `OPENROUTER_API_KEY` for local runs — mem0 silently prefers
+  OpenRouter over an explicit `openai_base_url` (mem0/llms/openai.py), which sent local model ids to
+  OpenRouter and 400'd every add.
+
 ## [0.6.0] — 2026-06-22
 
 ### Added
