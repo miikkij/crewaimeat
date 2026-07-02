@@ -309,6 +309,10 @@ def create_app(token: str | None = None) -> FastAPI:
         running, names = _ollama_probe()
         _fam = DEFAULT_OLLAMA_MODEL.split(":")[0]  # e.g. "llama3.2" — present in any variant tag
         has_model = any(_fam in n for n in names)
+        # The embed model powers the opt-in crew memory (CrewSpec.memory / pipeline_memory) — the
+        # cascade's preferred free+private tier. Surfaced so the wizard can show/gate it.
+        embed_model = os.getenv("AIMEAT_EMBED_OLLAMA_MODEL", "nomic-embed-text")
+        has_embed = any(n == embed_model or n.startswith(embed_model + ":") for n in names)
         bs = brains.list_brains()
         first = bs[0]["agent_name"] if bs else None
         first_auth = account.agent_auth(first, acc["owner"]) if first else {"authorized": False}
@@ -321,6 +325,8 @@ def create_app(token: str | None = None) -> FastAPI:
                 "running": running,
                 "has_model": has_model,
                 "default_model": DEFAULT_OLLAMA_MODEL,
+                "embed_model": embed_model,
+                "has_embed_model": has_embed,
                 "models": names,
             },
             "openrouter_key": _has_openrouter_key(),
@@ -333,20 +339,26 @@ def create_app(token: str | None = None) -> FastAPI:
     @app.post("/api/ollama/pull", dependencies=[require_token])
     def ollama_pull(body: PullIn) -> dict:
         """Kick off `ollama pull <model>` (default gemma4) in the background; the wizard polls
-        /api/setup/status until the model appears. Needs Ollama installed + on PATH."""
+        /api/setup/status until the model appears. Needs Ollama installed + on PATH.
+
+        Also pulls the EMBED model (nomic-embed-text, ~274 MB) right after — it is the embedder
+        cascade's preferred free+private tier, so opt-in crew memory (CrewSpec.memory /
+        pipeline_memory) works on the appliance out of the box instead of failing its prerequisite."""
         import subprocess
         import threading
 
         model = (body.model or DEFAULT_OLLAMA_MODEL).strip()
+        embed_model = os.getenv("AIMEAT_EMBED_OLLAMA_MODEL", "nomic-embed-text")
 
         def _pull():
-            try:
-                subprocess.run(["ollama", "pull", model], capture_output=True, timeout=3600)
-            except Exception:  # noqa: BLE001
-                pass
+            for m in (model, embed_model):
+                try:
+                    subprocess.run(["ollama", "pull", m], capture_output=True, timeout=3600)
+                except Exception:  # noqa: BLE001 — the wizard's status poll shows what actually arrived
+                    pass
 
         threading.Thread(target=_pull, daemon=True).start()
-        return {"started": True, "model": model}
+        return {"started": True, "model": model, "embed_model": embed_model}
 
     @app.post("/api/setup/openrouter-key", dependencies=[require_token])
     def set_openrouter_key_route(body: KeyIn) -> dict:
