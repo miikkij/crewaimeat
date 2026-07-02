@@ -137,6 +137,73 @@ def _ollama_probe() -> tuple[bool, list[str]]:
         return False, []
 
 
+def _ollama_bin() -> str | None:
+    """The ollama executable, or None when not installed. Checks PATH first, then the Windows
+    user-scope default install dir — a JUST-installed ollama is on the user PATH only after a
+    re-login, so the wizard's install->start flow needs the direct path."""
+    import shutil
+
+    p = shutil.which("ollama")
+    if p:
+        return p
+    if os.name == "nt":
+        cand = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Ollama", "ollama.exe")
+        if os.path.isfile(cand):
+            return cand
+    return None
+
+
+def _ollama_pidfile() -> str:
+    from crewaimeat._home import aimeat_home
+
+    return os.path.join(aimeat_home(), "agency_ollama.pid")
+
+
+def _start_agency_ollama() -> dict:
+    """Start `ollama serve` as an AGENCY-OWNED child when it is installed but not running (the fresh-
+    install first session, or autostart disabled/killed). The pid is recorded so shutdown stops exactly
+    what WE started — a user-started ollama (no pidfile) is never touched. Pytest-guarded: a test must
+    never spawn a real server."""
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return {"started": False, "reason": "pytest"}
+    running, _ = _ollama_probe()
+    if running:
+        return {"started": False, "reason": "already running"}
+    exe = _ollama_bin()
+    if not exe:
+        return {"started": False, "reason": "not installed", "download": "https://ollama.com/download"}
+    import subprocess
+
+    creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    proc = subprocess.Popen([exe, "serve"], creationflags=creationflags, close_fds=True)
+    with open(_ollama_pidfile(), "w", encoding="utf-8") as f:
+        f.write(str(proc.pid))
+    return {"started": True, "pid": proc.pid}
+
+
+def _stop_agency_ollama() -> str:
+    """Stop the ollama server ONLY if the agency started it (the pidfile we wrote, pid still an ollama
+    process). A user's own/autostart ollama has no pidfile and is left running. Best-effort."""
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return "agency-ollama stop skipped (pytest)"
+    path = _ollama_pidfile()
+    if not os.path.isfile(path):
+        return "ollama not agency-started (left running)"
+    import subprocess
+
+    try:
+        pid = int(open(path, encoding="utf-8").read().strip())
+        if os.name == "nt":
+            # /T also takes the model runner children (llama-server) that hold the GPU memory
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=15)
+        else:
+            os.kill(pid, 15)
+        os.remove(path)
+        return f"stopped agency-started ollama (pid {pid})"
+    except Exception as exc:  # noqa: BLE001 — shutdown hygiene is best-effort
+        return f"agency-ollama stop failed ({type(exc).__name__})"
+
+
 def _ollama_models() -> list[dict]:
     """Local models from a RUNNING Ollama, as picker entries with an ollama override spec. Empty if Ollama
     isn't up. llm.py routes ollama/<model> to the local endpoint and skips forced tool-use — so a local
@@ -322,6 +389,7 @@ def create_app(token: str | None = None) -> FastAPI:
             "owner": acc["owner"],
             "node": acc["node"],
             "ollama": {
+                "installed": _ollama_bin() is not None,
                 "running": running,
                 "has_model": has_model,
                 "default_model": DEFAULT_OLLAMA_MODEL,
@@ -335,6 +403,13 @@ def create_app(token: str | None = None) -> FastAPI:
             "first_agent_connected": bool(first_auth.get("authorized")),
             "first_agent_running": bool(first and first in serve_agents),
         }
+
+    @app.post("/api/ollama/start", dependencies=[require_token])
+    def ollama_start() -> dict:
+        """Start ollama as an agency-owned child (installed but not running — the fresh-install first
+        session, or autostart off). The wizard polls /api/setup/status until `running`. Shutdown stops
+        it again because we own the pid; a user-started ollama is never ours to stop."""
+        return _start_agency_ollama()
 
     @app.post("/api/ollama/pull", dependencies=[require_token])
     def ollama_pull(body: PullIn) -> dict:
@@ -428,7 +503,8 @@ def create_app(token: str | None = None) -> FastAPI:
         from crewaimeat.tui import actions
 
         detail = actions.stop_fleet()
-        detail += " | " + _unload_ollama_models()
+        detail += " | " + _unload_ollama_models()  # free the GPU-backed model memory right away
+        detail += " | " + _stop_agency_ollama()  # and stop the server too, IF the agency started it
         events.record("_agency", "shutdown", {"detail": detail[:200]})
         if os.environ.get(_TOKEN_ENV):  # shell-launched -> exit so the shell's child-watcher quits the app
 

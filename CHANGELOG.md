@@ -51,11 +51,15 @@ Dates are the working dates; entries are **uncommitted and take effect on the ne
   generated crews ship real tags/capabilities/offers/discover instead of Hello-Integration defaults;
   a behavioral eval (`forge_eval.py`) grades orders end-to-end (dry-runs into `.candidates`, never the
   live fleet).
-- **agency**: the setup wizard pulls the **embed model** (nomic-embed-text) right after the chat model
-  and `/api/setup/status` reports it — crew memory works on a fresh appliance out of the box; appliance
-  **shutdown now also unloads the ollama models** the fleet had loaded (`ollama stop`, best-effort) so
-  the GPU-backed memory frees immediately instead of waiting out the keep-alive (the ollama service
-  itself — the user's own app — is never touched).
+- **agency owns the full ollama lifecycle it participates in.** The setup wizard pulls the **embed
+  model** (nomic-embed-text) right after the chat model and `/api/setup/status` reports it — crew
+  memory works on a fresh appliance out of the box. Status now distinguishes **installed vs running**:
+  not installed → the download step (as before); **installed but not running** (a fresh install's
+  first session, or autostart off) → a *Start Ollama* button (`POST /api/ollama/start`) that spawns
+  `ollama serve` as an **agency-owned child with a recorded pid**. Appliance **shutdown unloads the
+  ollama models** the fleet had loaded (`ollama stop` per model — the 10+ GB of GPU-backed memory
+  frees immediately instead of waiting out the keep-alive) and then **stops the ollama server too,
+  but ONLY if the agency started it** (the pidfile); a user's own/autostart ollama is never touched.
 
 ### Changed
 - `CrewSpec.offer` — a crew can pin its offer inline; task-runner registration passes `--mode` so tasks

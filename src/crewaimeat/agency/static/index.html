@@ -110,6 +110,8 @@ const STR = {
   "w.recheck":{en:"Re-check",fi:"Tarkista uudelleen"}, "w.next":{en:"Continue",fi:"Jatka"},
   "w.noacct":{en:"Don't have an account? Create one at aimeat.io",fi:"Ei tiliä? Luo sellainen osoitteessa aimeat.io"},
   "w.installollama":{en:"Download Ollama",fi:"Lataa Ollama"}, "w.getgemma":{en:"Download the AI model (~2 GB)",fi:"Lataa tekoälymalli (~2 Gt)"},
+  "w.startollama":{en:"Start Ollama",fi:"Käynnistä Ollama"},
+  "w.ollama.start":{en:"Ollama is installed but not running — start it (the app will also stop it when you quit).",fi:"Ollama on asennettu mutta ei käynnissä — käynnistä se (sovellus myös sammuttaa sen kun lopetat)."},
   "w.downloading":{en:"Downloading the model… this takes a few minutes (you can leave this open).",fi:"Ladataan mallia… kestää muutaman minuutin (voit pitää tämän auki)."},
   "w.advanced":{en:"Advanced: use a cloud model instead",fi:"Lisäasetus: käytä pilvimallia"},
   "w.savekey":{en:"Save key",fi:"Tallenna avain"}, "w.opendash":{en:"Open aimeat.io to approve",fi:"Avaa aimeat.io hyväksyäksesi"},
@@ -336,11 +338,21 @@ async function setupStep(p, key, s, refresh){
   }
   else if(key==="model"){
     p.innerHTML=`<h3>2. ${t("w.model")}</h3><p class="muted">${t("w.model.desc")}</p>`;
-    if(!s.ollama.running){
+    if(!s.ollama.running && !s.ollama.installed){
       p.appendChild(el(`<p>${t("w.ollama.install")}</p>`));
       const dl=el(`<button class="btn">${t("w.installollama")}</button>`); dl.onclick=()=>openExt("https://ollama.com/download");
       const rc=el(`<button class="btn ghost" style="margin-left:8px">${t("w.recheck")}</button>`); rc.onclick=refresh;
       const r=el(`<div class="row" style="margin-top:6px"></div>`); r.appendChild(dl); r.appendChild(rc); p.appendChild(r);
+    } else if(!s.ollama.running){
+      // installed but not running (fresh install's first session / autostart off) -> WE start it,
+      // agency-owned: the pid is recorded so app shutdown stops it again.
+      p.appendChild(el(`<p>${t("w.ollama.start")}</p>`));
+      const st=el(`<button class="btn">${t("w.startollama")}</button>`);
+      st.onclick=async()=>{ st.disabled=true; try{ await api("/api/ollama/start",{method:"POST"});
+        const iv=setInterval(async()=>{ try{ const x=await api("/api/setup/status"); if(x.ollama.running){ clearInterval(iv); refresh(); } }catch{} }, 2000);
+      }catch(e){ st.disabled=false; toast(e.message); } };
+      const rc2=el(`<button class="btn ghost" style="margin-left:8px">${t("w.recheck")}</button>`); rc2.onclick=refresh;
+      const r2=el(`<div class="row" style="margin-top:6px"></div>`); r2.appendChild(st); r2.appendChild(rc2); p.appendChild(r2);
     } else if(!s.ollama.has_model){
       p.appendChild(el(`<p>${t("w.gemma.desc")}</p>`));
       const slot=el(`<div style="margin-top:8px"></div>`);

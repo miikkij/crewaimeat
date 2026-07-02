@@ -436,3 +436,31 @@ def test_delete_removes_connector_token(client, tmp_path):
     tokf.write_text("t", encoding="utf-8")
     assert client.delete("/api/brains/zombie-test").json()["deleted"] is True
     assert not tokf.exists()  # token gone -> no zombie
+
+
+def test_ollama_start_endpoint_pytest_guarded(client):
+    # under pytest the start endpoint must NEVER spawn a real server — guard answers instead
+    r = client.post("/api/ollama/start")
+    assert r.status_code == 200 and r.json() == {"started": False, "reason": "pytest"}
+
+
+def test_setup_status_reports_ollama_install_state(client, monkeypatch):
+    import crewaimeat.agency.cockpit as cp
+
+    monkeypatch.setattr(cp, "_ollama_probe", lambda: (False, []))
+    monkeypatch.setattr(cp, "_ollama_bin", lambda: None)
+    o = client.get("/api/setup/status").json()["ollama"]
+    assert o["installed"] is False and o["running"] is False
+    # installed-but-not-running (fresh install first session) — the wizard's Start-Ollama branch
+    monkeypatch.setattr(cp, "_ollama_bin", lambda: "C:/x/ollama.exe")
+    o = client.get("/api/setup/status").json()["ollama"]
+    assert o["installed"] is True and o["running"] is False
+    assert o["embed_model"]  # crew-memory prerequisite surfaced alongside
+
+
+def test_stop_agency_ollama_only_touches_own_pidfile(client, monkeypatch):
+    # guard off -> real logic; tmp AIMEAT_HOME has no pidfile -> a user-started ollama is left alone
+    import crewaimeat.agency.cockpit as cp
+
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    assert cp._stop_agency_ollama() == "ollama not agency-started (left running)"
