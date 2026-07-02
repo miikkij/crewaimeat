@@ -36,6 +36,10 @@ blueprint_test.json
 llm_providers.json
 docs/internal/
 
+# LOCOMO benchmark: the dataset is downloaded on demand (provenance printed), not vendored;
+# run outputs stay local. (Crew memory stores live under .aimeat/, already ignored above.)
+benchmarks/locomo/.data/
+
 # Enterprise "Secretary" agent/agency — PRIVATE. Its own nested git repo + private
 # GitHub remote (mirrors the aimeat-protocol `ee/` open-core seam). Never committed
 # to this public repo.
