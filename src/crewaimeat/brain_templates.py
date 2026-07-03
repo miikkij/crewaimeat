@@ -142,17 +142,8 @@ def _build_topic_watcher(ctx: Any, brain: dict) -> tuple[list, list]:
     policy = brain.get("policy") or {}
     visibility = (policy.get("visibility") or "owner").strip().lower()
     # Build the publish key so each run is distinct + time-sortable by apps on the node (the operator
-    # picks the rule via policy.key_mode). base.latest -> base; then suffix by mode.
-    import datetime as _dt
-
-    base = (policy.get("publish_key") or "").strip().rstrip(".")
-    if base.endswith(".latest"):
-        base = base[: -len(".latest")]
-    base = base or f"watch.{agent_name}"
-    mode = (policy.get("key_mode") or "date").strip().lower()
-    _now = _dt.datetime.now()
-    suffix = {"date": _now.strftime("%Y-%m-%d"), "timestamp": _now.strftime("%Y-%m-%dT%H-%M-%S")}.get(mode, "latest")
-    publish_key = f"{base}.{suffix}"
+    # picks the rule via policy.key_mode). Shared helper so the app builder reads the same base it writes.
+    publish_key = _resolve_publish_key(agent_name, policy, f"watch.{agent_name}")
 
     watcher = Agent(
         role="Topic Watcher",
@@ -269,14 +260,42 @@ def _default_policy(cron: str | None = "0 8 * * *", autonomy: str = "draft") -> 
     }
 
 
+# The per-template default key PREFIX a brain publishes its deliverables under (before the `.<agent>`
+# and the key_mode suffix). The single source of truth so the crew's WRITE path and any READER (e.g. the
+# agency data-app builder) agree on exactly where the data lives.
+DEFAULT_PUBLISH_BASE: dict[str, str] = {
+    "topic-watcher": "watch",
+    "research-assistant": "answers",
+    "daily-briefing": "briefing",
+    "page-watcher": "page",
+    "company-watcher": "company",
+    "map-snapshot": "maps",
+}
+
+
+def _base_from_policy(policy: dict, default_base: str) -> str:
+    """The key BASE (no key_mode suffix): the operator's `publish_key` (stripped of a trailing `.latest`),
+    else `default_base`. Shared by the write path and `publish_key_base` so both compute the same base."""
+    base = (policy.get("publish_key") or "").strip().rstrip(".")
+    if base.endswith(".latest"):
+        base = base[: -len(".latest")]
+    return base or default_base
+
+
+def publish_key_base(agent_name: str, brain: dict) -> str:
+    """The key BASE a brain publishes under (e.g. `watch.news-watcher`), derived from the brain's policy
+    and its template's default. A reader (e.g. the agency app builder) lists memory keys under `base + '.'`
+    (plus the single `base + '.latest'`) to find the agent's deliverables — matching what the crew writes."""
+    policy = brain.get("policy") or {}
+    default_prefix = DEFAULT_PUBLISH_BASE.get(brain.get("template_id") or "", "watch")
+    return _base_from_policy(policy, f"{default_prefix}.{agent_name}")
+
+
 def _resolve_publish_key(agent_name: str, policy: dict, default_base: str) -> str:
     """base.<suffix> where suffix follows policy.key_mode (latest|date|timestamp) — same rule as topic-watcher."""
     import datetime as _dt
 
-    base = (policy.get("publish_key") or "").strip().rstrip(".")
-    if base.endswith(".latest"):
-        base = base[: -len(".latest")]
-    base = base or default_base
+    base = _base_from_policy(policy, default_base)
     mode = (policy.get("key_mode") or "date").strip().lower()
     _now = _dt.datetime.now()
     suffix = {"date": _now.strftime("%Y-%m-%d"), "timestamp": _now.strftime("%Y-%m-%dT%H-%M-%S")}.get(mode, "latest")

@@ -1,0 +1,157 @@
+<!doctype html>
+<!--
+  aimeat-agency data dashboard (LOGIN-GATED / owner data).
+  Pre-baked template — the appliance fills the __*_JSON__ placeholders (as JS literals) and publishes it
+  inline under the owner. It reads the agent's OWN published deliverables via AIMEAT.data.list({prefix}),
+  so only the logged-in owner sees them. Boot order follows the canonical Starter Template:
+  loadScript aimeat-auth.js + aimeat-data.js -> mountLoginButton -> await login() -> startApp(session).
+  Self-contained (inline CSS, no external scripts — the inline-app CSP blocks CDNs).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data dashboard</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         background: #0f1115; color: #e7e9ee; }
+  @media (prefers-color-scheme: light) { body { background: #f6f7f9; color: #1a1c22; } }
+  nav { display: flex; align-items: center; gap: 12px; padding: 12px 20px;
+        border-bottom: 1px solid #ffffff1f; position: sticky; top: 0;
+        background: #161a22cc; backdrop-filter: blur(6px); }
+  @media (prefers-color-scheme: light) { nav { background: #ffffffcc; border-color: #0000000f; } }
+  nav .brand { font-weight: 650; font-size: 16px; }
+  nav .spacer { flex: 1; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 22px 20px 60px; }
+  h1 { font-size: 22px; margin: 6px 0 2px; }
+  .sub { opacity: .6; font-size: 13px; margin-bottom: 20px; }
+  #status { opacity: .7; padding: 24px 4px; }
+  .card { border: 1px solid #ffffff1f; border-radius: 12px; padding: 16px 18px; margin: 0 0 14px;
+          background: #161a22; }
+  @media (prefers-color-scheme: light) { .card { background: #fff; border-color: #0000000f; } }
+  .card > summary { cursor: pointer; font-weight: 600; list-style: none; }
+  .card > summary::-webkit-details-marker { display: none; }
+  .card .when { opacity: .55; font-size: 12px; font-weight: 500; margin-left: 8px; }
+  .body { margin-top: 12px; white-space: pre-wrap; word-wrap: break-word; }
+  .body a { color: #6ea8fe; }
+  .empty { text-align: center; opacity: .7; padding: 40px 10px; }
+  .empty b { display: block; font-size: 17px; margin-bottom: 6px; opacity: 1; }
+  a.btn { color: inherit; text-decoration: none; }
+</style>
+</head>
+<body>
+<nav>
+  <span class="brand" id="brand">Data dashboard</span>
+  <span class="spacer"></span>
+  <span id="header-auth"></span>
+</nav>
+<div class="wrap">
+  <h1 id="title">Data dashboard</h1>
+  <div class="sub" id="sub"></div>
+  <div id="status">Loading…</div>
+  <div id="cards"></div>
+</div>
+<script>
+  // ── filled by the appliance (JS literals) ──
+  const AGENT = __AGENT_JSON__;
+  const PREFIX = __PREFIX_JSON__;
+  const TITLE = __TITLE_JSON__;
+  const LANG = __LANG_JSON__;
+  const KEYMODE = __KEYMODE_JSON__;
+
+  const T = {
+    en: { sub: "Latest results published by \"" + AGENT + "\".",
+          login: "Log in to view your agent's data.",
+          emptyH: "No data yet", empty: "Run the agent so it has something to show here, then refresh.",
+          err: "Could not load the data." },
+    fi: { sub: "Agentin \"" + AGENT + "\" viimeisimmät julkaisut.",
+          login: "Kirjaudu nähdäksesi agenttisi datan.",
+          emptyH: "Ei dataa vielä", empty: "Aja agentti, jotta sillä on jotain näytettävää, ja päivitä sivu.",
+          err: "Datan lataus epäonnistui." }
+  };
+  const S = T[LANG] || T.en;
+
+  function esc(s) { return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;"); }
+  // minimal, safe prose render: escape, then linkify bare http(s) URLs.
+  function render(text) {
+    return esc(text).replace(/(https?:\/\/[^\s<)"']+)/g,
+      '<a href="$1" target="_blank" rel="noopener">$1</a>');
+  }
+  function valueText(v) {
+    if (v == null) return "";
+    if (typeof v === "string") return v;
+    if (typeof v === "object") return v.body || v.text || v.summary || v.content || JSON.stringify(v, null, 2);
+    return String(v);
+  }
+  function label(key) {
+    const tail = String(key).slice(PREFIX.length).replace(/^\./, "");
+    return tail || "latest";
+  }
+
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = src; s.onload = resolve; s.onerror = () => reject(new Error("failed to load " + src));
+      document.head.appendChild(s);
+    });
+  }
+
+  async function startApp(session) {
+    const status = document.getElementById("status");
+    const cards = document.getElementById("cards");
+    cards.innerHTML = "";
+    try {
+      const res = await AIMEAT.data.list({ prefix: PREFIX });
+      let items = (res && res.items) || [];
+      items = items.filter(it => it && typeof it.key === "string" &&
+        (it.key === PREFIX || it.key.startsWith(PREFIX + ".")));
+      items.sort((a, b) => (a.key < b.key ? 1 : a.key > b.key ? -1 : 0)); // newest first
+      if (!items.length) {
+        status.innerHTML = '<div class="empty"><b>' + esc(S.emptyH) + "</b>" + esc(S.empty) + "</div>";
+        return;
+      }
+      status.textContent = "";
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        let v = it.value;
+        if (v == null) { try { v = await AIMEAT.data.get(it.key); } catch (e) { v = ""; } }
+        const d = document.createElement("details");
+        d.className = "card";
+        if (i === 0) d.open = true;
+        d.innerHTML = '<summary>' + esc(TITLE) + '<span class="when">' + esc(label(it.key)) +
+          '</span></summary><div class="body">' + render(valueText(v)) + '</div>';
+        cards.appendChild(d);
+      }
+    } catch (e) {
+      status.innerHTML = '<div class="empty">' + esc(S.err) + "<br><small>" + esc(e && e.message || e) +
+        "</small></div>";
+    }
+  }
+
+  async function boot() {
+    document.getElementById("title").textContent = TITLE;
+    document.getElementById("brand").textContent = TITLE;
+    document.getElementById("sub").textContent = S.sub;
+    try {
+      await loadScript("/v1/libs/aimeat-auth.js");
+      await loadScript("/v1/libs/aimeat-data.js");
+    } catch (e) {
+      document.getElementById("status").textContent = String(e && e.message || e);
+      return;
+    }
+    if (AIMEAT.auth.mountLoginButton) {
+      AIMEAT.auth.mountLoginButton("#header-auth", { onLogin: boot, onLogout: boot });
+    }
+    let session = null;
+    try { session = (await AIMEAT.auth.login()) || AIMEAT.auth.getSession(); } catch (e) { session = null; }
+    if (session) { await startApp(session); }
+    else { document.getElementById("status").textContent = S.login; }
+  }
+  boot();
+</script>
+</body>
+</html>

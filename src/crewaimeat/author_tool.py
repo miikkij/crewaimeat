@@ -242,6 +242,59 @@ def revert_apps_to_baseline(agent_name: str, task_id: str | None, owner: str | N
     return out
 
 
+def publish_app_html(
+    agent_name: str,
+    owner: str | None,
+    filename: str,
+    html: str,
+    *,
+    name: str = "",
+    description: str = "",
+    category: str = "utility",
+    icon: str = "",
+    uses_cortex: list | None = None,
+) -> tuple[bool, str]:
+    """Publish (or update in place) an app deterministically — the NON-LLM sibling of the `publish_app`
+    tool, for callers (e.g. the agency data-app builder) that already hold ready HTML. Same contract as
+    the tool: syntax-gate the inline <script>, require the AIMEAT base libs when the app touches AIMEAT,
+    then POST /v1/apps with INLINE base64 content (never presigned — it keys the owner wrong). The same
+    filename versions the app in place (history preserved). Returns (True, live_inline_url) or
+    (False, error). Best-effort; never raises."""
+    try:
+        owner = owner or _discover_owner(agent_name)
+        base = _node_base(agent_name, owner)
+        if not base:
+            return False, "no node url (agent token missing?)"
+        ok, err = _check_js(_extract_inline_js(html))
+        if not ok:
+            return False, f"app inline <script> has a JS syntax error -> {err}"
+        # Structural gate (same as publish_app): any app that touches AIMEAT must loadScript the base libs
+        # or the AIMEAT global is undefined at runtime.
+        if "AIMEAT" in html:
+            missing = [lib for lib in ("aimeat-auth.js", "aimeat-data.js") if lib not in html]
+            if missing:
+                return False, "app uses AIMEAT but does not loadScript " + " and ".join(
+                    "/v1/libs/" + m for m in missing
+                )
+        meta = {
+            "filename": filename,
+            "content": base64.b64encode(html.encode("utf-8")).decode(),
+            "name": name or filename.replace(".html", ""),
+            "description": description,
+            "category": category,
+            "tags": [],
+            "uses_cortex": list(uses_cortex or []),
+        }
+        if icon:
+            meta["icon"] = icon
+        r = _call(agent_name, owner, "POST", "/v1/apps", meta)
+        if not _ok(r):
+            return False, _err(r)
+        return True, f"{base}/v1/apps/{owner}/{filename}?mode=inline"
+    except Exception as e:  # noqa: BLE001
+        return False, repr(e)
+
+
 def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | None = None) -> tuple[list, dict]:
     """Return (tools, state). Attach tools to the builder agent. `state` carries the node base + owner
     and tracks what got installed/published, for a clean final report."""

@@ -29,7 +29,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from crewaimeat import brain_templates, brains, local_memory
-from crewaimeat.agency import account, events
+from crewaimeat.agency import account, apps, chat_store, events, journey
 
 COCKPIT_VERSION = "0.8.30"
 _TOKEN_ENV = "AIMEAT_AGENCY_TOKEN"
@@ -84,6 +84,12 @@ class PullIn(BaseModel):
 
 class UrlIn(BaseModel):
     url: str
+
+
+class ChatIn(BaseModel):
+    message: str
+    session_id: str | None = None
+    lang: str = "en"
 
 
 def _brain_diff(prev: dict | None, new: dict) -> list[str]:
@@ -284,6 +290,123 @@ _PULL_STATE: dict = {"running": False, "model": None, "error": None}
 # `npm install -g aimeat` progress for the wizard's engine step — same shape, same reason.
 _ENGINE_INSTALL: dict = {"running": False, "error": None}
 
+# Per-agent "build a data app" progress (keyed by agent) — same background-thread + poll pattern as the
+# installs above. {agent: {"running": bool, "step": str|None, "error": str|None, "result": dict|None}}.
+_APP_BUILD: dict = {}
+
+# The copilot runs a local model in-process; cap concurrent kickoffs so rapid double-sends don't pin the
+# GPU with several crews at once (excess turns get a short "still thinking" reply).
+import threading as _threading  # noqa: E402
+
+_CHAT_SEMAPHORE = _threading.Semaphore(2)
+
+
+def setup_snapshot() -> dict:
+    """The whole onboarding read-model (owner/engine/model/first-agent progress). Module-level so BOTH
+    the wizard's `/api/setup/status` route AND the copilot's journey/chat routes read the exact same
+    'where is the user' state — they can never disagree."""
+    from crewaimeat import node_engine
+    from crewaimeat.tui import fleet_state
+
+    acc = account.load()
+    running, names = _ollama_probe()
+    _fam = DEFAULT_OLLAMA_MODEL.split(":")[0]  # e.g. "gemma4" — present in any variant tag (gemma4:latest)
+    has_model = any(_fam in n for n in names)
+    embed_model = os.getenv("AIMEAT_EMBED_OLLAMA_MODEL", "nomic-embed-text")
+    has_embed = any(n == embed_model or n.startswith(embed_model + ":") for n in names)
+    bs = brains.list_brains()
+    first = bs[0]["agent_name"] if bs else None
+    first_auth = account.agent_auth(first, acc["owner"]) if first else {"authorized": False}
+    serve_agents = {a.get("agent") for a in (fleet_state.collect_serve().get("agents") or [])}
+    return {
+        "owner_set": acc["owner_set"],
+        "owner": acc["owner"],
+        "node": acc["node"],
+        "engine": {
+            **node_engine.engine_status(),
+            "install_running": _ENGINE_INSTALL["running"],
+            "install_error": _ENGINE_INSTALL["error"],
+        },
+        "ollama": {
+            "installed": _ollama_bin() is not None,
+            "running": running,
+            "has_model": has_model,
+            "default_model": DEFAULT_OLLAMA_MODEL,
+            "embed_model": embed_model,
+            "has_embed_model": has_embed,
+            "models": names,
+            "pull_running": _PULL_STATE["running"],
+            "pull_error": _PULL_STATE["error"],
+        },
+        "openrouter_key": _has_openrouter_key(),
+        "brain_count": len(bs),
+        "first_agent": first,
+        "first_agent_connected": bool(first_auth.get("authorized")),
+        "first_agent_running": bool(first and first in serve_agents),
+    }
+
+
+def _advisor_llm(snapshot: dict):
+    """Build the copilot's LLM from the appliance's configured model. OpenRouter/providers/override first
+    (via get_llm), else the local Ollama model the wizard provisioned. Returns None if neither exists (the
+    chat route then falls back to a scripted, model-free reply)."""
+    from crewaimeat import llm as llm_mod
+
+    try:
+        return llm_mod.get_llm(agent_name="__advisor__", temperature=0.3)
+    except Exception:  # noqa: BLE001 — no cloud key / providers file: fall back to local Ollama
+        pass
+    oll = snapshot.get("ollama") or {}
+    names = oll.get("models") or []
+    if not names:
+        return None
+    fam = (oll.get("default_model") or "").split(":")[0]
+    model = next((n for n in names if fam and fam in n), names[0])
+    try:
+        from crewai import LLM
+
+        return LLM(model=f"ollama/{model}", base_url=_ollama_base(), temperature=0.3)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _produced_data(agent: str | None) -> bool:
+    """Has the agent produced ≥1 deliverable yet (the journey's 'see it work' gate)? Reuses the app
+    builder's data check; falls back to the activity log so it still answers when the node is unreachable."""
+    if not agent:
+        return False
+    try:
+        from crewaimeat.agency import app_builder
+
+        if app_builder.data_status(agent).get("ready"):
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    return events.has_kind(agent, "app_built") or events.has_kind(agent, "test_run")
+
+
+def _same_action(a: dict, b: dict) -> bool:
+    """Two proposed actions are 'the same' button if same kind + same target (agent/step/url/template)."""
+    if a.get("kind") != b.get("kind"):
+        return False
+    return all(a.get(f) == b.get(f) for f in ("agent", "step", "url", "template_id"))
+
+
+def _merge_actions(actions: list, jrny: dict, message: str, templates: list) -> list:
+    """Deterministic safety net: ensure the journey's next-step button is present regardless of what the
+    LLM emitted, and add up to 2 interest-based 'create agent' buttons when the model proposed none. So a
+    correct, relevant action is always offered even if the local model misfires."""
+    from crewaimeat.agency import advisor
+
+    out = list(actions or [])
+    nxt = jrny.get("next")
+    if nxt and nxt.get("cta") and not any(_same_action(a, nxt["cta"]) for a in out):
+        out.append(dict(nxt["cta"]))
+    if not any(a.get("kind") == "create_brain" for a in out):
+        for s in advisor.suggest_builds(message, templates)[:2]:
+            out.append({"kind": "create_brain", "template_id": s["template_id"], "name": "", "prose": ""})
+    return out[:6]
+
 
 def _ver_tuple(v: str | None) -> tuple[int, ...]:
     import re
@@ -411,51 +534,8 @@ def create_app(token: str | None = None) -> FastAPI:
     def setup_status() -> dict:
         """Aggregate state for the onboarding wizard: account, model (local Ollama / OpenRouter key), and
         the first agent's progress (created → connected → running) — so the wizard shows the whole checklist
-        and gates each step on the previous."""
-        from crewaimeat.tui import fleet_state
-
-        acc = account.load()
-        running, names = _ollama_probe()
-        _fam = DEFAULT_OLLAMA_MODEL.split(":")[0]  # e.g. "gemma4" — present in any variant tag (gemma4:latest)
-        has_model = any(_fam in n for n in names)
-        # The embed model powers the opt-in crew memory (CrewSpec.memory / pipeline_memory) — the
-        # cascade's preferred free+private tier. Surfaced so the wizard can show/gate it.
-        embed_model = os.getenv("AIMEAT_EMBED_OLLAMA_MODEL", "nomic-embed-text")
-        has_embed = any(n == embed_model or n.startswith(embed_model + ":") for n in names)
-        bs = brains.list_brains()
-        first = bs[0]["agent_name"] if bs else None
-        first_auth = account.agent_auth(first, acc["owner"]) if first else {"authorized": False}
-        serve_agents = {a.get("agent") for a in (fleet_state.collect_serve().get("agents") or [])}
-        from crewaimeat import node_engine
-
-        return {
-            "owner_set": acc["owner_set"],
-            "owner": acc["owner"],
-            "node": acc["node"],
-            # Node.js + the AIMEAT connector CLI — the engine agents run on. Every dev box had both on
-            # PATH, so nothing checked; a fresh machine has neither and device-auth/serve just died.
-            "engine": {
-                **node_engine.engine_status(),
-                "install_running": _ENGINE_INSTALL["running"],
-                "install_error": _ENGINE_INSTALL["error"],
-            },
-            "ollama": {
-                "installed": _ollama_bin() is not None,
-                "running": running,
-                "has_model": has_model,
-                "default_model": DEFAULT_OLLAMA_MODEL,
-                "embed_model": embed_model,
-                "has_embed_model": has_embed,
-                "models": names,
-                "pull_running": _PULL_STATE["running"],
-                "pull_error": _PULL_STATE["error"],
-            },
-            "openrouter_key": _has_openrouter_key(),
-            "brain_count": len(bs),
-            "first_agent": first,
-            "first_agent_connected": bool(first_auth.get("authorized")),
-            "first_agent_running": bool(first and first in serve_agents),
-        }
+        and gates each step on the previous. Shares `setup_snapshot()` with the copilot's journey."""
+        return setup_snapshot()
 
     @app.post("/api/ollama/start", dependencies=[require_token])
     def ollama_start() -> dict:
@@ -860,6 +940,10 @@ def create_app(token: str | None = None) -> FastAPI:
                     pass
         except Exception:  # noqa: BLE001
             pass
+        try:
+            apps.clear_app(agent)  # forget any built data-app pointer for this agent
+        except Exception:  # noqa: BLE001
+            pass
         return {"deleted": deleted}
 
     @app.get("/api/brains/{agent}/history", dependencies=[require_token])
@@ -1248,6 +1332,137 @@ def create_app(token: str | None = None) -> FastAPI:
             val if isinstance(val, str) else (None if val is None else _json.dumps(val, ensure_ascii=False, indent=1))
         )
         return {"key": key, "value": text}
+
+    # ── data app: build an AIMEAT app that SHOWS this agent's published data ──────
+    @app.post("/api/agents/{agent}/app/build", dependencies=[require_token])
+    def build_app(agent: str, lang: str = Query(default="en")) -> dict:
+        """Build (or rebuild in place) an AIMEAT app that presents this agent's data — deterministic
+        pre-baked template, published inline under the owner. Runs in the background (like the installs);
+        poll GET /api/agents/{agent}/app for progress + result. The app's visibility mirrors the brain's
+        data visibility (owner → private login-gated dashboard, public → shareable public page)."""
+        if brains.get_brain(agent) is None:
+            raise HTTPException(status_code=404, detail=f"no brain '{agent}'")
+        acc = account.load()
+        if not account.agent_auth(agent, acc["owner"]).get("has_token"):
+            raise HTTPException(status_code=400, detail="connect (approve) the agent first")
+        if (_APP_BUILD.get(agent) or {}).get("running"):
+            return {"started": False, "reason": "already building"}
+        if os.environ.get("PYTEST_CURRENT_TEST"):  # a test must never publish to the real node
+            return {"started": False, "reason": "pytest"}
+        import threading
+
+        _APP_BUILD[agent] = {"running": True, "step": "starting", "error": None, "result": None}
+
+        def _run() -> None:
+            try:
+                from crewaimeat.agency import app_builder
+
+                res = app_builder.build_data_app(
+                    agent, acc["owner"], lang=lang, on_step=lambda s: _APP_BUILD[agent].update(step=s)
+                )
+                _APP_BUILD[agent]["result"] = res
+                if res.get("status") in ("failed", "no_data", "no_brain"):
+                    _APP_BUILD[agent]["error"] = res.get("error") or res.get("status")
+            except Exception as exc:  # noqa: BLE001 — surfaced via the poll
+                _APP_BUILD[agent]["error"] = f"{type(exc).__name__}: {exc}"
+            finally:
+                _APP_BUILD[agent]["running"] = False
+
+        threading.Thread(target=_run, daemon=True).start()
+        return {"started": True}
+
+    @app.get("/api/agents/{agent}/app", dependencies=[require_token])
+    def get_app(agent: str) -> dict:
+        """One call for the whole app panel: the built app pointer (if any), live build progress, and
+        whether the agent has data yet to show (so the UI can guide 'run the agent first')."""
+        from crewaimeat.agency import app_builder
+
+        st = _APP_BUILD.get(agent) or {"running": False, "step": None, "error": None, "result": None}
+        try:
+            data = app_builder.data_status(agent)
+        except Exception:  # noqa: BLE001
+            data = {"ready": False, "count": 0, "prefix": None}
+        return {
+            "app": apps.get_app(agent),
+            "build": {"running": st.get("running", False), "step": st.get("step"), "error": st.get("error")},
+            "data": {"ready": data.get("ready"), "count": data.get("count"), "prefix": data.get("prefix")},
+        }
+
+    # ── copilot: journey (deterministic next steps) + chat ───────────────────────
+    def _journey(lang: str) -> dict:
+        snap = setup_snapshot()
+        bl = brains.list_brains()
+        first = snap.get("first_agent")
+        app_state = apps.get_app(first) if first else None
+        return journey.compute(snap, bl, app_state, produced_data=_produced_data(first), lang=lang)
+
+    @app.get("/api/journey", dependencies=[require_token])
+    def get_journey(lang: str = Query(default="en")) -> dict:
+        """The deterministic 'where am I / what's next' ladder — powers the copilot's journey panel and
+        grounds every chat turn. Extends the setup wizard past 'running' into build-app → offer → aimeat.io."""
+        return _journey(lang if lang in ("en", "fi") else "en")
+
+    @app.get("/api/chat/history", dependencies=[require_token])
+    def chat_hist(session_id: str = Query(...)) -> dict:
+        """Rehydrate a chat pane: the session's turns in order (with the action buttons each suggested)."""
+        return {"messages": chat_store.history(session_id)}
+
+    @app.post("/api/chat", dependencies=[require_token])
+    def chat(body: ChatIn) -> dict:
+        """One copilot turn. Grounded in the deterministic journey + the real catalog; runs the advisor
+        in-process against the appliance's model. Returns {session_id, reply, actions, journey}. Falls back
+        to a scripted next-step reply when no model is ready (or under pytest) so it works from step 1."""
+        import uuid
+
+        from crewaimeat.agency import advisor
+        from crewaimeat.tui import fleet_state
+
+        sid = (body.session_id or "").strip() or uuid.uuid4().hex
+        msg = (body.message or "").strip()
+        lang = body.lang if body.lang in ("en", "fi") else "en"
+        if not msg:
+            raise HTTPException(status_code=400, detail="empty message")
+
+        prior = chat_store.window(sid, 6)  # history BEFORE this turn (avoid double-including the message)
+        chat_store.append(sid, "user", msg)
+
+        snap = setup_snapshot()
+        bl = brains.list_brains()
+        first = snap.get("first_agent")
+        app_state = apps.get_app(first) if first else None
+        jrny = journey.compute(snap, bl, app_state, produced_data=_produced_data(first), lang=lang)
+
+        templates = [t.localized(lang) for t in brain_templates.all_templates()]
+        serve = {a.get("agent") for a in (fleet_state.collect_serve().get("agents") or [])}
+        agents_ctx = [
+            {"agent_name": b["agent_name"], "template_id": b["template_id"], "running": b["agent_name"] in serve}
+            for b in bl
+        ]
+
+        has_model = bool((snap.get("ollama") or {}).get("has_model") or snap.get("openrouter_key"))
+        actions: list = []
+        if not has_model or os.environ.get("PYTEST_CURRENT_TEST"):
+            text = advisor.scripted_reply(jrny, lang)  # model-free: still useful from the very first step
+        else:
+            llm = _advisor_llm(snap)
+            if llm is None:
+                text = advisor.scripted_reply(jrny, lang)
+            elif not _CHAT_SEMAPHORE.acquire(timeout=1):
+                text = (
+                    "Mietin vielä edellistä viestiäsi…" if lang == "fi" else "Still thinking about your last message…"
+                )
+            else:
+                try:
+                    catalog = advisor.build_catalog_context(templates, agents_ctx)
+                    out = advisor.respond(msg, jrny, catalog, prior, llm=llm, templates=templates, agents=agents_ctx)
+                finally:
+                    _CHAT_SEMAPHORE.release()
+                text = out.get("text") or advisor.scripted_reply(jrny, lang)
+                actions = out.get("actions") or []
+
+        actions = _merge_actions(actions, jrny, msg, templates)
+        chat_store.append(sid, "assistant", text, actions)
+        return {"session_id": sid, "reply": text, "actions": actions, "journey": jrny}
 
     return app
 

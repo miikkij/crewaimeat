@@ -243,6 +243,28 @@ const STR = {
   "th.topic":{en:"topic",fi:"aihe"}, "th.source":{en:"source",fi:"lähde"}, "th.body":{en:"content",fi:"sisältö"},
   "mem.empty":{en:"empty",fi:"tyhjä"}, "mem.topics":{en:"topics",fi:"aiheet"},
   "fleet.conn":{en:"connection",fi:"yhteys"}, "fleet.down":{en:"down",fi:"ei käynnissä"},
+  // ── copilot (advisor) + data app ──
+  "nav.advisor":{en:"Copilot",fi:"Apuri"},
+  "advisor.title":{en:"Copilot",fi:"Apuri"},
+  "advisor.sub":{en:"Brainstorm what to build with your agents and templates — I'll guide your next steps.",fi:"Ideoi mitä rakentaa agenteillasi ja pohjilla — opastan seuraavat askeleet."},
+  "advisor.placeholder":{en:"Ask me what to build, or what to do next…",fi:"Kysy mitä rakentaa tai mitä tehdä seuraavaksi…"},
+  "advisor.send":{en:"Send",fi:"Lähetä"}, "advisor.thinking":{en:"Thinking…",fi:"Mietin…"},
+  "advisor.journey":{en:"Your next steps",fi:"Seuraavat askeleesi"},
+  "advisor.greeting":{en:"Hi! Tell me what you'd like to make, or ask what to do next.",fi:"Hei! Kerro mitä haluaisit tehdä, tai kysy mitä seuraavaksi."},
+  "act.setup":{en:"Go to setup",fi:"Käyttöönottoon"}, "act.create":{en:"Create",fi:"Luo"},
+  "act.buildapp":{en:"Build the app",fi:"Rakenna sovellus"}, "act.testrun":{en:"Run it once",fi:"Aja kerran"},
+  "act.offer":{en:"Advertise it",fi:"Mainosta"}, "act.open":{en:"Open link",fi:"Avaa linkki"},
+  "act.manage":{en:"Open agent",fi:"Avaa agentti"}, "act.do":{en:"Do this",fi:"Tee tämä"},
+  "app.section":{en:"Data app",fi:"Datasovellus"},
+  "app.note":{en:"Build a web app on aimeat.io that shows what this agent produces. It mirrors your data's visibility — private if owner-only, shareable if public.",fi:"Rakenna aimeat.io:hon web-sovellus, joka näyttää mitä tämä agentti tuottaa. Se noudattaa datan näkyvyyttä — yksityinen jos vain omistajalle, jaettava jos julkinen."},
+  "app.build":{en:"Build an app to show this data",fi:"Rakenna sovellus tämän datan näyttämiseen"},
+  "app.rebuild":{en:"Rebuild",fi:"Rakenna uudelleen"}, "app.open":{en:"Open app",fi:"Avaa sovellus"},
+  "app.building":{en:"Building the app…",fi:"Rakennetaan sovellusta…"},
+  "app.nodata":{en:"Run the agent first so it has data to show here.",fi:"Aja agentti ensin, jotta sillä on näytettävää dataa."},
+  "app.unverified":{en:"published — open it to check",fi:"julkaistu — avaa tarkistaaksesi"},
+  "w.buildnext":{en:"What should I build next? →",fi:"Mitä rakentaisin seuraavaksi? →"},
+  "ev.app_built":{en:"built a data app",fi:"rakensi datasovelluksen"},
+  "ev.app_build_failed":{en:"app build failed",fi:"sovelluksen rakennus epäonnistui"},
 };
 const t = k => (STR[k]&&STR[k][LANG]) || (STR[k]&&STR[k].en) || k;
 
@@ -260,7 +282,7 @@ function esc(s){ return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;
 // The connector requires agent ids to be 3-64 lowercase alphanumeric + hyphens, so normalize names client-side.
 function slugAgent(s){ return (s||"").toLowerCase().replace(/[^a-z0-9-]+/g,"-").replace(/^-+|-+$/g,"").slice(0,64); }
 
-const VIEWS = ["setup","gallery","fleet","memory","sync"];
+const VIEWS = ["setup","advisor","gallery","fleet","memory","sync"];
 let view = "gallery", editing = null, editorStream = null, latestState = null, skipSetup = false;
 let wizardStarted = !!_qlang, pendingAuth = null;   // shell already did language+plan? skip the in-app intro. + in-flight device-auth
 
@@ -278,6 +300,7 @@ async function render(){
   const m=document.getElementById("main"); m.innerHTML="<p class='muted'>…</p>";
   try {
     if (editing!==null) return renderEditor(m);
+    if (view==="advisor") return renderChat(m);         // the copilot: brainstorm + guided next steps
     if (view==="setup") return renderSetup(m);          // the guided first-run wizard (full checklist + gated steps)
     if (view==="gallery") return renderGallery(m);
     if (view==="fleet") return renderFleet(m);
@@ -341,7 +364,10 @@ async function renderSetup(m){
     list.appendChild(el(`<div style="padding:5px 0;color:${cl}"><b style="display:inline-block;width:22px">${ic}</b> ${i+1}. ${esc(st.title)}</div>`)); });
   m.appendChild(list);
   if(cur===-1){ const c=el(`<div class="card" style="max-width:560px"><h3>${t("w.done")}</h3><p class="muted">${t("w.done.sub")}</p></div>`);
-    const b=el(`<button class="btn">${t("w.open")}</button>`); b.onclick=()=>{ skipSetup=true; openEditor(s.first_agent); }; c.appendChild(b); m.appendChild(c);
+    const brow=el(`<div class="row" style="gap:8px"></div>`);
+    const b=el(`<button class="btn">${t("w.open")}</button>`); b.onclick=()=>{ skipSetup=true; openEditor(s.first_agent); };
+    const nx=el(`<button class="btn ghost">${t("w.buildnext")}</button>`); nx.onclick=()=>{ skipSetup=true; view="advisor"; render(); };
+    brow.appendChild(b); brow.appendChild(nx); c.appendChild(brow); m.appendChild(c);
     m.appendChild(el(`<div style="margin-top:10px"><a class="muted" style="cursor:pointer" onclick="skipSetup=true;view='gallery';render()">${t("nav.gallery")} →</a></div>`)); return; }
   const panel=el(`<div class="card" style="max-width:660px"></div>`); m.appendChild(panel);
   setupStep(panel, steps[cur].key, s, ()=>renderSetup(m), cur+1);
@@ -594,6 +620,9 @@ function renderEditor(m){
   m.appendChild(form);
   const offerBox=el(`<div id="offerbox"></div>`); m.appendChild(offerBox);
   if(!isNew) loadOffer(offerBox, m, brain.agent_name, authState);
+  const appBox=el(`<div id="appbox"></div>`); m.appendChild(appBox);
+  // map-snapshot stores a different (image) shape than the generic prose dashboard reads — hide it there.
+  if(!isNew && brain.template_id!=="map-snapshot") loadAppPanel(appBox, brain.agent_name, authState);
 
   // model picker — async catalogue; preserve the brain's current model until it loads (don't clobber on save)
   let modelsLoaded=false; const modelSpecs={};
@@ -840,6 +869,45 @@ async function loadOffer(box, m, agent, authState){
       toast(t("offer.published")); loadOffer(box, m, agent, authState); }catch(e){ toast(e.message); } finally{ btn.disabled=false; } };
   card.appendChild(btn); box.appendChild(card);
 }
+async function loadAppPanel(box, agent, authState){
+  let info; try{ info=await api("/api/agents/"+encodeURIComponent(agent)+"/app"); }catch{ return; }
+  box.innerHTML="";
+  const card=el(`<div class="card" style="margin-top:14px"></div>`);
+  card.appendChild(el(`<h3>${t("app.section")}</h3>`));
+  card.appendChild(el(`<div class="sub" style="margin:0 0 10px">${t("app.note")}</div>`));
+  const slot=el(`<div></div>`); card.appendChild(slot); box.appendChild(card);
+  async function poll(){ if(!document.body.contains(card)) return;   // stop polling once the editor is gone
+    try{ const x=await api("/api/agents/"+encodeURIComponent(agent)+"/app"); paint(x); }catch{} }
+  async function startBuild(){
+    if(!authState.authorized) return toast(t("approvefirst"));
+    slot.innerHTML=`<div class="row"><span class="spin"></span> <span class="muted">${t("app.building")}</span></div>`;
+    try{ await api("/api/agents/"+encodeURIComponent(agent)+"/app/build?lang="+LANG,{method:"POST"}); setTimeout(poll,2500); }
+    catch(e){ toast(e.message); paint(info); }
+  }
+  function paint(inf){
+    info=inf; const b=inf.build||{}, app=inf.app, data=inf.data||{};
+    slot.innerHTML="";
+    if(b.running){ slot.innerHTML=`<div class="row"><span class="spin"></span> <span class="muted">${t("app.building")}${b.step?(" · "+esc(b.step)):""}</span></div>`; setTimeout(poll,3000); return; }
+    if(app && app.url){
+      const head=el(`<div class="row" style="gap:8px;align-items:center"></div>`);
+      head.appendChild(el(`<span class="pill ${app.status==="live"?"published":"DUPLICATE"}">${esc(app.status)}</span>`));
+      if(app.verified===null && app.status==="live") head.appendChild(el(`<span class="muted" style="font-size:12px">${t("app.unverified")}</span>`));
+      slot.appendChild(head);
+      slot.appendChild(el(`<div class="muted" style="font-size:12px;word-break:break-all;margin:8px 0">${esc(app.url)}</div>`));
+      const r=el(`<div class="row" style="gap:8px"></div>`);
+      if(app.status==="live"){ const open=el(`<button class="btn">${t("app.open")}</button>`); open.onclick=()=>openExt(app.url); r.appendChild(open); }
+      const rb=el(`<button class="btn ghost">${t("app.rebuild")}</button>`); rb.onclick=startBuild; r.appendChild(rb);
+      slot.appendChild(r);
+      if(b.error) slot.appendChild(el(`<div class="muted" style="font-size:12px;margin-top:6px;color:#ff9bb5">${esc(b.error)}</div>`));
+      return;
+    }
+    if(!data.ready){ slot.appendChild(el(`<p class="muted">${t("app.nodata")}</p>`));
+      const rc=el(`<button class="btn ghost" style="padding:4px 10px">${t("w.recheck")}</button>`); rc.onclick=poll; slot.appendChild(rc); return; }
+    const build=el(`<button class="btn">${t("app.build")}</button>`); build.onclick=startBuild; slot.appendChild(build);
+    if(b.error) slot.appendChild(el(`<div class="muted" style="font-size:12px;margin-top:6px;color:#ff9bb5">${esc(b.error)}</div>`));
+  }
+  paint(info);
+}
 function showLogs(m,l){
   const out=m.querySelector("#editorout"); out.dataset.view="logs";
   // Preserve the reader's scroll: only auto-follow to the bottom if they were ALREADY near it (so scrolling
@@ -952,6 +1020,91 @@ function showMemRecord(out, agent, r){
   out.appendChild(el(mdRender(r.body)));
 }
 
+// ── Copilot (advisor): brainstorm + deterministic next-steps journey ──
+async function renderChat(m){
+  m.innerHTML=`<h2>${t("advisor.title")}</h2><div class="sub">${t("advisor.sub")}</div>`;
+  const wrap=el(`<div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start"></div>`);
+  const left=el(`<div style="flex:2;min-width:320px;display:flex;flex-direction:column"></div>`);
+  const right=el(`<div style="flex:1;min-width:230px"></div>`);
+  wrap.appendChild(left); wrap.appendChild(right); m.appendChild(wrap);
+  const jcard=el(`<div class="card"><h3 style="margin-top:0">${t("advisor.journey")}</h3><div id="jsteps" class="muted">…</div></div>`);
+  right.appendChild(jcard);
+  const thread=el(`<div id="chatthread" style="display:flex;flex-direction:column;gap:10px;margin-bottom:12px;max-height:60vh;overflow:auto"></div>`);
+  left.appendChild(thread);
+  const inrow=el(`<div class="row" style="gap:8px"></div>`);
+  const inp=el(`<input placeholder="${esc(t("advisor.placeholder"))}" style="flex:1;min-width:180px">`);
+  const send=el(`<button class="btn">${t("advisor.send")}</button>`);
+  inrow.appendChild(inp); inrow.appendChild(send); left.appendChild(inrow);
+
+  const paintJourney=(j)=>{ if(j) renderJourney(jcard.querySelector("#jsteps"), j); };
+  const refreshJourney=async()=>{ try{ paintJourney(await api("/api/journey?lang="+LANG)); }catch{} };
+  const addMsg=(role,text,actions)=>{
+    const b=el(`<div class="card" style="${role==="user"?"align-self:flex-end;max-width:82%;background:var(--panel2)":"align-self:flex-start;max-width:94%"}"></div>`);
+    if(role==="user") b.appendChild(el(`<div>${esc(text)}</div>`)); else b.appendChild(el(mdRender(text||"")));
+    if(actions&&actions.length){ const ar=el(`<div class="row" style="margin-top:10px;gap:6px"></div>`);
+      actions.forEach(a=>{ const btn=el(`<button class="btn ghost" style="padding:5px 10px;font-size:12px">${esc(actionLabel(a))}</button>`);
+        btn.onclick=()=>runAction(a, refreshJourney); ar.appendChild(btn); }); b.appendChild(ar); }
+    thread.appendChild(b); thread.scrollTop=thread.scrollHeight;
+  };
+
+  let sid=localStorage.getItem("advisorSession")||"";
+  if(sid){ try{ const h=await api("/api/chat/history?session_id="+encodeURIComponent(sid)); (h.messages||[]).forEach(x=>addMsg(x.role,x.text,x.actions)); }catch{} }
+  if(!thread.children.length) addMsg("assistant", t("advisor.greeting"), null);
+  refreshJourney();
+
+  const doSend=async()=>{ const msg=inp.value.trim(); if(!msg) return; inp.value=""; addMsg("user",msg,null);
+    send.disabled=true; const think=el(`<div class="card" style="align-self:flex-start"><span class="row"><span class="spin"></span> <span class="muted">${t("advisor.thinking")}</span></span></div>`);
+    thread.appendChild(think); thread.scrollTop=thread.scrollHeight;
+    try{ const r=await api("/api/chat",{method:"POST",body:JSON.stringify({message:msg,session_id:sid||undefined,lang:LANG})});
+      sid=r.session_id; localStorage.setItem("advisorSession",sid); think.remove(); addMsg("assistant",r.reply,r.actions); paintJourney(r.journey);
+    }catch(e){ think.remove(); addMsg("assistant", e.message, null); }
+    finally{ send.disabled=false; inp.focus(); } };
+  send.onclick=doSend; inp.onkeydown=(e)=>{ if(e.key==="Enter"){ e.preventDefault(); doSend(); } };
+  inp.focus();
+}
+function renderJourney(container, j){
+  container.innerHTML="";
+  (j.steps||[]).forEach(st=>{
+    const cl=st.done?"var(--ok)":(st.is_next?"var(--brand)":"var(--muted)");
+    const ic=st.done?"✓":(st.is_next?"▶":(st.optional?"◇":"○"));
+    container.appendChild(el(`<div style="padding:4px 0;color:${cl}"><b style="display:inline-block;width:20px">${ic}</b> ${esc(st.title)}</div>`));
+    if(st.is_next && st.cta){ const b=el(`<button class="btn" style="margin:2px 0 10px 20px;padding:5px 12px;font-size:12px">${esc(t("act.do"))}</button>`);
+      b.onclick=()=>runAction(st.cta, async()=>{ try{ renderJourney(container, await api("/api/journey?lang="+LANG)); }catch{} }); container.appendChild(b); }
+  });
+}
+function actionLabel(a){
+  if(a.kind==="goto_step") return t("act.setup");
+  if(a.kind==="create_brain") return (t("act.create")+" "+(a.template_id||"")).trim();
+  if(a.kind==="build_app") return t("act.buildapp");
+  if(a.kind==="test_run") return t("act.testrun");
+  if(a.kind==="publish_offer") return t("act.offer");
+  if(a.kind==="open_url") return t("act.open");
+  if(a.kind==="open_agent") return t("act.manage");
+  return a.kind||"?";
+}
+async function runAction(a, after){
+  try{
+    if(a.kind==="goto_step"){ skipSetup=false; wizardStarted=true; editing=null; view="setup"; render(); return; }
+    if(a.kind==="open_url"){ if(a.url) openExt(a.url); }
+    else if(a.kind==="open_agent"){ if(a.agent) return openEditor(a.agent); }
+    else if(a.kind==="create_brain"){
+      const tpls=await api("/api/templates?lang="+LANG); const tp=(tpls.templates||[]).find(x=>x.id===a.template_id);
+      if(!tp) return toast("?");
+      // propose-then-confirm: open a NEW-brain editor prefilled; the user clicks Save to actually create it.
+      editing={isNew:true, template:tp, brain:{agent_name:slugAgent(a.name||""), template_id:tp.id, prose:(a.prose||tp.default_prose), policy:tp.default_policy, title:tp.title}};
+      return render();
+    }
+    else if(a.kind==="build_app"){ if(!a.agent) return;
+      try{ await api("/api/agents/"+encodeURIComponent(a.agent)+"/app/build?lang="+LANG,{method:"POST"}); toast(t("app.building")); }
+      catch(e){ toast(e.message); }
+      return openEditor(a.agent);   // watch progress in the agent's Data app panel
+    }
+    else if(a.kind==="test_run"){ if(a.agent) return openEditor(a.agent); }
+    else if(a.kind==="publish_offer"){ if(a.agent){ await api("/api/agents/"+encodeURIComponent(a.agent)+"/offer/publish",{method:"POST"}); toast(t("offer.published")); } }
+  }catch(e){ toast(e.message); }
+  if(after) after();
+}
+
 async function renderSync(m){
   m.innerHTML=`<h2>${t("sync.title")}</h2><div class="sub">${t("sync.sub")}</div>`;
   const out=el(`<div style="margin-top:14px"></div>`);
@@ -962,12 +1115,23 @@ async function loadSync(out, agent){
   const s=await api("/api/sync/"+encodeURIComponent(agent));
   const banner=s.in_sync?`<span class="pill published">${t("insync")}</span>`:`<span class="pill stale-heartbeat">${s.raw_count} ${t("notinsync")}</span>`;
   out.innerHTML=`<div class="row" style="gap:18px;margin-bottom:6px">${banner} <span class="muted">${s.raw_count} ${t("raw")} · ${s.published_count} ${t("published")} (aimeat.io)</span></div><div class="muted" style="font-size:12px;margin-bottom:10px">${t("sync.open")}</div>`;
+  syncAppRow(out, agent);   // if a data app exists for this agent, offer to open it (secondary surface)
   if(!s.published.length){ out.appendChild(el(`<p class="muted">—</p>`)); return; }
   const tb=el(`<table><tr><th>${t("th.key")}</th><th>${t("th.visibility")}</th><th>${t("th.updated")}</th></tr></table>`);
   s.published.forEach(p=>{ const when=p.updated?new Date(p.updated).toLocaleString():"—";
     const tr=el(`<tr style="cursor:pointer"><td style="font-family:monospace;word-break:break-all;font-size:12px">${esc(p.key)}</td><td class="muted">${esc(p.visibility||"")}</td><td class="muted">${esc(when)}</td></tr>`);
     tr.onclick=()=>showNodeKey(out, agent, p); tb.appendChild(tr); });
   out.appendChild(tb);
+}
+async function syncAppRow(out, agent){
+  // Secondary surface: when a data app already exists for this agent, show a one-line "Open app" here.
+  let inf; try{ inf=await api("/api/agents/"+encodeURIComponent(agent)+"/app"); }catch{ return; }
+  const app=inf&&inf.app;
+  if(!(app&&app.url&&app.status==="live")) return;
+  const row=el(`<div class="row" style="gap:8px;margin-bottom:12px;align-items:center"></div>`);
+  row.appendChild(el(`<span class="muted" style="font-size:12px">${t("app.section")}:</span>`));
+  const open=el(`<button class="btn ghost" style="padding:4px 10px">${t("app.open")}</button>`); open.onclick=()=>openExt(app.url); row.appendChild(open);
+  out.insertBefore(row, out.firstChild);
 }
 async function showNodeKey(out, agent, p){
   out.innerHTML=""; const back=el(`<div class="back">← ${t("sync.title")}</div>`); back.onclick=()=>loadSync(out, agent); out.appendChild(back);

@@ -1,0 +1,157 @@
+<!doctype html>
+<!--
+  aimeat-agency data viewer (PUBLIC / anonymous).
+  Pre-baked template — the appliance fills the __*_JSON__ placeholders (as JS literals) and publishes it
+  inline under the owner. It shows the agent's PUBLIC deliverables to anyone with the link. Anonymous
+  visitors cannot list-by-prefix, so the appliance bakes the discovered keys (KEYS) + the publisher GAII
+  (PUBLISHER) at build time and reads them via AIMEAT.data.getPublic(gaii, key); for date-mode agents it
+  also probes recent days so freshly-published items appear without a rebuild. startApp() runs for
+  EVERYONE (never gated on a session) so anon visitors are not stuck on "Loading…".
+  Self-contained (inline CSS, no external scripts — the inline-app CSP blocks CDNs).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         background: #0f1115; color: #e7e9ee; }
+  @media (prefers-color-scheme: light) { body { background: #f6f7f9; color: #1a1c22; } }
+  nav { display: flex; align-items: center; gap: 12px; padding: 12px 20px;
+        border-bottom: 1px solid #ffffff1f; position: sticky; top: 0;
+        background: #161a22cc; backdrop-filter: blur(6px); }
+  @media (prefers-color-scheme: light) { nav { background: #ffffffcc; border-color: #0000000f; } }
+  nav .brand { font-weight: 650; font-size: 16px; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 22px 20px 60px; }
+  h1 { font-size: 22px; margin: 6px 0 2px; }
+  .sub { opacity: .6; font-size: 13px; margin-bottom: 20px; }
+  #status { opacity: .7; padding: 24px 4px; }
+  .card { border: 1px solid #ffffff1f; border-radius: 12px; padding: 16px 18px; margin: 0 0 14px;
+          background: #161a22; }
+  @media (prefers-color-scheme: light) { .card { background: #fff; border-color: #0000000f; } }
+  .card > summary { cursor: pointer; font-weight: 600; list-style: none; }
+  .card > summary::-webkit-details-marker { display: none; }
+  .card .when { opacity: .55; font-size: 12px; font-weight: 500; margin-left: 8px; }
+  .body { margin-top: 12px; white-space: pre-wrap; word-wrap: break-word; }
+  .body a { color: #6ea8fe; }
+  .empty { text-align: center; opacity: .7; padding: 40px 10px; }
+  .empty b { display: block; font-size: 17px; margin-bottom: 6px; opacity: 1; }
+</style>
+</head>
+<body>
+<nav>
+  <span class="brand" id="brand">Data</span>
+</nav>
+<div class="wrap">
+  <h1 id="title">Data</h1>
+  <div class="sub" id="sub"></div>
+  <div id="status">Loading…</div>
+  <div id="cards"></div>
+</div>
+<script>
+  // ── filled by the appliance (JS literals) ──
+  const AGENT = __AGENT_JSON__;
+  const PREFIX = __PREFIX_JSON__;
+  const TITLE = __TITLE_JSON__;
+  const LANG = __LANG_JSON__;
+  const KEYMODE = __KEYMODE_JSON__;
+  const PUBLISHER = __PUBLISHER_JSON__;   // GAII that owns the keys
+  const KEYS = __KEYS_JSON__;             // keys discovered at build time
+
+  const T = {
+    en: { sub: "Published by \"" + AGENT + "\".",
+          emptyH: "Nothing to show yet", empty: "This page has no published data yet.",
+          err: "Could not load the data." },
+    fi: { sub: "Julkaisija \"" + AGENT + "\".",
+          emptyH: "Ei näytettävää vielä", empty: "Tällä sivulla ei ole vielä julkaistua dataa.",
+          err: "Datan lataus epäonnistui." }
+  };
+  const S = T[LANG] || T.en;
+
+  function esc(s) { return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;"); }
+  function render(text) {
+    return esc(text).replace(/(https?:\/\/[^\s<)"']+)/g,
+      '<a href="$1" target="_blank" rel="noopener">$1</a>');
+  }
+  function valueText(v) {
+    if (v == null) return "";
+    if (typeof v === "string") return v;
+    if (typeof v === "object") return v.body || v.text || v.summary || v.content || JSON.stringify(v, null, 2);
+    return String(v);
+  }
+  function label(key) {
+    const tail = String(key).slice(PREFIX.length).replace(/^\./, "");
+    return tail || "latest";
+  }
+  function recentDateKeys(days) {
+    const out = [];
+    const now = new Date();
+    for (let i = 0; i < days; i++) {
+      const d = new Date(now.getTime() - i * 86400000);
+      out.push(PREFIX + "." + d.toISOString().slice(0, 10));
+    }
+    return out;
+  }
+
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = src; s.onload = resolve; s.onerror = () => reject(new Error("failed to load " + src));
+      document.head.appendChild(s);
+    });
+  }
+
+  async function startApp() {
+    const status = document.getElementById("status");
+    const cards = document.getElementById("cards");
+    cards.innerHTML = "";
+    // candidate keys: baked + (for date mode) recent days, de-duplicated.
+    let keys = Array.isArray(KEYS) ? KEYS.slice() : [];
+    if (KEYMODE === "date") keys = keys.concat(recentDateKeys(10));
+    keys = Array.from(new Set(keys));
+    const found = [];
+    for (const key of keys) {
+      try {
+        const v = await AIMEAT.data.getPublic(PUBLISHER, key);
+        if (v != null && valueText(v).trim()) found.push({ key, value: v });
+      } catch (e) { /* missing/unset key — skip */ }
+    }
+    found.sort((a, b) => (a.key < b.key ? 1 : a.key > b.key ? -1 : 0));
+    if (!found.length) {
+      status.innerHTML = '<div class="empty"><b>' + esc(S.emptyH) + "</b>" + esc(S.empty) + "</div>";
+      return;
+    }
+    status.textContent = "";
+    for (let i = 0; i < found.length; i++) {
+      const it = found[i];
+      const d = document.createElement("details");
+      d.className = "card";
+      if (i === 0) d.open = true;
+      d.innerHTML = '<summary>' + esc(TITLE) + '<span class="when">' + esc(label(it.key)) +
+        '</span></summary><div class="body">' + render(valueText(it.value)) + '</div>';
+      cards.appendChild(d);
+    }
+  }
+
+  async function boot() {
+    document.getElementById("title").textContent = TITLE;
+    document.getElementById("brand").textContent = TITLE;
+    document.getElementById("sub").textContent = S.sub;
+    try {
+      await loadScript("/v1/libs/aimeat-auth.js");
+      await loadScript("/v1/libs/aimeat-data.js");
+    } catch (e) {
+      document.getElementById("status").textContent = String(e && e.message || e);
+      return;
+    }
+    await startApp(); // runs for everyone, no login gate
+  }
+  boot();
+</script>
+</body>
+</html>
