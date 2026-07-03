@@ -691,6 +691,102 @@ _CREW_OFFERS: dict[str, list[dict]] = {
             ),
         },
     ],
+    "mroom-sniffer": [
+        {
+            "id": "sniff-guest-request",
+            "title": "Intake a guest REQuest into a research plan",
+            "ask": (
+                "When a guest leaves a REQuest in the machine room, I pick it up, classify the ask, map it "
+                "to a POI and draft a short research plan into a visible outbox document. Runs automatically "
+                "on each new request — I plan and hand off; I don't research or decide. A guest is only ever "
+                "EXC_VIP_NN."
+            ),
+            "example": "A guest asks: how does AIMEAT compare to MCP for agent-to-agent messaging?",
+            "cost": "cheap",
+            "latency": "seconds",
+            "repeatability": "idempotent",  # skips a request that already has an outbox
+            "verification": "gated",  # outbox is schema-validated at the room boundary
+            "consequences": [
+                {"type": "publishes-public", "note": "the outbox plan is visible MACHINE ROOM progress guests see"},
+            ],
+            "sample": (
+                "## Plan\n- Classification: comparison\n- POI: POI_004\n"
+                "- Angle: message semantics + delivery guarantees, AIMEAT inbox vs MCP\n"
+                "- Steps:\n  1. Read the MCP messaging spec\n  2. Compare AIMEAT federated inbox guarantees\n\n…"
+            ),
+        },
+    ],
+    "mroom-digger": [
+        {
+            "id": "research-guest-request",
+            "title": "Research a guest REQuest (sourced, bilingual)",
+            "ask": (
+                "I take the sniffer's plan, search the open web, read the sources and append sourced, cited, "
+                "bilingual (FI+EN) findings to the request's outbox — then hand off to the scorer. Runs "
+                "automatically per request. I research and cite; I don't score or decide. I'm the fleet's "
+                "researcher, distinct from mroom-researcher (which does per-POI briefs)."
+            ),
+            "example": "Execute the plan for the MCP-vs-AIMEAT messaging request",
+            "cost": "cheap",
+            "latency": "minutes",
+            "repeatability": "idempotent",  # status gate: only a `processing` request is picked up
+            "verification": "gated",
+            "consequences": [
+                {"type": "publishes-public", "note": "the findings are visible MACHINE ROOM outbox content guests see"},
+            ],
+            "sample": (
+                "## Findings\nMCP defines request/response tool calls but no durable inbox [1]; AIMEAT's "
+                "federated inbox persists + consents delivery [2].\n\n## Sources\n- https://modelcontextprotocol.io …\n\n…"
+            ),
+        },
+    ],
+    "mroom-scorer": [
+        {
+            "id": "score-guest-request",
+            "title": "Cold-score what a guest REQuest produced",
+            "ask": (
+                "I read the research trail and state one SIGNAL VALUE: X.X — RETAINED or DISCARDED plus one "
+                "factual line, then hand off to the archivist. I judge the CONTENT, never the person — a "
+                "discard is 'the request produced no signal', never an insult. Runs automatically per "
+                "request — I score and hand off; I don't decide or act on the result."
+            ),
+            "example": "Score the MCP-vs-AIMEAT messaging research",
+            "cost": "cheap",
+            "latency": "seconds",
+            "repeatability": "idempotent",  # status gate: only a `researched` request is scored
+            "verification": "gated",
+            "consequences": [
+                {"type": "publishes-public", "note": "the scorecard is visible MACHINE ROOM outbox content"},
+            ],
+            "sample": (
+                "## Scorecard\nSIGNAL VALUE: 6.5 — RETAINED\nConfirms a real gap MCP leaves that AIMEAT fills.\n\n…"
+            ),
+        },
+    ],
+    "mroom-archivist": [
+        {
+            "id": "archive-guest-request",
+            "title": "Archive a scored guest REQuest",
+            "ask": (
+                "A RETAINED request becomes a published, bilingual archive-entry — the permanent trail (path, "
+                "decision, scorecard, follow-ups, sources). A DISCARDED request gets a light note. Either way "
+                "the request is closed. Runs automatically per scored request. Parties are named only as "
+                "EXC_VIP_NN + the agent names — never a real identity."
+            ),
+            "example": "Archive the RETAINED MCP-vs-AIMEAT messaging request",
+            "cost": "cheap",
+            "latency": "seconds",
+            "repeatability": "idempotent",  # skips a request that already has an archive-entry
+            "verification": "gated",
+            "consequences": [
+                {"type": "publishes-public", "note": "the archive-entry is public MACHINE ROOM content guests see"},
+            ],
+            "sample": (
+                "```\nPATH:     request rq-… → outbox → scored 6.5\nDECISION: RETAINED\nSTATUS:   ARCHIVED\n"
+                "PARTIES:  EXC_VIP_07 + agents (mroom-sniffer, mroom-digger, mroom-scorer, mroom-archivist)\n```\n\n…"
+            ),
+        },
+    ],
     "librarian": [
         {
             "id": "map-knowledge",

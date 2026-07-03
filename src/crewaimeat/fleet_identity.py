@@ -298,6 +298,56 @@ FLEET_IDENTITY: dict[str, dict] = {
             "languages": ["en", "fi"],
         },
     },
+    # ── M-ROOM REQuest fleet: the visible workers that turn ONE guest REQuest/day into an archived trail.
+    #    Four separate GAIIs, chained by request status; each is `mroom` + a distinct role tag.
+    "mroom-sniffer": {  # intake: classify the ask + draft a plan into an outbox doc
+        "tags": ["mroom", "request-fleet", "intake", "role.task-runner"],
+        "capabilities": {
+            "technical": [_skill("mroom-sniffer")],
+            "domain": [
+                "M-ROOM guest-REQuest intake: classify the ask, map it to a POI, draft a research plan",
+                "writes a visible outbox plan; hands off to the researcher (status sniffing -> processing)",
+                "privacy-hard: a guest is only ever EXC_VIP_NN, never an email or a real name",
+            ],
+            "languages": ["en", "fi"],
+        },
+    },
+    "mroom-digger": {  # the fleet's OWN researcher (distinct from the POI-brief mroom-researcher)
+        "tags": ["mroom", "request-fleet", "research", "role.task-runner"],
+        "capabilities": {
+            "technical": [_skill("mroom-digger"), _skill("web-search")],
+            "domain": [
+                "M-ROOM guest-REQuest research: execute the sniffer's plan with live web search",
+                "sourced, cited, bilingual (FI + EN) findings appended to the outbox (status processing -> researched)",
+                "distinct from mroom-researcher, which handles per-POI research-briefs",
+            ],
+            "languages": ["en", "fi"],
+        },
+    },
+    "mroom-scorer": {  # cold evaluator: SIGNAL VALUE X.X + RETAINED/DISCARDED
+        "tags": ["mroom", "request-fleet", "scoring", "role.task-runner"],
+        "capabilities": {
+            "technical": [_skill("mroom-scorer")],
+            "domain": [
+                "M-ROOM cold evaluation: SIGNAL VALUE X.X + RETAINED/DISCARDED + one factual line",
+                "judges the CONTENT never the person; a discard states 'no signal', never an insult",
+                "hands off to the archivist (status researched -> scored)",
+            ],
+            "languages": ["en", "fi"],
+        },
+    },
+    "mroom-archivist": {  # publishes the permanent bilingual archive-entry trail
+        "tags": ["mroom", "request-fleet", "archival", "role.task-runner"],
+        "capabilities": {
+            "technical": [_skill("mroom-archivist")],
+            "domain": [
+                "M-ROOM archival: RETAINED -> published bilingual archive-entry (path, scorecard, follow-ups, sources)",
+                "DISCARDED -> a light deterministic note; both close the request (status scored -> archived)",
+                "parties named only as EXC_VIP_NN + the agent names, never a real identity",
+            ],
+            "languages": ["en", "fi"],
+        },
+    },
     "web-researcher": {  # THREE workspace contracts — advertise each so 0.14.0 engagements can gate per-contract
         "tags": [
             "web-research",
