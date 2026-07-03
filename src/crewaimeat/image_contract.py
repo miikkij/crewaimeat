@@ -290,6 +290,10 @@ def process_moodboards(max_items: int = 2, targets: list[tuple[str, str]] | None
     document -> advance. Bounded (max_items per pass — images are heavy); output-dedup settles a
     request whose document already exists. Returns counts."""
     pairs = targets if targets is not None else _member_workspaces()
+    if targets is None:  # gate the discovery path on engagements (0.14.0 gates only the push path)
+        from crewaimeat.engagements import engaged_pairs
+
+        pairs = engaged_pairs(AGENT, pairs, contract=CONTRACT["id"])
     today = datetime.date.today().isoformat()
     processed = failed = 0
     for oid, wid in pairs:

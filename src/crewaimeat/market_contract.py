@@ -211,6 +211,10 @@ def _mail_out(oid: str, wid: str, out_id: str, title: str, md: str) -> None:
 def process_market_scans(max_items: int = 2, targets: list[tuple[str, str]] | None = None) -> dict:
     """Fulfil DUE `market-scan-request` records (one-shot 'requested' + recurring 'active')."""
     pairs = targets if targets is not None else member_workspaces(AGENT)
+    if targets is None:  # gate the discovery path on engagements (0.14.0 gates only the push path)
+        from crewaimeat.engagements import engaged_pairs
+
+        pairs = engaged_pairs(AGENT, pairs, contract=CONTRACT["id"])
     now = datetime.datetime.now(datetime.timezone.utc)
     today = datetime.date.today().isoformat()
     processed = failed = 0

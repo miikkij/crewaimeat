@@ -30,8 +30,17 @@ Performs live web searches to find recent articles, reports, and news on a given
 def build_domain(ctx):
     """Build a web research crew that searches for recent articles, reports, and news on a given topic,
     producing sourced summaries with proper citations."""
-    if is_adopt_task(ctx.task):  # UI "Adopt contract" chip -> provision our spaces there
-        return build_adopt_domain(ctx, AGENT_NAME, CONTRACT)
+    if is_adopt_task(ctx.task):  # UI "Adopt contract" chip -> provision the ADOPTED contract's spaces
+        # web-researcher serves THREE contracts; stamp the spaces with the contract named in scope.contract
+        # (§7c / audit point 4), not a hardcoded one — else a market-scan/company-research adopt would stamp
+        # its spaces as 'research' and granular per-contract Retire would break.
+        from crewaimeat.company_contract import CONTRACT as _CO
+        from crewaimeat.contract_adopt import task_scope
+        from crewaimeat.market_contract import CONTRACT as _MK
+
+        _by_id = {CONTRACT["id"]: CONTRACT, _MK["id"]: _MK, _CO["id"]: _CO}
+        _contract = _by_id.get(task_scope(ctx.task).get("contract"), CONTRACT)
+        return build_adopt_domain(ctx, AGENT_NAME, _contract)
 
     # --- Agents ---
 

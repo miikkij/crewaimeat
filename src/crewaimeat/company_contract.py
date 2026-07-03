@@ -273,6 +273,10 @@ def _advance(oid: str, wid: str, req: dict, **changes) -> None:
 def process_company_research(max_items: int = 3, targets: list[tuple[str, str]] | None = None) -> dict:
     """Fulfil pending `company-research-request` records across the agent's member workspaces."""
     pairs = targets if targets is not None else member_workspaces(AGENT)
+    if targets is None:  # gate the discovery path on engagements (0.14.0 gates only the push path)
+        from crewaimeat.engagements import engaged_pairs
+
+        pairs = engaged_pairs(AGENT, pairs, contract=CONTRACT["id"])
     today = datetime.date.today().isoformat()
     processed = failed = 0
     for oid, wid in pairs:

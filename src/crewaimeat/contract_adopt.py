@@ -45,7 +45,14 @@ def is_adopt_task(task: dict) -> bool:
 def adopt_contract(agent: str, contract: dict, organism_id: str, ws: str) -> str:
     """Deterministically adopt this agent's contract into one workspace. Idempotent."""
     join = _aimeat_call(agent, "aimeat_organism_join", {"id": organism_id})  # ALREADY_MEMBER -> None, fine
-    add = [{"name": s["space"], "namespace": s["namespace"], "mode": s["mode"]} for s in contract["spaces"]]
+    # Stamp every provisioned space with its OWNING contract id (0.14.0 engagements, contract §4 / audit
+    # point 3): objectType.contract is what the engagement gate keys on for PER-CONTRACT retire (without it
+    # the gate degrades to coarse workspace-level), and what legacy backfill reads to name the contract on
+    # the Contracts tab. The id here (contract["id"]) MUST match the agent's `contract.<id>` capability tag.
+    add = [
+        {"name": s["space"], "namespace": s["namespace"], "mode": s["mode"], "contract": contract["id"]}
+        for s in contract["spaces"]
+    ]
     schemas = {s["namespace"]: s["schema"] for s in contract["spaces"] if s.get("schema")}
     payload: dict = {"organism_id": organism_id, "ws": ws, "add_spaces": add}
     if schemas:

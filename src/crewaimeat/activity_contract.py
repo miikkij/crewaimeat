@@ -174,6 +174,10 @@ def process_activity_reports(targets: list[tuple[str, str]] | None = None) -> di
     """
     member_ws = _member_workspaces()
     pairs = targets if targets is not None else member_ws
+    if targets is None:  # gate the discovery path on engagements (0.14.0 gates only the push path)
+        from crewaimeat.engagements import engaged_pairs
+
+        pairs = engaged_pairs(AGENT, pairs, contract=CONTRACT["id"])
     now = datetime.datetime.now(datetime.timezone.utc)
     nowiso = now.isoformat()
     made = failed = 0

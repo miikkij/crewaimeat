@@ -30,6 +30,7 @@ from zoneinfo import ZoneInfo
 from crewai.tools import tool
 
 from crewaimeat.aimeat_crew import _aimeat_call, member_workspaces
+from crewaimeat.engagements import engaged_pairs
 from crewaimeat.local_marks import last_local_run, mark_local_run
 
 AGENT = "postman"
@@ -187,6 +188,8 @@ def _storage_image(image_key: str) -> tuple[bytes, str] | None:
 def process_mail(max_items: int = 5, targets: list[tuple[str, str]] | None = None) -> dict:
     """Send pending `mail-request` records across the agent's member workspaces. Deterministic."""
     pairs = targets if targets is not None else member_workspaces(AGENT)
+    if targets is None:  # gate ONLY the discovery path — an explicit `targets` (push event) is pre-gated by 0.14.0
+        pairs = engaged_pairs(AGENT, pairs, contract=CONTRACT["id"])
     sent = failed = 0
     for oid, wid in pairs:
         if sent + failed >= max_items:

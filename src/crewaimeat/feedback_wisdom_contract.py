@@ -397,7 +397,13 @@ def mirror_targets() -> list[tuple[str, str]]:
     if org and ws:
         return [(org, ws)]
     out = []
-    for oid, wid in member_workspaces(AGENT):
+    # Gate the mirror on engagements (0.14.0 gates only the push path). NOTE: feedback-wisdom's WORK is
+    # discovered from owner-scope MEMORY (feedback.stats.*), not workspaces — a RETIRED org's advisory
+    # OUTBOX is still produced upstream; a full stop needs a per-ORG engagement check in process_feedback_stats
+    # (open question for the node dev: is engagement modelled per-organism for a memory-discovered contract?).
+    from crewaimeat.engagements import engaged_pairs
+
+    for oid, wid in engaged_pairs(AGENT, member_workspaces(AGENT), contract=CONTRACT["id"]):
         data = _call("aimeat_workspace_read", {"organism_id": oid, "ws": wid})
         if data and data.get("manifest") is not None and _ws_has_space(data):
             out.append((oid, wid))

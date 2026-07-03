@@ -84,6 +84,10 @@ def process_image_requests(max_items: int = 3, targets: list[tuple[str, str]] | 
     image-gallery document -> advance. Bounded (max_items per pass — each image costs ~$0.04);
     output-dedup settles a request whose gallery doc already exists. Returns counts."""
     pairs = targets if targets is not None else member_workspaces(AGENT)
+    if targets is None:  # gate the discovery path on engagements (0.14.0 gates only the push path)
+        from crewaimeat.engagements import engaged_pairs
+
+        pairs = engaged_pairs(AGENT, pairs, contract=CONTRACT["id"])
     today = datetime.date.today().isoformat()
     processed = failed = 0
     for oid, wid in pairs:
