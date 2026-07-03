@@ -1,10 +1,10 @@
 """The M-ROOM REQuest fleet — the visible workers that turn one guest REQuest/day into an archived trail.
 
 A guest in the machine-room card leaves ONE request per day; it lands as a `request` record (status
-`sniffing`). Four separate GAIIs — each its own crew so the room roster honestly shows WHO DID WHAT —
-walk it through a records-driven lifecycle, each triggering on its inbound status:
+`submitted`, created by the M-ROOM intake). Four separate GAIIs — each its own crew so the room roster
+honestly shows WHO DID WHAT — walk it through a records-driven lifecycle, each triggering on its inbound status:
 
-    sniffing --[mroom-sniffer]--> processing --[mroom-digger]--> researched
+    submitted --[intake]--> [mroom-sniffer claims `sniffing`] --> processing --[mroom-digger]--> researched
              --[mroom-scorer]--> scored --[mroom-archivist]--> archived        (`failed` on any stage error)
 
   * mroom-sniffer   — classify the ask, draft a processing plan into an `outbox` doc, set `processing`.
@@ -15,19 +15,19 @@ walk it through a records-driven lifecycle, each triggering on its inbound statu
   * mroom-archivist — RETAINED -> write + PUBLISH a bilingual `archive-entry`; DISCARDED -> a light note;
                       set `archived` (+ archive_ref).
 
-`researched` and `archived` are added to the spec's `sniffing/processing/scored` so every handoff has a
-distinct inbound status — the whole chain is records-driven (the node's record-fork bug is fixed:
-status writes persist as the member's GHII and the aggregated read is freshest-wins). A light
+The status set (submitted/sniffing/processing/researched/scored/archived/failed) is the M-ROOM node's blessed
+enum, so every handoff has a distinct inbound status — the whole chain is records-driven (the node's record-fork
+bug is fixed: status writes persist as the member's GHII and the aggregated read is freshest-wins). A light
 idempotency guard (skip a request whose next artifact already exists) keeps a catch-up / re-run from
 double-writing, and every stage reads the room via the AGGREGATED read (`aimeat_workspace_read`) — never
 a raw per-GAII memory GET (an agent 404s on its own key by design after the ownership fix).
 
-HARD privacy invariants: never write a guest's email or real identity ANYWHERE — a guest appears ONLY as
-`EXC_VIP_NN`. Layered defense: `_safe_vip` owns the handle (refuses any non-EXC value); `_advance` writes
-the request back through an ALLOWLIST (unknown card fields — a possible email/name/phone under any key or
-type — are DROPPED); `_ask` strips self-identification + emails from the guest's free text before it ever
-reaches a model or a record; and `_write` email-scrubs EVERY string (titles included) at the boundary.
-Free-text name redaction is best-effort (true redaction needs NER), so the LLM prompts also forbid names.
+HARD privacy invariants: `member` (EXC_VIP_NN, or OPERATOR for operator/test requests) is the ONLY identity a
+request carries — by house rule no email/name/phone ever reaches a record. Layered defense anyway: `_advance`
+rebuilds the request from ONLY the declared room.request@1 fields (a STRICT schema — anything undeclared is
+rejected at publish); `_ask` strips self-identification + emails from the guest's `text` before it reaches a
+model; and `_write` email-scrubs EVERY string (titles included) at the boundary. Free-text name redaction is
+best-effort (true redaction needs NER), so the LLM prompts also forbid names.
 
 Writing to the live room is gated: DRY-RUN (default) reads + BUILDS every record but writes NOTHING; set
 MROOM_REQUESTS_PUBLISH=1 in the fleet env to actually write + advance the lifecycle.
@@ -45,7 +45,7 @@ import sys
 
 from crewaimeat.article_extract import _MIN_CHARS, _trafilatura_text
 from crewaimeat.fetch_pipeline import _searxng_urls
-from crewaimeat.mroom import _extract_json, _room_read, _room_write
+from crewaimeat.mroom import _extract_json, _now, _room_read, _room_write
 
 # the four fleet identities (each a separate GAII / crew)
 SNIFFER = "mroom-sniffer"
@@ -61,8 +61,10 @@ OUTBOX_SPACE, OUTBOX_NS = "outbox", "room.outbox"
 ARCHIVE_SPACE, ARCHIVE_NS = "archive-entry", "room.archive"
 _NS = {REQUEST_SPACE: REQUEST_NS, OUTBOX_SPACE: OUTBOX_NS, ARCHIVE_SPACE: ARCHIVE_NS}
 
-# request lifecycle — each agent triggers on its INBOUND status
-ST_SNIFF, ST_PROCESSING, ST_RESEARCHED, ST_SCORED, ST_ARCHIVED, ST_FAILED = (
+# request lifecycle — the blessed enum (M-ROOM app/node). Intake sets `submitted`; each agent triggers on
+# its INBOUND status; `sniffing` is the sniffer's CLAIM; terminals are `archived` (success) / `failed` (error).
+ST_SUBMITTED, ST_SNIFFING, ST_PROCESSING, ST_RESEARCHED, ST_SCORED, ST_ARCHIVED, ST_FAILED = (
+    "submitted",
     "sniffing",
     "processing",
     "researched",
@@ -76,42 +78,43 @@ _MAX_SOURCES = 5
 _SRC_CHARS = 3000
 _SCORE_RETAIN = 5.0  # signal_value >= this -> RETAINED (used when the model omits a clean verdict)
 
-# guests appear ONLY as EXC_VIP_NN; anything else is refused as a real-identity leak risk
-_EXC_RE = re.compile(r"^EXC(?:_[A-Za-z0-9]+)+$")
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _POIS = ("POI_002", "POI_004", "POI_006")
-# the guest's ask can live under any of these keys (whichever the card used)
-_ASK_KEYS = ("ask", "request", "text", "body", "question", "prompt", "message", "content")
-# ALLOWLIST of request fields the fleet may re-persist on a status write-back. Everything else the card
-# supplied — a possible email / name / phone under ANY key or of ANY type — is DROPPED, so an agent can
-# never re-persist a guest's real identity. The guest's ask is kept SEPARATELY (sanitized) so the app still
-# shows the question, and `vip` is re-derived as a safe handle. (If the card needs another field preserved,
-# add it here — dropping is the conservative default under the hard privacy invariant.)
+# room.request@1 is a STRICT schema (undeclared fields are REJECTED at publish), so the write-back set must
+# be EXACTLY its declared fields. Intake sets id/member/text/status/submitted_at (+ optional lang, poi_id);
+# the fleet fills the rest as the request advances. `member` is the ONLY identity (EXC_VIP_NN, or OPERATOR for
+# operator/test requests); by house rule NO email/name/phone ever reaches a record, so there is no PII to
+# strip here — only the discipline of writing nothing undeclared. NEVER lock/re-lock this schema from here.
 _SAFE_REQUEST_KEYS = frozenset(
     {
         "id",
+        "member",
+        "text",
         "status",
+        "submitted_at",
+        "lang",
         "poi_id",
-        "outbox_ref",
-        "archive_ref",
         "plan",
         "verdict",
+        "reason",
         "signal_value",
-        "score_line",
+        "refs",
+        "outbox_ref",
+        "archive_ref",
+        "assigned_to",
+        "started_at",
+        "researched_at",
+        "scored_at",
+        "archived_at",
         "error",
-        "created_at",
+        "notes",
+        "attempts",
         "updated_at",
-        "day",
-        "date",
-        "kind",
-        "source",
-        "lang",
-        "locale",
     }
 )
 # best-effort neutralization of a guest self-identifying in free text ("I'm <Name>", "regards, <Name>", …).
 # NOT a substitute for NER: a bare name with no cue can still pass, which is why the LLM prompts also forbid
-# names and _safe_vip owns the real handle. The cue is case-insensitive; the captured name must be Capitalized.
+# names and _member owns the handle. The cue is case-insensitive; the captured name must be Capitalized.
 _SELF_ID_RE = re.compile(
     r"(?:(?i:i['’]?m|i am|my name is|this is|name['’]?s|regards|sincerely|yours|signed))"
     r"[\s,:.\-]+([A-ZÅÄÖ][A-Za-zÅÄÖåäö'’.\-]*(?:\s+[A-ZÅÄÖ][A-Za-zÅÄÖåäö'’.\-]*){0,2})"
@@ -156,35 +159,32 @@ def _clean_ask(text: str) -> str:
     return _scrub(_strip_self_id(str(text or "").strip()))
 
 
-def _safe_vip(req: dict) -> str:
-    """The guest's SAFE handle: an EXC_VIP_NN ident or the generic `EXC_VIP` — NEVER an email/real name.
-    Refuses any candidate that is not a bare EXC handle, so a mis-populated field can't leak identity."""
-    for k in ("vip", "guest", "guest_ident", "ident", "exc", "vip_id", "guest_id", "handle"):
-        v = req.get(k)
-        if isinstance(v, str) and _EXC_RE.match(v.strip()):
-            return v.strip()
-    return "EXC_VIP"
+def _member(req: dict) -> str:
+    """The guest's handle — the `member` field, the ONLY identity a request ever carries (EXC_VIP_NN, or
+    OPERATOR for operator/test requests). Preserved as intake set it (never rejected); email-scrubbed purely
+    as defense (the room guarantees no PII on records)."""
+    m = req.get("member")
+    return _scrub(m.strip()) if isinstance(m, str) and m.strip() else "EXC_VIP"
 
 
 def _ask(req: dict) -> str:
-    """The guest's ask text, SANITIZED (self-identification stripped + email-scrubbed), from whichever field
-    the card wrote it to. Used for EVERY LLM prompt AND for the request write-back, so the guest's identity
-    never reaches a model or a record through the free-text ask."""
-    for k in _ASK_KEYS:
-        v = req.get(k)
-        if isinstance(v, str) and v.strip():
-            return _clean_ask(v)
-    return ""
+    """The guest's ask — always the `text` field — SANITIZED for LLM prompts (self-identification stripped +
+    email-scrubbed) so a name a guest typed never reaches a model. The STORED text is preserved as intake set
+    it (the room guarantees no PII on records); this sanitization is prompt-side defense only."""
+    v = req.get("text")
+    return _clean_ask(v) if isinstance(v, str) and v.strip() else ""
 
 
 # --------------------------------------------------------------------------- #
 # room I/O helpers
 # --------------------------------------------------------------------------- #
-def _requests(room: dict, status: str) -> list[dict]:
+def _requests(room: dict, *statuses: str) -> list[dict]:
+    """Requests whose status is one of `statuses` (the calling agent's inbound state[s])."""
+    want = set(statuses)
     return [
         r
         for r in (room.get("objects", {}) or {}).get(REQUEST_SPACE) or []
-        if isinstance(r, dict) and r.get("status") == status and r.get("id")
+        if isinstance(r, dict) and r.get("status") in want and r.get("id")
     ]
 
 
@@ -211,19 +211,14 @@ def _write(space: str, rec_id: str, value: dict, *, agent: str) -> bool:
 
 
 def _advance(req: dict, agent: str, **changes) -> bool:
-    """Write+publish the request with a status change using ALLOWLIST semantics: only known-safe structural
-    fields survive (see _SAFE_REQUEST_KEYS), plus the SANITIZED ask (under the card's own key) and the
-    normalized `vip` handle. EVERY other card-supplied field — a possible email/name/phone in any key or of
-    any type — is DROPPED, so an agent can never re-persist a guest's real identity. Returns the write's ok."""
+    """Write+publish the request with a status change, STRICT-schema-safe: the record is rebuilt from ONLY the
+    declared room.request@1 fields (_SAFE_REQUEST_KEYS) — publishing any undeclared field is rejected by the
+    node. The required fields (id/member/text/status/submitted_at) carry through from intake; `member` is
+    re-derived to the safe handle, and the stored `text` is email-scrubbed at the _write boundary. Ok on success."""
     merged = {**req, **changes}
     rec = {k: v for k, v in merged.items() if k in _SAFE_REQUEST_KEYS}
     rec["id"] = req["id"]
-    rec["vip"] = _safe_vip(req)
-    for k in _ASK_KEYS:  # keep the guest's question (sanitized) under the SAME key the card used
-        v = req.get(k)
-        if isinstance(v, str) and v.strip():
-            rec[k] = _clean_ask(v)
-            break
+    rec["member"] = _member(req)
     return _write(REQUEST_SPACE, rec["id"], rec, agent=agent)
 
 
@@ -246,12 +241,12 @@ def _append_outbox(
 # --------------------------------------------------------------------------- #
 # pure builders (LLM does judgement only; code owns the envelope) — unit-testable without the room
 # --------------------------------------------------------------------------- #
-def _plan_ask(llm, ask: str, vip: str) -> dict:
+def _plan_ask(llm, ask: str, member: str) -> dict:
     """Classify the ask + draft a research plan. ONE llm.call(). Returns {} on failure (caller fails loud)."""
     prompt = (
         "You are mroom-sniffer, the intake worker of the AIMEAT machine room. A guest left ONE request. "
         "Classify it and draft a short plan for the research worker. Cold, factual machine voice. "
-        f"NEVER write any email address or real personal name — the guest is only '{vip}'.\n\n"
+        f"NEVER write any email address or real personal name — the guest is only '{member}'.\n\n"
         f"GUEST REQUEST:\n{ask}\n\n"
         "Return STRICT JSON only: {"
         '"title": "<=80 chars, what this request is about>", '
@@ -324,14 +319,14 @@ def _gather(queries: list[str]) -> list[dict]:
     return docs
 
 
-def _compose_findings(llm, ask: str, vip: str, angle: str, docs: list[dict]) -> dict:
+def _compose_findings(llm, ask: str, member: str, angle: str, docs: list[dict]) -> dict:
     """Compose bilingual research findings grounded in the sources. ONE llm.call(). {} on failure."""
     src_block = "\n\n".join(f"[{i + 1}] {d['url']}\n{d['text']}" for i, d in enumerate(docs))
     prompt = (
         "You are mroom-digger, the research worker of the AIMEAT machine room. Execute the plan for a "
-        f"guest ('{vip}') request using ONLY the numbered sources; cite them as [n]. Cold, factual machine "
+        f"guest ('{member}') request using ONLY the numbered sources; cite them as [n]. Cold, factual machine "
         "voice — state, never sell. If the sources do not answer part of the ask, say so plainly rather than "
-        f"inventing. NEVER write any email or real personal name — the guest is only '{vip}'.\n\n"
+        f"inventing. NEVER write any email or real personal name — the guest is only '{member}'.\n\n"
         f"REQUEST:\n{ask}\n\nANGLE: {angle or '(none given)'}\n\n"
         f"SOURCES (cite as [n]; use ONLY facts present here):\n{src_block}\n\n"
         'Return STRICT JSON only: {"fi": "<Finnish findings, markdown, ending with a ## Lähteet list of the '
@@ -346,13 +341,13 @@ def _compose_findings(llm, ask: str, vip: str, angle: str, docs: list[dict]) -> 
     return {"fi": _scrub(str(obj.get("fi") or "")).strip(), "en": _scrub(str(obj.get("en") or "")).strip()}
 
 
-def _score(llm, ask: str, vip: str, findings: str) -> dict:
+def _score(llm, ask: str, member: str, findings: str) -> dict:
     """Cold SIGNAL VALUE score of what the research produced. ONE llm.call(). {} on failure."""
     prompt = (
         "You are mroom-scorer, the cold evaluator of the AIMEAT machine room. Score the SIGNAL VALUE of what "
         "the research produced FOR THE HOUSE, 0.0 (no signal) to 10.0 (act on it today). Judge the CONTENT, "
         "never the person: a discard is 'the request produced no signal', never an insult. NEVER write any "
-        f"email or real personal name — the guest is only '{vip}'.\n\n"
+        f"email or real personal name — the guest is only '{member}'.\n\n"
         f"REQUEST:\n{ask}\n\nRESEARCH FINDINGS:\n{findings}\n\n"
         'Return STRICT JSON only: {"signal_value": <number 0-10>, "verdict": "RETAINED"|"DISCARDED", '
         '"line": "<ONE factual sentence: the signal it produced, or why there is none>"}'
@@ -391,21 +386,26 @@ def _parse_scorecard(md: str) -> dict:
     return {"signal_value": round(float(m.group(1)), 1), "verdict": m.group(2)} if m else {}
 
 
-def _parties(vip: str) -> str:
-    return f"{vip} + agents (mroom-sniffer, mroom-digger, mroom-scorer, mroom-archivist)"
+def _parties(member: str) -> str:
+    return f"{member} + agents (mroom-sniffer, mroom-digger, mroom-scorer, mroom-archivist)"
 
 
-def _compose_archive(llm, ask: str, vip: str, score: dict, trail: str) -> dict:
+def _archive_title(rid: str, short: str) -> str:
+    """House style: `REQ <request-id> // <short title>` — the ARC-NNN series belongs to the operator, not us."""
+    return f"REQ {rid} // {(short or 'guest request').strip()}"[:120]
+
+
+def _compose_archive(llm, rid: str, ask: str, member: str, score: dict, trail: str) -> dict:
     """Compose the bilingual RETAINED archive-entry (the permanent trail). ONE llm.call(). {} on failure."""
     prompt = (
         "You are mroom-archivist. Write the permanent ARCHIVE ENTRY for a RETAINED guest request. Bilingual, "
         "cold machine voice. START with a fenced code block holding four lines — PATH / DECISION / STATUS / "
-        f"PARTIES (parties = exactly '{_parties(vip)}'). Then a short body: what was asked, what the research "
-        "produced, the score, any follow-ups. End with a ## Lähteet / ## Sources list of the source URLs. "
-        f"NEVER write any email or real personal name — the guest is ONLY '{vip}'.\n\n"
+        f"PARTIES (parties = exactly '{_parties(member)}'). Then a short body: what was asked, what the research "
+        "produced, the score, any follow-ups. End with a ## Lähteet / ## Sources list of clickable source URLs. "
+        f"NEVER write any email or real personal name — the guest is ONLY '{member}'.\n\n"
         f"REQUEST:\n{ask}\n\nSCORE: {score['signal_value']:.1f} — RETAINED\nSCORE LINE: {score.get('line')}\n\n"
         f"RESEARCH TRAIL:\n{trail}\n\n"
-        'Return STRICT JSON only: {"title": "<=90 chars>", "markdown": "<Finnish>", "markdown_en": "<English>"}'
+        'Return STRICT JSON only: {"title": "<=70 chars, short>", "markdown": "<Finnish>", "markdown_en": "<English>"}'
     )
     try:
         raw = _extract_json(str(llm.call([{"role": "user", "content": prompt}]) or ""))
@@ -417,18 +417,18 @@ def _compose_archive(llm, ask: str, vip: str, score: dict, trail: str) -> dict:
     if not md and not md_en:
         return {}
     return {
-        "title": (obj.get("title") or f"Guest request — {vip}")[:120],
+        "title": _archive_title(rid, obj.get("title") or ""),
         "markdown": _scrub(md or md_en),
         "markdown_en": _scrub(md_en or md),
     }
 
 
-def _discard_note(rid: str, vip: str, score: dict) -> dict:
+def _discard_note(rid: str, member: str, score: dict) -> dict:
     """A light, deterministic archive note for a DISCARDED request (no LLM) — a discard still gets a trail."""
     line = score.get("line") or "The request produced no signal."
-    block = f"```\nPATH:     request {rid}\nDECISION: DISCARDED — no signal\nSTATUS:   CLOSED\nPARTIES:  {_parties(vip)}\n```"
+    block = f"```\nPATH:     request {rid}\nDECISION: DISCARDED — no signal\nSTATUS:   CLOSED\nPARTIES:  {_parties(member)}\n```"
     return {
-        "title": f"Guest request {rid} — DISCARDED (no signal)",
+        "title": _archive_title(rid, "DISCARDED — no signal"),
         "markdown": _scrub(
             f"{block}\n\n**Tulos:** pyyntö ei tuottanut signaalia. SIGNAL VALUE: {score['signal_value']:.1f}.\n\n{line}"
         ),
@@ -456,33 +456,37 @@ def _no_access(agent: str, dry_run: bool) -> dict:
 
 
 def run_sniff(llm=None, *, dry_run: bool = True, max_items: int = _MAX_PER_RUN) -> dict:
-    """`sniffing` -> classify + plan -> outbox doc + `processing`. Honors every write; self-heals a request
-    whose outbox landed but whose status advance did not (re-advance instead of stranding it)."""
+    """`submitted` -> claim (`sniffing`) -> classify + plan -> outbox doc + `processing`. Honors every write and
+    self-heals a request whose outbox landed but whose advance did not (re-advance rather than strand it)."""
     room = _room_read(SNIFFER)
     if not room:
         return _no_access(SNIFFER, dry_run)
-    reqs = _requests(room, ST_SNIFF)
+    reqs = _requests(room, ST_SUBMITTED, ST_SNIFFING)  # inbox: fresh + already-claimed-but-incomplete
     processed = failed = 0
     would: list[dict] = []
     llm = _get_llm(llm, SNIFFER) if reqs else llm
     for req in reqs[:max_items]:
         rid, oid = req["id"], _outbox_id(req["id"])
         try:
-            if _doc(room, OUTBOX_SPACE, oid):  # outbox already written; status stuck at sniffing -> self-heal
+            if _doc(room, OUTBOX_SPACE, oid):  # outbox already written; advance stuck -> self-heal
                 if dry_run or _advance(req, SNIFFER, status=ST_PROCESSING, outbox_ref=oid, poi_id=req.get("poi_id")):
                     processed += 1
                 else:
                     failed += 1
-                    print(f"[{SNIFFER}] {rid}: re-advance failed (outbox exists, still sniffing)", file=sys.stderr)
+                    print(f"[{SNIFFER}] {rid}: re-advance failed (outbox exists)", file=sys.stderr)
                 continue
-            ask, vip = _ask(req), _safe_vip(req)
+            ask, member = _ask(req), _member(req)
             if not ask:
                 failed += 1
                 if not dry_run:
-                    _advance(req, SNIFFER, status=ST_FAILED, error="request has no readable ask text")
+                    _advance(req, SNIFFER, status=ST_FAILED, error="request has no readable text")
                 print(f"[{SNIFFER}] {rid}: no readable ask text — marked failed", file=sys.stderr)
                 continue
-            plan = _plan_ask(llm, ask, vip)
+            if not dry_run and req.get("status") == ST_SUBMITTED:  # CLAIM (shows motion + a soft lock)
+                started = _now()
+                if _advance(req, SNIFFER, status=ST_SNIFFING, started_at=started):
+                    req = {**req, "status": ST_SNIFFING, "started_at": started}  # reflect so later writes keep it
+            plan = _plan_ask(llm, ask, member)
             if not plan.get("queries"):
                 failed += 1
                 if not dry_run:
@@ -493,9 +497,8 @@ def run_sniff(llm=None, *, dry_run: bool = True, max_items: int = _MAX_PER_RUN) 
                 would.append({"outbox": oid, "plan": plan})
                 processed += 1
                 continue
-            if not _write(
-                OUTBOX_SPACE, oid, {"title": plan["title"], "markdown": fi, "markdown_en": en}, agent=SNIFFER
-            ):
+            title = f"REQ {rid} // {plan['title']}"[:120]
+            if not _write(OUTBOX_SPACE, oid, {"title": title, "markdown": fi, "markdown_en": en}, agent=SNIFFER):
                 failed += 1
                 print(f"[{SNIFFER}] {rid}: outbox write failed — not advancing", file=sys.stderr)
                 continue
@@ -534,14 +537,14 @@ def run_research(llm=None, *, dry_run: bool = True, max_items: int = _MAX_PER_RU
         oid = req.get("outbox_ref") or _outbox_id(rid)
         try:
             if _HDR_FINDINGS in (_doc(room, OUTBOX_SPACE, oid).get("markdown_en") or ""):  # findings already written
-                if dry_run or _advance(req, DIGGER, status=ST_RESEARCHED):
+                if dry_run or _advance(req, DIGGER, status=ST_RESEARCHED, researched_at=_now()):
                     processed += 1
                 else:
                     failed += 1
                     print(f"[{DIGGER}] {rid}: re-advance failed (findings exist, still processing)", file=sys.stderr)
                 continue
             plan = req.get("plan") or {}
-            ask, vip = _ask(req), _safe_vip(req)
+            ask, member = _ask(req), _member(req)
             queries = [q for q in (plan.get("queries") or []) if isinstance(q, str)] or ([ask[:80]] if ask else [])
             docs = _gather(queries)
             if not docs:
@@ -550,7 +553,7 @@ def run_research(llm=None, *, dry_run: bool = True, max_items: int = _MAX_PER_RU
                     _advance(req, DIGGER, status=ST_FAILED, error="no usable sources found")
                 print(f"[{DIGGER}] {rid}: no usable sources (queries={queries})", file=sys.stderr)
                 continue
-            findings = _compose_findings(llm, ask, vip, plan.get("angle") or "", docs)
+            findings = _compose_findings(llm, ask, member, plan.get("angle") or "", docs)
             if not (findings.get("en") or findings.get("fi")):
                 failed += 1
                 if not dry_run:
@@ -572,7 +575,7 @@ def run_research(llm=None, *, dry_run: bool = True, max_items: int = _MAX_PER_RU
                 failed += 1
                 print(f"[{DIGGER}] {rid}: outbox append failed — not advancing", file=sys.stderr)
                 continue
-            if _advance(req, DIGGER, status=ST_RESEARCHED):
+            if _advance(req, DIGGER, status=ST_RESEARCHED, researched_at=_now()):
                 processed += 1
             else:
                 failed += 1
@@ -611,7 +614,8 @@ def run_score(llm=None, *, dry_run: bool = True, max_items: int = _MAX_PER_RUN) 
                         status=ST_SCORED,
                         verdict=sc["verdict"],
                         signal_value=sc["signal_value"],
-                        score_line=req.get("score_line") or "",
+                        reason=req.get("reason") or "",
+                        scored_at=_now(),
                         outbox_ref=oid,
                     )
                 ):
@@ -620,9 +624,9 @@ def run_score(llm=None, *, dry_run: bool = True, max_items: int = _MAX_PER_RUN) 
                     failed += 1
                     print(f"[{SCORER}] {rid}: scorecard present but re-advance failed", file=sys.stderr)
                 continue
-            ask, vip = _ask(req), _safe_vip(req)
+            ask, member = _ask(req), _member(req)
             trail = ob_en or _doc(room, OUTBOX_SPACE, oid).get("markdown") or ""
-            score = _score(llm, ask, vip, trail)
+            score = _score(llm, ask, member, trail)
             if not score:
                 failed += 1
                 if not dry_run:
@@ -643,7 +647,8 @@ def run_score(llm=None, *, dry_run: bool = True, max_items: int = _MAX_PER_RUN) 
                 status=ST_SCORED,
                 verdict=score["verdict"],
                 signal_value=score["signal_value"],
-                score_line=score["line"],
+                reason=score["line"],
+                scored_at=_now(),
                 outbox_ref=oid,
             ):
                 processed += 1
@@ -672,28 +677,28 @@ def run_archive(llm=None, *, dry_run: bool = True, max_items: int = _MAX_PER_RUN
         rid, aid = req["id"], _archive_id(req["id"])
         try:
             if _doc(room, ARCHIVE_SPACE, aid):  # archive already written; ensure the request is closed
-                if dry_run or _advance(req, ARCHIVIST, status=ST_ARCHIVED, archive_ref=aid):
+                if dry_run or _advance(req, ARCHIVIST, status=ST_ARCHIVED, archive_ref=aid, archived_at=_now()):
                     processed += 1
                 else:
                     failed += 1
                     print(f"[{ARCHIVIST}] {rid}: re-advance failed (archive exists, still scored)", file=sys.stderr)
                 continue
-            ask, vip = _ask(req), _safe_vip(req)
+            ask, member = _ask(req), _member(req)
             score = {
                 "signal_value": float(req.get("signal_value") or 0.0),
                 "verdict": req.get("verdict") or "DISCARDED",
-                "line": req.get("score_line") or "",
+                "line": req.get("reason") or "",
             }
             if score["verdict"] == "RETAINED":
                 trail = _doc(room, OUTBOX_SPACE, req.get("outbox_ref") or _outbox_id(rid)).get("markdown_en") or ""
-                entry = _compose_archive(_get_llm(llm, ARCHIVIST), ask, vip, score, trail)
+                entry = _compose_archive(_get_llm(llm, ARCHIVIST), rid, ask, member, score, trail)
                 if not entry:
                     failed += 1
                     if not dry_run:
                         _advance(req, ARCHIVIST, status=ST_FAILED, error="archive composition returned empty")
                     continue
             else:
-                entry = _discard_note(rid, vip, score)
+                entry = _discard_note(rid, member, score)
             if dry_run:
                 would.append({"archive": aid, "verdict": score["verdict"], "entry": entry})
                 processed += 1
@@ -702,7 +707,7 @@ def run_archive(llm=None, *, dry_run: bool = True, max_items: int = _MAX_PER_RUN
                 failed += 1
                 print(f"[{ARCHIVIST}] {rid}: archive write failed — not advancing (retries next wake)", file=sys.stderr)
                 continue
-            if _advance(req, ARCHIVIST, status=ST_ARCHIVED, archive_ref=aid):
+            if _advance(req, ARCHIVIST, status=ST_ARCHIVED, archive_ref=aid, archived_at=_now()):
                 processed += 1
             else:
                 failed += 1

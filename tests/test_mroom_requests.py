@@ -1,8 +1,9 @@
 """Tests for the M-ROOM REQuest fleet engine (crewaimeat.mroom_requests).
 
-Covers the hard privacy invariant (no guest identity re-persisted), the records-driven lifecycle
-(sniffing -> processing -> researched -> scored -> archived), stage idempotency + self-heal, and
-builder robustness — all with an in-memory record store + canned LLM outputs (no network / no real LLM).
+Covers the strict room.request@1 schema discipline (only declared fields written; `member`/`text`/`reason`
+field names; no PII), the records-driven lifecycle (submitted -> sniffing -> processing -> researched ->
+scored -> archived), stage idempotency + self-heal, and builder robustness — all with an in-memory record
+store + canned LLM outputs (no network / no real LLM).
 """
 
 from __future__ import annotations
@@ -10,6 +11,9 @@ from __future__ import annotations
 import pytest
 
 from crewaimeat import mroom_requests as mr
+
+# every field the fleet is allowed to write (STRICT schema — anything else is rejected at publish)
+_DECLARED = mr._SAFE_REQUEST_KEYS
 
 
 class _LLM:
@@ -51,34 +55,39 @@ def _llms() -> dict:
     }
 
 
-# --------------------------------------------------------------------------- privacy
-def test_ask_strips_self_id_and_email():
-    a = mr._ask({"ask": "Hi, I'm Jane Doe, mail me a@b.com about MCP"})
+def _req(**kw):
+    base = {
+        "id": "r",
+        "status": "submitted",
+        "member": "EXC_VIP_09",
+        "text": "compare MCP vs AIMEAT",
+        "submitted_at": "t0",
+    }
+    return {**base, **kw}
+
+
+# --------------------------------------------------------------------------- privacy / schema discipline
+def test_ask_reads_text_strips_self_id_and_email():
+    a = mr._ask({"text": "Hi, I'm Jane Doe, mail me a@b.com about MCP"})
     assert "Jane Doe" not in a and "a@b.com" not in a and "MCP" in a
 
 
-def test_vip_refuses_non_exc():
-    assert mr._safe_vip({"vip": "jane@example.com"}) == "EXC_VIP"
-    assert mr._safe_vip({"guest": "EXC_VIP_42"}) == "EXC_VIP_42"
+def test_member_preserves_handle_and_operator():
+    assert mr._member({"member": "EXC_VIP_42"}) == "EXC_VIP_42"
+    assert mr._member({"member": "OPERATOR"}) == "OPERATOR"  # operator test requests are not rejected
+    assert mr._member({}) == "EXC_VIP"
 
 
-def test_advance_allowlists_and_drops_identity(room):
-    req = {
-        "id": "r",
-        "status": "sniffing",
-        "vip": "EXC_VIP_1",
-        "email": "a@b.com",
-        "mobile": 358401234567,
-        "guest_name": "Jane Doe",
-        "theme": "secret-field",
-        "ask": "compare X",
-    }
-    assert mr._advance(req, mr.SNIFFER, status=mr.ST_PROCESSING, outbox_ref="ob-r") is True
+def test_advance_writes_only_declared_fields(room):
+    # a record carrying junk fields (a stray email/name/phone under any key) must publish ONLY declared fields
+    req = _req(email="a@b.com", mobile=358401234567, guest_name="Jane Doe", ask="wrong-key", theme="x")
+    assert mr._advance(req, mr.SNIFFER, status=mr.ST_PROCESSING, outbox_ref="ob-r", plan={"queries": ["q"]}) is True
     rec = room["request"]["r"]
-    for leak in ("a@b.com", "358401234567", "Jane Doe", "secret-field"):
-        assert leak not in str(rec)
-    assert rec["vip"] == "EXC_VIP_1" and rec["status"] == "processing" and rec["outbox_ref"] == "ob-r"
-    assert not any(k in rec for k in ("mobile", "guest_name", "email", "theme"))
+    assert set(rec) <= _DECLARED, f"undeclared field written: {set(rec) - _DECLARED}"
+    assert rec["member"] == "EXC_VIP_09" and rec["text"] == "compare MCP vs AIMEAT" and rec["status"] == "processing"
+    for dropped in ("email", "mobile", "guest_name", "ask", "theme"):
+        assert dropped not in rec
+    assert "a@b.com" not in str(rec) and "Jane Doe" not in str(rec) and "358401234567" not in str(rec)
 
 
 # --------------------------------------------------------------------------- builder robustness
@@ -103,19 +112,39 @@ def test_parse_scorecard():
     assert mr._parse_scorecard("no scorecard here") == {}
 
 
+def test_archive_title_house_style():
+    assert mr._archive_title("req-abc", "MCP vs AIMEAT").startswith("REQ req-abc // ")
+
+
 # --------------------------------------------------------------------------- lifecycle
-def test_full_chain_retained(room):
+def test_full_chain_retained_writes_timestamps(room):
     lm = _llms()
-    room["request"]["r"] = {"id": "r", "status": "sniffing", "vip": "EXC_VIP_9", "ask": "compare MCP vs AIMEAT"}
+    room["request"]["r"] = _req()
     mr.run_sniff(lm["plan"], dry_run=False)
-    assert room["request"]["r"]["status"] == "processing" and "ob-r" in room["outbox"]
+    rec = room["request"]["r"]
+    assert rec["status"] == "processing" and "ob-r" in room["outbox"] and rec.get("started_at")
     mr.run_research(lm["find"], dry_run=False)
-    assert room["request"]["r"]["status"] == "researched" and mr._HDR_FINDINGS in room["outbox"]["ob-r"]["markdown_en"]
+    rec = room["request"]["r"]
+    assert (
+        rec["status"] == "researched"
+        and rec.get("researched_at")
+        and mr._HDR_FINDINGS in room["outbox"]["ob-r"]["markdown_en"]
+    )
     mr.run_score(lm["score"], dry_run=False)
-    assert room["request"]["r"]["status"] == "scored" and room["request"]["r"]["verdict"] == "RETAINED"
+    rec = room["request"]["r"]
+    assert (
+        rec["status"] == "scored"
+        and rec["verdict"] == "RETAINED"
+        and rec.get("reason") == "gap"
+        and rec.get("scored_at")
+    )
     mr.run_archive(lm["arch"], dry_run=False)
-    assert room["request"]["r"]["status"] == "archived" and "arc-r" in room["archive-entry"]
-    # a terminal request matches no inbound status -> re-running every stage duplicates nothing
+    rec = room["request"]["r"]
+    assert rec["status"] == "archived" and rec.get("archived_at") and "arc-r" in room["archive-entry"]
+    assert room["archive-entry"]["arc-r"]["title"].startswith("REQ r // ")
+    # every persisted request stayed within the declared schema
+    assert set(rec) <= _DECLARED, f"undeclared field: {set(rec) - _DECLARED}"
+    # terminal: re-running any stage duplicates nothing
     mr.run_research(lm["find"], dry_run=False)
     mr.run_score(lm["score"], dry_run=False)
     en = room["outbox"]["ob-r"]["markdown_en"]
@@ -123,37 +152,22 @@ def test_full_chain_retained(room):
 
 
 def test_discard_path_closes_with_light_note(room):
-    room["request"]["r"] = {
-        "id": "r",
-        "status": "scored",
-        "vip": "EXC_VIP_9",
-        "ask": "x",
-        "verdict": "DISCARDED",
-        "signal_value": 2.0,
-        "score_line": "no signal",
-    }
+    room["request"]["r"] = _req(status="scored", verdict="DISCARDED", signal_value=2.0, reason="no signal")
     mr.run_archive(None, dry_run=False)  # no LLM needed on the discard path
     assert room["request"]["r"]["status"] == "archived"
     assert "DISCARDED" in room["archive-entry"]["arc-r"]["markdown_en"]
 
 
 def test_sniff_self_heal_after_partial_write(room):
-    # outbox landed on an earlier run but the status advance did not -> re-advance, don't strand
-    room["request"]["r"] = {"id": "r", "status": "sniffing", "vip": "EXC_VIP_9", "ask": "x"}
+    # outbox landed on an earlier run (status claimed `sniffing`) but the advance did not -> re-advance
+    room["request"]["r"] = _req(status="sniffing")
     room["outbox"]["ob-r"] = {"id": "ob-r", "markdown": "## Plan", "markdown_en": "## Plan"}
     mr.run_sniff(_llms()["plan"], dry_run=False)
     assert room["request"]["r"]["status"] == "processing"
 
 
 def test_digger_does_not_double_append(room):
-    room["request"]["r"] = {
-        "id": "r",
-        "status": "processing",
-        "vip": "EXC_VIP_9",
-        "ask": "x",
-        "outbox_ref": "ob-r",
-        "plan": {"queries": ["q"]},
-    }
+    room["request"]["r"] = _req(status="processing", outbox_ref="ob-r", plan={"queries": ["q"]})
     room["outbox"]["ob-r"] = {"id": "ob-r", "markdown": "## Plan", "markdown_en": "## Plan\n\n## Findings\nold"}
     mr.run_research(_llms()["find"], dry_run=False)
     assert room["request"]["r"]["status"] == "researched"
@@ -161,7 +175,7 @@ def test_digger_does_not_double_append(room):
 
 
 def test_scorer_self_heal_uses_parsed_score(room):
-    room["request"]["r"] = {"id": "r", "status": "researched", "vip": "EXC_VIP_9", "ask": "x", "outbox_ref": "ob-r"}
+    room["request"]["r"] = _req(status="researched", outbox_ref="ob-r")
     room["outbox"]["ob-r"] = {
         "id": "ob-r",
         "markdown": "p",
@@ -174,21 +188,13 @@ def test_scorer_self_heal_uses_parsed_score(room):
 
 
 def test_dry_run_writes_nothing(room):
-    room["request"]["r"] = {"id": "r", "status": "sniffing", "vip": "EXC_VIP_9", "ask": "x"}
+    room["request"]["r"] = _req()
     mr.run_sniff(_llms()["plan"], dry_run=True)
-    assert room["request"]["r"]["status"] == "sniffing" and not room["outbox"]
+    assert room["request"]["r"]["status"] == "submitted" and not room["outbox"]
 
 
 def test_failed_write_does_not_advance(room, monkeypatch):
-    # a status advance that returns False must count as failed, not silently reported as advanced
-    room["request"]["r"] = {
-        "id": "r",
-        "status": "scored",
-        "vip": "EXC_VIP_9",
-        "ask": "x",
-        "verdict": "DISCARDED",
-        "signal_value": 1.0,
-    }
+    room["request"]["r"] = _req(status="scored", verdict="DISCARDED", signal_value=1.0, reason="x")
     monkeypatch.setattr(mr, "_room_write", lambda *a, **k: (False, a[1]))  # every write fails
     res = mr.run_archive(None, dry_run=False)
     assert res["processed"] == 0 and res["failed"] == 1 and room["request"]["r"]["status"] == "scored"
