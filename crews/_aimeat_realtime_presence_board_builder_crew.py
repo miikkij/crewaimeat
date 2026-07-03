@@ -19,12 +19,12 @@ from crewaimeat.workflow import make_workflow_tools
 AGENT_NAME = "aimeat-realtime-presence-board-builder"
 
 README = """```
-  ____            _           _     ____                _ _     _            
- |  _ \\ ___ _ __ | | __ _  __| |   |  _ \\ ___ _ __ ___ | (_)___(_) ___  _ __ 
+  ____            _           _     ____                _ _     _
+ |  _ \\ ___ _ __ | | __ _  __| |   |  _ \\ ___ _ __ ___ | (_)___(_) ___  _ __
  | |_) / _ \\ '_ \\| |/ _` |/ _` |   | |_) / _ \\ '_ ` _ \\| | / __| |/ _ \\| '_ \\
  |  _ <  __/ |_) | | (_| | (_| |   |  __/  __/ | | | | | | \\__ \\ | (_) | | | |
  |_| \\_\\___| .__/|_|\\__,_|\\__|   |_|   \\___|_| |_| |_|_|_|___/_|\\___/|_| |_|
-           |_|                                                               
+           |_|
 ```
 **Purpose:** Build AIMEAT-native realtime presence board apps using the AimeatRealtime `/lib/realtime.js` presence+broadcast API — ephemeral realtime-only state, peer presence lists, broadcast notes feeds, auth-gated posting, and anonymous visitor support.
 
