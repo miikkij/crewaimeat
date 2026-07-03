@@ -274,6 +274,51 @@ FLEET_IDENTITY: dict[str, dict] = {
             "languages": ["en"],
         },
     },
+    "mroom-curator": {  # M-ROOM research radar — judges feed hits into signal verdicts
+        "tags": ["research-radar", "mroom", "curation", "role.task-runner"],
+        "capabilities": {
+            "technical": [_skill("mroom-curator")],
+            "domain": [
+                "M-ROOM research curation: judge raw feed hits into ACCEPTED/REJECTED signal verdicts",
+                "AIMEAT-relevance + popularity signal scoring (competitor-compare / adopt / foundation-shift / regulation)",
+                "insight + proposal drafting (drafts only — the operator decides)",
+            ],
+            "languages": ["en", "fi"],
+        },
+    },
+    "mroom-researcher": {  # M-ROOM deep researcher — fulfils per-POI research-briefs
+        "tags": ["research", "mroom", "role.task-runner"],
+        "capabilities": {
+            "technical": [_skill("mroom-researcher")],
+            "domain": [
+                "M-ROOM POI research briefs: primary source + POI signals + live web -> sourced operator brief",
+                "derives real search queries from a rich brief; grounds every claim in cited sources",
+                "bilingual (FI + markdown_en), cold machine voice, follows the brief's exact structure",
+            ],
+            "languages": ["en", "fi"],
+        },
+    },
+    "web-researcher": {  # THREE workspace contracts — advertise each so 0.14.0 engagements can gate per-contract
+        "tags": [
+            "web-research",
+            "role.workspace-contract",
+            "contract.research",
+            "contract.market-scan",
+            "contract.company-research",
+        ],
+        "capabilities": {
+            "technical": [_skill("web-researcher"), _skill("web-search")],
+            "domain": [
+                "live web research -> sourced, cited summaries",
+                "market / competitor landscape scans",
+                "company research (Finnish + global)",
+                "consumes:research-request",
+                "consumes:market-scan-request",
+                "consumes:company-research-request",
+            ],
+            "languages": ["en", "fi"],
+        },
+    },
     "ledger-reader": {  # Company Brain — bank statements -> facts, on the company's own machine
         "tags": [
             "ledger",

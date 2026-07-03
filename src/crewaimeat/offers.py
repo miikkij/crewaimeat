@@ -632,6 +632,65 @@ _CREW_OFFERS: dict[str, list[dict]] = {
             ),
         },
     ],
+    "mroom-curator": [
+        {
+            "id": "curate-mroom",
+            "title": "Curate the M-ROOM research feeds",
+            "ask": (
+                "I read the raw HN / arXiv / MCP-release / EU-AI-Act feed hits, judge each against the "
+                "operator's criteria, and write ACCEPTED/REJECTED signal verdicts into the MACHINE ROOM. "
+                "Runs on a schedule — ask only for an extra pass. I judge and record; I don't decide — "
+                "the strongest accepts become drafts the operator approves."
+            ),
+            "example": "Run an M-ROOM curation pass now",
+            "cost": "cheap",
+            "latency": "minutes",
+            "repeatability": "idempotent",  # cursor dedup — a re-run never re-verdicts a URL
+            "verification": "gated",  # signal records are schema-validated at the room boundary
+            "scheduleBorn": "every 4h — runs automatically",
+            "consequences": [
+                {
+                    "type": "publishes-public",
+                    "note": "signal verdicts are public MACHINE ROOM content guests see; insight/proposal stay drafts",
+                },
+            ],
+            "sample": (
+                "## M-ROOM curation — 15 scanned\n\n"
+                "- **ACCEPTED** sig-scopewalker (POI_006 · community-pulse) — MCP ecosystem tooling with traction.\n"
+                "- **REJECTED** sig-agentrc — packaging/ops tooling; no protocol or identity angle.\n\n"
+                "1 strong accept drafted as insight + proposal (operator decides).\n\n…"
+            ),
+        },
+    ],
+    "mroom-researcher": [
+        {
+            "id": "research-mroom-brief",
+            "title": "Research an M-ROOM POI brief",
+            "ask": (
+                "I sweep the MACHINE ROOM's research-briefs, read the primary source + the POI's own signals, "
+                "search the live web, and write a sourced, bilingual (FI+EN) operator brief following the brief's "
+                "exact structure. Runs on a schedule — ask only for an extra sweep. I research and write; I don't "
+                "decide or act on the findings."
+            ),
+            "example": "Research the pending EU AI Act (POI_002) brief now",
+            "cost": "cheap",
+            "latency": "minutes",
+            "repeatability": "idempotent",  # output-existence dedup (res-<id>) — a re-run never re-researches
+            "verification": "gated",  # research-result is schema-validated at the room boundary
+            "scheduleBorn": "every 6h — runs automatically",
+            "consequences": [
+                {
+                    "type": "publishes-public",
+                    "note": "the research brief is public MACHINE ROOM content guests can see",
+                },
+            ],
+            "sample": (
+                "## EU AI Act — mitä muuttui ja mitä se tarkoittaa AIMEATille\n\n"
+                "Korkean riskin ohjeluonnos julkaistiin ennen 23.7… GPAI-velvoitteet [1], Art. 50 läpinäkyvyys [2].\n\n"
+                "## Lähteet\n- https://artificialintelligenceact.eu/ …\n\n*(myös markdown_en)*\n\n…"
+            ),
+        },
+    ],
     "librarian": [
         {
             "id": "map-knowledge",
