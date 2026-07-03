@@ -949,6 +949,24 @@ _ONBOARDING_TOOL_FILTER: tuple[str, ...] = (
 )
 
 
+def _resolve_test_task_id(agent_name: str) -> str | None:
+    """The agent's still-open onboarding TEST TASK id. `complete_test_task`'s howTo ships a LITERAL
+    `{test_task_id}` placeholder in its args, so a driver that passes it verbatim gets 'Task not found' and
+    the step stalls at 6/7 forever. Resolve the real id here (the node titles the task 'Onboarding
+    verification') before calling aimeat_task_complete. None if no open test task is visible yet."""
+    data = _aimeat_call(agent_name, "aimeat_task_list", {}, quiet=True) or {}
+    tasks = data.get("tasks") if isinstance(data, dict) else data
+    for t in tasks or []:
+        if not isinstance(t, dict) or t.get("status") in ("completed", "done", "closed", "failed"):
+            continue
+        title = (t.get("title") or "").lower()
+        verif = t.get("verification") if isinstance(t.get("verification"), dict) else {}
+        expects = (verif or {}).get("userExpects", "") or ""
+        if "onboarding" in title or "verification" in title or expects.startswith("Agent completes the onboarding"):
+            return t.get("id")
+    return None
+
+
 def _finish_pending_onboarding(tools, agent_name: str, step_args: dict, *, attempts: int = 4) -> None:
     """Safety net for the mode-change re-derivation race — with a short retry/backoff drive loop.
 
@@ -1006,6 +1024,12 @@ def _finish_pending_onboarding(tools, agent_name: str, step_args: dict, *, attem
             args = dict(step_args.get(sid) or how.get("args") or {})
             if tool_name == "aimeat_memory_write":
                 args.setdefault("visibility", "owner")
+            if tool_name == "aimeat_task_complete" and ("{" in str(args.get("task_id", "")) or not args.get("task_id")):
+                real = _resolve_test_task_id(agent_name)  # resolve the {test_task_id} placeholder -> real task id
+                if not real:
+                    print(f"[{agent_name}]   {sid}: onboarding test task not visible yet — retrying", file=sys.stderr)
+                    continue
+                args["task_id"] = real
             try:
                 tool.run(**args)
                 print(f"[{agent_name}]   {sid} -> {tool_name}: ok", file=sys.stderr)
@@ -1810,18 +1834,16 @@ def run_crew(spec: CrewSpec) -> None:
     #    authorized regardless; partial onboarding is fine.
     _ob_done, _ob_drivable = _onboarding_state(spec.agent_name)
     _ob_recent = _onboarding_attempted_recently(spec.agent_name)
-    # The .attempt window (1h) resets the per-window try count; outside it, treat as a fresh attempt.
-    _ob_attempts, _ob_last = _onboarding_attempt_info(spec.agent_name) if _ob_recent else (0, None)
-    # Drive Hello Integration when there are drivable pending REQUIRED steps (howTo.tool present) AND either
-    # we made PROGRESS (drivable count fell since the last attempt) OR we are still under the per-window try
-    # cap (driving usually credits a step immediately, so a flat count across restarts is NOT proof of
-    # "stuck" — a prior restart may have skipped it, or crediting lagged); OR when onboarding is not even
-    # completable yet and we have not tried this window. The try cap bounds a genuinely stuck-but-drivable
-    # step to a few ~25s drives per hour instead of every restart. The drivable check does NOT gate on
-    # `completable` (the node reports that independently of these api_call steps).
-    if (_ob_drivable > 0 and (_ob_last is None or _ob_drivable < _ob_last or _ob_attempts < _ONBOARD_MAX_TRIES)) or (
-        not _ob_done and not _ob_recent
-    ):
+    _ob_attempts = _onboarding_attempt_info(spec.agent_name)[0] if _ob_recent else 0
+    # Drive Hello Integration on EVERY start while onboarding is incomplete and has drivable pending REQUIRED
+    # steps (howTo.tool present). A crew start is a manual/supervised event (not a hot loop), the drive is
+    # idempotent (only NON-passed steps run, ~seconds when there is nothing to do), and the old failure that
+    # stranded new agents — complete_test_task shipping a `{test_task_id}` placeholder it could never
+    # complete, so the drivable count never fell and the per-window try cap then gave up — is fixed at the
+    # source (_resolve_test_task_id). Reliability beats sparing a few seconds per restart; a genuinely
+    # tool-stuck step self-heals the instant its blocker clears. The check does NOT gate on `completable`
+    # (the node reports that independently of the api_call steps). Fall back to the fresh-window drive too.
+    if (_ob_drivable > 0 and not _ob_done) or (not _ob_done and not _ob_recent):
         _mark_onboarding_attempt(spec.agent_name, n_drivable=_ob_drivable, attempts=_ob_attempts + 1)
         _run_onboarding_only(spec.agent_name, services=spec.services, commands=spec.commands)
 
