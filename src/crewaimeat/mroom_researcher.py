@@ -19,6 +19,7 @@ Run:  uv run python -m crewaimeat.mroom_researcher        # one DRY-RUN sweep, p
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import sys
@@ -34,25 +35,42 @@ OUT_SPACE = "research-result"  # ns shared.research_docs (a DOCUMENT space)
 _MAX_SOURCES = 6
 _SRC_CHARS = 3500
 _MAX_ITEMS = 3
+_CLAIM_STALE_MIN = 15  # an `in-progress` claim idle this long = a run the fleet/server restart killed -> re-pick-up
 
 
 def _live() -> bool:
     return (os.getenv("MROOM_RESEARCHER_PUBLISH") or "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def _is_stale(rec: dict, minutes: int = _CLAIM_STALE_MIN) -> bool:
+    """True if the record hasn't moved in `minutes` (server `_updatedAt`) — a claimed run that died mid-way.
+    Missing/unparseable timestamp -> treat as stale (re-pick-up; output-existence dedup keeps that safe)."""
+    ts = rec.get("_updatedAt") or rec.get("updated_at") or rec.get("claimed_at")
+    if not isinstance(ts, str):
+        return True
+    try:
+        t = datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    return (datetime.datetime.now(datetime.timezone.utc) - t) > datetime.timedelta(minutes=minutes)
+
+
 def _requested(room: dict) -> list[dict]:
-    """Requests to fulfil: status=='requested' AND no research-result yet. OUTPUT-EXISTENCE DEDUP is the
-    PRIMARY guard: writing status='done' back to a workspace RECORD does not reliably persist via the
-    connector (a known AIMEAT quirk — postman and web-researcher hit the same 'the done write doesn't
-    supersede' behavior), so we never rely on the request's own status to avoid re-work. A request whose
-    res-<id> already exists in research-result is treated as fulfilled and skipped."""
+    """Requests to fulfil: no research-result yet AND either status=='requested' OR a STALE 'in-progress'
+    claim — a run a fleet/server restart killed mid-way, which otherwise sits 'in-progress' forever (the
+    AIMEAT dev's 'a lost run must never require a human nudge' directive; doc-qld5qo5). OUTPUT-EXISTENCE
+    DEDUP stays the primary guard: a request whose res-<id> already exists is treated as fulfilled + skipped,
+    so re-claiming a stale in-progress can never double-write."""
     objs = room.get("objects", {}) or {}
     done = {r.get("id") for r in (objs.get(OUT_SPACE) or []) if isinstance(r, dict) and r.get("id")}
-    return [
-        r
-        for r in (objs.get(IN_SPACE) or [])
-        if isinstance(r, dict) and r.get("status") == "requested" and r.get("id") and f"res-{r['id']}" not in done
-    ]
+    out: list[dict] = []
+    for r in objs.get(IN_SPACE) or []:
+        if not isinstance(r, dict) or not r.get("id") or f"res-{r['id']}" in done:
+            continue
+        status = r.get("status")
+        if status == "requested" or (status == "in-progress" and _is_stale(r)):
+            out.append(r)
+    return out
 
 
 def _poi_signals(room: dict, poi_id: str | None) -> list[dict]:
