@@ -808,6 +808,36 @@ def _onboarding_completed(agent_name: str) -> bool:
     return data.get("onboarding", {}).get("status") == "completed"
 
 
+def _onboarding_state(agent_name: str) -> tuple[bool, int]:
+    """From ONE aimeat_onboarding_status read: (completed, n_drivable_pending). `n_drivable_pending`
+    counts pending REQUIRED steps that carry a howTo.tool — the ones the deterministic driver can
+    actually advance. completed=False with n_drivable_pending=0 means only toolless/passive steps
+    remain, so re-driving would loop forever and we must not. Degrades to (False, 0) on any read/parse
+    error — it runs bare in run_crew, so it must never raise and abort startup before the daemon."""
+    try:
+        data = _aimeat_call(agent_name, "aimeat_onboarding_status", {}) or {}
+        completed = bool((data.get("summary") or {}).get("completable")) or (
+            (data.get("onboarding") or {}).get("status") == "completed"
+        )
+        steps = (data.get("onboarding") or {}).get("steps") or []
+        guide = data.get("step_guide") or {}
+        n_drivable = sum(
+            1
+            for s in steps
+            if isinstance(s, dict)
+            and s.get("required")
+            and s.get("status") != "passed"
+            and (guide.get(s.get("id")) or {}).get("tool")
+        )
+        return completed, n_drivable
+    except Exception as exc:  # noqa: BLE001 — a malformed status payload must not abort startup
+        print(
+            f"[{agent_name}] onboarding status read failed ({exc!r}) — treating as incomplete/0-drivable",
+            file=sys.stderr,
+        )
+        return False, 0
+
+
 def _onboarding_marker(agent_name: str) -> Path:
     from crewaimeat._home import aimeat_home
 
@@ -825,13 +855,29 @@ def _onboarding_attempted_recently(agent_name: str, within_seconds: int = 3600) 
         return False
 
 
-def _mark_onboarding_attempt(agent_name: str) -> None:
+_ONBOARD_MAX_TRIES = 3  # per .attempt window (1h): re-drive a drivable-but-uncredited step at most this many times
+
+
+def _mark_onboarding_attempt(agent_name: str, n_drivable: int | None = None, attempts: int = 1) -> None:
+    """Record an onboarding attempt (the write refreshes the marker's mtime for
+    ``_onboarding_attempted_recently``). The CONTENT stores ``<attempts> <n_drivable>``: `attempts` bounds
+    re-drives per window (so a genuinely stuck-but-drivable step is not re-driven on every restart), while
+    still retrying a step a prior restart skipped or whose node-side crediting merely lagged."""
     p = _onboarding_marker(agent_name)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(str(time.time()), encoding="utf-8")
+        p.write_text(f"{attempts} {'' if n_drivable is None else n_drivable}", encoding="utf-8")
     except OSError:
         pass
+
+
+def _onboarding_attempt_info(agent_name: str) -> tuple[int, int | None]:
+    """(attempts, n_drivable) recorded at the last onboarding attempt; (0, None) if unknown."""
+    try:
+        parts = _onboarding_marker(agent_name).read_text(encoding="utf-8").split()
+        return (int(parts[0]) if parts else 0), (int(parts[1]) if len(parts) > 1 and parts[1] else None)
+    except (OSError, ValueError):
+        return 0, None
 
 
 def _memory_key(agent_name: str, prefix: str | None, task: dict) -> str:
@@ -903,56 +949,69 @@ _ONBOARDING_TOOL_FILTER: tuple[str, ...] = (
 )
 
 
-def _finish_pending_onboarding(tools, agent_name: str, step_args: dict) -> None:
-    """Safety net for the mode-change re-derivation race.
+def _finish_pending_onboarding(tools, agent_name: str, step_args: dict, *, attempts: int = 4) -> None:
+    """Safety net for the mode-change re-derivation race — with a short retry/backoff drive loop.
 
     ``aimeat_agent_mode_set`` (run just before onboarding) triggers a node-side re-derivation of the
-    onboarding step list to fit the new mode. If that write lands AFTER the deterministic driver's first
-    ``aimeat_onboarding_status`` read, the driver sees a stale ``completable=true`` and returns without
-    driving the api_call steps (identify_platform / install_skill / publish_config) — leaving a fully
-    functional agent stuck at e.g. 4/7. So settle for the re-derivation, then drive ANY still-pending
-    REQUIRED step directly from its ``step_guide`` howTo (the same tool + node-supplied args the driver
-    would use). This acts on the real pending set, not the racy ``completable`` flag, so it is robust even
-    if the flag is momentarily stale. Best-effort — never raises."""
+    onboarding step list to fit the new mode. That write can land AFTER the driver's first
+    ``aimeat_onboarding_status`` read, so the driver returns on a stale ``completable=true`` and leaves
+    the api_call steps (identify_platform / install_skill / publish_config) pending — the 4/7 stall. A
+    single sleep raced the node; instead re-read status with a short backoff and drive EVERY still-
+    pending REQUIRED step that has a ``howTo.tool`` (the same tool + node-supplied args the driver would
+    use), repeating until nothing drivable remains or the attempts run out (NOT on ``summary.completable``,
+    which the node reports true while api_call steps are still pending).
+    Idempotent + terminating; best-effort — never raises."""
     status_tool = next((t for t in tools if getattr(t, "name", None) == "aimeat_onboarding_status"), None)
     if status_tool is None:
         return
-    time.sleep(1.5)  # let the node's mode re-derivation land before we read the pending set
-    try:
-        raw = status_tool.run()
-        data = json.loads(raw) if isinstance(raw, str) else raw
-    except Exception as exc:  # noqa: BLE001 — verification is best-effort
-        print(f"[{agent_name}] onboarding verify: status re-read failed ({exc!r})", file=sys.stderr)
-        return
-    data = data or {}
-    steps = (data.get("onboarding") or {}).get("steps") or []
-    guide = data.get("step_guide") or {}
-    pending_required = [s for s in steps if s.get("required") and s.get("status") != "passed"]
-    if not pending_required:
-        return
-    print(
-        f"[{agent_name}] onboarding: {len(pending_required)} required step(s) still pending after the "
-        "driver (mode re-derivation race) — driving them directly.",
-        file=sys.stderr,
-    )
-    for s in pending_required:
-        sid = s.get("id")
-        how = guide.get(sid) or {}
-        tool_name = how.get("tool")
-        if not tool_name:
-            continue  # passive step: the final status re-read below refreshes lastSeen so it auto-passes
-        tool = next((t for t in tools if getattr(t, "name", None) == tool_name), None)
-        if tool is None:
-            continue
-        args = dict(step_args.get(sid) or how.get("args") or {})
-        if tool_name == "aimeat_memory_write":
-            args.setdefault("visibility", "owner")
+    for attempt in range(attempts):
+        time.sleep(min(1.0 + attempt, 3.0))  # backoff 1,2,3,3s — let a late re-derivation land
         try:
-            tool.run(**args)
-            print(f"[{agent_name}]   {sid} -> {tool_name}: ok", file=sys.stderr)
-        except Exception as exc:  # noqa: BLE001 — report; a functional agent is already authorized
-            print(f"[{agent_name}]   {sid} -> {tool_name} raised: {exc!r}", file=sys.stderr)
-    # A final status read lets checkAutoSteps pass the automatic steps (e.g. publish_config).
+            raw = status_tool.run()
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except Exception as exc:  # noqa: BLE001 — verification is best-effort
+            print(f"[{agent_name}] onboarding verify: status re-read failed ({exc!r})", file=sys.stderr)
+            return
+        data = data or {}
+        # Do NOT early-return on summary.completable: the node reports completable=true while the api_call
+        # steps (identify_platform / install_skill / publish_config) are still pending at 4/7, and
+        # run_hello_integration stops at completable — so THOSE are exactly what this safety net must drive
+        # to 7/7. Terminate on an empty drivable set instead (below).
+        steps = (data.get("onboarding") or {}).get("steps") or []
+        guide = data.get("step_guide") or {}
+        drivable = [
+            s
+            for s in steps
+            if s.get("required") and s.get("status") != "passed" and (guide.get(s.get("id")) or {}).get("tool")
+        ]
+        if not drivable:
+            # only toolless/passive steps remain — a final status read refreshes lastSeen so they auto-pass
+            try:
+                status_tool.run()
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        print(
+            f"[{agent_name}] onboarding: driving {len(drivable)} pending required step(s) "
+            f"(attempt {attempt + 1}/{attempts}) — mode re-derivation race.",
+            file=sys.stderr,
+        )
+        for s in drivable:
+            sid = s.get("id")
+            how = guide.get(sid) or {}
+            tool_name = how.get("tool")
+            tool = next((t for t in tools if getattr(t, "name", None) == tool_name), None)
+            if tool is None:
+                continue
+            args = dict(step_args.get(sid) or how.get("args") or {})
+            if tool_name == "aimeat_memory_write":
+                args.setdefault("visibility", "owner")
+            try:
+                tool.run(**args)
+                print(f"[{agent_name}]   {sid} -> {tool_name}: ok", file=sys.stderr)
+            except Exception as exc:  # noqa: BLE001 — report; a functional agent is already authorized
+                print(f"[{agent_name}]   {sid} -> {tool_name} raised: {exc!r}", file=sys.stderr)
+    # attempts exhausted — a final status read to settle any auto-steps
     try:
         status_tool.run()
     except Exception:  # noqa: BLE001
@@ -1741,11 +1800,29 @@ def run_crew(spec: CrewSpec) -> None:
     )
     print(f"[{spec.agent_name}] set agent mode = {_mode}: {bool(_mres)}", file=sys.stderr)
 
-    # 1) Ensure Hello Integration once (one-shot, best-effort) before the daemon. Skip if we already tried
-    #    recently: a node step with no matching tool can never reach "completed", and re-onboarding on every
-    #    restart would block the real task forever. Partial onboarding is fine — the agent is authorized.
-    if not _onboarding_completed(spec.agent_name) and not _onboarding_attempted_recently(spec.agent_name):
-        _mark_onboarding_attempt(spec.agent_name)
+    # 1) Ensure Hello Integration before the daemon (best-effort). SELF-HEALING: re-invoke the driver
+    #    whenever onboarding is incomplete AND at least one pending REQUIRED step is drivable (has a
+    #    howTo.tool). Driving those is idempotent + terminating, so a crew stranded at e.g. 4/7 (the
+    #    mode re-derivation race left identify_platform / install_skill / publish_config pending) drives
+    #    itself to 7/7 on the next restart — no manual dashboard action. The .attempt lock only guards
+    #    the toolless case: when the sole remaining pending steps have no tool they can never pass, so we
+    #    skip re-driving them (would loop forever) once we've already tried. A functional agent is
+    #    authorized regardless; partial onboarding is fine.
+    _ob_done, _ob_drivable = _onboarding_state(spec.agent_name)
+    _ob_recent = _onboarding_attempted_recently(spec.agent_name)
+    # The .attempt window (1h) resets the per-window try count; outside it, treat as a fresh attempt.
+    _ob_attempts, _ob_last = _onboarding_attempt_info(spec.agent_name) if _ob_recent else (0, None)
+    # Drive Hello Integration when there are drivable pending REQUIRED steps (howTo.tool present) AND either
+    # we made PROGRESS (drivable count fell since the last attempt) OR we are still under the per-window try
+    # cap (driving usually credits a step immediately, so a flat count across restarts is NOT proof of
+    # "stuck" — a prior restart may have skipped it, or crediting lagged); OR when onboarding is not even
+    # completable yet and we have not tried this window. The try cap bounds a genuinely stuck-but-drivable
+    # step to a few ~25s drives per hour instead of every restart. The drivable check does NOT gate on
+    # `completable` (the node reports that independently of these api_call steps).
+    if (_ob_drivable > 0 and (_ob_last is None or _ob_drivable < _ob_last or _ob_attempts < _ONBOARD_MAX_TRIES)) or (
+        not _ob_done and not _ob_recent
+    ):
+        _mark_onboarding_attempt(spec.agent_name, n_drivable=_ob_drivable, attempts=_ob_attempts + 1)
         _run_onboarding_only(spec.agent_name, services=spec.services, commands=spec.commands)
 
     # 1b) Publish the slash-command palette so the dashboard (Data Access) and the Messages UI
@@ -1854,6 +1931,42 @@ def run_crew(spec: CrewSpec) -> None:
     def _build(task: dict, liaison: Agent) -> Crew:
         tid = task.get("id")
         raw_prompt = task.get("description") or task.get("title") or ""
+
+        # Onboarding SMOKE TEST TASK: the node creates an ordinary task during Hello Integration whose
+        # sole purpose is to prove the agent can round-trip a task. It carries no special kind, but both
+        # node creation sites stamp the SAME locale-independent marker. Do NOT run the domain crew on it
+        # (that fabricates junk work) and do NOT let finalize mark invented "do the onboarding" todos done
+        # (the "did it lie" bug). Ack it; the deterministic complete-callback closes it — its purpose (a
+        # task round-trips through the subprocess) is satisfied without touching any onboarding todo.
+        _verif = task.get("verification")
+        if (
+            isinstance(_verif, dict)
+            and _verif.get("userExpects") == "Agent completes the onboarding test task successfully"
+        ):
+            # The smoke test's only pass criterion is that a task ROUND-TRIPS — which needs NO model. Complete
+            # it DETERMINISTICALLY right here (_make_complete_cb is a plain aimeat_task_complete that ignores its
+            # output arg), so a down/erroring LLM provider can't fail the probe. No domain crew, no LLM in the
+            # completion, no invented "done" todos. The trivial crew below is ceremony the daemon requires; its
+            # callback re-completes idempotently as a fallback if the direct call raised.
+            print(
+                f"[{spec.agent_name}] onboarding smoke test task {tid} -> deterministic complete (no crew/LLM/todos)",
+                file=sys.stderr,
+            )
+            _complete = _make_complete_cb(spec.agent_name, tid, owner=spec.owner)
+            try:
+                _complete(None)
+            except Exception as exc:  # noqa: BLE001 — a still-active task is simply re-dispatched on restart
+                print(f"[{spec.agent_name}] smoke test deterministic complete raised: {exc!r}", file=sys.stderr)
+            _noop = Agent(
+                role="Onboarding Test",
+                goal="Return ok.",
+                backstory="You do nothing; the task is already complete.",
+                llm=get_llm(for_tool_use=False, agent_name=spec.agent_name),
+                verbose=False,
+            )
+            _noopt = Task(description="Output exactly: ok", expected_output="ok", agent=_noop)
+            _noopt.callback = _complete  # idempotent fallback (only matters if the direct complete above failed)
+            return Crew(agents=[_noop], tasks=[_noopt], process=Process.sequential, verbose=False, cache=False)
 
         # Self-evolution: if this message is the owner's CLICK on one of our own evolution prompts,
         # handle it here (diagnose / build / dismiss) and reply in our thread — do NOT run the domain
