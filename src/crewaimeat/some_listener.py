@@ -237,6 +237,27 @@ def scan_hn(hours: int = 48, limit: int = 12) -> dict:
         except Exception:  # noqa: BLE001
             pass
 
+    # Public mirror for CROSS-ORGANISM display: another organism (e.g. the M-ROOM, same owner) reads this
+    # with aimeat_memory_read_public(gaii, "some.radar.public.latest") — the exact path M-ROOM already uses
+    # for its ext:mroom feeds. Display-safe shape only: public HN thread pointers + our scoring, no
+    # owner-private context. Best-effort; never blocks the scan.
+    try:
+        public = {
+            "date": date,
+            "count": len(ranked),
+            "items": [
+                {"title": r["title"], "url": r["url"], "score": r["score"], "why": r["why"], "snippet": r["snippet"]}
+                for r in ranked
+            ],
+        }
+        _aimeat_call(
+            "some-listener",
+            "aimeat_memory_write",
+            {"key": "some.radar.public.latest", "value": public, "visibility": "public"},
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
     # Sync new hits into the Social Radar workspace as opportunity records (deterministic, no LLM).
     radar = _sync_to_radar(ranked, date)
 

@@ -631,6 +631,23 @@ def build_morning_report() -> dict:
         **({"error": err[:300]} if err else {}),
     }
     _advance(_HOME_ORG, _HOME_WS, rec)
+    # Public mirror for CROSS-ORGANISM display: another organism (e.g. the M-ROOM, same owner) reads this
+    # with aimeat_memory_read_public(gaii, "mail.morning.public.latest") and renders the whole digest
+    # (activity + insights + SOME radar + kilpailijakatsaus) — the competitor section otherwise lives ONLY
+    # inside the sent email and is never persisted. NOTE: "public" = readable by anyone who knows this
+    # agent's GAII + the key (not broadcast/indexed); flip visibility to "owner" to keep the full briefing
+    # to the owner's own agents. Best-effort; never blocks or alters the send.
+    try:
+        _call(
+            "aimeat_memory_write",
+            {
+                "key": "mail.morning.public.latest",
+                "value": {"date": now.date().isoformat(), "subject": subject, "body_md": body, "radar": radar},
+                "visibility": "public",
+            },
+        )
+    except Exception:  # noqa: BLE001
+        pass
     print(f"[{AGENT}] morning report {rid}: {'FAILED ' + err if err else 'sent'}{img_note}", file=sys.stderr)
     return {"sent": 0 if err else 1, "failed": 1 if err else 0}
 
