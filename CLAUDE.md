@@ -43,3 +43,33 @@ Touch it only when the owner explicitly asks to read or log something there.
   tunnel-push drain (Phase 2, aimeat-crewai). **Scopes:** agents need `messages:send` + `messages:read`
   (both in the `coordinator` profile; grant explicitly for task-runner agents at device-auth).
 - **Fail loud** — surface the real cause: reject at the boundary, or raise from one shared dispatcher.
+
+---
+
+## Fleet & daemon — when a crew-agent actually comes ONLINE
+- The fleet host **auto-discovers every `crews/*_crew.py`** (that has a `run()`) — no roster to edit.
+  A leading underscore parks a crew: `crews/_foo_crew.py` is skipped (`forge._crew_files`, why the
+  `_aimeat_*` crews are dormant). So "add a crew file" ≠ "agent is live".
+- Two things make it live, not just present: (1) **register once** —
+  `npx aimeat@latest connect add --agent <name> --mode task-runner --url https://aimeat.io --owner <owner>`
+  — and approve the one-time device flow (its token lands in the shared `serve.json`); (2) **restart the
+  fleet** (`scripts/start_fleet.ps1` → `fleet_host`) so it attaches as a THREAD to the ONE shared loopback
+  serve daemon (all agents in one process, crewai imported once). Only APPROVED agents come online; an
+  unapproved one waits and joins itself once approved.
+- **Connector tools (`aimeat_workspace_*`, `aimeat_memory_*`, `memory_read_public`, task poll/push) work
+  ONLY while the agent is attached / running in-fleet.** Off-fleet (a bare `uv run … -c` one-liner, a
+  background loop) those reads fail quietly — `manifest=null`, empty lists — which is exactly what the
+  some-listener / mroom code means by "works once attached". Run cross-organism reads in-fleet.
+- **Restart the fleet** after changing an agent's identity (`fleet_identity.py` tags/capabilities), LLM
+  routing (`llm_providers.json`), or after adopting a new contract — none of it takes hold until re-attach.
+
+## Cross-organism display — a different org shows another's data
+- A different organism (even the SAME owner) reads another's data via a **public memory key** +
+  `aimeat_memory_read_public(gaii, key)` — NOT by reaching into the other org's workspace (same-owner
+  sub-agents get `manifest=null` there; a known connector gap). Reciprocal move: **EXPOSE** the data as a
+  `visibility:"public"` memory key, then the reader uses its existing public-read path (the one M-ROOM
+  already uses for its `ext:mroom.*` feeds). Address a public key by the writer's **GAII**
+  (`<agent>#<owner>@<node>`), not the owner GHII.
+- Live bridge (crewaimeat → M-ROOM): `some.radar.public.latest` (some-listener) +
+  `mail.morning.public.latest` (postman). NB: the morning digest's `## Kilpailijakatsaus` is otherwise
+  **not persisted** — it lives only inside the sent email until mirrored to that key.
