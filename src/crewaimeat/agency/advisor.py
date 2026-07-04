@@ -173,7 +173,22 @@ def _advisor_tools(sink: dict, templates: list, agents: list):
         stage({"kind": "open_url", "url": (url or "").strip()})
         return "Added a link button."
 
-    return [propose_create_agent, propose_build_app, propose_test_run, propose_publish_offer, propose_open_link]
+    @tool("propose_generate_app")
+    def propose_generate_app(idea: str = "") -> str:
+        """Propose building a CUSTOM app (any idea, not just the agent's data) with AI. Adds a button that
+        opens the 'Generate App with AI' panel prefilled with `idea` — it hands the user a ready-to-paste
+        prompt for their own AI chat. Use this when the user wants an app that isn't one of the templates."""
+        stage({"kind": "generate_app", "idea": (idea or "").strip()})
+        return "Added a button to open the app generator."
+
+    return [
+        propose_create_agent,
+        propose_build_app,
+        propose_test_run,
+        propose_publish_offer,
+        propose_open_link,
+        propose_generate_app,
+    ]
 
 
 _ROLE = "aimeat-agency copilot"

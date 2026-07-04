@@ -265,6 +265,25 @@ const STR = {
   "w.buildnext":{en:"What should I build next? →",fi:"Mitä rakentaisin seuraavaksi? →"},
   "ev.app_built":{en:"built a data app",fi:"rakensi datasovelluksen"},
   "ev.app_build_failed":{en:"app build failed",fi:"sovelluksen rakennus epäonnistui"},
+  "ev.app_published":{en:"published an app",fi:"julkaisi sovelluksen"},
+  // ── Generate App with AI (AIMEAT create-app prompt) ──
+  "act.genapp":{en:"Generate an app",fi:"Luo sovellus"},
+  "gen.title":{en:"Generate App with AI",fi:"Luo sovellus tekoälyllä"},
+  "gen.intro":{en:"No coding. Describe your idea, copy the prompt, and paste it into any AI chat (Claude, ChatGPT…). The AI asks a few questions, builds a ready-to-use app, and gives you one HTML file — then add it here to put it live.",fi:"Ei koodausta. Kuvaile ideasi, kopioi kehote ja liitä se mihin tahansa tekoälychattiin (Claude, ChatGPT…). Tekoäly kysyy muutaman kysymyksen, rakentaa valmiin sovelluksen ja antaa yhden HTML-tiedoston — lisää se sitten tähän julkaistavaksi."},
+  "gen.s1":{en:"Describe your app",fi:"Kuvaile sovelluksesi"},
+  "gen.idea.ph":{en:"e.g. a shared shopping list for my family",fi:"esim. jaettu ostoslista perheelleni"},
+  "gen.tmpl":{en:"Start from a template (optional)",fi:"Aloita pohjasta (valinnainen)"},
+  "gen.s2":{en:"Copy the prompt & paste it into your AI",fi:"Kopioi kehote & liitä se tekoälyysi"},
+  "gen.s2.sub":{en:"Open Claude, ChatGPT or any AI chat, paste this in, and answer its questions. It will build your app and hand you a single HTML file.",fi:"Avaa Claude, ChatGPT tai mikä tahansa tekoälychatti, liitä tämä ja vastaa sen kysymyksiin. Se rakentaa sovelluksesi ja antaa yhden HTML-tiedoston."},
+  "gen.preview":{en:"PROMPT PREVIEW",fi:"KEHOTTEEN ESIKATSELU"},
+  "gen.copy":{en:"📋 Copy Prompt",fi:"📋 Kopioi kehote"}, "gen.copied":{en:"Prompt copied",fi:"Kehote kopioitu"},
+  "gen.s3":{en:"Add & publish your app",fi:"Lisää & julkaise sovelluksesi"},
+  "gen.s3.sub":{en:"Got the HTML file back from the AI? Paste it here — it goes live on your node and you get a shareable link.",fi:"Saitko HTML-tiedoston tekoälyltä? Liitä se tähän — se julkaistaan nodeesi ja saat jaettavan linkin."},
+  "gen.html.ph":{en:"Paste your app's HTML here…",fi:"Liitä sovelluksesi HTML tähän…"},
+  "gen.name":{en:"App name",fi:"Sovelluksen nimi"}, "gen.publish":{en:"Publish",fi:"Julkaise"},
+  "gen.published":{en:"Published! Your app is live:",fi:"Julkaistu! Sovelluksesi on käynnissä:"},
+  "gen.needsconnect":{en:"Connect an agent first — an app publishes under your account.",fi:"Yhdistä agentti ensin — sovellus julkaistaan tilisi alle."},
+  "close":{en:"Close",fi:"Sulje"},
 };
 const t = k => (STR[k]&&STR[k][LANG]) || (STR[k]&&STR[k].en) || k;
 
@@ -1023,6 +1042,8 @@ function showMemRecord(out, agent, r){
 // ── Copilot (advisor): brainstorm + deterministic next-steps journey ──
 async function renderChat(m){
   m.innerHTML=`<h2>${t("advisor.title")}</h2><div class="sub">${t("advisor.sub")}</div>`;
+  const genBtn=el(`<button class="btn ghost" style="margin-bottom:14px">✨ ${t("act.genapp")}</button>`);
+  genBtn.onclick=()=>openAppGen(""); m.appendChild(genBtn);
   const wrap=el(`<div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start"></div>`);
   const left=el(`<div style="flex:2;min-width:320px;display:flex;flex-direction:column"></div>`);
   const right=el(`<div style="flex:1;min-width:230px"></div>`);
@@ -1078,6 +1099,7 @@ function actionLabel(a){
   if(a.kind==="build_app") return t("act.buildapp");
   if(a.kind==="test_run") return t("act.testrun");
   if(a.kind==="publish_offer") return t("act.offer");
+  if(a.kind==="generate_app") return "✨ "+t("act.genapp");
   if(a.kind==="open_url") return t("act.open");
   if(a.kind==="open_agent") return t("act.manage");
   return a.kind||"?";
@@ -1085,6 +1107,7 @@ function actionLabel(a){
 async function runAction(a, after){
   try{
     if(a.kind==="goto_step"){ skipSetup=false; wizardStarted=true; editing=null; view="setup"; render(); return; }
+    if(a.kind==="generate_app"){ return openAppGen(a.idea||""); }
     if(a.kind==="open_url"){ if(a.url) openExt(a.url); }
     else if(a.kind==="open_agent"){ if(a.agent) return openEditor(a.agent); }
     else if(a.kind==="create_brain"){
@@ -1103,6 +1126,51 @@ async function runAction(a, after){
     else if(a.kind==="publish_offer"){ if(a.agent){ await api("/api/agents/"+encodeURIComponent(a.agent)+"/offer/publish",{method:"POST"}); toast(t("offer.published")); } }
   }catch(e){ toast(e.message); }
   if(after) after();
+}
+
+// "Generate App with AI" — AIMEAT's app-catalog create-app prompt: describe idea + template -> copy the
+// filled prompt into any capable AI (Claude/ChatGPT) -> paste the returned HTML back here to publish.
+async function openAppGen(idea){
+  const ov=el(`<div style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:100;display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:30px 16px"></div>`);
+  const card=el(`<div class="card" style="max-width:720px;width:100%;background:var(--bg)"></div>`);
+  ov.appendChild(card); document.body.appendChild(ov);
+  const close=()=>ov.remove(); ov.onclick=(e)=>{ if(e.target===ov) close(); };
+  card.appendChild(el(`<h2 style="margin-top:0">✨ ${t("gen.title")}</h2>`));
+  card.appendChild(el(`<p class="muted" style="margin-top:-6px">${t("gen.intro")}</p>`));
+  card.appendChild(el(`<h3>1 · ${t("gen.s1")}</h3>`));
+  const ideaBox=el(`<textarea placeholder="${esc(t("gen.idea.ph"))}" style="min-height:70px">${esc(idea||"")}</textarea>`); card.appendChild(ideaBox);
+  card.appendChild(el(`<label>✨ ${t("gen.tmpl")}</label>`));
+  const tsel=el(`<select class="f"><option value="">…</option></select>`); card.appendChild(tsel);
+  card.appendChild(el(`<h3 style="margin-top:18px">2 · ${t("gen.s2")}</h3>`));
+  card.appendChild(el(`<p class="muted" style="margin-top:-6px">${t("gen.s2.sub")}</p>`));
+  card.appendChild(el(`<label>${t("gen.preview")}</label>`));
+  const prev=el(`<textarea readonly style="min-height:150px;font-family:monospace;font-size:12px">…</textarea>`); card.appendChild(prev);
+  const copy=el(`<button class="btn" style="width:100%;margin-top:8px">${t("gen.copy")}</button>`);
+  copy.onclick=()=>{ navigator.clipboard.writeText(prev.value).then(()=>toast(t("gen.copied"))).catch(()=>toast(t("gen.copied"))); };
+  card.appendChild(copy);
+  card.appendChild(el(`<h3 style="margin-top:18px">3 · ${t("gen.s3")}</h3>`));
+  card.appendChild(el(`<p class="muted" style="margin-top:-6px">${t("gen.s3.sub")}</p>`));
+  const htmlBox=el(`<textarea placeholder="${esc(t("gen.html.ph"))}" style="min-height:110px;font-family:monospace;font-size:12px"></textarea>`); card.appendChild(htmlBox);
+  const nrow=el(`<div class="row" style="gap:8px;margin-top:8px"></div>`);
+  const nameI=el(`<input placeholder="${esc(t("gen.name"))}" style="flex:1">`);
+  const pub=el(`<button class="btn">${t("gen.publish")}</button>`);
+  nrow.appendChild(nameI); nrow.appendChild(pub); card.appendChild(nrow);
+  const pubOut=el(`<div style="margin-top:8px"></div>`); card.appendChild(pubOut);
+  pub.onclick=async()=>{ const html=htmlBox.value.trim(); if(html.length<30) return toast(t("gen.html.ph")); pub.disabled=true;
+    try{ const r=await api("/api/app-gen/publish",{method:"POST",body:JSON.stringify({html,name:nameI.value.trim()})});
+      if(r.published){ pubOut.innerHTML=`<div class="card"><span class="pill published">${t("gen.published")}</span> <span class="muted" style="word-break:break-all">${esc(r.url)}</span></div>`;
+        const open=el(`<button class="btn ghost" style="margin-top:8px">${t("app.open")}</button>`); open.onclick=()=>openExt(r.url); pubOut.appendChild(open);
+      } else toast(r.reason||"pytest"); }
+    catch(e){ toast(e.message); } finally{ pub.disabled=false; } };
+  const clrow=el(`<div class="row" style="justify-content:flex-end;margin-top:14px"></div>`);
+  const clb=el(`<button class="btn ghost">${t("close")}</button>`); clb.onclick=close; clrow.appendChild(clb); card.appendChild(clrow);
+  let tmpls=[{id:"",title:"—"}]; try{ tmpls=(await api("/api/app-gen/templates")).templates||tmpls; }catch{}
+  tsel.innerHTML=tmpls.map(x=>`<option value="${esc(x.id)}">${esc(x.title)}</option>`).join("");
+  let ti=null;
+  const refresh=async()=>{ try{ const r=await api("/api/app-gen/prompt",{method:"POST",body:JSON.stringify({idea:ideaBox.value,template:tsel.value,lang:LANG})}); prev.value=r.prompt; }catch(e){} };
+  ideaBox.oninput=()=>{ clearTimeout(ti); ti=setTimeout(refresh,350); };
+  tsel.onchange=refresh;
+  await refresh();
 }
 
 async function renderSync(m){

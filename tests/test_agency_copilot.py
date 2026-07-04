@@ -165,6 +165,29 @@ def test_advisor_suggest_and_scripted():
 # ── cockpit routes (node/model short-circuited) ──────────────────────────────
 
 
+def test_app_gen_prompt_builder():
+    from crewaimeat.agency import app_prompt
+
+    ids = [t["id"] for t in app_prompt.templates()]
+    assert "" in ids and "data" in ids and "realtime-social" in ids  # AIMEAT's template menu
+    p = app_prompt.build_prompt("a shared family shopping list", "data", "fi")
+    # verbatim AIMEAT prompt, fully substituted (idea + template steer + language)
+    assert "family shopping list" in p and "DATA app" in p and "Finnish" in p
+    assert "Help me build a single-file HTML app that runs on AIMEAT" in p
+    assert "__IDEA__" not in p and "__LANG__" not in p and "__TEMPLATE_HINT__" not in p
+
+
+def test_app_gen_routes(client):
+    assert client.get("/api/app-gen/templates", headers={"Authorization": ""}).status_code == 401
+    tmpls = client.get("/api/app-gen/templates").json()["templates"]
+    assert any(t["id"] == "data" for t in tmpls)
+    p = client.post("/api/app-gen/prompt", json={"idea": "a notes app", "template": "standard", "lang": "en"}).json()
+    assert "a notes app" in p["prompt"] and "STANDARD app" in p["prompt"]
+    # publish is pytest-guarded (never touches the real node)
+    r = client.post("/api/app-gen/publish", json={"html": "<!doctype html><html><body>hi</body></html>", "name": "x"})
+    assert r.json() == {"published": False, "reason": "pytest"}
+
+
 def test_journey_route(client):
     assert client.get("/api/journey", headers={"Authorization": ""}).status_code == 401
     j = client.get("/api/journey?lang=en").json()

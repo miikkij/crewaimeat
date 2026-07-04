@@ -92,6 +92,18 @@ class ChatIn(BaseModel):
     lang: str = "en"
 
 
+class AppGenPromptIn(BaseModel):
+    idea: str = ""
+    template: str | None = None
+    lang: str = "en"
+
+
+class AppGenPublishIn(BaseModel):
+    html: str
+    name: str = ""
+    agent: str | None = None
+
+
 def _brain_diff(prev: dict | None, new: dict) -> list[str]:
     """What changed between two brain versions — for the activity log ('created', 'prose',
     'policy.autonomy', …) so History shows not just THAT a save happened but WHAT it changed."""
@@ -1463,6 +1475,57 @@ def create_app(token: str | None = None) -> FastAPI:
         actions = _merge_actions(actions, jrny, msg, templates)
         chat_store.append(sid, "assistant", text, actions)
         return {"session_id": sid, "reply": text, "actions": actions, "journey": jrny}
+
+    # ── Generate App with AI: AIMEAT's app-catalog create-app prompt (copy into any AI) + paste-to-publish ──
+    @app.get("/api/app-gen/templates", dependencies=[require_token])
+    def app_gen_templates() -> dict:
+        """The starting-template menu for the 'Generate App with AI' picker (mirrors aimeat.io/app-catalog)."""
+        from crewaimeat.agency import app_prompt
+
+        return {"templates": app_prompt.templates()}
+
+    @app.post("/api/app-gen/prompt", dependencies=[require_token])
+    def app_gen_prompt(body: AppGenPromptIn) -> dict:
+        """Fill AIMEAT's canonical create-app prompt with the user's idea + optional template + language.
+        The user copies this into any capable AI (Claude/ChatGPT), which builds a single HTML file."""
+        from crewaimeat.agency import app_prompt
+
+        lang = body.lang if body.lang in ("en", "fi") else "en"
+        return {"prompt": app_prompt.build_prompt(body.idea, body.template, lang)}
+
+    @app.post("/api/app-gen/publish", dependencies=[require_token])
+    def app_gen_publish(body: AppGenPublishIn) -> dict:
+        """Publish a pasted AI-generated HTML app — inline under the owner (served via a connected agent's
+        token). Returns the live shareable URL. This is the appliance's 'Add & publish your app' step."""
+        if os.environ.get("PYTEST_CURRENT_TEST"):  # a test must never publish to the real node
+            return {"published": False, "reason": "pytest"}
+        html = body.html or ""
+        if "<" not in html or len(html.strip()) < 30:
+            raise HTTPException(status_code=400, detail="paste the app's HTML first")
+        acc = account.load()
+        agent = body.agent
+        if not agent:  # publish under the first CONNECTED agent (an app is served under the owner via its token)
+            agent = next(
+                (
+                    b["agent_name"]
+                    for b in brains.list_brains()
+                    if account.agent_auth(b["agent_name"], acc["owner"]).get("has_token")
+                ),
+                None,
+            )
+        if not agent:
+            raise HTTPException(
+                status_code=400, detail="connect an agent first — an app publishes under your account via its token"
+            )
+        name = (body.name or "").strip() or "my-app"
+        filename = (brains.slug_agent_name(name) or "my-app") + ".html"
+        from crewaimeat import author_tool
+
+        ok, url = author_tool.publish_app_html(agent, acc["owner"], filename, html, name=name, category="utility")
+        if not ok:
+            raise HTTPException(status_code=502, detail=f"publish failed: {url}")
+        events.record(agent, "app_published", {"filename": filename, "url": url})
+        return {"published": True, "url": url, "filename": filename}
 
     return app
 
