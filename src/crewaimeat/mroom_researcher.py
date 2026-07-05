@@ -164,8 +164,14 @@ def _advance(req: dict, **changes) -> None:
 # --------------------------------------------------------------------------- #
 # the sweep
 # --------------------------------------------------------------------------- #
-def run_research(llm, *, dry_run: bool = True, max_items: int = _MAX_ITEMS) -> dict:
-    """One sweep: fulfil pending `research-request` briefs. dry_run writes NOTHING to the room."""
+def run_research(llm=None, *, dry_run: bool = True, max_items: int = _MAX_ITEMS) -> dict:
+    """One sweep: fulfil pending `research-request` briefs. dry_run writes NOTHING to the room.
+
+    `llm` is OPTIONAL: the catch-up sweep (idle_hook / on-record push) calls this with none, and the LLM
+    is built lazily below ONLY when there is a real pending brief — so an idle sweep stays deterministic
+    and never constructs an LLM (the documented 'no LLM unless a real pending brief' contract). Mirrors
+    mroom_requests.run_research(llm=None, ...).
+    """
     room = _room_read(AGENT_NAME)
     if not room:
         note = "MACHINE ROOM not accessible to mroom-researcher (org membership / write access?) — nothing done."
@@ -175,6 +181,11 @@ def run_research(llm, *, dry_run: bool = True, max_items: int = _MAX_ITEMS) -> d
     reqs = _requested(room)
     if not reqs:
         return {"processed": 0, "failed": 0, "note": "no requested briefs", "dry_run": dry_run}
+
+    if llm is None:  # real work exists -> build the LLM now (not on an empty idle sweep)
+        from crewaimeat.llm import get_llm
+
+        llm = get_llm(for_tool_use=False, agent_name=AGENT_NAME)
 
     processed = failed = 0
     would_write: list[dict] = []
