@@ -9,6 +9,8 @@ waits patiently for that approval, so nothing crash-loops while you get to it.
 crew-forge also operates the fleet via slash commands (send as a task OR an inbox message):
   /build <description>   design, register, and launch a new agent
   /build-json <desc>     same, but emit the crew as a validated JSON definition (exec-free)
+  /publish <agent>       publish a built crew def to the AIMEAT registry
+  /install <agent>       install a crew def from the registry (register + launch)
   /restart <agent>       bring a stopped crew back online
   /reauth <agent>        re-run authorization so you can approve it again
   /list  (or /status)    show your crews and which are running
@@ -30,6 +32,7 @@ from crewai import Agent, Task
 
 from crewaimeat import forge_catalog, forge_json
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
+from crewaimeat.crew_registry import make_registry_tools
 from crewaimeat.forge import forge_precedent_block, make_forge_json_tools, make_forge_tools, make_manage_tools
 
 AGENT_NAME = "crew-forge"
@@ -40,6 +43,8 @@ HELP = (
     "crew-forge commands (send as a task or a message):\n"
     "  /build <description>   design, register, and launch a new agent\n"
     "  /build-json <desc>     same, but emit the crew as a validated JSON definition (exec-free)\n"
+    "  /publish <agent> [owner|public]  publish a built crew def to the AIMEAT registry\n"
+    "  /install <agent> [gaii]          install a crew def from the registry (register + launch)\n"
     "  /restart <agent>       bring a stopped crew back online\n"
     "  /reauth <agent>        re-run authorization so you can approve it again\n"
     "  /list   (or /status)   show your crews and which are running\n"
@@ -59,6 +64,16 @@ COMMANDS = [
         "name": "/build-json",
         "description": "Like /build, but emit the crew as a validated JSON definition (exec-free path)",
         "category": "fleet",
+    },
+    {
+        "name": "/publish",
+        "description": "Publish a built crew def to the AIMEAT registry: /publish <agent> [owner|public]",
+        "category": "registry",
+    },
+    {
+        "name": "/install",
+        "description": "Install a crew def from the AIMEAT registry (register + launch): /install <agent> [gaii]",
+        "category": "registry",
     },
     {"name": "/restart", "description": "Bring a stopped crew back online: /restart <agent>", "category": "fleet"},
     {
@@ -101,6 +116,10 @@ _BUILD_JSON_CMDS = {"build-json", "buildjson", "new-json", "make-json"}
 _RESTART_CMDS = {"restart", "relaunch", "reboot", "start"}
 _LIST_CMDS = {"list", "ls", "status"}
 _RECONCILE_CMDS = {"startall", "start-all", "reconcile", "up"}
+# Crew registry (AIMEAT): publish a locally-built crew def so it can be discovered + installed elsewhere;
+# install one from the registry (materialize its files, then register + launch it here).
+_PUBLISH_CMDS = {"publish", "push"}
+_INSTALL_CMDS = {"install", "pull"}
 _HELP_CMDS = {"help", "commands", "?"}
 
 # Declared at onboarding (aimeat_onboarding_declare_services) so other agents and the owner
@@ -110,6 +129,14 @@ COMMAND_SERVICES = [
     {
         "name": "build-agent-json",
         "description": "/build-json <description> — build the agent as a validated JSON crew definition (exec-free)",
+    },
+    {
+        "name": "publish-crew",
+        "description": "/publish <agent> [owner|public] — publish a built crew def to the AIMEAT registry",
+    },
+    {
+        "name": "install-crew",
+        "description": "/install <agent> [gaii] — install a crew def from the AIMEAT registry (register + launch)",
     },
     {"name": "restart-agent", "description": "/restart <agent> — bring a stopped crew back online"},
     {"name": "reauth-agent", "description": "/reauth <agent> — re-run authorization so the owner can approve it again"},
@@ -144,15 +171,15 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
 
 
 def _command_domain(ctx: BuildContext, cmd: str, arg: str) -> tuple[list[Agent], list[Task]]:
-    """Run one fleet command (restart / reauth / list / help) via the Fleet Operator."""
+    """Run one fleet command (restart / reauth / list / publish / install / help) via the Fleet Operator."""
     operator = Agent(
         role="Fleet Operator",
-        goal="Carry out fleet commands precisely: restart or re-auth a crew, or report status",
+        goal="Carry out fleet commands precisely: restart or re-auth a crew, report status, or publish/install a crew def",
         backstory=(
             "You operate a fleet of AIMEAT crews on this machine. You do not design crews; you run "
             "the requested command with your tools and report the result, nothing more."
         ),
-        tools=make_manage_tools(),
+        tools=[*make_manage_tools(), *make_registry_tools(AGENT_NAME)],
         llm=ctx.llm,
         verbose=True,
     )
@@ -172,6 +199,30 @@ def _command_domain(ctx: BuildContext, cmd: str, arg: str) -> tuple[list[Agent],
             f"Call reauth_crew with agent_name='{arg}' and report the result."
             if arg
             else "No agent name was given. Reply asking the user to send '/reauth <agent>'."
+        )
+    elif cmd in _PUBLISH_CMDS:
+        # arg = "<agent> [visibility]"; default owner visibility.
+        _p = arg.split(None, 1)
+        _tgt = _p[0] if _p else ""
+        _vis = _p[1].strip().lower() if len(_p) > 1 and _p[1].strip().lower() in ("owner", "public") else "owner"
+        instr = (
+            f"Call publish_crew with target_agent='{_tgt}', visibility='{_vis}' and report the result."
+            if _tgt
+            else "No agent name was given. Reply asking the user to send '/publish <agent> [owner|public]'."
+        )
+    elif cmd in _INSTALL_CMDS:
+        # arg = "<agent> [gaii]"; a gaii installs a PUBLIC def from another owner.
+        _p = arg.split(None, 1)
+        _tgt = _p[0] if _p else ""
+        _gaii = _p[1].strip() if len(_p) > 1 else ""
+        instr = (
+            (
+                f"Call install_crew with target_agent='{_tgt}'"
+                + (f", gaii='{_gaii}'" if _gaii else "")
+                + " and report the result verbatim (it registers + launches the crew)."
+            )
+            if _tgt
+            else "No agent name was given. Reply asking the user to send '/install <agent> [gaii]'."
         )
     elif cmd in _HELP_CMDS:
         instr = f"Report exactly this text as the final answer, with no changes:\n{HELP}"
