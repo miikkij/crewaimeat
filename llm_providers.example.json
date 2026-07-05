@@ -4,7 +4,7 @@
     "default": "profile name used by any crew not listed in 'crews'",
     "profiles": "name -> { providers:[...] }. A provider: {name, type, api_key_env?, base_url?, context?, models:[...], enabled?}",
     "crews": "agent_name -> profile name (the agent_name from `aimeat connect add --agent ...`)",
-    "type": "openrouter | ollama (local, keyless) | xai | openai | generic (decides the litellm prefix + default base_url)",
+    "type": "openrouter | ollama (local, keyless) | xai | openai | nvidia (NVIDIA NIM @ build.nvidia.com — free, OpenAI-compatible, ~40 req/min) | generic (decides the litellm prefix + default base_url)",
     "api_key_env": "name of the .env var holding the key (omit for keyless local ollama); a provider whose key is missing is skipped, not fatal",
     "models": "models IN PRIORITY ORDER, each an id string or {id, context}. id has NO litellm prefix. context = that model's MAX context window (tokens) so CrewAI never over-fills a small model.",
     "enabled": "optional false to keep a provider in the file but skip it"
@@ -44,8 +44,19 @@
       ]
     },
     "coding": {
-      "_use": "app / cortex / extension / test crews. Do NOT put grok here (weak at code). Slot your strongest coder as the FIRST provider (e.g. a paid deepseek/claude via OpenRouter, or a local code model). The free model below is only a placeholder.",
+      "_use": "app / cortex / extension / test crews. Do NOT put grok here (weak at code). Slot your strongest coder as the FIRST provider — e.g. NVIDIA NIM's free frontier coders (glm-5.2 / kimi-k2.6 / minimax-m3), a paid model via OpenRouter, or a local code model.",
       "providers": [
+        {
+          "name": "nvidia-nim",
+          "type": "nvidia",
+          "api_key_env": "NVIDIA_KEY",
+          "base_url": "https://integrate.api.nvidia.com/v1",
+          "models": [
+            { "id": "z-ai/glm-5.2", "context": 131072 },
+            { "id": "moonshotai/kimi-k2.6", "context": 131072 },
+            { "id": "minimaxai/minimax-m3", "context": 131072 }
+          ]
+        },
         {
           "name": "openrouter-coder",
           "type": "openrouter",

@@ -28,8 +28,21 @@ from crewai.llms.base_llm import BaseLLM
 from pydantic import PrivateAttr
 
 # provider type -> litellm model-id prefix
-_PREFIX = {"openrouter": "openrouter/", "ollama": "ollama/", "xai": "xai/", "openai": "", "generic": ""}
-_DEFAULT_BASE = {"openrouter": "https://openrouter.ai/api/v1", "ollama": "http://localhost:11434"}
+# `nvidia` = NVIDIA NIM (build.nvidia.com), an OpenAI-compatible endpoint: route it through litellm's
+# `openai/` provider with an explicit base_url (so `z-ai/glm-5.2` becomes `openai/z-ai/glm-5.2`).
+_PREFIX = {
+    "openrouter": "openrouter/",
+    "ollama": "ollama/",
+    "xai": "xai/",
+    "openai": "",
+    "generic": "",
+    "nvidia": "openai/",
+}
+_DEFAULT_BASE = {
+    "openrouter": "https://openrouter.ai/api/v1",
+    "ollama": "http://localhost:11434",
+    "nvidia": "https://integrate.api.nvidia.com/v1",
+}
 # fallback context window if a model/provider declares none (conservative)
 _FALLBACK_CONTEXT = 32768
 
