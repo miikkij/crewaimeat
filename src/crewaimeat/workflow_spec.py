@@ -281,6 +281,9 @@ WORKFLOWS: dict[str, dict] = {
                 "stage": ("crewaimeat.write_pipeline", "write_edition_articles"),
                 "desk": "A",
                 "retry": {"max": 2, "backoff_min": 5},  # a transient tunnel drop → re-run, don't lose the desk
+                # ~10 sequential full-article generations — the node defaults steps to 60 min, which the
+                # slow-endpoint 2h run blew past → timed-out. Headroom for a slow LLM spell (fast path ~4 min).
+                "timeout_min": 240,
             },
             {
                 "id": "write-b",
@@ -294,6 +297,7 @@ WORKFLOWS: dict[str, dict] = {
                 "stage": ("crewaimeat.write_pipeline", "write_edition_articles"),
                 "desk": "B",
                 "retry": {"max": 2, "backoff_min": 5},  # a transient tunnel drop → re-run, don't lose the desk
+                "timeout_min": 240,  # heavy desk (see write-a) — headroom over the node's 60-min default
             },
             # Independent: pulls NOAA/NASA itself, writes the avaruussaa article into the set.
             {
@@ -374,6 +378,8 @@ def node_definition(wf_id: str = "laimeat-sanomat-evening") -> dict:
             step["after"] = s["after"]
         if s.get("retry"):
             step["retry"] = s["retry"]
+        if s.get("timeout_min"):  # else the node applies its 60-min per-step default
+            step["timeout_min"] = s["timeout_min"]
         # A pure source step (offer omits required_to_function) declares "none" at the STEP level —
         # the only place the node accepts the bare string (it means "no input gate, don't block").
         if AGENT_SIGNALS.get(s["offer"], {}).get("required_to_function") == "none":
