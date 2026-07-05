@@ -25,7 +25,7 @@ from pathlib import Path
 
 from crewai.tools import tool
 
-from crewaimeat import forge_catalog
+from crewaimeat import forge_catalog, forge_json
 
 # Reads `AGENT_NAME = "..."` from a generated crew file (to check its token/approval).
 _AGENT_NAME_RE = re.compile(r'^\s*AGENT_NAME\s*=\s*["\']([^"\']+)["\']', re.M)
@@ -839,6 +839,55 @@ def register_and_launch(agent_name: str) -> str:
     )
 
 
+@tool("write_and_validate_crew_json")
+def write_and_validate_crew_json(crew_json: str, request: str = "") -> str:
+    """Write + validate a NEW crew from a JSON crew DEFINITION — the exec-free path (no generated Python
+    is ever run to find out whether it's valid).
+
+    Pass `crew_json` as the crew-def object described in the schema you were given. Shape:
+        {"agent_name": "<kebab-name>", "temperature": <0.25|0.5|0.7>,
+         "tags": [...], "capabilities": {...}, "offers": [{...}],
+         "discover": <bool>, "memory": <bool>,
+         "agents": [{"name","role","goal","backstory","tools":["memory","web",...],"allow_delegation"}],
+         "tasks":  [{"id","description","expected_output","agent","context":[earlier ids],"async"}]}
+    Each agent's `tools` are catalog ids (memory, web, schedule, dm, delegate, image, app_build). A task's
+    `context` lists EARLIER task ids (a DAG). At least one task description MUST inject the request with
+    `{{ctx.prompt}}` (use `{{ctx.today}}` for time-sensitive work).
+
+    On VALID it writes crew_defs/<name>.json (the definition) + crews/<name>_crew.py (a thin loader) and
+    the crew is ready to register. On INVALID it returns the EXACT list of problems (unknown tool, a task
+    pointing at a missing agent, a non-DAG context edge, a missing {{ctx.prompt}}, a bad field, ...) and
+    writes NOTHING — fix the JSON and call again until VALID. Pass `request` as the user's original order
+    so a VALID build is remembered as forge experience. Then call register_and_launch_crew with the
+    agent_name (it appears in the VALID message)."""
+    doc = forge_json.coerce_doc(crew_json)
+    if doc is None:
+        return (
+            "INVALID: crew_json is not a JSON object (send ONLY the crew-def object). "
+            "Fix it and call write_and_validate_crew_json again."
+        )
+    ok, detail, _path = forge_json.write_json_crew(doc, request=request)
+    if ok and str(request).strip() and isinstance(doc, dict):
+        # Remember the build as forge experience, mirroring the Python path. Fields are DERIVED from the
+        # doc: capabilities = the union of agents' tool ids; domain = the non-role tags.
+        agent_name = doc.get("agent_name", "")
+        tool_ids = sorted({t for a in doc.get("agents", []) if isinstance(a, dict) for t in (a.get("tools") or [])})
+        domain_tags = [t for t in (doc.get("tags") or []) if isinstance(t, str) and not t.startswith("role.")]
+        _remember_build(
+            request,
+            agent_name,
+            capabilities=", ".join(tool_ids),
+            domain=" ".join(domain_tags),
+            discover=bool(doc.get("discover")),
+            remember=bool(doc.get("memory")),
+            temperature=doc.get("temperature"),
+            detail=detail,
+        )
+    if ok:
+        return f"{detail}\nNow call register_and_launch_crew with agent_name='{doc.get('agent_name', '')}'."
+    return detail
+
+
 @tool("register_and_launch_crew")
 def register_and_launch_crew(agent_name: str) -> str:
     """Register the new agent on AIMEAT and launch its crew under the watchdog.
@@ -1000,8 +1049,14 @@ def start_all_crews() -> str:
 
 
 def make_forge_tools() -> list:
-    """The tools the crew-forge builder agent uses to materialize a new crew."""
+    """The tools the crew-forge builder agent uses to materialize a new crew (Python build_domain path)."""
     return [write_and_validate_crew, register_and_launch_crew]
+
+
+def make_forge_json_tools() -> list:
+    """The tools for the DECLARATIVE builder: validate + write a JSON crew def (exec-free), then the same
+    register/launch as the Python path (the emitted loader is an ordinary crews/*_crew.py)."""
+    return [write_and_validate_crew_json, register_and_launch_crew]
 
 
 def make_manage_tools() -> list:

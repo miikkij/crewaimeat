@@ -8,6 +8,7 @@ waits patiently for that approval, so nothing crash-loops while you get to it.
 
 crew-forge also operates the fleet via slash commands (send as a task OR an inbox message):
   /build <description>   design, register, and launch a new agent
+  /build-json <desc>     same, but emit the crew as a validated JSON definition (exec-free)
   /restart <agent>       bring a stopped crew back online
   /reauth <agent>        re-run authorization so you can approve it again
   /list  (or /status)    show your crews and which are running
@@ -27,9 +28,9 @@ from __future__ import annotations
 
 from crewai import Agent, Task
 
-from crewaimeat import forge_catalog
+from crewaimeat import forge_catalog, forge_json
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
-from crewaimeat.forge import forge_precedent_block, make_forge_tools, make_manage_tools
+from crewaimeat.forge import forge_precedent_block, make_forge_json_tools, make_forge_tools, make_manage_tools
 
 AGENT_NAME = "crew-forge"
 
@@ -38,6 +39,7 @@ AGENT_NAME = "crew-forge"
 HELP = (
     "crew-forge commands (send as a task or a message):\n"
     "  /build <description>   design, register, and launch a new agent\n"
+    "  /build-json <desc>     same, but emit the crew as a validated JSON definition (exec-free)\n"
     "  /restart <agent>       bring a stopped crew back online\n"
     "  /reauth <agent>        re-run authorization so you can approve it again\n"
     "  /list   (or /status)   show your crews and which are running\n"
@@ -51,6 +53,11 @@ COMMANDS = [
     {
         "name": "/build",
         "description": "Design, register, and launch a new AIMEAT agent from a description",
+        "category": "fleet",
+    },
+    {
+        "name": "/build-json",
+        "description": "Like /build, but emit the crew as a validated JSON definition (exec-free path)",
         "category": "fleet",
     },
     {"name": "/restart", "description": "Bring a stopped crew back online: /restart <agent>", "category": "fleet"},
@@ -88,6 +95,9 @@ Example: `/build an agent that drafts release notes from a changelog`
 """
 
 _BUILD_CMDS = {"build", "new", "make", "create"}
+# Declarative path: same design job, but the crew is emitted as a validated JSON crew def (crew_defs/
+# <name>.json + a thin loader) instead of Python build_domain — validated before it runs live, no exec.
+_BUILD_JSON_CMDS = {"build-json", "buildjson", "new-json", "make-json"}
 _RESTART_CMDS = {"restart", "relaunch", "reboot", "start"}
 _LIST_CMDS = {"list", "ls", "status"}
 _RECONCILE_CMDS = {"startall", "start-all", "reconcile", "up"}
@@ -97,6 +107,10 @@ _HELP_CMDS = {"help", "commands", "?"}
 # can discover how to drive crew-forge.
 COMMAND_SERVICES = [
     {"name": "build-agent", "description": "/build <description> — design, register, and launch a new AIMEAT agent"},
+    {
+        "name": "build-agent-json",
+        "description": "/build-json <description> — build the agent as a validated JSON crew definition (exec-free)",
+    },
     {"name": "restart-agent", "description": "/restart <agent> — bring a stopped crew back online"},
     {"name": "reauth-agent", "description": "/reauth <agent> — re-run authorization so the owner can approve it again"},
     {"name": "list-agents", "description": "/list (or /status) — show the crews and which are running"},
@@ -122,6 +136,8 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
     parts = text[1:].split(None, 1)
     cmd = parts[0].lower() if parts else "help"
     arg = parts[1].strip() if len(parts) > 1 else ""
+    if cmd in _BUILD_JSON_CMDS:
+        return _build_json_domain(ctx, request=arg or text)
     if cmd in _BUILD_CMDS:
         return _build_domain(ctx, request=arg or text)
     return _command_domain(ctx, cmd, arg)
@@ -301,6 +317,85 @@ def _build_domain(ctx: BuildContext, request: str | None = None) -> tuple[list[A
         expected_output=(
             "A short report: new agent name + file, registration + launch status, the dashboard "
             "approve step, and how to queue the first task."
+        ),
+        agent=builder,
+        context=[design],
+    )
+
+    return [architect, builder], [design, build]
+
+
+def _build_json_domain(ctx: BuildContext, request: str | None = None) -> tuple[list[Agent], list[Task]]:
+    """Declarative build: design the crew as a validated JSON crew def (crew_defs/<name>.json + a thin
+    loader), instead of Python build_domain. The design is DATA the validator checks BEFORE it ever runs
+    live — no exec of generated code. Same registration/launch as the Python path (the loader is an
+    ordinary crews/*_crew.py). Sibling of _build_domain — the proven Python path stays untouched."""
+    llm, today = ctx.llm, ctx.today
+    request = request if request is not None else ctx.prompt
+    schema_brief = forge_json.render_schema_brief()  # the crew-def schema + this machine's usable tool ids
+    precedent = forge_precedent_block(request)  # most similar past builds become priors (deterministic)
+
+    architect = Agent(
+        role="Crew Architect",
+        goal="Turn a plain-language request into a concrete new crew expressed as a JSON crew definition",
+        backstory=(
+            "You design small, focused CrewAI task-runner crews and express them as DATA — a JSON crew "
+            "definition, not Python. You know the schema: agent_name, agents (role/goal/backstory/tools), "
+            "tasks (description/expected_output/agent/context), plus temperature, tags, offer. Tools are "
+            'catalog ids each agent lists in its "tools"; you never write code. You weave the user\'s '
+            "request into a task via {{ctx.prompt}}. You output ONLY the JSON object."
+        ),
+        llm=llm,
+        verbose=True,
+    )
+    builder = Agent(
+        role="Crew Builder",
+        goal="Materialize the designed crew: validate + write its JSON def, register the agent, and launch it",
+        backstory=(
+            "You are careful and methodical. You pass the architect's JSON to the validator, fix it from "
+            "the exact errors it returns until it is VALID, then register and launch it exactly once. You "
+            "never touch the scaffold wiring."
+        ),
+        tools=make_forge_json_tools(),
+        llm=llm,
+        verbose=True,
+    )
+
+    design = Task(
+        description=(
+            f"{today}\n\n"
+            "A user wants a NEW AIMEAT task-runner crew. Design it as a JSON crew definition. Request:\n"
+            f"{request}\n\n"
+            + (f"{precedent}\n\n" if precedent else "")
+            + "The new crew runs on the same locked scaffold — you design ONLY the crew definition (the "
+            "scaffold provides all AIMEAT wiring). Pick a short kebab-case agent_name distinct from obvious "
+            "existing ones, 2-4 specialist agents, and the crew TEMPERATURE from its role (creative work "
+            "0.7; factual/analytical 0.25; a genuine mix 0.5).\n\n"
+            f"{schema_brief}\n\n"
+            'You may include a "readme_md" string (a FIGLET logo line + one-line description + a \'How to '
+            "task me' line); omit it and the scaffold publishes a generated README. Output EXACTLY the "
+            "single JSON object and nothing else — no prose, no code fences."
+        ),
+        expected_output="A single JSON crew-definition object (agent_name, agents, tasks, and the optional fields).",
+        agent=architect,
+    )
+    build = Task(
+        description=(
+            "Bring the Crew Architect's JSON design above to life. Work ONE tool call at a time — never "
+            "fire several in the same turn.\n"
+            f'THE ORIGINAL USER REQUEST (pass it VERBATIM as the `request` param in step 1):\n"""{request}"""\n\n'
+            "1. Call write_and_validate_crew_json with the architect's JSON object (as crew_json) and the "
+            "ORIGINAL USER REQUEST above (as request), so a VALID build is remembered as design experience.\n"
+            "2. If it returns INVALID, fix the JSON from the exact problems listed and call "
+            "write_and_validate_crew_json again. Repeat until it returns VALID.\n"
+            "3. Once VALID, call register_and_launch_crew ONCE with the agent_name from the VALID message.\n"
+            "4. Report as the final answer: the new agent's name and files (crew_defs/<name>.json + the "
+            "loader), whether it registered, the exact approve step the user must do on the AIMEAT "
+            "dashboard, the watchdog log path, and how to queue its first task. Keep it short and actionable."
+        ),
+        expected_output=(
+            "A short report: new agent name + files, registration + launch status, the dashboard approve "
+            "step, and how to queue the first task."
         ),
         agent=builder,
         context=[design],
