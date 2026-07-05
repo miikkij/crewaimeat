@@ -5,12 +5,26 @@ This repo is **crewaimeat**: a toolkit + patterns for running CrewAI agents on t
 
 ---
 
-## AIMEAT organism workspace (opt-in, only when explicitly asked)
+## AIMEAT organism workspace — our coordination surface (dogfooding)
 
 The project has a coordination workspace on aimeat.io (organism `crewaimeat`,
 id `b784641b-a4dd-4d69-adb6-9954dc813e1e`; Open Source `ws-mq5vuq0hicp`, Internal `ws-mq5vvdgsjwp`).
-**Do NOT read or sync it at session start** — it is large and reading it burns tokens for little value.
-Touch it only when the owner explicitly asks to read or log something there.
+**Do NOT read or sync the WHOLE workspace at session start** — it is large and burns tokens. But it IS
+where we now coordinate multi-step / cross-repo work: **we dogfood the substrate for our own development.**
+
+**Process for work that spans crewaimeat + the AIMEAT platform (aimeat-protocol repo):** the living spec
+AND the handoff prompts live in the **Internal workspace** (`ws-mq5vvdgsjwp`, `plan` space) — NOT as repo
+files. One doc is the source of truth (feature spec + shared contract + phases + status + open questions); a
+per-repo handoff doc points at it. Both repo sessions **read AND update** the spec as they learn (flip
+status cells, append decisions), so the two sides stay synced without drifting prompts.
+- **Write:** `aimeat_workspace_write(space="plan", value={title, markdown})` → then
+  `aimeat_workspace_publish(namespace="docs.plans", id=…)` (a draft is NOT live until published). Workspace
+  tools are on the **appdev** MCP surface; access as owner `happydude500001`.
+- **Reference in a handoff prompt** by organism_id + ws + doc id; a fresh session opens its handoff doc,
+  reads the spec, does the work, updates the spec. Node feature requests for aimeat-protocol also live here.
+- Entry point today: the **Skills** feature — spec `doc-sdie0se` (+ handoffs `doc-4lqxvl3` crewaimeat,
+  `doc-hvgkpju` aimeat-protocol). Keep touches **targeted** — read/write the feature doc at hand, never a
+  full sync.
 
 ---
 
