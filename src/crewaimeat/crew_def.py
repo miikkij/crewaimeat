@@ -117,6 +117,22 @@ def _tools_app_build(agent_name: str, ctx: Any) -> list:
     return list(tools)
 
 
+def _tools_local_memory(agent_name: str, ctx: Any) -> list:
+    # Two-tier memory: keep raw findings LOCAL (remember/recall/search), publish only the refined result
+    # UPWARD (publish_memory). What the agency's research/watcher brains use.
+    from crewaimeat.local_memory import make_local_memory_tools
+
+    return list(make_local_memory_tools(agent_name))
+
+
+def _tools_article_fetch(agent_name: str, ctx: Any) -> list:
+    # A single tool: given result URLs, fetch + extract the readable article text (so a searcher reads
+    # sources instead of guessing from snippets). Pairs with `web`.
+    from crewaimeat.article_extract import fetch_article_text
+
+    return [fetch_article_text]
+
+
 TOOL_REGISTRY: dict[str, Any] = {
     "memory": _tools_memory,
     "web": _tools_web,
@@ -125,7 +141,31 @@ TOOL_REGISTRY: dict[str, Any] = {
     "delegate": _tools_delegate,
     "image": _tools_image,
     "app_build": _tools_app_build,
+    "local_memory": _tools_local_memory,
+    "article_fetch": _tools_article_fetch,
 }
+
+# One-line purpose per tool id — the single source the AI generators render into their tool menus, so an
+# author can only pick a tool the interpreter can actually resolve (TOOL_REGISTRY is the resolver, this is
+# its human-facing description; keep the two key sets in lockstep).
+TOOL_PURPOSES: dict[str, str] = {
+    "memory": "read/write the owner's node memory at EXACT keys with a chosen visibility (public/owner)",
+    "web": "search the live web (SearXNG if reachable, else keyless DuckDuckGo)",
+    "schedule": "create/list/update/delete AIMEAT node cron schedules (fire offline, 0 tokens)",
+    "dm": "read + reply to the agent's federated inbox (agent-to-agent messages)",
+    "delegate": "discover peer crews and delegate a subtask to one, then wait for its result",
+    "image": "generate an image from a text prompt (Seedream) and get back its public URL",
+    "app_build": "author, install, publish and verify a real AIMEAT app / cortex / extension",
+    "local_memory": "keep raw findings in LOCAL memory (remember/recall/search) and publish only the refined result upward (publish_memory)",
+    "article_fetch": "fetch + extract the readable article text behind result URLs (read sources, not snippets)",
+}
+
+
+def render_tool_catalog(ids: list[str] | None = None) -> str:
+    """A '- id: purpose' menu of the tools the interpreter can resolve — the tool half of an AI author's
+    spec. Defaults to every registered tool; pass ``ids`` to restrict it."""
+    ids = ids if ids is not None else list(TOOL_REGISTRY)
+    return "\n".join(f"    - {i}: {TOOL_PURPOSES.get(i, '(no description)')}" for i in ids if i in TOOL_REGISTRY)
 
 
 def _agent_key(a: dict) -> str | None:

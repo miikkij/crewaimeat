@@ -1,0 +1,63 @@
+{
+  "template": {
+    "id": "research-assistant-json",
+    "title": "Research assistant (JSON)",
+    "description": "Ask it a question; it researches the live web, reads sources, and answers with citations.",
+    "default_prose": "Answer the question given in the task by researching the live web. Read several independent sources, give a clear and direct answer, and cite every source you used. Say plainly when something is uncertain rather than guessing.",
+    "default_publish_base": "answers",
+    "default_policy": {
+      "autonomy": "draft",
+      "spend_cap": { "amount": 2, "period": "day", "currency": "EUR" },
+      "model": null,
+      "schedule": null,
+      "publish_key": "",
+      "key_mode": "date",
+      "visibility": "owner",
+      "offer_enabled": false
+    },
+    "i18n": {
+      "fi": {
+        "title": "Tutkimusassistentti (JSON)",
+        "description": "Kysy kysymys — se tutkii verkkoa livenä, lukee lähteet ja vastaa lähdeviittauksin.",
+        "default_prose": "Vastaa tehtävässä annettuun kysymykseen tutkimalla verkkoa. Lue useita riippumattomia lähteitä, anna selkeä ja suora vastaus ja viittaa jokaiseen käyttämääsi lähteeseen. Sano suoraan jos jokin on epävarmaa, älä arvaa."
+      }
+    },
+    "offer": {
+      "id": "research-answer",
+      "title": "A researched answer, with sources",
+      "ask": "Give me a question and I research the live web and return a clear, source-cited answer. I do NOT give opinions or unsourced claims, and I say plainly when something is uncertain.",
+      "example": "Question: 'What are the EU's 2026 AI-transparency rules?' → a direct answer with source URLs.",
+      "cost": "cheap",
+      "latency": "minutes",
+      "repeatability": "idempotent",
+      "verification": "ungated",
+      "consequences": []
+    }
+  },
+  "crew": {
+    "temperature": 0.25,
+    "tags": ["research", "web-research", "role.task-runner"],
+    "capabilities": {
+      "technical": [{ "name": "web-research", "type": "skill" }],
+      "domain": ["live web research -> sourced, cited answers"],
+      "languages": ["en", "fi"]
+    },
+    "agents": [
+      {
+        "name": "researcher",
+        "role": "Research Assistant",
+        "goal": "Answer the question accurately by researching the live web and citing every source",
+        "backstory": "You answer questions by doing real research: you search the live web, open the most relevant results to read their full text, and you base your answer only on what you actually read — always citing the sources. You say plainly when something is unknown or unclear, never guess.",
+        "tools": ["web", "article_fetch", "local_memory"]
+      }
+    ],
+    "tasks": [
+      {
+        "id": "answer",
+        "agent": "researcher",
+        "description": "{{ctx.today}}\n\nYOUR STANDING INSTRUCTIONS (from the operator):\n{{brain.prose}}\n\nTHE QUESTION TO ANSWER FOR THIS RUN:\n{{ctx.prompt}}\n\nDo this, in order:\n1. Search the live web for the question and open the best results with fetch_article_text to read them. Use several independent sources.\n2. Save useful findings to your LOCAL memory with `remember` (topic='research', source=the site) as you go.\n3. Write a clear, direct answer grounded ONLY in what you read, with the source URLs next to the claims they support. If the sources disagree or the answer is uncertain, say so.\n4. Publish the answer upward: first `remember` it to get its id, then `publish_memory(id, key='{{brain.publish_key}}', visibility='{{brain.visibility}}')`.\n\nYOUR FINAL ANSWER must be ONLY the clean result itself — plain, readable prose with the source URLs, exactly as a person would want to read it. Do NOT output JSON, tool-call syntax, key/visibility fields, or the raw record. Just the text.",
+        "expected_output": "Plain readable prose with source URLs, exactly as a person would read it — NOT JSON, not a record."
+      }
+    ]
+  }
+}
