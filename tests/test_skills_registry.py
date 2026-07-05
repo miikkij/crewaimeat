@@ -302,3 +302,26 @@ def test_crewspec_workspace_skills_defaults_off():
 
     spec = CrewSpec(agent_name="x", build_domain=lambda ctx: ([], []))
     assert spec.workspace_skills is False
+
+
+# ── @semver pins: pinned refs are opaque to the consumer, like every other ref ─
+def test_fetch_with_pinned_ref_entry(monkeypatch):
+    """A @semver-pinned ref (user:{owner}/{name}@1.0.0) in the agent fetch materializes like
+    any other — the node resolves the pin to the retained snapshot; the consumer only sees
+    name + fileContents."""
+    _patch_auth(monkeypatch)
+    entry = _entry("pinned-skill", ref="user:owner/pinned-skill@1.0.0")
+    monkeypatch.setattr(reg.requests, "get", _fake_get({"skills": [entry], "unresolved": []}))
+    (skill,) = reg.fetch_agent_skills("joker")
+    assert skill.name == "pinned-skill"
+    assert skill.instructions
+
+
+def test_unretained_pin_surfaces_as_unresolved(monkeypatch, capsys):
+    """A pin older than the newest-10 retention comes back in `unresolved` — loud, no crash."""
+    _patch_auth(monkeypatch)
+    payload = {"skills": [], "unresolved": [{"ref": "user:owner/old-skill@0.0.1", "error": "not retained"}]}
+    monkeypatch.setattr(reg.requests, "get", _fake_get(payload))
+    assert reg.fetch_agent_skills("joker") == []
+    err = capsys.readouterr().err
+    assert "UNRESOLVED" in err and "old-skill@0.0.1" in err
