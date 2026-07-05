@@ -3,6 +3,7 @@
   "llm_profile": "content",
   "process": "sequential",
   "temperature": 0.7,
+  "skills": ["comedy-set-craft"],
   "readme_md": "[[FIGLET:slant][\"JOKER\"]]\n\n# joker — four comedians and a host\n\nSend me a topic and I riff on it from four angles — a pun, an observational bit, a playful roast,\nand a short anecdote — then present them as one clean lineup. I match the language of your topic.\n\n## How to task me\nQueue a task with whatever you want jokes about:\n- `dad jokes about Mondays`\n- `roast my over-engineered side project`\n- `a short funny story about a cat who refuses to use the litter box`\n",
   "tags": ["humor", "comedy", "role.task-runner"],
   "capabilities": {

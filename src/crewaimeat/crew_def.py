@@ -377,6 +377,15 @@ def validate_crew_doc(doc: Any) -> list[str]:
     if caps is not None and not isinstance(caps, dict):
         errors.append("capabilities: must be an object {technical, domain, languages}")
 
+    skills = doc.get("skills")
+    if skills is not None:
+        if not isinstance(skills, list) or not skills:
+            errors.append("skills: must be a non-empty list of skill names (skills/<name>/SKILL.md)")
+        else:
+            for sk in skills:
+                if not isinstance(sk, str) or not sk.strip():
+                    errors.append(f"skills: {sk!r} must be a non-empty string")
+
     offers = doc.get("offers")
     if offers is not None:
         if not isinstance(offers, list):
@@ -433,6 +442,11 @@ def build_domain_from_json(doc: dict, ctx: Any) -> tuple[list, list]:
     # machine with no LLM key, unlike every Python crew (which passes llm=None straight to Agent).
     llm = getattr(ctx, "llm", None)
 
+    # Doc-level skills apply to EVERY agent (a declarative doc has no per-agent split). run_crew loads
+    # them (CrewSpec.skills -> ctx.skills, already-validated Skill objects); empty during offline
+    # validation, where agents build without skills exactly like a skill-less crew.
+    ctx_skills = list(getattr(ctx, "skills", None) or [])
+
     agents_by_key: dict[str, Any] = {}
     agent_objs: list = []
     for a in doc["agents"]:
@@ -448,6 +462,8 @@ def build_domain_from_json(doc: dict, ctx: Any) -> tuple[list, list]:
             allow_delegation=bool(a.get("allow_delegation", False)),
             verbose=bool(a.get("verbose", True)),
         )
+        if ctx_skills:
+            kwargs["skills"] = ctx_skills
         if a.get("max_iter") is not None:
             kwargs["max_iter"] = a["max_iter"]
         agent = Agent(**kwargs)
@@ -507,6 +523,8 @@ def crewspec_from_json(doc: dict, **overrides: Any):
         kwargs["memory"] = bool(doc["memory"])
     if doc.get("listen_for") is not None:
         kwargs["listen_for"] = tuple(doc["listen_for"])
+    if doc.get("skills") is not None:
+        kwargs["skills"] = list(doc["skills"])  # run_crew loads+validates at start; ctx.skills at build
     offers = doc.get("offers")
     if offers:  # CrewSpec carries ONE inline offer meta; the rest live in the doc for discovery
         kwargs["offer"] = offers[0]

@@ -61,6 +61,8 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
         else ""
     )
 
+    # The four comedians carry the comedy-set-craft skill (CrewSpec.skills -> ctx.skills): shared
+    # joke-construction craft injected into their prompts. The host only presents — no skill needed.
     punslinger = Agent(
         role="Punslinger",
         goal="Land one quick pun or wordplay joke about the topic",
@@ -68,6 +70,7 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "You live for puns and dad-joke energy. You find the word that bends two ways and snap it shut with a grin."
         ),
         llm=llm,
+        skills=ctx.skills,
         verbose=True,
     )
     observer = Agent(
@@ -78,6 +81,7 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
             "nobody says out loud, and you say it."
         ),
         llm=llm,
+        skills=ctx.skills,
         verbose=True,
     )
     roaster = Agent(
@@ -85,6 +89,7 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
         goal="Deliver one sharp, playful roast of the topic",
         backstory="You roast with a wink: pointed and clever, never cruel. The target laughs hardest.",
         llm=llm,
+        skills=ctx.skills,
         verbose=True,
     )
     storyteller = Agent(
@@ -92,6 +97,7 @@ def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
         goal="Tell one short setup-and-punchline comic anecdote about the topic",
         backstory="You build a tiny scene, draw the listener in, and land the punchline at the end.",
         llm=llm,
+        skills=ctx.skills,
         verbose=True,
     )
     host = Agent(
@@ -145,6 +151,7 @@ def run() -> None:
             temperature=0.7,
             self_monitor=True,
             clean_deliverable=_remember_lineup,
+            skills=["comedy-set-craft"],
         )
     )
 

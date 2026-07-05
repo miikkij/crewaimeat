@@ -141,6 +141,12 @@ class BuildContext:
     #   (scope.kind == 'offer'), the RESOLVED offer descriptor. ctx.prompt stays the user's RAW
     #   request — never the offer's own ask/example text (re-feeding it made agents treat their
     #   boilerplate as the request). Use ctx.offer only to pick a mode/command for the work.
+    skills: list | None = None  # the crew's SKILL.md skills (CrewSpec.skills), loaded + validated
+    #   ONCE at daemon start as crewai Skill objects (crewaimeat.skills.load_skills). Pass to your
+    #   Agents like ctx.llm: Agent(..., skills=ctx.skills) — the skill bodies render into the agent
+    #   prompt as a <skills> block. None when the crew declares none (crewai rejects an EMPTY skills
+    #   list, so None keeps the pass-through safe); per-agent selection is yours (give different
+    #   agents different subsets if you want).
 
 
 # build_domain returns (agents, tasks). Tasks run in `process` order; the LAST
@@ -221,6 +227,27 @@ class CrewSpec:
     #   FIRST, so no extra prompt is needed — this flag just makes the tool LOADABLE. Turn ON for
     #   researchers / planners / coordinators / delegators / a head agent; leave OFF for single-purpose
     #   executors (they don't need to survey the node before doing their one job).
+    skills: list | None = None  # SKILL.md skills this crew's agents carry: bare names (directories
+    #   under <cwd>/skills, env CREWAIMEAT_SKILLS_DIR overrides) or direct paths to skill dirs. Loaded +
+    #   validated at DAEMON START via crewaimeat.skills.load_skills — a missing/malformed skill kills
+    #   startup LOUDLY (a declared skill is configuration, not a suggestion). The loaded Skill objects
+    #   arrive in build_domain as ctx.skills; pass them to your Agents (Agent(skills=ctx.skills)) —
+    #   crewai injects the bodies into the agent prompt. None (default) = no skills, today's behavior.
+    registry_skills: bool = True  # ALSO fetch the skills the owner LINKED to this agent in the AIMEAT
+    #   skills registry (profile UI / aimeat_skill_link) — fetched FRESH per crew build (a link/unlink
+    #   takes effect on the very next task, no restart) via crewaimeat.skills_registry, merged into
+    #   ctx.skills (union by name; a repo-LOCAL skill WINS a collision). Registry unreachable -> the
+    #   task still runs on local skills with a LOUD stderr note; an unresolved linked ref is logged
+    #   LOUDLY (consumer contract). A fetched skill that fails validation raises (contract drift is a
+    #   bug, not weather). Turn off only for a crew that must never carry owner-injected expertise.
+    workspace_skills: bool | list = False  # OPT-IN (default OFF): ALSO carry the skills published in
+    #   the workspaces this crew operates in (platform 2c, `ws:{org}/{ws}/{name}`). True = derive the
+    #   target workspaces from the crew's resolved record_spaces (the workspaces it demonstrably works
+    #   in); or an explicit list of {"organism_id","ws"} dicts. Fetched fresh per build like
+    #   registry_skills; precedence repo-LOCAL > owner-LINKED > workspace-auto; same failure boundary
+    #   (a node without 2c answers 400 -> loud note, skipped). Off by default because a workspace is a
+    #   SHARED surface — any member's published skill would ride into this crew's prompts; opt in only
+    #   where that is the intent (e.g. a contract crew whose workspace curates its own runbooks).
     commands: list[dict] | None = None  # slash-command palette [{name, description, category}, ...]
     #   published to memory key agents.<agent>.commands (owner) so the Messages UI surfaces it
     chat_commands: list[dict] | Callable[[str], list[dict]] | None = None  # PUBLIC chat-command palette the
@@ -1791,6 +1818,52 @@ def run_crew(spec: CrewSpec) -> None:
 
     progress = install_progress(spec.agent_name)
 
+    # 0-pre) Load the crew's declared SKILL.md skills ONCE, before anything network-facing. A
+    #    missing/malformed skill is a configuration error — fail the start here, loudly, instead
+    #    of surfacing mid-task. The loaded Skill objects ride into every build_domain as ctx.skills.
+    crew_skills: list | None = None
+    if spec.skills:
+        from crewaimeat.skills import load_skills
+
+        crew_skills = load_skills(spec.skills)
+        print(
+            f"[{spec.agent_name}] loaded {len(crew_skills)} skill(s): " + ", ".join(s.name for s in crew_skills),
+            file=sys.stderr,
+        )
+
+    # record_spaces is resolved ONCE (memoized) — the daemon subscription and the workspace
+    # skills auto-attach must see the SAME workspace set, and a discovery callable (e.g.
+    # contract_record_spaces) must not run twice per start.
+    _records_cache: dict = {}
+
+    def _resolved_record_spaces():
+        if "v" not in _records_cache:
+            _records_cache["v"] = spec.record_spaces() if callable(spec.record_spaces) else spec.record_spaces
+        return _records_cache["v"]
+
+    def _task_skills() -> list | None:
+        """ctx.skills for ONE build, fetched FRESH now (no daemon-lifetime cache — an owner
+        link/unlink takes effect on the very next task). Precedence on a name collision:
+        repo-LOCAL > owner-LINKED (registry) > WORKSPACE auto-attach (opt-in)."""
+        if not spec.registry_skills and not spec.workspace_skills:
+            return crew_skills
+        from crewaimeat.skills_registry import build_ctx_skills, workspace_targets
+
+        targets = workspace_targets(spec.workspace_skills, _resolved_record_spaces())
+        if spec.workspace_skills and not targets:
+            print(
+                f"[{spec.agent_name}] workspace_skills is ON but no (organism_id, ws) targets resolve "
+                "(record_spaces empty?) — nothing to auto-attach",
+                file=sys.stderr,
+            )
+        return build_ctx_skills(
+            spec.agent_name,
+            spec.owner,
+            crew_skills,
+            registry=bool(spec.registry_skills),
+            ws_targets=targets,
+        )
+
     # 0a) Single-instance guard: if another daemon for THIS agent is already running, exit
     #     cleanly instead of double-dispatching its tasks (two daemons each poll the same active
     #     task and run it). Name-based, so it catches duplicates however they were launched.
@@ -2071,6 +2144,7 @@ def run_crew(spec: CrewSpec) -> None:
             today=_now_context(),
             directives=directives,
             offer=_resolve_offer(spec.agent_name, task),
+            skills=_task_skills(),
         )
         agents, tasks = spec.build_domain(ctx)
 
@@ -2325,6 +2399,7 @@ def run_crew(spec: CrewSpec) -> None:
                 prompt=str(body),
                 llm=get_llm(agent_name=spec.agent_name),
                 today=_now_context(),
+                skills=_task_skills(),
             )
             # Build memory BEFORE the try so a missing-embedder RuntimeError fails LOUD (a memory
             # misconfiguration must surface, not hide behind the generic per-DM apology below). Memory on
@@ -2354,8 +2429,9 @@ def run_crew(spec: CrewSpec) -> None:
         _listen = _listen + ("dms",)
     if spec.self_monitor and "messages" not in _listen:
         _listen = _listen + ("messages",)
-    # record_spaces may be a 0-arg callable (resolved here at daemon start, e.g. discovers member workspaces).
-    _records = spec.record_spaces() if callable(spec.record_spaces) else spec.record_spaces
+    # record_spaces may be a 0-arg callable (resolved at daemon start, memoized above so the
+    # workspace-skills auto-attach sees the SAME set without re-running discovery).
+    _records = _resolved_record_spaces()
 
     # Tool filter for the daemon liaison: the default ~24-tool allowlist, plus aimeat_discover (the master
     # directory) when this crew opts in. The 0.10.0 liaison backstory steers it to discover first; without

@@ -38,6 +38,16 @@ status cells, append decisions), so the two sides stay synced without drifting p
   never re-derive the path. `.aimeat/` is gitignored (it holds tokens).
 - One crew = `crews/<name>_crew.py`; `build_domain(ctx) -> ([agents], [tasks])`; `AGENT_NAME` matches
   the name used in `aimeat connect add --agent`.
+- **Skills** = portable SKILL.md expertise packs in `skills/<name>/` (see `skills/README.md`; contract
+  shared with the AIMEAT registry, spec doc-sdie0se). `CrewSpec.skills=["name"]` loads them FAIL-LOUD at
+  daemon start (`crewaimeat.skills.load_skills`); agents take them like ctx.llm: `Agent(skills=ctx.skills)`
+  (`ctx.skills` is None when the crew declares none — crewai rejects an empty list). JSON crew-defs: a
+  top-level `"skills": [...]` applies to every agent. Live proof: `crews/joker_crew.py`. Crews ALSO
+  fetch owner-LINKED skills from the node's skills registry per build (`crewaimeat.skills_registry`;
+  union, local wins; opt-out `registry_skills=False`; unreachable registry = loud note + local-only).
+  Workspace skills (2c) are OPT-IN: `workspace_skills=True` derives targets from record_spaces (or pass
+  explicit `[{"organism_id","ws"}]`); precedence local > linked > workspace-auto. Default OFF — a
+  workspace is a shared surface; any member's skill would ride into the crew's prompts.
 - **New agent? Give it a real identity** — don't ship the generic Hello-Integration defaults. Add an
   entry to the central registry `src/crewaimeat/fleet_identity.py` (charset-safe `tags` `[a-z0-9._-]`
   + specific `capabilities` {technical, domain, languages}, derived from the agent's purpose); the

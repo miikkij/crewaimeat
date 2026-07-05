@@ -65,4 +65,5 @@ def make_ctx(prompt: str | None = None):
         today=_TODAY,
         directives="",
         task={"id": "t-0001-test", "description": p, "title": p[:40]},
+        skills=None,  # BuildContext.skills — loaded SKILL.md skills; None like a skill-less run
     )
