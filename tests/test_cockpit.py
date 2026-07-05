@@ -591,3 +591,100 @@ def test_fleet_view_shows_only_brain_agents(client, monkeypatch):
     monkeypatch.setattr(fs, "build_snapshot", fake_snapshot)
     rows = client.get("/api/fleet").json()["rows"]
     assert [r["agent"] for r in rows] == ["watcher"]
+
+
+# ── data-driven JSON templates + "Create an agent with AI" (brain-gen) ─────────
+def _canned_template() -> dict:
+    return {
+        "template": {
+            "id": "weekly-watch",
+            "suggested_agent_name": "weekly-watch",
+            "title": "Weekly watch",
+            "description": "Watch a topic weekly.",
+            "default_prose": "Watch the topic and summarize what is new, with sources.",
+            "default_publish_base": "watch",
+            "default_policy": {
+                "autonomy": "draft",
+                "schedule": {"cron": "0 8 * * 1", "timezone": "Europe/Helsinki"},
+                "visibility": "owner",
+                "key_mode": "date",
+            },
+        },
+        "crew": {
+            "temperature": 0.25,
+            "agents": [
+                {"name": "w", "role": "Watcher", "goal": "watch", "backstory": "b", "tools": ["web", "local_memory"]}
+            ],
+            "tasks": [
+                {
+                    "id": "t",
+                    "agent": "w",
+                    "description": "{{ctx.today}} {{brain.prose}} topic: {{ctx.prompt}} -> {{brain.publish_key}}",
+                    "expected_output": "summary",
+                }
+            ],
+        },
+    }
+
+
+def test_json_builtin_templates_in_gallery(client):
+    ids = {t["id"] for t in client.get("/api/templates").json()["templates"]}
+    assert {"research-assistant-json", "topic-watcher-json", "daily-briefing-json"} <= ids
+
+
+def test_brain_gen_needs_a_model(client, monkeypatch):
+    import crewaimeat.agency.cockpit as ck
+
+    monkeypatch.setattr(ck, "_advisor_llm", lambda snap: None)
+    r = client.post("/api/brain-gen", json={"description": "watch AI news weekly"})
+    assert r.status_code == 400 and "model" in r.json()["detail"]
+
+
+def test_brain_gen_returns_plan_preview(client, monkeypatch):
+    import crewaimeat.agency.cockpit as ck
+    from crewaimeat import brain_json
+
+    monkeypatch.setattr(ck, "_advisor_llm", lambda snap: object())
+    monkeypatch.setattr(brain_json, "generate_brain_template", lambda desc, llm=None: (True, _canned_template(), []))
+    r = client.post("/api/brain-gen", json={"description": "watch AI news every Monday"}).json()
+    assert r["ok"] and r["suggested_agent_name"] == "weekly-watch"
+    ag = r["preview"]["agents"][0]
+    assert ag["role"] == "Watcher" and any("memory" in x for x in ag["tools"])  # tools resolved
+    assert r["preview"]["policy"]["schedule"]["cron"] == "0 8 * * 1"  # schedule configured by the AI
+
+
+def test_brain_gen_reports_invalid_model_output(client, monkeypatch):
+    import crewaimeat.agency.cockpit as ck
+    from crewaimeat import brain_json
+
+    monkeypatch.setattr(ck, "_advisor_llm", lambda snap: object())
+    monkeypatch.setattr(
+        brain_json, "generate_brain_template", lambda desc, llm=None: (False, None, ["unknown tool 'x'"])
+    )
+    r = client.post("/api/brain-gen", json={"description": "x"}).json()
+    assert r["ok"] is False and any("unknown tool" in e for e in r["errors"])
+
+
+def test_brain_gen_create_makes_a_ready_brain(client, monkeypatch):
+    from crewaimeat import brains
+
+    # don't write a real crew stub into the repo's crews/ — assert it's requested, isolate the FS
+    monkeypatch.setattr(brains, "write_crew_stub", lambda name, **kw: f"crews/{name}_crew.py")
+    r = client.post("/api/brain-gen/create", json={"template": _canned_template(), "agent_name": "weekly-watch"})
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert j["brain"]["agent_name"] == "weekly-watch" and j["template_id"] == "weekly-watch" and j["stub"]
+    # the brain is persisted and the template is now a real gallery entry (usable/reusable)
+    assert client.get("/api/brains/weekly-watch").json()["template_id"] == "weekly-watch"
+    assert "weekly-watch" in {t["id"] for t in client.get("/api/templates").json()["templates"]}
+
+
+def test_brain_gen_create_rejects_bad_template(client, monkeypatch):
+    from crewaimeat import brains
+
+    monkeypatch.setattr(brains, "write_crew_stub", lambda name, **kw: "x")
+    bad = _canned_template()
+    bad["crew"]["agents"][0]["tools"] = ["nope"]  # unknown tool -> rejected, no brain created
+    r = client.post("/api/brain-gen/create", json={"template": bad, "agent_name": "bad-agent"})
+    assert r.status_code == 400
+    assert client.get("/api/brains/bad-agent").status_code == 404

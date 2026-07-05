@@ -283,6 +283,24 @@ const STR = {
   "gen.name":{en:"App name",fi:"Sovelluksen nimi"}, "gen.publish":{en:"Publish",fi:"Julkaise"},
   "gen.published":{en:"Published! Your app is live:",fi:"Julkaistu! Sovelluksesi on käynnissä:"},
   "gen.needsconnect":{en:"Connect an agent first — an app publishes under your account.",fi:"Yhdistä agentti ensin — sovellus julkaistaan tilisi alle."},
+  // ── Create an AGENT with AI (brain-gen) ──
+  "bgen.btn":{en:"✨ Create an agent with AI",fi:"✨ Luo agentti tekoälyllä"},
+  "bgen.title":{en:"Create an agent with AI",fi:"Luo agentti tekoälyllä"},
+  "bgen.intro":{en:"Describe the agent you want in plain words. The AI designs it — tools, schedule, and behaviour — as an editable JSON config, checks it works, and you create it in one click.",fi:"Kuvaile haluamasi agentti tavallisin sanoin. Tekoäly suunnittelee sen — työkalut, aikataulun ja toiminnan — muokattavana JSON-määrityksenä, tarkistaa että se toimii, ja luot sen yhdellä klikkauksella."},
+  "bgen.desc":{en:"Describe your agent",fi:"Kuvaile agenttisi"},
+  "bgen.desc.ph":{en:"e.g. every Monday morning, research the latest EU AI regulation news and post a short sourced summary",fi:"esim. joka maanantaiaamu tutki uusimmat EU:n tekoälysääntelyuutiset ja julkaise lyhyt lähteistetty yhteenveto"},
+  "bgen.generate":{en:"✨ Generate",fi:"✨ Luo"},
+  "bgen.generating":{en:"Designing your agent…",fi:"Suunnittelen agenttiasi…"},
+  "bgen.name":{en:"Agent name",fi:"Agentin nimi"},
+  "bgen.plan":{en:"What it will do",fi:"Mitä se tekee"},
+  "bgen.schedule":{en:"Schedule",fi:"Aikataulu"},
+  "bgen.tools":{en:"Tools",fi:"Työkalut"},
+  "bgen.config":{en:"Config (JSON — edit if you like)",fi:"Määritys (JSON — muokkaa halutessasi)"},
+  "bgen.create":{en:"Create agent",fi:"Luo agentti"},
+  "bgen.created":{en:"Agent created — connect it to put it live.",fi:"Agentti luotu — yhdistä se ottaaksesi käyttöön."},
+  "bgen.needmodel":{en:"Connect a model first (local Ollama or a cloud key) — AI generation needs one.",fi:"Yhdistä malli ensin (paikallinen Ollama tai pilviavain) — tekoälyluonti tarvitsee sen."},
+  "bgen.badjson":{en:"The config isn't valid JSON — fix it and try again.",fi:"Määritys ei ole kelvollista JSONia — korjaa ja yritä uudelleen."},
+  "bgen.reactive":{en:"On demand (no schedule)",fi:"Pyynnöstä (ei aikataulua)"},
   "close":{en:"Close",fi:"Sulje"},
 };
 const t = k => (STR[k]&&STR[k][LANG]) || (STR[k]&&STR[k].en) || k;
@@ -568,6 +586,8 @@ async function setupStep(p, key, s, refresh, num){
 async function renderGallery(m){
   const [tpls, brains] = await Promise.all([api("/api/templates?lang="+LANG), api("/api/brains")]);
   m.innerHTML=`<h2>${t("gallery.title")}</h2><div class="sub">${t("gallery.sub")}</div>`;
+  const aiBtn=el(`<button class="btn" style="margin-bottom:16px">${t("bgen.btn")}</button>`);
+  aiBtn.onclick=()=>openBrainGen(); m.appendChild(aiBtn);
   const g=el(`<div class="grid"></div>`);
   tpls.templates.forEach(tp=>{
     const c=el(`<div class="card"><h3>${esc(tp.title)}</h3><p>${esc(tp.description)}</p></div>`);
@@ -1171,6 +1191,58 @@ async function openAppGen(idea){
   ideaBox.oninput=()=>{ clearTimeout(ti); ti=setTimeout(refresh,350); };
   tsel.onchange=refresh;
   await refresh();
+}
+
+// "Create an agent with AI" — describe it in plain words -> the model designs a VALIDATED JSON brain
+// config (tools + schedule + policy) -> show a plan preview + the editable config -> create the brain in
+// one click (then the editor opens to connect + test it). This is the data-driven "new agent" path.
+async function openBrainGen(){
+  const ov=el(`<div style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:100;display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:30px 16px"></div>`);
+  const card=el(`<div class="card" style="max-width:720px;width:100%;background:var(--bg)"></div>`);
+  ov.appendChild(card); document.body.appendChild(ov);
+  const close=()=>ov.remove(); ov.onclick=(e)=>{ if(e.target===ov) close(); };
+  card.appendChild(el(`<h2 style="margin-top:0">✨ ${t("bgen.title")}</h2>`));
+  card.appendChild(el(`<p class="muted" style="margin-top:-6px">${t("bgen.intro")}</p>`));
+  card.appendChild(el(`<h3>1 · ${t("bgen.desc")}</h3>`));
+  const descBox=el(`<textarea placeholder="${esc(t("bgen.desc.ph"))}" style="min-height:80px"></textarea>`); card.appendChild(descBox);
+  const genBtn=el(`<button class="btn" style="width:100%;margin-top:8px">${t("bgen.generate")}</button>`); card.appendChild(genBtn);
+  const out=el(`<div style="margin-top:16px"></div>`); card.appendChild(out);
+  const clrow=el(`<div class="row" style="justify-content:flex-end;margin-top:14px"></div>`);
+  const clb=el(`<button class="btn ghost">${t("close")}</button>`); clb.onclick=close; clrow.appendChild(clb); card.appendChild(clrow);
+  genBtn.onclick=async()=>{
+    const desc=descBox.value.trim(); if(desc.length<8) return toast(t("bgen.desc.ph"));
+    genBtn.disabled=true; genBtn.textContent=t("bgen.generating"); out.innerHTML="";
+    let r; try{ r=await api("/api/brain-gen",{method:"POST",body:JSON.stringify({description:desc,lang:LANG})}); }
+    catch(e){ toast(/model/i.test(e.message)?t("bgen.needmodel"):e.message); genBtn.disabled=false; genBtn.textContent=t("bgen.generate"); return; }
+    genBtn.disabled=false; genBtn.textContent=t("bgen.generate");
+    if(!r.ok){ out.innerHTML=`<div class="card">⚠︎ ${esc((r.errors||[]).join("; ")||"could not generate — try rephrasing")}</div>`; return; }
+    renderGenResult(out, r, close);
+  };
+}
+function renderGenResult(out, r, close){
+  const tj=r.template||{}, pv=r.preview||{};
+  const sched=(pv.policy&&pv.policy.schedule&&pv.policy.schedule.cron)||"";
+  out.innerHTML="";
+  out.appendChild(el(`<h3>2 · ${t("bgen.name")}</h3>`));
+  const nameI=el(`<input value="${esc(r.suggested_agent_name||"")}" style="width:100%">`); out.appendChild(nameI);
+  out.appendChild(el(`<h3 style="margin-top:14px">${t("bgen.plan")}</h3>`));
+  const plan=el(`<div class="card"></div>`);
+  (pv.agents||[]).forEach(a=>{ plan.appendChild(el(`<div><b>${esc(a.role)}</b> <span class="muted">— ${esc(a.goal||"")}</span></div>`));
+    plan.appendChild(el(`<div class="muted" style="font-size:12px;margin:2px 0 8px">${t("bgen.tools")}: ${esc((a.tools||[]).join(", ")||"—")}</div>`)); });
+  plan.appendChild(el(`<div class="muted" style="font-size:12px">${t("bgen.schedule")}: ${sched?esc(sched):t("bgen.reactive")}</div>`));
+  out.appendChild(plan);
+  out.appendChild(el(`<h3 style="margin-top:14px">${t("bgen.config")}</h3>`));
+  const cfg=el(`<textarea style="min-height:160px;font-family:monospace;font-size:12px"></textarea>`);
+  cfg.value=JSON.stringify(tj,null,2); out.appendChild(cfg);
+  const createBtn=el(`<button class="btn" style="width:100%;margin-top:10px">${t("bgen.create")}</button>`); out.appendChild(createBtn);
+  createBtn.onclick=async()=>{
+    let template; try{ template=JSON.parse(cfg.value); }catch{ return toast(t("bgen.badjson")); }
+    const name=slugAgent(nameI.value); if(name.length<3) return toast(t("bgen.name"));
+    createBtn.disabled=true;
+    try{ await api("/api/brain-gen/create",{method:"POST",body:JSON.stringify({template,agent_name:name})});
+      toast(t("bgen.created")); close(); view="gallery"; render(); setTimeout(()=>openEditor(name),150);
+    }catch(e){ toast(e.message); createBtn.disabled=false; }
+  };
 }
 
 async function renderSync(m){

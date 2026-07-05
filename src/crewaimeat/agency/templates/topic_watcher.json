@@ -1,0 +1,63 @@
+{
+  "template": {
+    "id": "topic-watcher-json",
+    "title": "Topic watcher (JSON)",
+    "description": "Watches a topic on the web, keeps raw findings local, publishes only the refined summary.",
+    "default_prose": "Get the latest news on the topic given in the task. Find what is genuinely new, summarize the notable items concisely with their sources, and skip noise and repeats.",
+    "default_publish_base": "watch",
+    "default_policy": {
+      "autonomy": "draft",
+      "spend_cap": { "amount": 2, "period": "day", "currency": "EUR" },
+      "model": null,
+      "schedule": { "cron": "0 8 * * *", "timezone": "Europe/Helsinki" },
+      "publish_key": "",
+      "key_mode": "date",
+      "visibility": "owner",
+      "offer_enabled": false
+    },
+    "i18n": {
+      "fi": {
+        "title": "Aiheen vahti (JSON)",
+        "description": "Seuraa aihetta verkossa, pitää raakahavainnot paikallisina ja julkaisee vain jalostetun yhteenvedon.",
+        "default_prose": "Seuraa uutisia tehtävässä annetusta aiheesta. Etsi mikä on aidosti uutta, tiivistä merkittävät kohdat napakasti lähteineen ja ohita kohina ja toistot."
+      }
+    },
+    "offer": {
+      "id": "topic-summary",
+      "title": "Latest on a topic, summarized",
+      "ask": "Give me a topic and I return a concise, source-cited summary of what's genuinely new. I do NOT give opinions, predictions, or unsourced claims.",
+      "example": "Topic: 'Finnish AI-startup funding' → a short digest of recent rounds, each with its source URL.",
+      "cost": "cheap",
+      "latency": "minutes",
+      "repeatability": "idempotent",
+      "verification": "ungated",
+      "consequences": []
+    }
+  },
+  "crew": {
+    "temperature": 0.25,
+    "tags": ["topic-watch", "web-research", "role.task-runner"],
+    "capabilities": {
+      "technical": [{ "name": "web-research", "type": "skill" }],
+      "domain": ["watch a topic on the live web -> refined, sourced summary"],
+      "languages": ["en", "fi"]
+    },
+    "agents": [
+      {
+        "name": "watcher",
+        "role": "Topic Watcher",
+        "goal": "Find what is genuinely new on the watched topic and distil it",
+        "backstory": "You monitor a topic over time. You search the live web, open the most relevant results to read their full text, and you keep your raw findings in your own LOCAL memory as you go — then you publish ONLY a clean, refined summary upward. You never publish raw scraps.",
+        "tools": ["web", "article_fetch", "local_memory"]
+      }
+    ],
+    "tasks": [
+      {
+        "id": "watch",
+        "agent": "watcher",
+        "description": "{{ctx.today}}\n\nYOUR STANDING INSTRUCTIONS (from the operator — how you always behave):\n{{brain.prose}}\n\nTHE SPECIFIC REQUEST FOR THIS RUN (the topic to act on right now):\n{{ctx.prompt}}\n\nDo this, in order:\n1. Decide the TOPIC: use the specific request above; if none was given, fall back to your standing instructions. Then search the live web for what is genuinely NEW on that topic and open the best results with fetch_article_text to read their full text.\n2. As you go, save each raw finding to your LOCAL memory with the `remember` tool (topic='watch', set source=the site, body=the finding). This stays private to you.\n3. Write a concise summary of the notable new items (with source URLs).\n4. Publish ONLY that refined summary upward with `publish_memory(id, key='{{brain.publish_key}}', visibility='{{brain.visibility}}')` — first `remember` the summary to get its id, then publish that id. Do not publish the raw findings.\n\nYOUR FINAL ANSWER must be ONLY the clean summary itself — plain, readable prose with the source URLs, exactly as a person would want to read it. Do NOT output JSON, tool-call syntax, key/visibility fields, or the raw record. Just the summary text.",
+        "expected_output": "Plain readable prose: a concise summary of the notable new items with their source URLs. NOT JSON, not a record — just the summary text a person would read."
+      }
+    ]
+  }
+}

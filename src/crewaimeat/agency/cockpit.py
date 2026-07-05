@@ -98,6 +98,19 @@ class AppGenPromptIn(BaseModel):
     lang: str = "en"
 
 
+class BrainGenIn(BaseModel):
+    description: str = ""
+    lang: str = "en"
+
+
+class BrainGenCreateIn(BaseModel):
+    template: dict  # the (edited) generated template JSON: {template: <header>, crew: <crew def>}
+    agent_name: str
+    prose: str | None = None
+    policy: dict | None = None
+    title: str | None = None
+
+
 class AppGenPublishIn(BaseModel):
     html: str
     name: str = ""
@@ -382,6 +395,31 @@ def _advisor_llm(snapshot: dict):
         return None
 
 
+def _brain_template_preview(tj: dict) -> dict:
+    """A no-LLM plan preview of a generated brain template: build it with a stub brain + stub context and
+    report the roster (roles + tools) + each resolved task description + the configured policy. So the user
+    sees EXACTLY what the AI-designed agent would run, before creating it (same idea as the brain dry-run)."""
+    from crewaimeat import brain_json
+    from crewaimeat.aimeat_crew import BuildContext
+
+    header = tj.get("template", {}) if isinstance(tj, dict) else {}
+    tmpl = brain_json.template_from_json(tj)  # validated build (does NOT register)
+    brain = {
+        "agent_name": brain_json.suggested_agent_name(tj) or "preview-agent",
+        "template_id": tmpl.id,
+        "prose": header.get("default_prose", ""),
+        "policy": header.get("default_policy") or {},
+    }
+    ctx = BuildContext(task={}, prompt="(the user's request goes here)", llm=None, today="(current time at run)")
+    agents, tasks = tmpl.build(ctx, brain)
+    return {
+        "title": tmpl.title,
+        "agents": [{"role": a.role, "goal": a.goal, "tools": [t.name for t in a.tools]} for a in agents],
+        "tasks": [{"description": t.description, "expected_output": t.expected_output} for t in tasks],
+        "policy": header.get("default_policy") or {},
+    }
+
+
 def _produced_data(agent: str | None) -> bool:
     """Has the agent produced ≥1 deliverable yet (the journey's 'see it work' gate)? Reuses the app
     builder's data check; falls back to the activity log so it still answers when the node is unreachable."""
@@ -494,6 +532,16 @@ def create_app(token: str | None = None) -> FastAPI:
             print(f"[cockpit] renamed agent '{old}' -> '{new}' (connector requires a lowercase slug)")
     except Exception:  # noqa: BLE001 — never block startup on the migration
         pass
+    try:
+        # Data-driven templates: load the shipped JSON brain templates + the user's own into the gallery,
+        # so a template is DATA (edit/AI-author, no compile). Additive over the Python templates.
+        from crewaimeat import brain_json
+
+        loaded = brain_json.register_builtin_json_templates()
+        if loaded:
+            print(f"[cockpit] loaded {len(loaded)} JSON brain template(s)")
+    except Exception as exc:  # noqa: BLE001 — a bad template file must never block cockpit startup
+        print(f"[cockpit] JSON template load skipped: {exc}")
     require_token = Depends(_require_token_dependency(app))
 
     @app.get("/healthz")
@@ -1475,6 +1523,58 @@ def create_app(token: str | None = None) -> FastAPI:
         actions = _merge_actions(actions, jrny, msg, templates)
         chat_store.append(sid, "assistant", text, actions)
         return {"session_id": sid, "reply": text, "actions": actions, "journey": jrny}
+
+    # ── Generate AGENT with AI: describe it -> a validated JSON brain template -> create + wire the brain ──
+    @app.post("/api/brain-gen", dependencies=[require_token])
+    def brain_gen(body: BrainGenIn) -> dict:
+        """Turn a plain-language description into a VALIDATED JSON brain template (tools + schedule + policy
+        configured by the model), plus a no-LLM plan preview of what it would run. Returns
+        {ok, template, suggested_agent_name, preview} or {ok:false, errors}. Needs a configured model."""
+        from crewaimeat import brain_json
+
+        desc = (body.description or "").strip()
+        if not desc:
+            raise HTTPException(status_code=400, detail="describe the agent you want")
+        llm = _advisor_llm(setup_snapshot())
+        if llm is None:
+            raise HTTPException(
+                status_code=400,
+                detail="connect a model first (local Ollama or a cloud key) — AI generation needs one",
+            )
+        ok, tj, errs = brain_json.generate_brain_template(desc, llm=llm)
+        if not ok:
+            return {"ok": False, "errors": errs}
+        return {
+            "ok": True,
+            "template": tj,
+            "suggested_agent_name": brain_json.suggested_agent_name(tj),
+            "preview": _brain_template_preview(tj),
+        }
+
+    @app.post("/api/brain-gen/create", dependencies=[require_token])
+    def brain_gen_create(body: BrainGenCreateIn) -> dict:
+        """Persist the (possibly edited) generated template, create the brain from it, and write its crew
+        stub — so the new agent is ready to CONNECT + TEST via the existing flow. Returns the saved brain."""
+        from crewaimeat import brain_json
+
+        name = brains.slug_agent_name(body.agent_name)
+        if len(name) < 3:
+            raise HTTPException(
+                status_code=400, detail="agent name must be 3–64 lowercase letters, numbers, or hyphens"
+            )
+        try:
+            tmpl = brain_json.save_user_template(body.template)  # validate + persist + register
+        except Exception as exc:  # noqa: BLE001 — an invalid/edited template is the user's to fix
+            raise HTTPException(status_code=400, detail=f"invalid template: {exc}") from exc
+        prose = body.prose if body.prose is not None else tmpl.default_prose
+        policy = body.policy if body.policy is not None else dict(tmpl.default_policy)
+        try:
+            saved = brains.save_brain(name, tmpl.id, prose=prose, policy=policy, title=body.title or tmpl.title)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        stub = brains.write_crew_stub(name)  # discoverable by the fleet once connected + approved
+        events.record(name, "brain_saved", {"version": saved["version"], "generated": True, "template_id": tmpl.id})
+        return {"brain": saved, "template_id": tmpl.id, "stub": stub}
 
     # ── Generate App with AI: AIMEAT's app-catalog create-app prompt (copy into any AI) + paste-to-publish ──
     @app.get("/api/app-gen/templates", dependencies=[require_token])

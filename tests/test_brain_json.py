@@ -12,12 +12,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+import crewaimeat.agency as _agency
 from crewaimeat import brain_json
 from crewaimeat import brain_templates as bt
 from crewaimeat.crew_def import TOOL_REGISTRY
 from tests.crew_fixtures import make_ctx
 
-TEMPLATE_JSON = Path(__file__).resolve().parents[1] / "crew_defs" / "templates" / "research_assistant.json"
+TEMPLATE_JSON = Path(_agency.__file__).resolve().parent / "templates" / "research_assistant.json"
 
 
 def _load_tj() -> dict:
@@ -188,3 +191,51 @@ def test_generation_prompt_lists_tools_and_brain_vars():
     brief = brain_json.render_template_schema_brief()
     assert "local_memory" in brief and "web" in brief  # tool menu from crew_def
     assert "{{brain.prose}}" in brief and "{{ctx.prompt}}" in brief  # placeholder rules
+    assert "default_policy" in brief and "cron" in brief  # schedule/policy guidance
+
+
+# ── shipped built-ins + user-dir persistence ──────────────────────────────────
+def test_builtin_templates_ship_in_package():
+    d = brain_json.default_templates_dir()
+    ids = {
+        json.loads((d / f).read_text(encoding="utf-8"))["template"]["id"]
+        for f in ["research_assistant.json", "topic_watcher.json", "daily_briefing.json"]
+    }
+    assert ids == {"research-assistant-json", "topic-watcher-json", "daily-briefing-json"}
+    # every shipped template validates
+    for f in d.glob("*.json"):
+        assert brain_json.validate_template(json.loads(f.read_text(encoding="utf-8"))) == [], f.name
+
+
+def test_register_builtins_loads_all_three():
+    loaded = {t.id for t in brain_json.register_builtin_json_templates()}
+    assert {"research-assistant-json", "topic-watcher-json", "daily-briefing-json"} <= loaded
+    assert bt.get("topic-watcher-json") is not None and bt.get("daily-briefing-json") is not None
+
+
+def test_save_user_template_persists_and_registers(tmp_path, monkeypatch):
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    tj = _valid_generated_template()  # id 'summarizer'
+    tmpl = brain_json.save_user_template(tj)
+    assert tmpl.id == "summarizer" and bt.get("summarizer") is not None
+    saved = tmp_path / "templates" / "summarizer.json"
+    assert saved.is_file() and json.loads(saved.read_text(encoding="utf-8"))["template"]["id"] == "summarizer"
+
+
+def test_save_user_template_rejects_invalid(tmp_path, monkeypatch):
+    from crewaimeat.crew_def import CrewDocError
+
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    bad = _valid_generated_template()
+    bad["crew"]["agents"][0]["tools"] = ["nope"]
+    with pytest.raises(CrewDocError):
+        brain_json.save_user_template(bad)
+    assert not (tmp_path / "templates").exists() or not list((tmp_path / "templates").glob("*.json"))
+
+
+def test_suggested_agent_name():
+    tj = _valid_generated_template()
+    tj["template"]["suggested_agent_name"] = "Weekly Summarizer!"
+    assert brain_json.suggested_agent_name(tj) == "weekly-summarizer"
+    del tj["template"]["suggested_agent_name"]
+    assert brain_json.suggested_agent_name(tj) == "summarizer"  # falls back to id

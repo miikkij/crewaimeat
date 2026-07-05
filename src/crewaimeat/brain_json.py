@@ -174,17 +174,55 @@ def load_json_templates(directory: str | Path) -> list:
 
 
 def default_templates_dir() -> Path:
-    """The repo's built-in JSON-template dir (``crew_defs/templates/``)."""
-    from crewaimeat.forge import _project_root
+    """The built-in JSON-template dir SHIPPED INSIDE the package (``crewaimeat/agency/templates/``), so a
+    packaged/installed aimeat-agency finds them at the same module-relative path as in dev — mirrors how the
+    cockpit finds its static UI. force-included into the wheel (see pyproject)."""
+    import crewaimeat.agency as _agency
 
-    return _project_root() / "crew_defs" / "templates"
+    return Path(_agency.__file__).resolve().parent / "templates"
+
+
+def user_templates_dir() -> Path:
+    """The USER's writable template dir (``<AIMEAT_HOME>/templates/``) — where AI-authored / hand-edited
+    templates persist. Kept OUT of the package so they survive an app update, and per-home so two installs
+    don't share them. Created on first save."""
+    from crewaimeat._home import aimeat_home
+
+    return aimeat_home() / "templates"
 
 
 def register_builtin_json_templates() -> list:
-    """Load the built-in JSON templates (``crew_defs/templates/*.json``) into the gallery. Call this once
-    at agency startup, after the Python templates register — a JSON file with a new id ADDS a template; one
-    reusing a Python template's id replaces it (data wins), so a template can migrate code -> data safely."""
-    return load_json_templates(default_templates_dir())
+    """Load every JSON template into the gallery — the shipped built-ins FIRST, then the user's own (which
+    win on an id clash). Call once at agency startup, after the Python templates register: a JSON file with
+    a NEW id ADDS a template; one reusing an existing id REPLACES it (data wins), so a template can migrate
+    code -> data safely. Idempotent."""
+    return load_json_templates(default_templates_dir()) + load_json_templates(user_templates_dir())
+
+
+def save_user_template(tj: dict) -> Any:
+    """Validate + PERSIST a template to the user dir (``<AIMEAT_HOME>/templates/<id>.json``) and register
+    it. This is how an AI-authored (or hand-edited) template becomes a durable, reusable gallery entry.
+    Raises ``CrewDocError`` on an invalid template (nothing is written). Returns the registered Template."""
+    errs = validate_template(tj)
+    if errs:
+        raise CrewDocError(errs)
+    tmpl = template_from_json(tj)  # also registers via the caller below; build it to get the validated id
+    from crewaimeat import brain_templates as bt
+
+    d = user_templates_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    base = re.sub(r"[^a-z0-9]+", "_", tmpl.id.lower()).strip("_") or "template"
+    (d / f"{base}.json").write_text(json.dumps(tj, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    bt.register(tmpl)  # live now, without waiting for a restart
+    return tmpl
+
+
+def suggested_agent_name(tj: dict) -> str:
+    """A slugged agent-name suggestion for a generated template — the model's ``suggested_agent_name`` if it
+    gave one, else derived from the template id. Slugged to the connector rule (lowercase alnum + hyphens)."""
+    header = tj.get("template", {}) if isinstance(tj, dict) else {}
+    raw = header.get("suggested_agent_name") or header.get("id") or "agent"
+    return re.sub(r"[^a-z0-9-]+", "-", str(raw).lower()).strip("-")[:64]
 
 
 # --------------------------------------------------------------------------------------------------
@@ -199,9 +237,12 @@ def render_template_schema_brief() -> str:
         "Design an agency BRAIN TEMPLATE as a SINGLE JSON object with two parts:\n"
         "{\n"
         '  "template": {\n'
-        '    "id": "<kebab-id>", "title": "...", "description": "one line: what this kind of agent does",\n'
+        '    "id": "<kebab-id>", "suggested_agent_name": "<kebab agent name>", "title": "...",\n'
+        '    "description": "one line: what this kind of agent does",\n'
         '    "default_prose": "the standing instructions the operator will edit (what it should do)",\n'
         '    "default_publish_base": "<kebab base for published results, e.g. answers|watch|briefing>",\n'
+        '    "default_policy": {"autonomy": "draft", "schedule": {"cron": "<5-field cron>", "timezone":'
+        ' "Europe/Helsinki"}, "visibility": "owner", "key_mode": "date"},\n'
         '    "offer": {"id":"<kebab>","title":"...","ask":"what to send + what it returns + what it does NOT do",'
         ' "example":"...","cost":"cheap","latency":"minutes","repeatability":"idempotent","verification":"ungated","consequences":[]}\n'
         "  },\n"
@@ -214,6 +255,11 @@ def render_template_schema_brief() -> str:
         "}\n\n"
         "RULES:\n"
         '- OMIT agent_name in "crew" — it is set per brain.\n'
+        '- CONFIGURE default_policy from the description: pick the schedule cron the user implies ("every '
+        'morning" -> "0 8 * * *", "weekly on Monday" -> "0 8 * * 1", on-demand/reactive -> "schedule": null),'
+        ' and set visibility "public" only if the results are meant to be shared.\n'
+        "- Choose the tools the job genuinely needs (a web-research agent usually needs web + article_fetch + "
+        "local_memory).\n"
         "- In task descriptions use these placeholders (nothing else):\n"
         "    {{brain.prose}}      the operator's standing instructions\n"
         "    {{ctx.prompt}}       the per-run request/question (at least one task MUST include this)\n"

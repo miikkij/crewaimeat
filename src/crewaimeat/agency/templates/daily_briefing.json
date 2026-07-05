@@ -1,0 +1,63 @@
+{
+  "template": {
+    "id": "daily-briefing-json",
+    "title": "Daily briefing (JSON)",
+    "description": "Give it a few topics; each morning it posts a short digest of what's new, with sources.",
+    "default_prose": "Each morning, brief me on these topics (replace this with your own, one per line):\n- topic one\n- topic two\n- topic three\nFor each topic, give the few genuinely new and notable items with their sources, and skip routine noise.",
+    "default_publish_base": "briefing",
+    "default_policy": {
+      "autonomy": "draft",
+      "spend_cap": { "amount": 2, "period": "day", "currency": "EUR" },
+      "model": null,
+      "schedule": { "cron": "0 7 * * *", "timezone": "Europe/Helsinki" },
+      "publish_key": "",
+      "key_mode": "date",
+      "visibility": "owner",
+      "offer_enabled": false
+    },
+    "i18n": {
+      "fi": {
+        "title": "Aamukatsaus (JSON)",
+        "description": "Anna muutama aihe — joka aamu se julkaisee lyhyen koosteen uutuuksista lähteineen.",
+        "default_prose": "Tee joka aamu katsaus näistä aiheista (korvaa omillasi, yksi per rivi):\n- aihe yksi\n- aihe kaksi\n- aihe kolme\nKerro kustakin aiheesta muutama aidosti uusi ja merkittävä kohta lähteineen, ja ohita rutiini."
+      }
+    },
+    "offer": {
+      "id": "daily-briefing",
+      "title": "A short daily briefing across your topics",
+      "ask": "Give me a few topics and I post a short morning digest of what's genuinely new on each, with sources. I do NOT give opinions or unsourced claims.",
+      "example": "Topics: 'EU AI regulation', 'Finnish startup funding', 'agent frameworks' → a short digest per topic each morning.",
+      "cost": "cheap",
+      "latency": "minutes",
+      "repeatability": "idempotent",
+      "verification": "ungated",
+      "consequences": []
+    }
+  },
+  "crew": {
+    "temperature": 0.25,
+    "tags": ["briefing", "web-research", "role.task-runner"],
+    "capabilities": {
+      "technical": [{ "name": "web-research", "type": "skill" }],
+      "domain": ["daily multi-topic briefing from the live web, with sources"],
+      "languages": ["en", "fi"]
+    },
+    "agents": [
+      {
+        "name": "editor",
+        "role": "Briefing Editor",
+        "goal": "Produce a short, scannable daily briefing across the chosen topics",
+        "backstory": "You write a concise morning briefing. You take a handful of topics, check the live web for what is genuinely new on each, and distil it into a short digest a busy person can read in a minute. You group by topic and keep only what matters, with sources.",
+        "tools": ["web", "article_fetch", "local_memory"]
+      }
+    ],
+    "tasks": [
+      {
+        "id": "brief",
+        "agent": "editor",
+        "description": "{{ctx.today}}\n\nYOUR STANDING INSTRUCTIONS (the topics to cover + how — from the operator):\n{{brain.prose}}\n\nANY EXTRA FOCUS FOR THIS RUN (optional):\n{{ctx.prompt}}\n\nDo this, in order:\n1. Work out the list of TOPICS from your standing instructions (and any extra focus above).\n2. For EACH topic, search the live web for what is genuinely new and open the best results with fetch_article_text. Save raw findings to LOCAL memory with `remember` (topic='briefing').\n3. Write ONE briefing: a short section per topic (a heading + a few lines), each notable item with its source URL. For a topic with nothing new, say 'nothing notable'.\n4. Publish the briefing upward: `remember` it, then `publish_memory(id, key='{{brain.publish_key}}', visibility='{{brain.visibility}}')`.\n\nYOUR FINAL ANSWER must be ONLY the clean result itself — plain, readable prose with the source URLs, exactly as a person would want to read it. Do NOT output JSON, tool-call syntax, key/visibility fields, or the raw record. Just the text.",
+        "expected_output": "Plain readable prose with source URLs, exactly as a person would read it — NOT JSON, not a record."
+      }
+    ]
+  }
+}
