@@ -28,6 +28,22 @@ _MODEL = os.getenv("SEEDREAM_MODEL", "bytedance-seed/seedream-4.5")
 _IMAGE_MIMES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
 _GAII_CACHE: dict[str, str] = {}
 
+# Images generated since the last drain. The crew's clean_deliverable drains this at task-completion
+# to guarantee the public URL(s) land IN the published deliverable text — the LLM's final answer
+# sometimes echoes only the prompt and drops the URL, leaving the Tasks deliverable view with no
+# thumbnail even though the image exists. Serial task-runner (max_concurrent=1), so a module-level
+# accumulator maps cleanly onto one task.
+_RECENT_IMAGES: list[dict] = []
+
+
+def drain_recent_images() -> list[dict]:
+    """Return the images generated since the last call and clear the buffer. Each item is
+    {url, prompt, mime}. Empty when the task generated no image."""
+    global _RECENT_IMAGES
+    out = _RECENT_IMAGES
+    _RECENT_IMAGES = []
+    return out
+
 
 def _own_gaii(agent: str) -> str | None:
     """The agent's GAII (for /v1/pub/<gaii>/<key> URLs). Discovered once via agents_list."""
@@ -139,6 +155,8 @@ def generate_image(agent_name: str, prompt: str, *, size: str = "2K", aspect_rat
             "visibility": "public",
         },
     )
+    # Remember it so clean_deliverable can guarantee the URL reaches the published deliverable text.
+    _RECENT_IMAGES.append({"url": pub, "prompt": prompt, "mime": mime})
     return {"ok": True, "url": pub, "mime": mime, "bytes": len(data)}
 
 

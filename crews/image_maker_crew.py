@@ -14,9 +14,25 @@ from __future__ import annotations
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, contract_record_spaces, record_event_targets, run_crew
 from crewaimeat.contract_adopt import build_adopt_domain, is_adopt_task
 from crewaimeat.image_request_contract import CONTRACT, process_image_requests
-from crewaimeat.seedream_gen import make_image_tools
+from crewaimeat.seedream_gen import drain_recent_images, make_image_tools
 
 AGENT_NAME = "image-maker"
+
+
+def _ensure_image_in_deliverable(text: str) -> str:
+    """Guarantee every image generated during this task appears in the published deliverable as a
+    plain public URL. The AIMEAT Tasks deliverable view renders any image URL it finds in the text
+    as a thumbnail, but the LLM's final answer sometimes echoes only the prompt and drops the URL —
+    leaving the deliverable image-less even though the file was stored. This deterministic pass (run
+    by the scaffold just before publish) appends any missing URL so the picture always shows."""
+    imgs = drain_recent_images()
+    body = text or ""
+    missing = [im["url"] for im in imgs if im.get("url") and im["url"] not in body]
+    if not missing:
+        return body
+    lines = "\n".join(f"Image: {u}" for u in missing)
+    return f"{body.rstrip()}\n\n{lines}" if body.strip() else lines
+
 
 README = """[[FIGLET:slant]["Image Maker"]]
 
@@ -92,6 +108,7 @@ def run() -> None:
             listen_for=("tasks", "records"),
             record_spaces=lambda: contract_record_spaces(AGENT_NAME, CONTRACT),
             on_record=_on_record,
+            clean_deliverable=_ensure_image_in_deliverable,
         )
     )
 
