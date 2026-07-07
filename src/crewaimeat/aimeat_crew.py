@@ -1153,23 +1153,20 @@ def _run_onboarding_only(
 
 
 def _finalize_task(agent_name: str, tid: str, mem_key: str, liaison: Agent) -> Task:
-    """Liaison closing task. The deliverable is published and the task is completed
-    DETERMINISTICALLY by scaffold callbacks (see _make_publish_cb / _make_complete_cb) — not by
-    the LLM, which proved unreliable at memory_write on weaker models. This task therefore only
-    handles todos (when a task has them); it keeps the liaison in the crew per the daemon contract.
-
-    Sequential todo marking + parallel_tool_calls=False keeps concurrent task-state writes safe.
-    """
+    """Liaison closing task — a trivial keeper that does NO tool work. Publishing the deliverable,
+    marking todos done (_mark_todos_done) and completing the task are ALL done DETERMINISTICALLY by
+    scaffold callbacks (_make_publish_cb / _make_complete_cb), because the LLM proved unreliable at
+    every one of them on weaker/slower models: memory_write got skipped, and the todo step routinely
+    replied "done" without calling aimeat_task_todo — leaving the task completed but its todos pending
+    (0/1). Removing that step also drops an LLM round-trip that could itself stall on a slow model.
+    This task exists only to keep the liaison in the crew per the daemon contract."""
     return Task(
         description=(
-            f"The crew has finished the work for AIMEAT task '{tid}'. Its deliverable has already "
-            "been saved to memory, and the task will be marked complete for you automatically — you "
-            "do NOT need to write memory and you do NOT need to call aimeat_task_complete.\n"
-            f"Your only job: call aimeat_task_get for '{tid}'. If it has any todos, mark each one "
-            "done with aimeat_task_todo (status='done') ONE AT A TIME — fire one call, wait for its "
-            "result, then the next (never several in one turn). If there are no todos, just reply 'done'."
+            f"The crew has finished AIMEAT task '{tid}'. Its deliverable, its todos and completion are "
+            "all handled for you automatically — you do NOT need to call any tool, write memory, mark "
+            "todos, or complete the task. Simply reply with the single word: done."
         ),
-        expected_output="Any todos marked done one at a time; otherwise 'done'.",
+        expected_output="The single word 'done'.",
         agent=liaison,
     )
 
@@ -1442,6 +1439,30 @@ def _resolve_offer(agent_name: str, task: dict) -> dict | None:
     return {"id": oid, "title": str(scope.get("offer_title") or oid)}
 
 
+def _mark_todos_done(agent_name: str, tid: str) -> None:
+    """Deterministically mark every still-open todo of task `tid` DONE — in code, not via the LLM.
+
+    aimeat_task_todo works only while the task is ACTIVE, so this must run BEFORE aimeat_task_complete
+    (its caller places it there). Marking todos was previously the LLM finalize task's only job, and it
+    proved unreliable: a weak or slow model routinely replies "done" without ever calling the tool, so
+    the task got completed by the deterministic callback while its todos stayed `pending` — the task
+    reads Done but shows 0/1 (bit us 2026-07-07, image-maker). Completing a task already asserts the whole
+    task is done, so flipping its open todos to done is the consistent, correct close. Sequential +
+    read-after-write, fail-LOUD but never fatal (a todo hiccup must not block completion). Terminal
+    statuses (done/failed/skipped) are left as the crew set them."""
+    got = _aimeat_call(agent_name, "aimeat_task_get", {"task_id": tid}) or {}
+    task = got.get("task") if isinstance(got.get("task"), dict) else got
+    todos = (task or {}).get("todos") or []
+    open_ids = [td.get("id") for td in todos if td.get("id") and td.get("status") not in ("done", "failed", "skipped")]
+    for tdid in open_ids:
+        res = _aimeat_call(agent_name, "aimeat_task_todo", {"task_id": tid, "todo_id": tdid, "status": "done"})
+        print(
+            f"[{agent_name}] finalize: mark todo {tdid} done on {tid}: {bool(res)}"
+            + ("" if res else "  <-- WARN: todo write failed (task still completes)"),
+            file=sys.stderr,
+        )
+
+
 def _make_complete_cb(
     agent_name: str,
     tid: str,
@@ -1507,6 +1528,9 @@ def _make_complete_cb(
                         file=sys.stderr,
                     )
                     return
+        # Mark todos done DETERMINISTICALLY here, while the task is still active (aimeat_task_todo
+        # rejects a completed task), so a task never lands Done with its todos still pending (0/1).
+        _mark_todos_done(agent_name, tid)
         payload = {"task_id": tid, "message": "Crew finished; deliverable published to memory."}
         if mem_key:
             # The Offers/Inbox contract: the task record's deliverableKey points at the memory key
