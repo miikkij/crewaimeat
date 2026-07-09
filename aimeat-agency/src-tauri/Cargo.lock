@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "aimeat-agency"
-version = "0.8.30"
+version = "0.8.31"
 dependencies = [
  "getrandom 0.3.4",
  "serde_json",
