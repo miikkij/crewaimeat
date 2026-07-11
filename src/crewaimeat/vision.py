@@ -20,6 +20,7 @@ import os
 import requests
 
 from crewaimeat import storage
+from crewaimeat.ledger_report import report_llm_usage
 
 _VISION_MODEL = os.getenv("CONCIERGE_VISION_MODEL", "qwen/qwen-2.5-vl-72b-instruct")
 _VISION_PROMPT = (
@@ -32,8 +33,9 @@ _MAX_DOC_CHARS = 12000  # cap extracted document text fed downstream (keep the c
 _IMG_PREFIXES = ("image/",)
 
 
-def analyze_image(image_bytes: bytes, mime: str, *, prompt: str | None = None) -> str:
-    """Send one image to a vision model and return its text read. Fails soft -> a short error string."""
+def analyze_image(image_bytes: bytes, mime: str, *, prompt: str | None = None, agent: str | None = None) -> str:
+    """Send one image to a vision model and return its text read. Fails soft -> a short error string.
+    `agent` (when known) attributes the direct OpenRouter call to the AIMEAT usage ledger."""
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         return "(vision unavailable: OPENROUTER_API_KEY not set)"
@@ -51,6 +53,9 @@ def analyze_image(image_bytes: bytes, mime: str, *, prompt: str | None = None) -
                 ],
             }
         ],
+        # Ask OpenRouter for the authoritative cost so report_llm_usage can send it to the ledger
+        # (this direct call bypasses CrewAI, so aimeat-crewai's event-bus hook can't meter it).
+        "usage": {"include": True},
     }
     try:
         r = requests.post(
@@ -68,7 +73,9 @@ def analyze_image(image_bytes: bytes, mime: str, *, prompt: str | None = None) -
     if r.status_code != 200:
         return f"(vision HTTP {r.status_code}: {r.text[:200]})"
     try:
-        content = r.json()["choices"][0]["message"]["content"]
+        resp_json = r.json()
+        report_llm_usage(_VISION_MODEL, resp_json.get("usage"), agent=agent)
+        content = resp_json["choices"][0]["message"]["content"]
         if isinstance(content, list):  # some providers return content parts
             content = " ".join(p.get("text", "") for p in content if isinstance(p, dict))
         return (content or "").strip() or "(vision returned no text)"
@@ -127,7 +134,7 @@ def analyze_attachment(agent: str, att: dict, *, prompt: str | None = None) -> s
     data, dl_mime = got
     mime = mime or dl_mime
     if any(mime.startswith(p) for p in _IMG_PREFIXES):
-        analysis = analyze_image(data, mime, prompt=prompt)
+        analysis = analyze_image(data, mime, prompt=prompt, agent=agent)
         return f"[Attachment: {name} (image, {len(data)} bytes)]\n{analysis}"
     analysis = extract_document_text(data, mime, name)
     return f"[Attachment: {name} ({mime}, {len(data)} bytes)]\n{analysis}"

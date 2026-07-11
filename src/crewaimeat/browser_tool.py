@@ -26,6 +26,8 @@ import requests
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 
+from crewaimeat.ledger_report import report_llm_usage
+
 # Safe-to-retry (idempotent reads/waits); stateful actions must NOT be blindly retried.
 _RETRYABLE = {"navigate", "get_content", "wait"}
 
@@ -62,6 +64,8 @@ def _describe_image(path: str, prompt: str) -> str:
                     ],
                 }
             ],
+            # Authoritative cost for the ledger (this direct call bypasses CrewAI's hook).
+            "usage": {"include": True},
         }
         r = requests.post(
             f"{base}/chat/completions",
@@ -78,7 +82,9 @@ def _describe_image(path: str, prompt: str) -> str:
         )
         if r.status_code != 200:
             return f"(describe failed — vision model {model} returned HTTP {r.status_code}: {r.text[:200]})"
-        return (r.json()["choices"][0]["message"]["content"] or "").strip() or "(describe returned empty)"
+        resp_json = r.json()
+        report_llm_usage(model, resp_json.get("usage"))
+        return (resp_json["choices"][0]["message"]["content"] or "").strip() or "(describe returned empty)"
     except Exception as exc:  # noqa: BLE001 — vision is best-effort; never crash the action
         return f"(describe failed: {exc})"
 

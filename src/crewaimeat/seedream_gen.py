@@ -23,6 +23,7 @@ import requests
 
 from crewaimeat.aimeat_crew import _aimeat_call, _serve_api
 from crewaimeat.generator_tool import _discover_owner, _token
+from crewaimeat.ledger_report import report_llm_usage
 
 _MODEL = os.getenv("SEEDREAM_MODEL", "bytedance-seed/seedream-4.5")
 _IMAGE_MIMES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
@@ -109,6 +110,9 @@ def generate_image(agent_name: str, prompt: str, *, size: str = "2K", aspect_rat
         "messages": [{"role": "user", "content": prompt}],
         "modalities": ["image"],
         "image_config": image_config,
+        # Ask OpenRouter to include the authoritative cost in `usage` so we can report it to the
+        # AIMEAT ledger (this direct call bypasses CrewAI's LLM path, so the event-bus hook can't).
+        "usage": {"include": True},
     }
     try:
         r = requests.post(
@@ -126,10 +130,14 @@ def generate_image(agent_name: str, prompt: str, *, size: str = "2K", aspect_rat
     if r.status_code != 200:
         return {"ok": False, "error": f"OpenRouter HTTP {r.status_code}: {r.text[:300]}"}
     try:
-        msg = r.json()["choices"][0]["message"]
+        resp_json = r.json()
+        msg = resp_json["choices"][0]["message"]
         url = (msg.get("images") or [])[0]["image_url"]["url"]
     except (KeyError, IndexError, TypeError, ValueError):
         return {"ok": False, "error": f"no image in response: {str(r.text)[:300]}"}
+    # This direct requests.post bypasses CrewAI's LLM path, so aimeat-crewai's event-bus usage
+    # hook never sees it -- report the tokens+cost to the AIMEAT ledger ourselves (best-effort).
+    report_llm_usage(_MODEL, resp_json.get("usage"), agent=agent_name)
     m = re.match(r"^data:(image/\w+);base64,(.+)$", url, re.DOTALL)
     if not m:
         return {"ok": False, "error": "unexpected image url (not a base64 data URI)"}

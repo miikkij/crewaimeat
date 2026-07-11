@@ -38,6 +38,7 @@ from crewai.tools import tool
 
 from crewaimeat.aimeat_crew import _aimeat_call, _serve_api, member_workspaces
 from crewaimeat.generator_tool import _discover_owner, _token
+from crewaimeat.ledger_report import report_llm_usage
 
 AGENT = "image-scout"
 IN_SPACE, IN_NS = "moodboard-request", "shared.moodboard_requests"
@@ -166,10 +167,14 @@ def _vision_meta(image: bytes, mime: str, brief: str) -> dict | None:
                     }
                 ],
                 "max_tokens": 400,
+                # Authoritative cost for the ledger (this direct call bypasses CrewAI's hook).
+                "usage": {"include": True},
             },
             timeout=90,
         )
-        text = (r.json()["choices"][0]["message"]["content"] or "").strip()
+        resp_json = r.json()
+        report_llm_usage(model, resp_json.get("usage"))
+        text = (resp_json["choices"][0]["message"]["content"] or "").strip()
         m = re.search(r"\{.*\}", text, re.DOTALL)
         meta = json.loads(m.group(0)) if m else None
         if isinstance(meta, dict) and meta.get("subject"):

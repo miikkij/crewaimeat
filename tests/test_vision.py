@@ -59,7 +59,7 @@ def test_analyze_image_posts_data_uri(monkeypatch):
 
 def test_analyze_attachment_routes_image_to_vision(monkeypatch):
     monkeypatch.setattr(vision.storage, "fetch_bytes", lambda agent, key: (b"\x89PNG", "image/png"))
-    monkeypatch.setattr(vision, "analyze_image", lambda data, mime, prompt=None: "VISION-READ")
+    monkeypatch.setattr(vision, "analyze_image", lambda data, mime, prompt=None, agent=None: "VISION-READ")
     out = vision.analyze_attachment("concierge", {"storageKey": "dm/u/pic.png", "name": "pic.png", "mime": "image/png"})
     assert "VISION-READ" in out and "pic.png" in out
 
