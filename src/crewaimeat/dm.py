@@ -36,6 +36,7 @@ import os
 import sys
 
 import requests
+from aimeat_crewai import usage_run
 
 from crewaimeat.aimeat_crew import _aimeat_call, _serve_api
 from crewaimeat.generator_tool import _discover_owner, _token
@@ -314,7 +315,8 @@ def process_dm_inbox(agent: str, responder, *, seen: set | None = None, max_item
             continue
         seen.add(mid)  # mark BEFORE running so a crash can't re-trigger the same DM (runaway-safe)
         try:
-            reply_text = responder(m)
+            with usage_run(f"dm-{mid}", agent):  # attribute the crew's LLM usage to this agent + DM run
+                reply_text = responder(m)
         except Exception as exc:  # noqa: BLE001
             print(f"[{agent}] dm responder failed for {mid}: {exc!r}", file=sys.stderr)
             failed += 1
@@ -361,8 +363,12 @@ def handle_dm_event(agent: str, event: dict, responder, *, seen: set | None = No
     if sender.startswith(f"{agent}#"):
         return False  # never reply to our OWN message (self-DM) — the reply would re-trigger -> loop
     seen.add(mid)  # mark BEFORE running (runaway-safe)
+    # Ledger attribution: the daemon wraps only its OWN built-in DM crew in usage_run; a crew that
+    # supplies a custom on_dm (concierge/social-briefing/form-filler + the dm_serviceable bridge) runs
+    # its kickoff HERE, outside that wrap, so without this it would land on the first-installed agent.
     try:
-        result = responder(event)
+        with usage_run(f"dm-{mid}", agent):
+            result = responder(event)
     except Exception as exc:  # noqa: BLE001
         print(f"[{agent}] on_dm responder failed for {mid}: {exc!r}", file=sys.stderr)
         return False
