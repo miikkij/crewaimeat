@@ -59,16 +59,30 @@ def report_llm_usage(
             data["cost_usd"] = float(cost)  # authoritative provider cost wins over the node's table
         payload = {"type": "llm_call", "data": data}
 
+        def _log(resp, via: str) -> None:
+            """Turn the (previously silent) telemetry result LOUD: a non-2xx from the node — the most
+            likely reason usage never lands in /v1/ledger/usage — is now visible in the fleet log."""
+            code = getattr(resp, "status_code", None)
+            if code is None or code >= 300:
+                body = getattr(resp, "text", "")[:200] if resp is not None else "no response"
+                print(f"[ledger] {who} telemetry REJECTED via {via}: HTTP {code} {body}", file=sys.stderr)
+            else:
+                extra = f" cost=${data['cost_usd']}" if "cost_usd" in data else ""
+                print(f"[ledger] {who} metered {model} pt={pt} ct={ct}{extra} via {via}", file=sys.stderr)
+
         from crewaimeat.aimeat_crew import _serve_api  # lazy: avoid an import cycle
 
         api = _serve_api()
         if api is not None:
             base, session = api
-            session.post(
-                f"{base}/v1/agents/{who}/telemetry",
-                json=payload,
-                headers={"X-Aimeat-Agent": who},
-                timeout=15,
+            _log(
+                session.post(
+                    f"{base}/v1/agents/{who}/telemetry",
+                    json=payload,
+                    headers={"X-Aimeat-Agent": who},
+                    timeout=15,
+                ),
+                "loopback serve",
             )
             return
         # No loopback serve daemon — fall back to a direct call with the agent's own bearer token.
@@ -76,11 +90,14 @@ def report_llm_usage(
 
         tok, url = _token(who, _discover_owner(who))
         if tok and url:
-            requests.post(
-                f"{url.rstrip('/')}/v1/agents/{who}/telemetry",
-                json=payload,
-                headers={"Authorization": f"Bearer {tok}"},
-                timeout=15,
+            _log(
+                requests.post(
+                    f"{url.rstrip('/')}/v1/agents/{who}/telemetry",
+                    json=payload,
+                    headers={"Authorization": f"Bearer {tok}"},
+                    timeout=15,
+                ),
+                "agent token",
             )
     except Exception as exc:  # noqa: BLE001 — metering must never break the calling tool
         print(f"[ledger] usage report failed ({model}): {exc!r}", file=sys.stderr)
