@@ -44,3 +44,4 @@ benchmarks/locomo/.data/
 # GitHub remote (mirrors the aimeat-protocol `ee/` open-core seam). Never committed
 # to this public repo.
 /secretary/
+.lingua-images/
