@@ -136,9 +136,11 @@ def _download_image(url: str) -> tuple[bytes, str] | None:
         return None
 
 
-def _vision_meta(image: bytes, mime: str, brief: str) -> dict | None:
+def _vision_meta(image: bytes, mime: str, brief: str, *, agent: str | None = None) -> dict | None:
     """Describe one image with the vision model -> {subject, description, style, colors, tags,
-    relevance(0-10)}. Same OpenRouter wiring as browser_tool's screenshot describe."""
+    relevance(0-10)}. Same OpenRouter wiring as browser_tool's screenshot describe.
+    `agent` attributes the direct call to the ledger; pass it EXPLICITLY on the record/idle paths
+    (on_record, postman's day-image) where no crew kickoff has set the usage_run contextvar."""
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         return None
@@ -173,7 +175,7 @@ def _vision_meta(image: bytes, mime: str, brief: str) -> dict | None:
             timeout=90,
         )
         resp_json = r.json()
-        report_llm_usage(model, resp_json.get("usage"))
+        report_llm_usage(model, resp_json.get("usage"), agent=agent)
         text = (resp_json["choices"][0]["message"]["content"] or "").strip()
         m = re.search(r"\{.*\}", text, re.DOTALL)
         meta = json.loads(m.group(0)) if m else None
@@ -245,7 +247,7 @@ def build_moodboard(rid: str, brief: str, n_images: int = 6) -> tuple[list[dict]
         if h in seen_hashes:
             continue
         seen_hashes.add(h)
-        meta = _vision_meta(image, mime, brief)
+        meta = _vision_meta(image, mime, brief, agent=AGENT)
         if not meta:
             continue
         rated.append({**c, "image": image, "mime": mime, "hash": h, "meta": meta})

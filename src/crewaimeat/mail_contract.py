@@ -263,7 +263,7 @@ def _day_image() -> tuple[bytes, str] | None:
         got = _download_image(c["img_src"])
         if not got:
             continue
-        meta = _vision_meta(got[0], got[1], q)
+        meta = _vision_meta(got[0], got[1], q, agent=AGENT)  # AGENT="postman" — idle-hook has no usage_run contextvar
         rel = (meta or {}).get("relevance") or 0
         if rel > best_rel:
             best, best_rel = got, rel
