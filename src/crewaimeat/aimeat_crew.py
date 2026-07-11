@@ -65,6 +65,7 @@ from aimeat_crewai import (  # noqa: E402
     run_hello_integration,
     serve_params,
     stdio_params,
+    usage_run,
 )
 from aimeat_crewai.daemon import DAEMON_DEFAULT_TOOL_FILTER  # noqa: E402
 from aimeat_crewai.mcp_client import AimeatServeError  # noqa: E402 — raised when no live serve daemon
@@ -2439,7 +2440,11 @@ def run_crew(spec: CrewSpec) -> None:
                 _dm_kwargs: dict[str, Any] = dict(agents=agents, tasks=tasks, process=spec.process, verbose=False)
                 if _dm_mem is not None:
                     _dm_kwargs["memory"] = _dm_mem
-                result = Crew(**_dm_kwargs).kickoff()
+                # Attribute this DM's LLM usage to a per-DM run in the AIMEAT ledger (0.16.0 hook meters
+                # every call in-process, but this direct kickoff is outside run_crew_daemon's ContextVar
+                # so it would otherwise land run_id=None). Same id as the DM's isolated memory (dm-<mid>).
+                with usage_run(f"dm-{mid}"):
+                    result = Crew(**_dm_kwargs).kickoff()
             except Exception as exc:  # noqa: BLE001
                 print(f"[{spec.agent_name}] DM service crew failed: {exc!r}", file=sys.stderr)
                 return "Sorry — I couldn't complete that request."

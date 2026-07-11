@@ -50,11 +50,10 @@ from crewai.events import (  # noqa: E402
     ToolUsageStartedEvent,
 )
 
-# Optional across CrewAI versions — usage metering (AIMEAT LEDGER) is disabled if absent.
-try:  # noqa: SIM105
-    from crewai.events import LLMCallCompletedEvent  # noqa: E402
-except Exception:  # noqa: BLE001
-    LLMCallCompletedEvent = None
+# NB: per-LLM-call usage metering (AIMEAT LEDGER / TARGET-016) is NOT here anymore — it moved into
+# the aimeat-crewai package (>=0.16.0): run_crew_daemon auto-subscribes to LLMCallCompletedEvent and
+# POSTs the `llm_call` telemetry itself (run_id = the AIMEAT task id via a ContextVar). Keeping a copy
+# here would DOUBLE-count every call. This module keeps only the milestone + 5s live-status channels.
 
 HEARTBEAT_SECONDS = 5
 
@@ -78,28 +77,6 @@ def _aimeat_fire(tool: str, payload: dict, agent: str) -> None:
         subprocess.run(cmd, input=json.dumps(payload), capture_output=True, text=True, timeout=20)
     except Exception as exc:  # noqa: BLE001
         print(f"[progress] {tool} failed: {exc}", file=sys.stderr)
-
-
-def build_llm_usage_data(model, usage: dict | None) -> dict | None:
-    """Map a CrewAI LLM completion's (model, usage) into the AIMEAT ledger `llm_call`
-    telemetry `data` payload (LEDGER / TARGET-016). Returns None when there are no tokens
-    to meter. Cost is intentionally omitted: the node prices the call from model+tokens with
-    its centralized, versioned price table, so the runtime stays simple and provider-agnostic.
-    Tolerant of prompt_tokens/input_tokens and completion_tokens/output_tokens field names."""
-    usage = usage if isinstance(usage, dict) else {}
-    pt = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
-    ct = usage.get("completion_tokens") or usage.get("output_tokens") or 0
-    try:
-        pt, ct = int(pt), int(ct)
-    except (TypeError, ValueError):
-        return None
-    if pt <= 0 and ct <= 0:
-        return None
-    m = (model or "").strip() or "unknown"
-    data = {"model": m, "prompt_tokens": pt, "completion_tokens": ct}
-    if "/" in m:  # litellm-style "provider/model" — surface the provider for the ledger
-        data["provider"] = m.split("/", 1)[0]
-    return data
 
 
 class ProgressReporter:
@@ -183,24 +160,6 @@ class ProgressReporter:
             st = self._tasks.get(task_id)
             if st:
                 st["status"].update(kw)
-
-    def report_usage(self, model, usage: dict | None) -> None:
-        """Report one completed LLM call to the AIMEAT usage ledger (TARGET-016). Best-effort
-        and non-blocking — fired in a daemon thread so per-call metering never stalls the event
-        bus. The AIMEAT task id becomes the run_id (node falls back task_id -> run_id)."""
-        task_id = self._tid()
-        if not task_id:
-            return
-        data = build_llm_usage_data(model, usage)
-        if data is None:
-            return
-        payload = {"type": "llm_call", "data": data, "task_id": task_id}
-        threading.Thread(
-            target=_aimeat_fire,
-            args=("aimeat_agent_telemetry_report", payload, self.agent_name),
-            name="aimeat-usage-report",
-            daemon=True,
-        ).start()
 
     # --- lifecycle (called from the listener / _build) ------------------ #
     def bind(self, task_id: str, title: str) -> None:
@@ -325,16 +284,6 @@ class _ProgressListener(BaseEventListener):
             role = getattr(ev, "agent_role", None) or "agent"
             # No milestone (LLM calls are frequent) — live status only (5s beat).
             r.set(phase=role, activity=f"{role} thinking")
-
-        # Usage metering (AIMEAT LEDGER / TARGET-016): report each completed LLM call's
-        # tokens+model so the node can price it. Registered only when the event exists.
-        if LLMCallCompletedEvent is not None:
-
-            @bus.on(LLMCallCompletedEvent)
-            def _llc(_src, ev):  # noqa: ANN001
-                if not r._tid():
-                    return
-                r.report_usage(getattr(ev, "model", None), getattr(ev, "usage", None))
 
 
 _INSTALLED: ProgressReporter | None = None
