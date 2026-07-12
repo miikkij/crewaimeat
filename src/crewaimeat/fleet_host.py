@@ -172,6 +172,11 @@ def _supervise(path: Path, agent: str, stop: threading.Event) -> None:
 
 def run_host(agents: list[str] | None = None) -> int:
     """Start every selected agent as a supervised thread in THIS process and block until Ctrl+C."""
+    # Timestamp every log line (ours + the package's [daemon:*] lines) by wrapping stdout/stderr once,
+    # before any agent thread starts sharing them. Opt out with AIMEAT_LOG_TIMESTAMPS=0.
+    from crewaimeat.log_timestamps import install as _install_timestamps
+
+    _install_timestamps()
     crews = _select_crews(agents)
     if not crews:
         print("[host] no matching crews to run.", file=sys.stderr)
