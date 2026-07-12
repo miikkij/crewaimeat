@@ -35,6 +35,19 @@ def _resolve_agent(agent: str | None) -> str | None:
         return None
 
 
+def _resolve_run_id() -> str | None:
+    """The AIMEAT run/task id of the crew kickoff on this context — aimeat-crewai's usage_run sets it,
+    so a direct-call row also shows under /v1/ledger/usage/runs per deliverable. None on the record/idle
+    paths (no kickoff): the row still aggregates fine in /v1/ledger/usage, it just has no run to drill
+    into. Private contextvar, read defensively — degrade to None rather than crash if it ever moves."""
+    try:
+        from aimeat_crewai.usage_telemetry import _current_run_id
+
+        return _current_run_id.get()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def report_llm_usage(
     model: str,
     usage: dict | None,
@@ -57,7 +70,12 @@ def report_llm_usage(
         cost = u.get("cost")
         if isinstance(cost, (int, float)) and cost >= 0:
             data["cost_usd"] = float(cost)  # authoritative provider cost wins over the node's table
-        payload = {"type": "llm_call", "data": data}
+        run_id = _resolve_run_id()  # nice-to-have: ties the row to its deliverable at /v1/ledger/usage/runs
+        if run_id:
+            data["run_id"] = run_id
+        payload: dict[str, Any] = {"type": "llm_call", "data": data}
+        if run_id:
+            payload["task_id"] = run_id  # node falls back task_id -> run_id (matches the package hook)
 
         def _log(resp, via: str) -> None:
             """Turn the (previously silent) telemetry result LOUD: a non-2xx from the node — the most
