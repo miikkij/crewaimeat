@@ -235,6 +235,12 @@ def _flatten_endpoints(providers: list, for_tool_use: bool) -> list[dict]:
             ap: dict = {}
             if for_tool_use and ptype != "ollama":
                 ap["parallel_tool_calls"] = False  # AIMEAT task writes race if batched in one turn
+            if ptype == "openrouter":
+                # Make OpenRouter return the AUTHORITATIVE per-call cost in usage.cost (proven: litellm
+                # preserves it, CrewAI's _usage_to_dict copies it into the event usage) so the ledger
+                # records REAL spend — no litellm price DB, which doesn't even know z-ai/glm-5.2. Same
+                # flag the direct seedream/vision calls already use.
+                ap["extra_body"] = {"usage": {"include": True}}
             eps.append(
                 {
                     "label": f"{prov.get('name', ptype)}:{mid}",
