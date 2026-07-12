@@ -177,6 +177,11 @@ def run_host(agents: list[str] | None = None) -> int:
     from crewaimeat.log_timestamps import install as _install_timestamps
 
     _install_timestamps()
+    # Make CrewAI surface OpenRouter's per-call cost so the ledger records real spend, not $0
+    # (CrewAI's OpenAI usage extractor drops response.usage.cost — this restores it).
+    from crewaimeat.crewai_cost_patch import install as _install_cost_patch
+
+    _install_cost_patch()
     crews = _select_crews(agents)
     if not crews:
         print("[host] no matching crews to run.", file=sys.stderr)
