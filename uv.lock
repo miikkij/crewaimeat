@@ -10,7 +10,7 @@ resolution-markers = [
 
 [[package]]
 name = "aimeat-crewai"
-version = "0.16.3"
+version = "0.16.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "crewai" },
@@ -18,9 +18,9 @@ dependencies = [
     { name = "mcp" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/56/4a/9006eb1af05dac4fe21bd6c89e7f59588134f1627c7f32671779c4a6fe55/aimeat_crewai-0.16.3.tar.gz", hash = "sha256:c6934b9619e64ad453477a41ecc971fe2d206a6815370f01d98f15fc00a0c619", size = 423317, upload-time = "2026-07-12T01:12:29.455Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7f/b5/14e7444efd8d3ca0529e1470770d20ffbe95669889dbceeb91ac51af4639/aimeat_crewai-0.16.4.tar.gz", hash = "sha256:031fe2dd0398c8bf988beacefda8e80b2f684e7f34c0ba98d1a300962fdaf779", size = 425307, upload-time = "2026-07-12T01:41:48.657Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/eb/6c/19b03600410a20b46e49bca6cd9ef647b9a129cd965cde18be85e533e4ac/aimeat_crewai-0.16.3-py3-none-any.whl", hash = "sha256:44a376011ee821d3a6091b018841c73f9f092669967e49bb1fe14d6e589ea0dd", size = 78573, upload-time = "2026-07-12T01:12:28.11Z" },
+    { url = "https://files.pythonhosted.org/packages/62/75/b8c89b72a6d3d409865c53c042f6a63409434da0b4d72dc2cdb2cef38a4c/aimeat_crewai-0.16.4-py3-none-any.whl", hash = "sha256:c20ec9afc1897f3488a62d4801097e3e393ebd754fd2f56d3a9d4b011b1f6201", size = 79410, upload-time = "2026-07-12T01:41:47.1Z" },
 ]
 
 [[package]]
