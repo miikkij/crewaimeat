@@ -72,3 +72,19 @@ def install() -> None:
         print("[aimeat] crewai cost patch active (OpenRouter usage.cost -> ledger)", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001
         print(f"[aimeat] crewai cost patch failed: {exc!r}", file=sys.stderr)
+
+
+def prewarm_litellm() -> None:
+    """Pre-load CrewAI's litellm lazy-loader single-threaded BEFORE the fleet's concurrent agent
+    startups. CrewAI's `_ensure_litellm()` flips its `_litellm_loaded` flag BEFORE the (slow) litellm
+    import finishes and isn't locked — so under the fleet host's ~40 simultaneous agent LLM builds,
+    racing threads read the still-False `LITELLM_AVAILABLE` and EVERY non-native model (NVIDIA NIM
+    etc.) dies with 'LiteLLM fallback package is not installed', even though litellm IS installed.
+    Measured: 1/40 threads succeeded without this warm-up; 40/40 with it. Best-effort + idempotent."""
+    try:
+        from crewai.llm import _ensure_litellm
+
+        ok = _ensure_litellm()
+        print(f"[aimeat] litellm prewarmed (fleet-host race guard): available={ok}", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 — CrewAI internal moved; degrade to the race (non-fatal)
+        print(f"[aimeat] litellm prewarm skipped: {exc!r}", file=sys.stderr)

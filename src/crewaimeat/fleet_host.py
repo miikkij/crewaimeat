@@ -178,10 +178,14 @@ def run_host(agents: list[str] | None = None) -> int:
 
     _install_timestamps()
     # Make CrewAI surface OpenRouter's per-call cost so the ledger records real spend, not $0
-    # (CrewAI's OpenAI usage extractor drops response.usage.cost — this restores it).
+    # (CrewAI's OpenAI usage extractor drops response.usage.cost — this restores it), and pre-warm
+    # CrewAI's litellm loader single-threaded so the 40 concurrent agent startups don't race it
+    # (that race makes NVIDIA NIM etc. fail with "LiteLLM fallback not installed").
     from crewaimeat.crewai_cost_patch import install as _install_cost_patch
+    from crewaimeat.crewai_cost_patch import prewarm_litellm as _prewarm_litellm
 
     _install_cost_patch()
+    _prewarm_litellm()
     crews = _select_crews(agents)
     if not crews:
         print("[host] no matching crews to run.", file=sys.stderr)
