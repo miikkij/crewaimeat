@@ -20,33 +20,28 @@ from datetime import datetime
 
 
 class _TimestampedWriter:
-    """A stdout/stderr proxy that prefixes a timestamp at the start of every line. Delegates
-    everything else (flush, isatty, encoding, …) to the wrapped stream so Rich/color detection
-    and buffering behave exactly as before."""
+    """A stdout/stderr proxy that prefixes a timestamp at the start of every line. Buffers each
+    thread's partial line separately and only emits COMPLETE lines (prefix + line + newline) in one
+    locked write — so 40 agent threads printing at once never interleave mid-line. Delegates
+    everything else (flush, isatty, encoding, …) to the wrapped stream."""
 
     def __init__(self, stream, fmt: str) -> None:
         self._stream = stream
         self._fmt = fmt
         self._lock = threading.Lock()
-        self._at_line_start = True
+        self._partial: dict[int, str] = {}  # thread id -> buffered text with no trailing newline yet
 
     def write(self, text: str) -> int:
         if not text:
             return 0
-        stamp = datetime.now().strftime(self._fmt) + " "
+        tid = threading.get_ident()
         with self._lock:
-            parts = text.split("\n")
-            out: list[str] = []
-            for i, part in enumerate(parts):
-                is_last = i == len(parts) - 1
-                if self._at_line_start and (part or not is_last):
-                    out.append(stamp)
-                    self._at_line_start = False
-                out.append(part)
-                if not is_last:
-                    out.append("\n")
-                    self._at_line_start = True
-            self._stream.write("".join(out))
+            buf = self._partial.get(tid, "") + text
+            lines = buf.split("\n")
+            self._partial[tid] = lines.pop()  # last chunk has no newline yet — keep buffering it
+            if lines:
+                stamp = datetime.now().strftime(self._fmt) + " "
+                self._stream.write("".join(f"{stamp}{ln}\n" for ln in lines))
         return len(text)
 
     def flush(self) -> None:

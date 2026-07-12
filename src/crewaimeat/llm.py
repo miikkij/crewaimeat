@@ -27,16 +27,19 @@ from crewai import LLM
 from crewai.llms.base_llm import BaseLLM
 from pydantic import PrivateAttr
 
-# provider type -> litellm model-id prefix
-# `nvidia` = NVIDIA NIM (build.nvidia.com), an OpenAI-compatible endpoint: route it through litellm's
-# `openai/` provider with an explicit base_url (so `z-ai/glm-5.2` becomes `openai/z-ai/glm-5.2`).
+# provider type -> model-id prefix.
+# `nvidia` = NVIDIA NIM (build.nvidia.com): an OpenAI-compatible endpoint used the SAME way NVIDIA's own
+# docs show — the bare model id (`z-ai/glm-5.2`) against base_url=integrate.api.nvidia.com. So NO prefix.
+# (It used to be `openai/`, a litellm-era artifact that made `openai/z-ai/glm-5.2` — CrewAI 1.15 then
+# rejected it as a non-existent OpenAI model and fell back to litellm; the bare id routes cleanly through
+# CrewAI's openai_compatible provider, no litellm needed.)
 _PREFIX = {
     "openrouter": "openrouter/",
     "ollama": "ollama/",
     "xai": "xai/",
     "openai": "",
     "generic": "",
-    "nvidia": "openai/",
+    "nvidia": "",
 }
 _DEFAULT_BASE = {
     "openrouter": "https://openrouter.ai/api/v1",
