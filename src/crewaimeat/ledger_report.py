@@ -48,6 +48,29 @@ def _resolve_run_id() -> str | None:
         return None
 
 
+# Known LLM ROUTING prefixes (litellm-style). Stripped from the model id so ONE model = ONE ledger
+# row and the routing provider lives in `provider`, not baked into the model string. Only these are
+# stripped; a real model-family/vendor segment (qwen/, bytedance-seed/, z-ai/) is left intact.
+_ROUTING_PREFIXES = frozenset(
+    {"openrouter", "openai", "nvidia", "xai", "anthropic", "azure", "bedrock", "ollama", "local"}
+)
+
+
+def _normalize_model(model: str) -> tuple[str, str | None]:
+    """(canonical_model, routing_provider) — strip ONE leading known routing prefix, `prefix:rest` or
+    `prefix/rest`. Only the OUTERMOST known prefix is removed, once: `openrouter/openai/gpt-oss-120b`
+    -> (`openai/gpt-oss-120b`, `openrouter`) keeps the vendor namespace, while `openai/z-ai/glm-5.2`
+    -> (`z-ai/glm-5.2`, `openai`) and `nvidia:z-ai/glm-5.2` -> (`z-ai/glm-5.2`, `nvidia`). Bare /
+    vendor-first ids (`bytedance-seed/seedream-4.5`, `z-ai/glm-5.2`) pass through unchanged. Mirrors
+    aimeat-crewai's payload builder so both report paths collapse to the same row."""
+    m = (model or "").strip()
+    for sep in (":", "/"):
+        head, found, rest = m.partition(sep)
+        if found and rest and head.lower() in _ROUTING_PREFIXES:
+            return rest, head.lower()
+    return m, None
+
+
 def report_llm_usage(
     model: str,
     usage: dict | None,
@@ -66,7 +89,13 @@ def report_llm_usage(
         who = _resolve_agent(agent)
         if not who:
             return  # can't attribute -> skip rather than mis-post to the wrong agent
-        data: dict[str, Any] = {"model": model, "prompt_tokens": pt, "completion_tokens": ct, "provider": provider}
+        canonical_model, derived_provider = _normalize_model(model)  # one model = one ledger row
+        data: dict[str, Any] = {
+            "model": canonical_model,
+            "prompt_tokens": pt,
+            "completion_tokens": ct,
+            "provider": derived_provider or provider,
+        }
         cost = u.get("cost")
         if isinstance(cost, (int, float)) and cost >= 0:
             data["cost_usd"] = float(cost)  # authoritative provider cost wins over the node's table
