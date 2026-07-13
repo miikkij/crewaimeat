@@ -343,6 +343,11 @@ def run() -> None:
         # Corrections: anyone, message starts with the magic word (the chat command produces this too).
         if low.startswith(_CORRECTION_PREFIXES):
             return _handle_correction(sender, text)
+        # A refined sanomat-vinkki package is ALWAYS material, never a command — route it before the
+        # owner-command heuristics (a tip whose prose contains e.g. "haastattelee ... nyt" must not
+        # trigger the interview command; found the hard way with the intake announcement tip).
+        if reader_desk.parse_vinkki_block(text):
+            return _handle_tip(sender, text, attachments, is_owner=is_owner)
         # Owner control commands.
         if is_owner and "haastattele" in low and "nyt" in low:
             reader_desk.set_config(AGENT_NAME, interview_conversation_id=conv)
