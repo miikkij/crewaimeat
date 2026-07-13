@@ -190,6 +190,55 @@ def test_finish_pending_resolves_propose_todos_placeholder(monkeypatch):
     assert proposed and proposed[0]["task_id"] == "T123"
 
 
+def test_finish_pending_logs_node_rejection_loudly(monkeypatch, capsys):
+    """An MCP tool-level error comes back as a JSON envelope, NOT an exception — the safety net must
+    surface it as a REJECTION, not log 'ok' (the hidden accept_test_task deadlock)."""
+    monkeypatch.setattr(ac.time, "sleep", lambda *_: None)
+
+    class _Status:
+        name = "aimeat_onboarding_status"
+
+        def __init__(self):
+            self.calls = 0
+
+        def run(self, **kw):
+            self.calls += 1
+            if self.calls > 1:
+                return {"onboarding": {"steps": []}, "step_guide": {}}
+            return {
+                "onboarding": {
+                    "steps": [
+                        {
+                            "id": "accept_test_task",
+                            "required": True,
+                            "status": "pending",
+                            "details": {"testTaskId": "T123"},
+                        }
+                    ]
+                },
+                "step_guide": {
+                    "accept_test_task": {
+                        "tool": "aimeat_task_propose_todos",
+                        "args": {"task_id": "{test_task_id}", "todos": []},
+                    }
+                },
+            }
+
+    class _Propose:
+        name = "aimeat_task_propose_todos"
+
+        def run(self, **kw):
+            return (
+                '{"code": "INVALID_STATE", "message": '
+                '"TODOs can only be proposed on queued or revision_requested tasks (current: active)"}'
+            )
+
+    ac._finish_pending_onboarding([_Status(), _Propose()], "x", {})
+    err = capsys.readouterr().err
+    assert "REJECTED by node: INVALID_STATE" in err
+    assert "-> aimeat_task_propose_todos: ok" not in err
+
+
 def test_run_onboarding_only_seeds_services(monkeypatch):
     _patch_serve(monkeypatch)
     calls: list = []

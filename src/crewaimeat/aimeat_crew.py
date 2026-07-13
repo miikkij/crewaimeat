@@ -1071,10 +1071,26 @@ def _finish_pending_onboarding(tools, agent_name: str, step_args: dict, *, attem
                     continue
                 args["task_id"] = real
             try:
-                tool.run(**args)
-                print(f"[{agent_name}]   {sid} -> {tool_name}: ok", file=sys.stderr)
+                res = tool.run(**args)
             except Exception as exc:  # noqa: BLE001 — report; a functional agent is already authorized
                 print(f"[{agent_name}]   {sid} -> {tool_name} raised: {exc!r}", file=sys.stderr)
+                continue
+            # FAIL LOUD on a tool-level rejection: MCP returns errors as a JSON envelope, NOT an
+            # exception — logging those as 'ok' hid the accept_test_task deadlock (the node rejects
+            # propose_todos on an auto-started ACTIVE test task, so the step looked driven but never was).
+            parsed = res
+            if isinstance(res, str):
+                try:
+                    parsed = json.loads(res)
+                except ValueError:
+                    parsed = None
+            if isinstance(parsed, dict) and parsed.get("code") and parsed.get("message"):
+                print(
+                    f"[{agent_name}]   {sid} -> {tool_name} REJECTED by node: {parsed['code']}: {parsed['message']}",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"[{agent_name}]   {sid} -> {tool_name}: ok", file=sys.stderr)
     # attempts exhausted — a final status read to settle any auto-steps
     try:
         status_tool.run()
