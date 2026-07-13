@@ -88,6 +88,40 @@ def raw_key(date: str, edition: str = "evening") -> str:
     return f"news.{date}.{edition}.raw.lukijoilta"
 
 
+# ── refined tips: the `sanomat-vinkki` fenced block (TARGET-035) ─────────────
+# A tip refined in the sender's own AI chat arrives as a fenced JSON block. The canonical
+# contract lives in the skill user:happydude500001/sanomat-tip-desk (bound to the Sanomat app);
+# this parser must stay in sync with it. Anything that fails to parse falls back to the
+# first-line-is-title heuristic in add_tip — a malformed block is still a valid plain tip.
+_VINKKI_BLOCK_RE = re.compile(r"```sanomat-vinkki\s*\n(.*?)```", re.DOTALL)
+_VINKKI_TYPES = ("vinkki", "haastattelu")
+
+
+def parse_vinkki_block(text: str) -> dict | None:
+    """Extract and validate one `sanomat-vinkki` fenced block from a DM body.
+
+    Returns {type, title, content, language} on success, None on anything else
+    (no block, bad JSON, missing/empty title or content). Title is clamped to 120."""
+    import json
+
+    m = _VINKKI_BLOCK_RE.search(text or "")
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(1))
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    title = data.get("title")
+    content = data.get("content")
+    if not isinstance(title, str) or not title.strip() or not isinstance(content, str) or not content.strip():
+        return None
+    tip_type = data.get("type") if data.get("type") in _VINKKI_TYPES else "vinkki"
+    language = data.get("language") if isinstance(data.get("language"), str) else None
+    return {"type": tip_type, "title": title.strip()[:120], "content": content.strip(), "language": language}
+
+
 # ── the interview kickoff (deterministic — the questions are fixed) ──────────
 def build_interview(date_str: str) -> str:
     return (
@@ -160,6 +194,8 @@ def add_tip(
     source: str,
     images: list[str] | None = None,
     title: str | None = None,
+    refined: bool = False,
+    tip_type: str | None = None,
 ) -> tuple[str, str]:
     """Append one tip to the NEXT evening edition's lukijoilta raw (read-modify-write; tips are rare
     enough that the race window is acceptable). Returns (date, edition) it landed in. Raises on a
@@ -175,6 +211,11 @@ def add_tip(
         "content": text.strip(),
         "source": source,
     }
+    if refined:
+        # Refined in the sender's own AI chat (sanomat-vinkki block) — provenance for the paper.
+        entry["refined"] = True
+    if tip_type and tip_type != "vinkki":
+        entry["tip_type"] = tip_type  # tone hint for the writer (e.g. "haastattelu")
     if images:
         entry["images"] = images
     items.append(entry)

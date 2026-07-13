@@ -40,6 +40,9 @@ README = """[[FIGLET:slant]["Sanomat Desk"]]
 - **Oikaisupyyntö** — aloita viesti sanalla "OIKAISU". Lakiosasto käsittelee; tilan näet lehden
   Oikaisut-sivulta (aiheettomaksi todetut perustellaan julkisesti, hyväksytyt julkaistaan
   oikaisu-uutisena seuraavassa painoksessa).
+- **Jalostettu vinkki** — anna oman AI-chattisi haastatella sinut: Sanomat-appin "Kopioi
+  haastatteluprompt" -nappi (tai AIMEAT-kytketylle AI:lle skill `sanomat-tip-desk`) tuottaa valmiin
+  `sanomat-vinkki`-paketin, jonka deski parsii suoraan otsikoksi ja jutuksi.
 
 Komennot: "haastattele nyt", "haastattelu päivittäin klo 16:30", "lopeta haastattelu".
 """
@@ -244,14 +247,19 @@ def _resolve_correction_gate(event: dict) -> str | None:
 
 
 def _handle_tip(sender: str, text: str, attachments: list, *, is_owner: bool) -> str:
-    """Screen (external only) -> publish images -> append to the edition's lukijoilta raw -> ack."""
+    """Parse a refined block if present -> screen (external only) -> publish images -> append to the
+    edition's lukijoilta raw -> ack. A `sanomat-vinkki` fenced block (refined in the sender's own AI
+    chat, contract in the sanomat-tip-desk skill) supplies title/content directly; anything else uses
+    the first-line-is-title heuristic. The legal screen always sees the material that would publish."""
+    parsed = reader_desk.parse_vinkki_block(text)
+    material = parsed["content"] if parsed else text
     notes = ""
     if attachments:
         blocks = [vision.analyze_attachment(AGENT_NAME, a) for a in attachments[:5]]
         notes = "\n\n".join(blocks)
     if not is_owner:
         try:
-            verdict = legal_screen.screen_external(AGENT_NAME, sender=sender, text=text, attachment_notes=notes)
+            verdict = legal_screen.screen_external(AGENT_NAME, sender=sender, text=material, attachment_notes=notes)
         except legal_screen.LegalScreenUnavailable as exc:
             print(f"[{AGENT_NAME}] legal screen unavailable: {exc!r}", file=sys.stderr)
             return (
@@ -270,10 +278,18 @@ def _handle_tip(sender: str, text: str, attachments: list, *, is_owner: bool) ->
             )
     date, edition = reader_desk.next_evening_edition()
     images = reader_desk.publish_tip_images(AGENT_NAME, attachments, date=date) if attachments else []
-    body = text if not notes else f"{text}\n\n[Liitteiden analyysi]\n{notes}"
+    body = material if not notes else f"{material}\n\n[Liitteiden analyysi]\n{notes}"
     source = "haastattelu/omistaja" if is_owner else f"lukijavinkki ({sender.split('@')[0]})"
     try:
-        date, edition = reader_desk.add_tip(AGENT_NAME, text=body, source=source, images=images)
+        date, edition = reader_desk.add_tip(
+            AGENT_NAME,
+            text=body,
+            source=source,
+            images=images,
+            title=parsed["title"] if parsed else None,
+            refined=bool(parsed),
+            tip_type=parsed["type"] if parsed else None,
+        )
     except RuntimeError as exc:
         print(f"[{AGENT_NAME}] add_tip failed: {exc!r}", file=sys.stderr)
         return "Vinkki EI tallentunut (tekninen vika) — yritä hetken päästä uudelleen."

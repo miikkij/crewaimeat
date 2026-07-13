@@ -84,3 +84,73 @@ def test_build_interview_mentions_date_and_thread():
     body = rd.build_interview("2026-07-13")
     assert "2026-07-13" in body
     assert "haastattelu" in body.lower()
+
+
+# ── refined tips: the sanomat-vinkki fenced block (TARGET-035) ───────────────
+_BLOCK = (
+    "Uutisvinkki:\n```sanomat-vinkki\n"
+    '{"type": "haastattelu", "title": "Päivä joka ei kaatunut", '
+    '"content": "Aamulla kaatui kahvi, iltapäivällä kaatui palvelin, ilta pystyssä.", '
+    '"language": "fi"}\n```\nterv. lukija'
+)
+
+
+def test_parse_vinkki_block_happy_path():
+    parsed = rd.parse_vinkki_block(_BLOCK)
+    assert parsed == {
+        "type": "haastattelu",
+        "title": "Päivä joka ei kaatunut",
+        "content": "Aamulla kaatui kahvi, iltapäivällä kaatui palvelin, ilta pystyssä.",
+        "language": "fi",
+    }
+
+
+def test_parse_vinkki_block_defaults_type_and_clamps_title():
+    long_title = "x" * 300
+    text = f'```sanomat-vinkki\n{{"type": "runo", "title": "{long_title}", "content": "sisältö"}}\n```'
+    parsed = rd.parse_vinkki_block(text)
+    assert parsed is not None
+    assert parsed["type"] == "vinkki"  # unknown type falls back
+    assert len(parsed["title"]) == 120
+    assert parsed["language"] is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "pelkkä tavallinen vinkki ilman blokkia",
+        "```sanomat-vinkki\nei jsonia ollenkaan\n```",
+        '```sanomat-vinkki\n{"title": "", "content": "x"}\n```',  # empty title
+        '```sanomat-vinkki\n{"title": "x"}\n```',  # missing content
+        "```sanomat-vinkki\n[1, 2]\n```",  # not an object
+        "",
+    ],
+)
+def test_parse_vinkki_block_falls_back_to_none(text):
+    assert rd.parse_vinkki_block(text) is None
+
+
+def test_add_tip_refined_carries_provenance(monkeypatch):
+    call, written = _fake_store(None)
+    monkeypatch.setattr(rd, "_aimeat_call", call)
+    rd.add_tip(
+        "sanomat-desk",
+        text="Jalostettu sisältö.",
+        source="lukijavinkki (u)",
+        title="Oma otsikko",
+        refined=True,
+        tip_type="haastattelu",
+    )
+    entry = written["value"][0]
+    assert entry["title"] == "Oma otsikko"
+    assert entry["refined"] is True
+    assert entry["tip_type"] == "haastattelu"
+
+
+def test_add_tip_plain_has_no_refined_marker(monkeypatch):
+    call, written = _fake_store(None)
+    monkeypatch.setattr(rd, "_aimeat_call", call)
+    rd.add_tip("sanomat-desk", text="Tavallinen vinkki", source="s", tip_type="vinkki")
+    entry = written["value"][0]
+    assert "refined" not in entry
+    assert "tip_type" not in entry  # plain "vinkki" adds no field
