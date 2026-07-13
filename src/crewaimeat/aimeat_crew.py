@@ -66,7 +66,7 @@ from aimeat_crewai import (  # noqa: E402
     serve_params,
     stdio_params,
 )
-from aimeat_crewai.daemon import DAEMON_DEFAULT_TOOL_FILTER  # noqa: E402
+from aimeat_crewai.daemon import DAEMON_DEFAULT_TOOL_FILTER, _default_propose_crew  # noqa: E402
 from aimeat_crewai.mcp_client import AimeatServeError  # noqa: E402 — raised when no live serve daemon
 from crewai import Agent, Crew, Process, Task  # noqa: E402
 
@@ -976,6 +976,13 @@ _ONBOARDING_TOOL_FILTER: tuple[str, ...] = (
 )
 
 
+# The node's canonical TODO plan for the onboarding test task (accept_test_task's howTo.args template).
+# Proposed DETERMINISTICALLY (never via the LLM) wherever the scaffold touches the test task.
+_TEST_TASK_TODOS: tuple[dict, ...] = (
+    {"title": "Complete the onboarding test task", "verification": "Task status becomes done"},
+)
+
+
 def _resolve_test_task_id(agent_name: str) -> str | None:
     """The agent's still-open onboarding TEST TASK id. `complete_test_task`'s howTo ships a LITERAL
     `{test_task_id}` placeholder in its args, so a driver that passes it verbatim gets 'Task not found' and
@@ -1051,8 +1058,14 @@ def _finish_pending_onboarding(tools, agent_name: str, step_args: dict, *, attem
             args = dict(step_args.get(sid) or how.get("args") or {})
             if tool_name == "aimeat_memory_write":
                 args.setdefault("visibility", "owner")
-            if tool_name == "aimeat_task_complete" and ("{" in str(args.get("task_id", "")) or not args.get("task_id")):
-                real = _resolve_test_task_id(agent_name)  # resolve the {test_task_id} placeholder -> real task id
+            if tool_name in ("aimeat_task_complete", "aimeat_task_propose_todos") and (
+                "{" in str(args.get("task_id", "")) or not args.get("task_id")
+            ):
+                # Resolve the {test_task_id} placeholder -> real task id. The node stopped shipping
+                # hints.test_task_id (accept_test_task's howTo still says {test_task_id}), so an
+                # unresolved id reaches BOTH task steps — the step's own details.testTaskId is
+                # authoritative; fall back to scanning the open task list.
+                real = (s.get("details") or {}).get("testTaskId") or _resolve_test_task_id(agent_name)
                 if not real:
                     print(f"[{agent_name}]   {sid}: onboarding test task not visible yet — retrying", file=sys.stderr)
                     continue
@@ -1115,13 +1128,36 @@ def _run_onboarding_only(
             tool_filter=_ONBOARDING_TOOL_FILTER,
             verbose=False,
         ) as liaison:
-            run_hello_integration(
-                liaison.tools,
-                agent_name=agent_name,
-                step_args=step_args,
-                sleep_seconds=1.0,  # a beat between rounds so passive steps (configure_delivery) register
-                logger=lambda m: print(f"[{agent_name}] {m}", file=sys.stderr),
-            )
+            # The node stopped shipping hints.test_task_id, but accept_test_task / complete_test_task's
+            # howTo.args still carry a LITERAL {test_task_id} — the package driver substitutes from hints,
+            # so it calls the task tools with an EMPTY id and burns every round on a step that can never
+            # pass (the 15×accept_test_task stall). Pre-resolve the real id into step_args overrides
+            # (an override replaces howTo.args verbatim). No open test task yet -> leave the howTo args;
+            # the safety net below resolves from step details on a later pass.
+            _test_tid = _resolve_test_task_id(agent_name)
+            if _test_tid:
+                step_args.setdefault(
+                    "accept_test_task", {"task_id": _test_tid, "todos": [dict(t) for t in _TEST_TASK_TODOS]}
+                )
+                step_args.setdefault(
+                    "complete_test_task", {"task_id": _test_tid, "message": "Onboarding test task completed."}
+                )
+            try:
+                run_hello_integration(
+                    liaison.tools,
+                    agent_name=agent_name,
+                    step_args=step_args,
+                    sleep_seconds=1.0,  # a beat between rounds so passive steps (configure_delivery) register
+                    logger=lambda m: print(f"[{agent_name}] {m}", file=sys.stderr),
+                )
+            except OnboardingError as exc:
+                # Rounds exhausted on a stuck step (e.g. the test task is in a state its tool rejects).
+                # Do NOT bail past the safety net — the remaining drivable steps (publish_config et al.)
+                # are exactly what it exists to drive; a stuck step must not starve its siblings.
+                print(
+                    f"[{agent_name}] deterministic driver stopped early ({exc}) — driving leftover steps.",
+                    file=sys.stderr,
+                )
             # Safety net: if the mode-change re-derivation landed after the driver's first status read,
             # the driver may have returned on a stale completable=true — drive any leftover required step.
             _finish_pending_onboarding(liaison.tools, agent_name, step_args)
@@ -1150,6 +1186,29 @@ def _run_onboarding_only(
     except Exception as exc:  # noqa: BLE001 — onboarding must NEVER crash the daemon
         print(f"[{agent_name}] onboarding ended with an error (continuing): {exc!r}", file=sys.stderr)
     print(f"\n=== {agent_name}: ONBOARDING-ONLY done ===", file=sys.stderr)
+
+
+def _is_onboarding_smoke(task: dict) -> bool:
+    """True when this AIMEAT task is the node's Hello-Integration smoke test task. It carries no
+    special kind, but both node creation sites stamp the SAME locale-independent verification marker."""
+    verif = task.get("verification")
+    return (
+        isinstance(verif, dict) and verif.get("userExpects") == "Agent completes the onboarding test task successfully"
+    )
+
+
+def _make_noop_crew(agent_name: str, role: str, note: str) -> Crew:
+    """The trivial one-agent 'Output exactly: ok' crew — ceremony the daemon's dispatch requires when
+    the real work already happened deterministically."""
+    noop = Agent(
+        role=role,
+        goal="Return ok.",
+        backstory=note,
+        llm=get_llm(for_tool_use=False, agent_name=agent_name),
+        verbose=False,
+    )
+    task = Task(description="Output exactly: ok", expected_output="ok", agent=noop)
+    return Crew(agents=[noop], tasks=[task], process=Process.sequential, verbose=False, cache=False)
 
 
 def _finalize_task(agent_name: str, tid: str, mem_key: str, liaison: Agent) -> Task:
@@ -2057,16 +2116,11 @@ def run_crew(spec: CrewSpec) -> None:
         # (that fabricates junk work) and do NOT let finalize mark invented "do the onboarding" todos done
         # (the "did it lie" bug). Ack it; the deterministic complete-callback closes it — its purpose (a
         # task round-trips through the subprocess) is satisfied without touching any onboarding todo.
-        _verif = task.get("verification")
-        if (
-            isinstance(_verif, dict)
-            and _verif.get("userExpects") == "Agent completes the onboarding test task successfully"
-        ):
+        if _is_onboarding_smoke(task):
             # The smoke test's only pass criterion is that a task ROUND-TRIPS — which needs NO model. Complete
             # it DETERMINISTICALLY right here (_make_complete_cb is a plain aimeat_task_complete that ignores its
             # output arg), so a down/erroring LLM provider can't fail the probe. No domain crew, no LLM in the
-            # completion, no invented "done" todos. The trivial crew below is ceremony the daemon requires; its
-            # callback re-completes idempotently as a fallback if the direct call raised.
+            # completion, no invented "done" todos. The trivial crew below is ceremony the daemon requires.
             print(
                 f"[{spec.agent_name}] onboarding smoke test task {tid} -> deterministic complete (no crew/LLM/todos)",
                 file=sys.stderr,
@@ -2076,16 +2130,18 @@ def run_crew(spec: CrewSpec) -> None:
                 _complete(None)
             except Exception as exc:  # noqa: BLE001 — a still-active task is simply re-dispatched on restart
                 print(f"[{spec.agent_name}] smoke test deterministic complete raised: {exc!r}", file=sys.stderr)
-            _noop = Agent(
-                role="Onboarding Test",
-                goal="Return ok.",
-                backstory="You do nothing; the task is already complete.",
-                llm=get_llm(for_tool_use=False, agent_name=spec.agent_name),
-                verbose=False,
-            )
-            _noopt = Task(description="Output exactly: ok", expected_output="ok", agent=_noop)
-            _noopt.callback = _complete  # idempotent fallback (only matters if the direct complete above failed)
-            return Crew(agents=[_noop], tasks=[_noopt], process=Process.sequential, verbose=False, cache=False)
+
+            def _fallback_complete(_out, _tid=tid) -> None:
+                # Idempotent fallback: re-complete ONLY if the direct call above did not land (a blind
+                # re-complete on an already-done task logs a scary INVALID_STATE failure every time).
+                data = _aimeat_call(spec.agent_name, "aimeat_task_get", {"task_id": _tid}, quiet=True) or {}
+                status = ((data.get("task") if isinstance(data.get("task"), dict) else data) or {}).get("status")
+                if status in ("active", "stalled"):
+                    _complete(_out)
+
+            crew = _make_noop_crew(spec.agent_name, "Onboarding Test", "You do nothing; the task is already complete.")
+            crew.tasks[0].callback = _fallback_complete
+            return crew
 
         # Self-evolution: if this message is the owner's CLICK on one of our own evolution prompts,
         # handle it here (diagnose / build / dismiss) and reply in our thread — do NOT run the domain
@@ -2467,6 +2523,28 @@ def run_crew(spec: CrewSpec) -> None:
     if spec.discover:
         print(f"[{spec.agent_name}] discover ON -> liaison tool_filter += aimeat_discover", file=sys.stderr)
 
+    # PROPOSE-phase override: the onboarding smoke test task gets its TODO plan proposed DETERMINISTICALLY
+    # (the node's accept_test_task step passes on exactly this call — leaving it to the LLM propose crew
+    # made the step hostage to provider health/model quality). Every other task keeps the package's
+    # LLM propose crew.
+    def _propose(task: dict, liaison: Agent) -> Crew:
+        if _is_onboarding_smoke(task):
+            _ptid = task.get("id")
+            res = _aimeat_call(
+                spec.agent_name,
+                "aimeat_task_propose_todos",
+                {"task_id": _ptid, "todos": [dict(t) for t in _TEST_TASK_TODOS]},
+            )
+            print(
+                f"[{spec.agent_name}] onboarding smoke test task {_ptid} -> deterministic todo proposal "
+                f"(no LLM): {bool(res)}",
+                file=sys.stderr,
+            )
+            return _make_noop_crew(
+                spec.agent_name, "Onboarding Test", "You do nothing; the TODO plan is already proposed."
+            )
+        return _default_propose_crew(task, liaison)
+
     # Wait for the supervisor's shared serve daemon to be live before binding the daemon loop. A crew
     # never spawns it (single-spawner discipline), but riding out a transient restart/tunnel-drop beats
     # hard-crashing on AimeatServeError and burning the per-crew watchdog's quick-exit budget (the
@@ -2479,6 +2557,7 @@ def run_crew(spec: CrewSpec) -> None:
             run_crew_daemon(
                 agent_name=spec.agent_name,
                 build_crew=_build,
+                build_propose_crew=_propose,
                 poll_interval_seconds=spec.poll_seconds,
                 tool_filter=_tool_filter,
                 listen_for=_listen,
