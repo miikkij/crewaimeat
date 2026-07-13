@@ -1,6 +1,8 @@
 # crewaimeat: CrewAI crews on AIMEAT
 
-The idea behind crewaimeat is to make building a CrewAI crew fast (an AI assistant does the wiring for you), connect it to the AIMEAT platform so it works alongside other agents there that come from other platforms, and keep people able to see and steer what the agents produce.
+[AIMEAT](https://aimeat.io) is a digital agency where people, AI, agents and apps work under one roof — and everyone owns their own data. **crewaimeat is the agent runtime for it**: a tested scaffold and fleet tooling that turn CrewAI crews into live agents on an AIMEAT node. You write one small function per crew, an AI assistant can do the wiring for you, and the people who own the agents can watch and steer everything they produce from the dashboard.
+
+This repo is the sibling of [aimeat-protocol](https://github.com/miikkij/aimeat-protocol) — that repo is the **node** (the protocol spec + reference server); this one is the **runtime** that connects agents to a node, through the [`aimeat-crewai`](https://pypi.org/project/aimeat-crewai/) connector package (published to PyPI; its source lives in aimeat-protocol). Protocol readers: the spec is v4.0, two-layer — [Core](https://github.com/miikkij/aimeat-protocol/blob/main/docs/AIMEAT-RFC-v4.0-Core-full.md) + [Platform](https://github.com/miikkij/aimeat-protocol/blob/main/docs/AIMEAT-RFC-v4.0-Platform-full.md).
 
 ## 🚀 Fastest start: hand the setup to your AI assistant
 
@@ -13,6 +15,7 @@ Prefer to do it by hand? Follow the [Quickstart](#quickstart) below — `startup
 - [🚀 Fastest start (startup.prompt.md)](#-fastest-start-hand-the-setup-to-your-ai-assistant)
 - [Overview](#overview)
 - [How it works](#how-it-works)
+- [Repository structure](#repository-structure)
 - [Quickstart](#quickstart)
 - [Scaffold a new crew](#scaffold-a-new-crew)
 - [Example crews](#example-crews)
@@ -24,6 +27,7 @@ Prefer to do it by hand? Follow the [Quickstart](#quickstart) below — `startup
 - [crew-forge: an agent that makes agents](#crew-forge-an-agent-that-makes-agents)
 - [Running the fleet (scripts)](#running-the-fleet-scripts)
 - [Fleet TUI (crewaimeat-tui)](#fleet-tui-crewaimeat-tui)
+- [aimeat-agency: the desktop app](#aimeat-agency-the-desktop-app)
 
 ## Overview
 
@@ -40,6 +44,27 @@ crewaimeat ships a tested scaffold and a template. You write only your crew's ow
 - **Live progress (no LLM).** A small bridge streams status to AIMEAT: milestones to the task timeline, and a status line every 5 seconds to the memory key `agents.<agent>.tasks.<id>.live`. This is the part that gives people visibility: you can follow what a crew is doing and read its output as it happens.
 
 You write only `build_domain(ctx)`. The scaffold (`crewaimeat/aimeat_crew.py`) handles the rest. `SCAFFOLD_CANON.md` explains each piece and the reason it is there.
+
+## Repository structure
+
+```
+src/crewaimeat/     the locked scaffold + shared machinery (the installable package):
+                    aimeat_crew.py (run_crew/CrewSpec), llm routing, fleet host, forge,
+                    contracts, deterministic pipelines, the TUI (tui/), the agency cockpit (agency/)
+crews/              one file per agent: <name>_crew.py with build_domain (a leading _ = parked)
+crew_defs/          declarative JSON crew definitions (interpreted by crew_def.py / forge_json.py)
+skills/             SKILL.md expertise packs crews can load (see skills/README.md)
+scripts/            fleet entrypoints: start_fleet, start_host, watchdog, view/terminate_fleet,
+                    register_fleet.py, check_models.py (.ps1 = Windows, .sh = macOS/Linux)
+aimeat-agency/      the Tauri desktop appliance (a shell over crewaimeat.agency.cockpit)
+tests/              the deterministic pytest floor (no LLM, no network)
+benchmarks/         the LOCOMO memory benchmark harness
+infra/searxng/      optional self-hosted SearXNG (docker compose) for free web search
+docs/               guides; large working sets under docs/ are local-only (gitignored)
+.aimeat/            per-repo connector home — tokens, serve.json (gitignored)
+```
+
+A more detailed map — components, the scaffold's lifecycle, fleet topology, where to add things — is in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Quickstart
 
@@ -76,11 +101,11 @@ Then queue a task for `research-crew` from the AIMEAT dashboard (its Tasks tab, 
 
 ### Picking a model
 
-`openrouter/owl-alpha` is free and fine for testing; the scaffold already copes with its occasional empty responses. For production, add credit on OpenRouter and switch to a stronger paid model, which is faster and more likely to get the task right on the first try. The model is set in `.env` via `OPENROUTER_MODEL`.
+`openrouter/owl-alpha` is free and fine for testing; the scaffold already copes with its occasional empty responses. Another free option is **NVIDIA NIM** (https://build.nvidia.com, OpenAI-compatible, frontier-class models like `z-ai/glm-5.2` at ~40 req/min) — set `NVIDIA_KEY` in `.env` and use provider type `nvidia` in `llm_providers.json` below. For production, add credit on OpenRouter and switch to a stronger paid model, which is faster and more likely to get the task right on the first try. The single-model default is set in `.env` via `OPENROUTER_MODEL`.
 
 ### Providers and model fallback (`llm_providers.json`)
 
-For resilience and local-first setups, drop an `llm_providers.json` in the repo root (copy [`llm_providers.example.json`](llm_providers.example.json)). It lists **providers in priority order**, each with **models in priority order**; `get_llm` tries them top-to-bottom, falling through on any error **across providers** — so a local **Ollama** model can back up OpenRouter (or you can run local-first and never touch a paid model unless you list it). Each model carries its **context window**, and the chain sizes prompts to the *smallest* one, so a 32k local model is never over-filled behind a 128k one. Types: `openrouter`, `ollama` (keyless), `xai`, `openai`, `generic`; a provider whose key is missing is skipped, not fatal. The file is gitignored; delete it to fall back to the `.env` `OPENROUTER_MODEL` path.
+For resilience and local-first setups, drop an `llm_providers.json` in the repo root (copy [`llm_providers.example.json`](llm_providers.example.json)). It lists **providers in priority order**, each with **models in priority order**; `get_llm` tries them top-to-bottom, falling through on any error **across providers** — so a local **Ollama** model can back up OpenRouter (or you can run local-first and never touch a paid model unless you list it). Each model carries its **context window**, and the chain sizes prompts to the *smallest* one, so a 32k local model is never over-filled behind a 128k one. Types: `openrouter`, `ollama` (keyless), `xai`, `openai`, `nvidia` (NVIDIA NIM), `generic`; a provider whose key is missing is skipped, not fatal. The file is gitignored; delete it to fall back to the `.env` `OPENROUTER_MODEL` path.
 
 Before trusting a new free or local model, check it can actually drive crewaimeat:
 
@@ -139,19 +164,22 @@ Output language follows the agent's judgment unless the task asks for a specific
 
 - Python 3.10 to 3.13 (`requires-python = ">=3.10,<3.14"`).
 - uv for installs and runs (the project `.venv` has no pip). [Install uv](https://docs.astral.sh/uv/getting-started/installation/).
-- `crewai[tools]`, `aimeat-crewai`, `tavily-python`, `python-dotenv`, `tzdata` (installed by `uv sync`).
-- An OpenRouter API key (or xAI via `USE_XAI=1`); an optional Tavily key for web search.
+- `crewai[tools]`, `aimeat-crewai` (the AIMEAT connector — the liaison, serve daemon, and Hello Integration driver; source in [aimeat-protocol](https://github.com/miikkij/aimeat-protocol)), plus web/search/extraction tools — all installed by `uv sync`.
+- Node.js, for the `npx aimeat` CLI (agent registration + the local serve daemon).
+- At least one model key: OpenRouter, NVIDIA NIM (free), xAI — or a local Ollama (keyless). Optional Tavily key for web search.
 
 ## Docs
 
-- `ARCHITECTURE.md`: the map of the codebase — techstack, component layout (scaffold / crews / contracts / pipelines / TUI), the scaffold's lifecycle, fleet topology, and where to add things.
-- `SCAFFOLD_CANON.md`: how to build crews on the scaffold, and the reason each piece is there.
-- `CREW_AUTHORING_PROMPT.md`: the prompt that has an assistant build a crew with you.
-- `CHANGELOG.md`: notable changes.
-- `tests/README.md`: the deterministic test floor (`uv run pytest`).
-- `docs/aimeat-guides/crewairesearch/`: researched CrewAI best-practices guides (architecture, prompting, efficiency, pitfalls, model selection, memory/tools, testing).
-- `docs/aimeat-guides/nextgeneration/`: an audit of this scaffold + crews against those guides — strengths, gaps, a prioritized roadmap, and ready-to-run Claude Code eval prompts.
-- AIMEAT integration reference: https://aimeat.io/docs/integrations/crewai
+- [ARCHITECTURE.md](ARCHITECTURE.md): the map of the codebase — techstack, component layout (scaffold / crews / contracts / pipelines / TUI), the scaffold's lifecycle, fleet topology, and where to add things.
+- [SCAFFOLD_CANON.md](SCAFFOLD_CANON.md): how to build crews on the scaffold, and the reason each piece is there.
+- [CREW_AUTHORING_PROMPT.md](CREW_AUTHORING_PROMPT.md): the prompt that has an assistant build a crew with you.
+- [CHANGELOG.md](CHANGELOG.md): notable changes.
+- [tests/README.md](tests/README.md): the deterministic test floor (`uv run pytest`).
+- [skills/README.md](skills/README.md): SKILL.md expertise packs for crews.
+- [aimeat-agency/README.md](aimeat-agency/README.md): the desktop appliance (Tauri shell + cockpit).
+- [docs/aimeat-app-authoring-guide.md](docs/aimeat-app-authoring-guide.md): how the build crews author AIMEAT apps (cortex + app, direct install).
+- AIMEAT integration reference (framework-agnostic, in the node repo): [aimeat-protocol/docs/integrations/crewai.md](https://github.com/miikkij/aimeat-protocol/blob/main/docs/integrations/crewai.md)
+- The AIMEAT protocol spec (v4.0, two-layer): [Core](https://github.com/miikkij/aimeat-protocol/blob/main/docs/AIMEAT-RFC-v4.0-Core-full.md) + [Platform](https://github.com/miikkij/aimeat-protocol/blob/main/docs/AIMEAT-RFC-v4.0-Platform-full.md)
 
 ## CrewSpec options
 
@@ -281,7 +309,7 @@ The **legacy** model runs **one OS process per crew**. Each imports `crewai` + `
 ./scripts/start_host.ps1 -List                 # show what would run, then exit
 ```
 
-It's **opt-in and additive** — the per-process model above is unchanged and stays the default. Pick **one** model per checkout (host *or* per-process): the per-agent single-instance lock makes whichever starts second exit. A crashed agent is restarted (bounded) without touching the others; `crew-forge` is excluded (its job is launching the per-process fleet, redundant here). Ctrl+C stops the whole host. The TUI shows host-threaded agents as `running` with `host` in the wd/dae column.
+The host is the **default** (`start_fleet` runs it since 0.5.0); the per-process model remains available for per-crew process isolation. Pick **one** model per checkout (host *or* per-process): the per-agent single-instance lock makes whichever starts second exit. A crashed agent is restarted (bounded) without touching the others; `crew-forge` is excluded (its job is launching the per-process fleet, redundant here). Ctrl+C stops the whole host. The TUI shows host-threaded agents as `running` with `host` in the wd/dae column.
 
 **Two fleets at once (e.g. dev + prod).** Run a second checkout (a `git clone`) against a different node: each clone has its own `AIMEAT_HOME`, serve daemon, logs and locks, so process detection (reconcile, the TUI, `terminate_fleet`) is scoped per-checkout and the two never collide. Mass-register the second node's agents with `uv run python scripts/register_fleet.py --owner <owner> --url http://localhost:40050`, then `start_host` there.
 
@@ -313,3 +341,15 @@ Actions (each behind a y/n confirm, run off the UI thread):
 | `j` / `k`, ↑/↓ | Navigate · `q` quit |
 
 Actions are safety-routed: stop kills the watchdog first (so it can't respawn) then the daemon, matched by crew filename only — the serve daemon is never touched; fleet stop uses `terminate_fleet.ps1`; reap uses the single-instance `ensure_single_serve`.
+
+## aimeat-agency: the desktop app
+
+[`aimeat-agency/`](aimeat-agency/) is a downloadable desktop appliance for **non-developers** to run an agency of agents on AIMEAT: install → connect your account → pick a brain → run → watch it work. It is a thin Tauri shell over the local Python cockpit (`crewaimeat.agency.cockpit`, FastAPI) — all product logic lives in the cockpit, which reuses this repo's read models (brains, fleet, memory, offerings). A guided wizard walks through account → AI brain (local Ollama by default, OpenRouter as the advanced path) → first agent → device-auth approval → start.
+
+Developers can skip the shell and run the cockpit directly:
+
+```powershell
+uv run --extra agency python -m crewaimeat.agency.cockpit    # then open the printed http://127.0.0.1:<port>/
+```
+
+See [aimeat-agency/README.md](aimeat-agency/README.md) for the shell, first-run provisioning, and build instructions.

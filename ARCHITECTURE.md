@@ -34,7 +34,7 @@ own "How to task me" line for exactly this reason.
 | Language / runtime | Python `>=3.10,<3.14` |
 | Package / env | **uv** (`uv run`, `uv sync`); build backend **hatchling** |
 | Agent framework | **CrewAI** (`crewai[tools]`) — Agents + Tasks + Crew |
-| AIMEAT connector | **`aimeat-crewai`** (`>=0.6.0`) — liaison, serve daemon, per-repo home |
+| AIMEAT connector | **`aimeat-crewai`** (see `pyproject.toml` for the current floor) — liaison, serve daemon, per-repo home, deterministic Hello Integration, usage metering. Source lives in [aimeat-protocol](https://github.com/miikkij/aimeat-protocol) |
 | LLM access | **litellm** via CrewAI `LLM`; OpenRouter / xAI / local Ollama |
 | TUI | **Textual** (optional `[tui]` extra) |
 | Web / tools | SearXNG + DuckDuckGo (`ddgs`) + optional Tavily; `playwright` (web-tester); `trafilatura` (extraction) |
@@ -64,15 +64,30 @@ src/crewaimeat/         the LOCKED scaffold + shared machinery (the package)
   workflow.py /         workflow execution + inspection
     workflow_inspector.py
   evolve.py / evolve_run.py   reputation / variant-selection (lab benchmark ↔ field selection)
+  fleet_host.py         run every approved crew as a THREAD in one process (the default fleet model)
+  skills.py /           SKILL.md loading (repo-local) + registry/workspace skill attachment
+    skills_registry.py
+  crew_def.py /         declarative JSON crew definitions: interpreter/validator + the forge `/build-json`
+    forge_json.py         path + AIMEAT publish/install (crew_registry.py)
+  agency/               the aimeat-agency cockpit (FastAPI): wizard, brains, fleet ops, copilot
   tui/                  the fleet TUI (see below)
   <tools>               searxng_search, ddg_search, browser_tool, seedream_gen, librarian, …
 
 crews/                  ONE file per agent: <name>_crew.py with build_domain + AGENT_NAME + README
-scripts/                fleet entrypoints (start_fleet.ps1, watchdog.ps1, serve_watchdog.ps1, …)
+                        (a leading underscore parks a crew — skipped by fleet discovery)
+crew_defs/              declarative JSON crew definitions (data for crew_def.py / the registry)
+skills/                 SKILL.md expertise packs crews load via CrewSpec.skills (see skills/README.md)
+scripts/                fleet entrypoints (start_fleet, start_host, watchdog, view/terminate_fleet,
+                        register_fleet.py, check_models.py; .ps1 Windows / .sh macOS+Linux)
+aimeat-agency/          the Tauri desktop shell over crewaimeat.agency.cockpit (see its README)
 tests/                  the pytest floor (deterministic; mirrors module names)
-docs/                   guides (crewairesearch, nextgeneration audit, integration)
+benchmarks/             the LOCOMO memory-benchmark harness (driven by scripts/run_locomo.py)
+infra/searxng/          optional self-hosted SearXNG (docker compose) for keyless web search
+docs/                   guides; the large working sets (docs/aimeat-guides, docs/internal) are
+                        local-only (gitignored)
 .aimeat/                per-repo connector home — serve.json, tokens, agent configs (GITIGNORED)
-llm_providers.json      LLM routing config (profiles + per-crew profile assignment)
+llm_providers.json      LLM routing config (profiles + per-crew profile assignment; gitignored,
+                        copy llm_providers.example.json)
 ```
 
 ---
@@ -110,13 +125,17 @@ fallback. This is the single channel the TUI, pipelines, and contracts all use.
 ## Runtime topology (the fleet)
 
 ```
-start_fleet.ps1  ─ pins AIMEAT_HOME=<repo>/.aimeat, ensures ONE serve daemon, launches crew-forge
+start_fleet.ps1/.sh ─ pins AIMEAT_HOME=<repo>/.aimeat, ensures ONE serve daemon, runs the FLEET HOST
    │
-   ├── serve daemon (one, shared)         ── the loopback tunnel every crew calls through
-   ├── serve_watchdog.ps1                  ── keeps the serve daemon alive (single-instance lock)
-   └── watchdog.ps1 <crew>  (one per crew) ── keeps each crew daemon alive; restarts on crash
-          └── crew daemon (python)         ── run_crew loop for that agent
+   ├── serve daemon (one, shared)          ── the loopback tunnel every crew calls through
+   ├── serve_watchdog.ps1/.sh              ── keeps the serve daemon alive (single-instance lock)
+   └── fleet host (crewaimeat.fleet_host)  ── every approved crew as a THREAD in one process
+          └── run_crew loop per agent         (crewai imported once; ~20× less RAM; the default)
 ```
+
+Legacy per-process model (still available, for per-crew process isolation): start crew-forge under
+`watchdog.ps1` and it reconciles the fleet — one watchdog + one crew daemon (python) per agent.
+Pick ONE model per checkout; the per-agent single-instance lock exits whichever starts second.
 
 - **One connector home per repo**: `AIMEAT_HOME` (env wins, else `<cwd>/.aimeat`), resolved *only*
   via `_home.aimeat_home()`. Pinned in every entrypoint so all processes share one `serve.json`,

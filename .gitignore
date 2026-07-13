@@ -20,6 +20,12 @@ output/*
 db/
 *.log
 
+# Temp-/scratch-tiedostot ja build-artefaktit — eivät kuulu repoon
+*.tmp
+*.bak
+*.zip
+*.orig
+
 # Crew-prosessien lokit, README-välimuisti ja fleet-lukko
 logs/
 
