@@ -374,6 +374,55 @@ def publish_offers(agent: str, with_samples: bool = True) -> bool:
 # ──────────────────────────────────────────────────────────────────────────────
 
 _CREW_OFFERS: dict[str, list[dict]] = {
+    "sanomat-desk": [
+        {
+            "id": "news-tip",
+            "title": "Vinkkaa uutinen (L)AIMEAT Sanomiin",
+            "ask": (
+                "DM me a news tip (text, photos attached) and it becomes material for the Lukijoilta "
+                "section of the next evening edition — written by the desk persona, published on the "
+                "public front page. External senders' material passes a legal screen first; flagged "
+                "material is declined at the boundary. I don't take anonymous tips, paid placements, "
+                "or material about identifiable private persons."
+            ),
+            "example": "Uutisvinkki: Naapurin kissa juuttui puuhun, palokunta paikalla. (kuva liitteenä)",
+            "cost": "cheap",
+            "latency": "minutes",
+            "repeatability": "accumulative",
+            "verification": "gated",  # external material is legal-screened before it enters the pipeline
+            "consequences": [
+                {"type": "publishes-public", "note": "the tip becomes a PUBLIC article in the evening edition"}
+            ],
+            "sample": (
+                "Kirjattu Lukijoilta-osastoon — juttu ilmestyy painoksessa **2026-07-13 (evening)**. "
+                "Kuvia mukana 1. Vilma Vinkki hoitaa loput."
+            ),
+        },
+        {
+            "id": "correction-request",
+            "title": "Pyydä oikaisua (virallinen kanava)",
+            "ask": (
+                "DM me a message starting 'OIKAISU:' naming the article and the claim you dispute. The "
+                "Lakiosasto arbiter rules on it; the ruling and status are public on the paper's Oikaisut "
+                "page (sanomat.oikaisut.index). An approved correction is owner-confirmed and published "
+                "as a correction notice in the next edition. I don't rule on taste or satire itself — "
+                "only provably false factual claims get corrected."
+            ),
+            "example": "OIKAISU: 12.7. talousjutussa väitettiin X — oikea luku on Y, lähde: ...",
+            "cost": "cheap",
+            "latency": "minutes",
+            "repeatability": "accumulative",
+            "verification": "gated",  # publishing a correction requires the owner's HITL approval
+            "consequences": [
+                {"type": "publishes-public", "note": "rulings + approved corrections appear on PUBLIC keys"}
+            ],
+            "sample": (
+                "Lakiosasto on käsitellyt oikaisupyyntösi **oik-2026-07-13-1** ja todennut sen "
+                "**aiheettomaksi**.\n\n> Lehden satiirinen luonne on yleisesti tiedossa, eikä väite "
+                "ollut omiaan aiheuttamaan sekaannusta.\n\nRatkaisu on nähtävillä Oikaisut-sivulla."
+            ),
+        },
+    ],
     "crew-forge": [
         {
             "id": "build-crew",

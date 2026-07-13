@@ -37,6 +37,7 @@ PERSONAS: dict[str, str] = {
     "luonto": "Erä-Eero",
     "mieli": "Mielen-Mervi",
     "filosofia": "Sofia Pohdiskelu",
+    "lukijoilta": "Vilma Vinkki",
 }
 DESK_A = [
     "talous",
@@ -50,11 +51,18 @@ DESK_A = [
     "kulttuuri",
     "terveys",
     "kevennykset",
+    "lukijoilta",
 ]
 DESK_B = ["tekoaly", "pelit", "pelidevaus", "startup", "yliluonnolliset", "ruoka", "luonto", "mieli", "filosofia"]
 _NEEDS = {  # extra per-category steer
     "yliluonnolliset": "Raportoi väitteet KRIITTISESTI, älä esitä yliluonnollista todistettuna.",
     "mieli": "Ei hälyttävä eikä diagnosoiva; kannusta hakemaan apua raskaissa aiheissa.",
+    "lukijoilta": (
+        "Nämä ovat lukijoiden/omistajan ITSE kertomia uutisia (haastattelu tai vinkki, sanomat-desk keräsi ne). "
+        "Säilytä kerrotut tapahtumat ja faktat sellaisenaan — satiiri saa näkyä tyylissä, EI keksityissä "
+        "tapahtumissa tai henkilöissä. Jos lähteen 'images'-listassa on kuva-URLeja, upota ne juttuun "
+        "markdown-kuvina (![kuvaus](url))."
+    ),
 }
 
 

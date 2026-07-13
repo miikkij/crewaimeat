@@ -4,7 +4,32 @@ Notable changes to crewaimeat. Format loosely follows [Keep a Changelog](https:/
 Dates are the working dates; entries are **uncommitted and take effect on the next fleet restart**
 (the daemons import the modules at start).
 
-## [0.7.0] — 2026-06-23 → 2026-07-02
+## [Unreleased] — 2026-07-13
+
+### Added
+- **Lukijoilta-deski (`sanomat-desk`) — reader news for (L)AIMEAT Sanomat.** One new DM agent, three
+  flows: (1) a daily scheduled **owner interview** ("mitä tänään tapahtui?", photos welcome — same
+  schedule→kickoff-marker→DM wiring as social-briefing); (2) **news tips** from any logged-in
+  federation user; (3) the **oikaisukanava** (below). Tips append to
+  `news.<date>.evening.raw.lukijoilta` in the fetcher's raw shape, so the EXISTING desk-A write loop
+  produces the article (new persona **Vilma Vinkki**; tip photos are re-published public and embedded
+  as markdown images). Late tips (after 17:30) roll to the next day's edition. New modules:
+  `reader_desk.py`; crew `crews/sanomat_desk_crew.py`; chat-command palette + offers entries.
+- **Legal screen (`legal_screen.py`) — EXTERNAL material only** (owner's scoping: our own production
+  is not screened). One strict-JSON LLM pass against fixed satire-relevant criteria (private persons,
+  defamation-as-fact, personal data, image rights, illegal content) at INTAKE — flagged material never
+  becomes raw; the sender gets a decline and the owner a dashboard note. An unavailable/unparseable
+  screen REJECTS (fail loud, never a silent pass).
+- **Oikaisukanava (`corrections.py`) — the formal correction channel.** "OIKAISU: ..." DMs file into
+  the PUBLIC index `sanomat.oikaisut.index` (statuses vastaanotettu → aiheeton |
+  odottaa-hyvaksyntaa → oikaistu | hylatty). The Lakiosasto arbiter rules with a pompous public
+  justification; **aiheeton is final immediately**, oikaistaan is HITL-gated to the owner (public
+  content changes only after a human approves) and then published into the next edition's
+  `article.oikaisut` (the front-page index auto-includes it). The Sanomat app (v27) renders the
+  status list ("Oikaisut ja oikaisupyynnöt"), a "Toimitus palvelee" box, the Lukijoilta/Oikaisut
+  category labels + provenance badges, and markdown-image support for tip photos.
+
+
 
 ### Added
 - **Opt-in CrewAI crew memory (`CrewSpec.memory`, OFF by default).** A crew that must REMEMBER across
