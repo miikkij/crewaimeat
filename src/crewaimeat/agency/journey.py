@@ -81,7 +81,9 @@ def compute(
     s = _STR.get(lang, _STR["en"])
     agent = status.get("first_agent")
     engine_ready = bool((status.get("engine") or {}).get("ready"))
-    has_model = bool((status.get("ollama") or {}).get("has_model") or status.get("openrouter_key"))
+    has_model = bool(
+        (status.get("ollama") or {}).get("has_model") or status.get("openrouter_key") or status.get("nvidia_key")
+    )
     has_app = bool(app_state and app_state.get("url"))
     app_url = (app_state or {}).get("url")
     offer_enabled = False

@@ -147,6 +147,10 @@ def template_from_json(tj: dict):
         policy_fields=header.get("policy_fields") or bt._STD_POLICY_FIELDS,
         i18n=header.get("i18n") or {},
         offer=header.get("offer"),
+        # Identity the AI author emits (see render_template_schema_brief): tags live in `crew`, capabilities
+        # may be given in either half. brains derives sensible defaults when a template omits them.
+        tags=header.get("tags") or doc.get("tags"),
+        capabilities=header.get("capabilities") or doc.get("capabilities"),
     )
 
 
@@ -249,6 +253,7 @@ def render_template_schema_brief() -> str:
         '  "crew": {\n'
         '    "temperature": <0.25 factual | 0.5 mixed | 0.7 creative>,\n'
         '    "tags": ["<kebab subject words>", "role.task-runner"],\n'
+        '    "capabilities": {"domain": ["<what this agent actually does, plain phrase>"], "languages": ["en"]},\n'
         '    "agents": [{"name":"<local-id>","role":"...","goal":"...","backstory":"...","tools":["<ids>"]}],\n'
         '    "tasks":  [{"id":"<local-id>","agent":"<a name>","description":"...","expected_output":"..."}]\n'
         "  }\n"

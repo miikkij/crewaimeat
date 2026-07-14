@@ -120,6 +120,16 @@ const STR = {
   "w.lbl.account":{en:"Account name",fi:"Tilin nimi"}, "w.lbl.node":{en:"Home node",fi:"Kotinoodi"},
   "w.lbl.agentname":{en:"Agent name",fi:"Agentin nimi"}, "w.lbl.dowhat":{en:"What should it do?",fi:"Mitä sen pitäisi tehdä?"},
   "w.model.desc":{en:"Your agent needs an AI brain to think. By default it runs <b>on your own computer</b> with <b>Ollama</b> — free, private, works offline once set up. Nothing leaves your machine.",fi:"Agenttisi tarvitsee tekoälyaivot ajatellakseen. Oletuksena ne toimivat <b>omalla tietokoneellasi</b> <b>Ollamalla</b> — ilmainen, yksityinen ja toimii offline-tilassa asennuksen jälkeen. Mikään ei lähde koneeltasi."},
+  "w.model.choose":{en:"Your agent needs an AI brain to think. Choose where it runs — each is a real trade-off:",fi:"Agenttisi tarvitsee tekoälyaivot ajatellakseen. Valitse missä ne pyörivät — jokaisessa on aito kompromissi:"},
+  "w.model.ready":{en:"AI brain ready — you can switch later in an agent's settings.",fi:"Tekoälyaivot valmiina — voit vaihtaa myöhemmin agentin asetuksista."},
+  "w.recommended":{en:"Recommended",fi:"Suositus"}, "w.configured":{en:"Configured ✓",fi:"Käytössä ✓"},
+  "opt.nvidia.title":{en:"NVIDIA free cloud (build.nvidia.com)",fi:"NVIDIAn ilmaispilvi (build.nvidia.com)"},
+  "opt.nvidia.desc":{en:"Free models hosted by NVIDIA — nothing to install, nothing to pay. Reliable but <b>very slow</b>. The easiest way to start, and a fine choice if your computer can't run a local model.",fi:"NVIDIAn tarjoamat ilmaismallit — ei asennettavaa, ei maksua. Toimii luotettavasti mutta <b>hyvin hitaasti</b>. Helpoin tapa aloittaa ja hyvä valinta jos oma kone ei jaksa ajaa paikallista mallia."},
+  "opt.nvidia.getkey":{en:"Open build.nvidia.com & get a key →",fi:"Avaa build.nvidia.com & hae avain →"},
+  "opt.or.title":{en:"OpenRouter free models",fi:"OpenRouterin ilmaismallit"},
+  "opt.or.desc":{en:"Free models via OpenRouter — nothing to install. They work well sometimes and are congested or rate-limited other times, but they're good for testing.",fi:"Ilmaismalleja OpenRouterin kautta — ei asennettavaa. Toimivat joskus hyvin ja ovat joskus ruuhkaisia tai rajoitettuja, mutta testaamiseen ne käyvät hyvin."},
+  "opt.local.title":{en:"Run AI on your own computer (Ollama)",fi:"Aja tekoäly omalla koneellasi (Ollama)"},
+  "opt.local.warn":{en:"Free and fully private, but <b>heavy</b>. Recommended: <b>32–64 GB</b> of memory and a capable GPU with <b>12 GB+</b> of its own memory. On an older machine with only 8–16 GB it can be very slow or freeze.",fi:"Ilmainen ja täysin yksityinen, mutta <b>raskas</b>. Suositus: <b>32–64 Gt</b> muistia ja kyvykäs näytönohjain jolla on omaa muistia <b>12 Gt+</b>. Vanhemmalla, vain 8–16 Gt koneella se voi olla hyvin hidas tai jumittaa."},
   "w.ollama.install":{en:"First, install <b>Ollama</b> — a small free app that runs AI models locally.",fi:"Asenna ensin <b>Ollama</b> — pieni ilmainen sovellus, joka ajaa tekoälymalleja paikallisesti."},
   "w.gemma.desc":{en:"Now download a small AI model (~2 GB, one-time). It's your agent's brain — light enough to run on most computers, and it can call tools (search the web, save notes).",fi:"Lataa nyt pieni tekoälymalli (~2 Gt, kertaluonteinen). Se on agenttisi aivot — kevyt pyörimään useimmilla koneilla, ja se osaa käyttää työkaluja (hakea verkosta, tallentaa muistiinpanoja)."},
   "w.localready":{en:"✓ Local AI ready.",fi:"✓ Paikallinen tekoäly valmis."},
@@ -371,7 +381,7 @@ async function renderSetup(m){
   const steps=[
     {key:"account", title:t("w.account"), done:s.owner_set},
     {key:"engine",  title:t("w.engine"),  done:!!(s.engine&&s.engine.ready)},
-    {key:"model",   title:t("w.model"),   done:s.ollama.has_model||s.openrouter_key},
+    {key:"model",   title:t("w.model"),   done:s.ollama.has_model||s.openrouter_key||s.nvidia_key},
     {key:"agent",   title:t("w.agent"),   done:s.brain_count>0},
     {key:"approve", title:t("w.approve"), done:s.first_agent_connected},
     {key:"start",   title:t("w.start"),   done:s.first_agent_running},
@@ -449,57 +459,77 @@ async function setupStep(p, key, s, refresh, num){
     }
   }
   else if(key==="model"){
-    p.innerHTML=`<h3>${num}. ${t("w.model")}</h3><p class="muted">${t("w.model.desc")}</p>`;
-    if(!s.ollama.running && !s.ollama.installed){
-      p.appendChild(el(`<p>${t("w.ollama.install")}</p>`));
-      const dl=el(`<button class="btn">${t("w.installollama")}</button>`); dl.onclick=()=>openExt("https://ollama.com/download");
-      const rc=el(`<button class="btn ghost" style="margin-left:8px">${t("w.recheck")}</button>`); rc.onclick=refresh;
-      const r=el(`<div class="row" style="margin-top:6px"></div>`); r.appendChild(dl); r.appendChild(rc); p.appendChild(r);
-    } else if(!s.ollama.running){
-      // installed but not running (fresh install's first session / autostart off) -> WE start it,
-      // agency-owned: the pid is recorded so app shutdown stops it again.
-      p.appendChild(el(`<p>${t("w.ollama.start")}</p>`));
-      const slot0=el(`<div style="margin-top:8px"></div>`);
-      const st=el(`<button class="btn">${t("w.startollama")}</button>`);
-      st.onclick=async()=>{ st.disabled=true; try{ const d=await api("/api/ollama/start",{method:"POST"});
-        if(!d.started && d.reason && d.reason!=="already running"){ st.disabled=false; slot0.innerHTML=`<p class="muted">${esc(d.reason)}</p>`; return; }
-        let n=0; const iv=setInterval(async()=>{ n++; try{ const x=await api("/api/setup/status");
-          if(x.ollama.running){ clearInterval(iv); refresh(); }
-          else if(n>30){ clearInterval(iv); st.disabled=false; slot0.innerHTML=`<p class="muted">${t("w.ollama.failed")}</p>`; }
-        }catch{} }, 2000);
-      }catch(e){ st.disabled=false; toast(e.message); } };
-      const rc2=el(`<button class="btn ghost" style="margin-left:8px">${t("w.recheck")}</button>`); rc2.onclick=refresh;
-      const r2=el(`<div class="row" style="margin-top:6px"></div>`); r2.appendChild(st); r2.appendChild(rc2); p.appendChild(r2); p.appendChild(slot0);
-    } else if(!s.ollama.has_model){
-      p.appendChild(el(`<p>${t("w.gemma.desc")}</p>`));
-      p.appendChild(el(`<p class="muted" style="font-size:12px">${t("w.gemma.cpuwarn")}</p>`));
-      const slot=el(`<div style="margin-top:8px"></div>`);
-      const g=el(`<button class="btn">${t("w.getgemma")}</button>`);
-      g.onclick=async()=>{ g.disabled=true; try{ await api("/api/ollama/pull",{method:"POST",body:JSON.stringify({model:s.ollama.default_model})});
-        slot.innerHTML=`<div class="row"><span class="spin"></span> <span class="muted">${t("w.downloading")}</span></div>`;
-        const iv=setInterval(async()=>{ try{ const st2=await api("/api/setup/status"); const o=st2.ollama||{};
-          if(o.has_model){ clearInterval(iv); refresh(); }
-          else if(!o.pull_running){ // the pull ENDED without the model — say why instead of spinning forever
-            clearInterval(iv); g.disabled=false;
-            slot.innerHTML=`<div class="card" style="border:1px solid #c0506e"><div class="muted" style="white-space:pre-wrap">${o.pull_error?(t("w.pull.failed")+" "+esc(o.pull_error)):t("w.pull.gone")}</div></div>`;
-          }
-        }catch{} }, 5000);
-      }catch(e){ g.disabled=false; toast(e.message); } };
-      p.appendChild(g); p.appendChild(slot);
-    } else {
-      p.appendChild(el(`<p style="color:var(--ok)">${t("w.localready")}</p>`));
-      const b=el(`<button class="btn">${t("w.next")}</button>`); b.onclick=refresh; p.appendChild(b);
+    p.innerHTML=`<h3>${num}. ${t("w.model")}</h3><p class="muted">${t("w.model.choose")}</p>`;
+    const hasLocal=s.ollama.has_model, hasNv=s.nvidia_key, hasOr=s.openrouter_key;
+    if(hasLocal||hasNv||hasOr){  // a provider is configured — confirm + let them move on (they can still switch below)
+      const which=hasLocal?t("opt.local.title"):(hasNv?t("opt.nvidia.title"):t("opt.or.title"));
+      p.appendChild(el(`<div class="card" style="border:1px solid var(--ok);margin-bottom:12px"><p style="color:var(--ok);margin:0">✓ ${esc(which)}</p><p class="muted" style="margin:6px 0 0">${t("w.model.ready")}</p></div>`));
+      const b=el(`<button class="btn" style="margin-bottom:14px">${t("w.next")}</button>`); b.onclick=refresh; p.appendChild(b);
     }
-    const adv=el(`<details style="margin-top:18px"><summary class="muted" style="cursor:pointer">${t("w.advanced")}</summary></details>`);
-    const body=el(`<div style="margin-top:10px"></div>`);
-    body.appendChild(el(`<p class="muted" style="border-left:3px solid var(--ok);padding-left:10px">${t("w.or.free")}</p>`));
-    body.appendChild(el(`<p class="muted">${t("w.or.desc")}${s.openrouter_key?t("w.or.saved"):""}</p>`));
-    body.appendChild(el(`<p class="muted">${t("w.or.howto")}</p>`));
-    const getkey=el(`<button class="btn ghost">${t("w.or.getkey")}</button>`); getkey.onclick=()=>openExt("https://openrouter.ai/keys"); body.appendChild(getkey);
-    const k=el(`<input placeholder="sk-or-..." style="margin-top:10px">`); body.appendChild(k);
-    const sk=el(`<button class="btn ghost" style="margin-top:8px">${t("w.savekey")}</button>`);
-    sk.onclick=async()=>{ const kv=k.value.trim(); if(!kv) return; try{ await api("/api/setup/openrouter-key",{method:"POST",body:JSON.stringify({key:kv})}); toast(t("w.saved")); refresh(); }catch(e){ toast(e.message); } };
-    body.appendChild(sk); adv.appendChild(body); p.appendChild(adv);
+    // A titled option card with an optional "recommended" / "configured" badge.
+    const optCard=(title,desc,recommended,configured)=>{
+      const c=el(`<div class="card" style="margin-bottom:12px"></div>`);
+      const badge=configured?`<span style="color:var(--ok);font-size:12px;margin-left:8px">${t("w.configured")}</span>`
+        :(recommended?`<span style="color:var(--brand);font-size:12px;margin-left:8px">★ ${t("w.recommended")}</span>`:"");
+      c.appendChild(el(`<div style="font-weight:600">${esc(title)}${badge}</div>`));
+      c.appendChild(el(`<p class="muted" style="margin:6px 0 10px">${desc}</p>`));
+      return c;
+    };
+    const keyPaste=(card,placeholder,route)=>{
+      const k=el(`<input placeholder="${placeholder}" style="margin-top:10px">`); card.appendChild(k);
+      const sk=el(`<button class="btn ghost" style="margin-top:8px">${t("w.savekey")}</button>`);
+      sk.onclick=async()=>{ const kv=k.value.trim(); if(!kv) return; try{ await api(route,{method:"POST",body:JSON.stringify({key:kv})}); toast(t("w.saved")); refresh(); }catch(e){ toast(e.message); } };
+      card.appendChild(sk);
+    };
+    // ── 1) NVIDIA free cloud — recommended, easiest (slow but free, nothing to install) ──
+    { const c=optCard(t("opt.nvidia.title"), t("opt.nvidia.desc"), true, hasNv);
+      const gk=el(`<button class="btn ghost">${t("opt.nvidia.getkey")}</button>`); gk.onclick=()=>openExt("https://build.nvidia.com/"); c.appendChild(gk);
+      keyPaste(c, "nvapi-...", "/api/setup/nvidia-key"); p.appendChild(c); }
+    // ── 2) OpenRouter free models — flaky / rate-limited, fine for testing ──
+    { const c=optCard(t("opt.or.title"), t("opt.or.desc"), false, hasOr);
+      const gk=el(`<button class="btn ghost">${t("w.or.getkey")}</button>`); gk.onclick=()=>openExt("https://openrouter.ai/keys"); c.appendChild(gk);
+      keyPaste(c, "sk-or-...", "/api/setup/openrouter-key"); p.appendChild(c); }
+    // ── 3) Local (Ollama) — heavy; the multi-step install/start/pull flow, honest resource warning ──
+    { const c=optCard(t("opt.local.title"), t("opt.local.warn"), false, hasLocal);
+      if(!s.ollama.running && !s.ollama.installed){
+        c.appendChild(el(`<p>${t("w.ollama.install")}</p>`));
+        const dl=el(`<button class="btn">${t("w.installollama")}</button>`); dl.onclick=()=>openExt("https://ollama.com/download");
+        const rc=el(`<button class="btn ghost" style="margin-left:8px">${t("w.recheck")}</button>`); rc.onclick=refresh;
+        const r=el(`<div class="row" style="margin-top:6px"></div>`); r.appendChild(dl); r.appendChild(rc); c.appendChild(r);
+      } else if(!s.ollama.running){
+        // installed but not running (fresh install's first session / autostart off) -> WE start it,
+        // agency-owned: the pid is recorded so app shutdown stops it again.
+        c.appendChild(el(`<p>${t("w.ollama.start")}</p>`));
+        const slot0=el(`<div style="margin-top:8px"></div>`);
+        const st=el(`<button class="btn">${t("w.startollama")}</button>`);
+        st.onclick=async()=>{ st.disabled=true; try{ const d=await api("/api/ollama/start",{method:"POST"});
+          if(!d.started && d.reason && d.reason!=="already running"){ st.disabled=false; slot0.innerHTML=`<p class="muted">${esc(d.reason)}</p>`; return; }
+          let n=0; const iv=setInterval(async()=>{ n++; try{ const x=await api("/api/setup/status");
+            if(x.ollama.running){ clearInterval(iv); refresh(); }
+            else if(n>30){ clearInterval(iv); st.disabled=false; slot0.innerHTML=`<p class="muted">${t("w.ollama.failed")}</p>`; }
+          }catch{} }, 2000);
+        }catch(e){ st.disabled=false; toast(e.message); } };
+        const rc2=el(`<button class="btn ghost" style="margin-left:8px">${t("w.recheck")}</button>`); rc2.onclick=refresh;
+        const r2=el(`<div class="row" style="margin-top:6px"></div>`); r2.appendChild(st); r2.appendChild(rc2); c.appendChild(r2); c.appendChild(slot0);
+      } else if(!s.ollama.has_model){
+        c.appendChild(el(`<p>${t("w.gemma.desc")}</p>`));
+        const slot=el(`<div style="margin-top:8px"></div>`);
+        const g=el(`<button class="btn">${t("w.getgemma")}</button>`);
+        g.onclick=async()=>{ g.disabled=true; try{ await api("/api/ollama/pull",{method:"POST",body:JSON.stringify({model:s.ollama.default_model})});
+          slot.innerHTML=`<div class="row"><span class="spin"></span> <span class="muted">${t("w.downloading")}</span></div>`;
+          const iv=setInterval(async()=>{ try{ const st2=await api("/api/setup/status"); const o=st2.ollama||{};
+            if(o.has_model){ clearInterval(iv); refresh(); }
+            else if(!o.pull_running){ // the pull ENDED without the model — say why instead of spinning forever
+              clearInterval(iv); g.disabled=false;
+              slot.innerHTML=`<div class="card" style="border:1px solid #c0506e"><div class="muted" style="white-space:pre-wrap">${o.pull_error?(t("w.pull.failed")+" "+esc(o.pull_error)):t("w.pull.gone")}</div></div>`;
+            }
+          }catch{} }, 5000);
+        }catch(e){ g.disabled=false; toast(e.message); } };
+        c.appendChild(g); c.appendChild(slot);
+      } else {
+        c.appendChild(el(`<p style="color:var(--ok);margin:0">${t("w.localready")}</p>`));
+      }
+      p.appendChild(c); }
   }
   else if(key==="agent"){
     p.innerHTML=`<h3>${num}. ${t("w.agent")}</h3><p class="muted">${t("w.agent.desc")}</p>`;

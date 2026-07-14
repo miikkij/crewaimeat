@@ -398,12 +398,30 @@ def get_llm(for_tool_use: bool = True, temperature: float | None = None, agent_n
         model = os.getenv("XAI_MODEL", "xai/grok-4-fast")
         return LLM(model=model, api_key=api_key, temperature=temperature)
 
+    # --- Option: NVIDIA NIM (build.nvidia.com free tier) ---------------
+    # Appliance-friendly: works with just NVIDIA_KEY in the env, no llm_providers.json. Slow but free —
+    # the first-run wizard offers it as the gentle middle option between local Ollama and a paid cloud key.
+    # Routed through the SAME proven MultiProviderLLM path an llm_providers.json nvidia entry would use.
+    if os.getenv("NVIDIA_KEY"):
+        model = os.getenv("NVIDIA_MODEL", "z-ai/glm-5.2")
+        prov = {
+            "type": "nvidia",
+            "name": "nvidia",
+            "base_url": os.getenv("NVIDIA_BASE_URL", _DEFAULT_BASE["nvidia"]),
+            "api_key_env": "NVIDIA_KEY",
+            "models": [{"id": model}],
+        }
+        eps = _flatten_endpoints([prov], for_tool_use)
+        if eps:
+            print(f"[llm] {agent_name or '?'} -> NVIDIA NIM ({model}) (no providers file needed)", file=sys.stderr)
+            return MultiProviderLLM(eps, temperature)
+
     # --- Default: OpenRouter -------------------------------------------
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         raise RuntimeError(
-            "OPENROUTER_API_KEY is missing. Copy .env.example -> .env and fill in the key "
-            "(or set USE_XAI=1 to use xAI directly, or add an llm_providers.json)."
+            "No LLM provider is configured. Set one of: a local Ollama model, NVIDIA_KEY "
+            "(build.nvidia.com, free), OPENROUTER_API_KEY, USE_XAI=1 with XAI_API_KEY, or an llm_providers.json."
         )
     model = os.getenv("OPENROUTER_MODEL", "openrouter/x-ai/grok-4-fast")
     base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")

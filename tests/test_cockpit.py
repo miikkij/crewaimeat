@@ -101,6 +101,23 @@ def test_openrouter_key_requires_value(client):
     assert client.post("/api/setup/openrouter-key", json={"key": "  "}).status_code == 400
 
 
+def test_nvidia_key_requires_value(client):
+    assert client.post("/api/setup/nvidia-key", json={"key": "  "}).status_code == 400
+
+
+def test_nvidia_key_stored_and_seen_in_status(client, monkeypatch, tmp_path):
+    """Saving an NVIDIA key persists it (env) and the setup snapshot reports nvidia_key True — the model
+    step is then satisfied by the 'NVIDIA free' choice with no local model and no OpenRouter key."""
+    monkeypatch.setattr("crewaimeat.agency.cockpit._ollama_probe", lambda: (False, []))
+    monkeypatch.setattr("crewaimeat.agency.cockpit._has_openrouter_key", lambda: False)
+    # write to a throwaway .env so we don't touch the repo's real one
+    monkeypatch.setattr("crewaimeat.forge._project_root", lambda: tmp_path)
+    monkeypatch.delenv("NVIDIA_KEY", raising=False)
+    assert client.post("/api/setup/nvidia-key", json={"key": "nvapi-abc"}).status_code == 200
+    s = client.get("/api/setup/status").json()
+    assert "nvidia_key" in s and s["nvidia_key"] is True
+
+
 def test_open_external_rejects_non_http(client):
     assert client.post("/api/open", json={"url": "file:///etc/passwd"}).status_code == 400
     assert client.post("/api/open", json={"url": "javascript:alert(1)"}).status_code == 400
@@ -259,9 +276,9 @@ def test_activity_log_records_brain_saves_with_diff(client, tmp_path, monkeypatc
 
 def test_offer_surface_and_publish(client, monkeypatch):
     client.post("/api/brains", json={"agent_name": "watcher", "template_id": "topic-watcher", "prose": "watch x"})
-    # the template advertises an offer; not yet opted in
+    # the template advertises an offer; auto-advertise is the default for an agency agent (enabled=True)
     info = client.get("/api/agents/watcher/offer").json()
-    assert info["available"] is True and info["enabled"] is False
+    assert info["available"] is True and info["enabled"] is True
     assert info["offer"]["id"] == "topic-summary"
 
     # publishing advertises it (mock the node publish), flips enabled, logs an event

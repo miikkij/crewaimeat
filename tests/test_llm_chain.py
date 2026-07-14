@@ -102,3 +102,38 @@ def test_model_override_honored_without_providers_file(monkeypatch):
     out = llmmod.get_llm(agent_name="news-watcher-500001")
     assert out == "LLM"  # built from the override, did NOT raise on the missing cloud key
     assert captured["eps"], "override provider produced no endpoints"
+
+
+def test_nvidia_key_used_without_providers_file(monkeypatch):
+    """With only NVIDIA_KEY set (the appliance first-run 'NVIDIA free' choice) and no providers file / no
+    OpenRouter key, get_llm routes to NVIDIA NIM via the proven MultiProviderLLM path — bare model id,
+    integrate.api.nvidia.com base_url, the key from NVIDIA_KEY."""
+    monkeypatch.setattr(llmmod, "_providers_file", lambda: None)
+    monkeypatch.setattr(llmmod, "agent_override", lambda name: None)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("USE_XAI", raising=False)
+    monkeypatch.delenv("NVIDIA_MODEL", raising=False)
+    monkeypatch.setenv("NVIDIA_KEY", "nvapi-test")
+    captured = {}
+
+    def _fake_mp(eps, temp):
+        captured["eps"] = eps
+        return "NVIDIA-LLM"
+
+    monkeypatch.setattr(llmmod, "MultiProviderLLM", _fake_mp)
+    out = llmmod.get_llm(agent_name="watcher")
+    assert out == "NVIDIA-LLM"  # did NOT fall through to the missing-key crash
+    ep = captured["eps"][0]
+    assert ep["model"] == "z-ai/glm-5.2"  # bare id, no prefix (nvidia)
+    assert ep["base_url"] == "https://integrate.api.nvidia.com/v1"
+    assert ep["api_key"] == "nvapi-test"
+
+
+def test_no_provider_at_all_raises_actionable(monkeypatch):
+    """No local model, no NVIDIA/OpenRouter/xAI key, no providers file -> a clear multi-option error."""
+    monkeypatch.setattr(llmmod, "_providers_file", lambda: None)
+    monkeypatch.setattr(llmmod, "agent_override", lambda name: None)
+    for var in ("OPENROUTER_API_KEY", "NVIDIA_KEY", "USE_XAI"):
+        monkeypatch.delenv(var, raising=False)
+    with pytest.raises(RuntimeError, match="No LLM provider is configured"):
+        llmmod.get_llm(agent_name="watcher")

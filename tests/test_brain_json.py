@@ -87,6 +87,19 @@ def test_bridge_injects_brain_and_ctx_vars():
     assert "{{" not in desc  # no placeholder left unsubstituted
 
 
+def test_template_from_json_threads_tags_and_capabilities():
+    """A JSON template's identity (offer in `template`, tags/capabilities in `crew`) survives into the
+    Template, so an AI-authored agent brings its offers-like info into the CrewSpec (not dropped)."""
+    tj = _load_tj()
+    tj["template"]["offer"] = {"id": "demo-offer", "title": "T", "ask": "a", "example": "e"}
+    tj["crew"]["tags"] = ["demo-subject", "role.task-runner"]
+    tj["crew"]["capabilities"] = {"domain": ["demo work"], "languages": ["en"]}
+    tmpl = brain_json.template_from_json(tj)
+    assert tmpl.offer and tmpl.offer["id"] == "demo-offer"
+    assert tmpl.tags == ["demo-subject", "role.task-runner"]
+    assert tmpl.capabilities["domain"] == ["demo work"]
+
+
 def test_json_template_equivalent_to_python_research_assistant():
     ctx, brain = make_ctx("What are the EU's 2026 AI transparency rules?"), _brain()
     py_agents, py_tasks = bt.get("research-assistant").build(ctx, brain)

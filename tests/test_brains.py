@@ -129,6 +129,39 @@ def test_build_crewspec_wires_template(tmp_path, monkeypatch):
         brains.build_crewspec("no-brain")
 
 
+def test_build_crewspec_brings_offer_tags_capabilities(tmp_path, monkeypatch):
+    """A created agency agent carries its identity into the CrewSpec — so run_crew advertises the offer +
+    reports tags/capabilities on start, instead of the agent showing up with the generic defaults."""
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    from crewaimeat import brains
+
+    brains.save_brain("watcher-id", "topic-watcher")
+    spec = brains.build_crewspec("watcher-id")
+    # offer: the template's offer is advertised by default (auto-advertise on create)
+    assert spec.offer is not None and spec.offer["id"] == "topic-summary"
+    # tags: derived from the offer id + template id + role, charset-safe
+    assert "topic-summary" in spec.tags and "role.task-runner" in spec.tags
+    # capabilities: a real domain phrase + languages, not the generic onboarding defaults
+    assert spec.capabilities and spec.capabilities.get("domain")
+    assert "en" in spec.capabilities["languages"] and "fi" in spec.capabilities["languages"]
+
+
+def test_build_crewspec_offer_opt_out(tmp_path, monkeypatch):
+    """Setting offer_enabled=False keeps the agent unlisted (no offer) but STILL brings tags+capabilities."""
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    from crewaimeat import brains
+
+    b = brains.save_brain("watcher-priv", "topic-watcher")
+    pol = dict(b["policy"])
+    pol["offer_enabled"] = False
+    brains.save_brain("watcher-priv", "topic-watcher", policy=pol)
+    spec = brains.build_crewspec("watcher-priv")
+    assert spec.offer is None  # opted out of advertising
+    assert spec.tags and spec.capabilities  # identity still present
+
+
 def test_topic_watcher_injects_both_prose_and_request(tmp_path, monkeypatch):
     monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)

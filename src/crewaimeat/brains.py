@@ -212,9 +212,44 @@ def apply_policy(agent_name: str) -> None:
         llm.clear_override(agent_name)
 
 
+def _tag(s: str) -> str:
+    """A charset-safe capability tag ([a-z0-9._-]), derived from an offer/template id."""
+    return re.sub(r"[^a-z0-9._-]+", "-", (s or "").lower()).strip("-.")
+
+
+def _identity_from_template(tmpl, policy: dict) -> dict:
+    """The {offer?, tags?, capabilities?} an agency agent advertises, resolved from its template.
+
+    Templates MAY author these explicitly; when they don't we DERIVE a sensible identity so an
+    agency-created agent is never identity-less — the ecosystem-app picker matches on tags + capabilities,
+    and the offer surface shows what the agent can do. The orderable offer is advertised unless the operator
+    opted out (policy.offer_enabled=False); tags + capabilities are pure identity and always set. This is
+    what makes a created/registered agent bring its offers-like info with it (run_crew publishes all three
+    on every start)."""
+    ident: dict = {}
+    if tmpl.offer and policy.get("offer_enabled", True):
+        ident["offer"] = tmpl.offer
+    if tmpl.tags:
+        ident["tags"] = list(tmpl.tags)
+    else:  # derive: the offer id + the template id (+ role), charset-safe and de-duplicated
+        cand = [_tag((tmpl.offer or {}).get("id") or ""), _tag(tmpl.id), "role.task-runner"]
+        ident["tags"] = list(dict.fromkeys(t for t in cand if t))
+    if tmpl.capabilities:
+        ident["capabilities"] = tmpl.capabilities
+    else:  # derive a domain phrase from the description + the template's declared languages
+        caps: dict = {"languages": ["en", *sorted(tmpl.i18n or {})]}
+        domain = (tmpl.description or tmpl.title or "").strip()
+        if domain:
+            caps["domain"] = [domain]
+        ident["capabilities"] = caps
+    return ident
+
+
 def build_crewspec(agent_name: str):
     """Build the `CrewSpec` for a brain: its template's `build` wired with the brain, under the brain's
-    identity. Raises if the brain or its template is missing."""
+    identity — including the offer + tags + capabilities the agent advertises, so a created/registered
+    agency agent shows up with its real capability info (not the generic onboarding defaults). Raises if
+    the brain or its template is missing."""
     from crewaimeat import brain_templates as templates
     from crewaimeat.aimeat_crew import CrewSpec
 
@@ -228,7 +263,14 @@ def build_crewspec(agent_name: str):
     def build_domain(ctx):
         return tmpl.build(ctx, brain)
 
-    return CrewSpec(agent_name=agent_name, build_domain=build_domain)
+    ident = _identity_from_template(tmpl, brain.get("policy") or {})
+    return CrewSpec(
+        agent_name=agent_name,
+        build_domain=build_domain,
+        offer=ident.get("offer"),
+        tags=ident.get("tags"),
+        capabilities=ident.get("capabilities"),
+    )
 
 
 def run_brain(agent_name: str) -> None:

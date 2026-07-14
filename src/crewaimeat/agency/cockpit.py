@@ -278,8 +278,10 @@ def _ollama_models() -> list[dict]:
     ]
 
 
-def _has_openrouter_key() -> bool:
-    if os.environ.get("OPENROUTER_API_KEY"):
+def _has_env_key(var: str) -> bool:
+    """True when a non-blank `var` is set in the process env OR saved in the runtime .env — the wizard's
+    'is this cloud provider configured?' check (a blank `VAR=` line does NOT count as saved)."""
+    if os.environ.get(var):
         return True
     try:
         from crewaimeat.forge import _project_root
@@ -288,24 +290,41 @@ def _has_openrouter_key() -> bool:
         if not env.is_file():
             return False
         for ln in env.read_text(encoding="utf-8").splitlines():
-            # a blank `OPENROUTER_API_KEY=` line is NOT a saved key — don't tell the wizard it is
-            if ln.startswith("OPENROUTER_API_KEY=") and ln.split("=", 1)[1].strip():
+            if ln.startswith(f"{var}=") and ln.split("=", 1)[1].strip():
                 return True
         return False
     except Exception:  # noqa: BLE001
         return False
 
 
-def _set_openrouter_key(key: str) -> None:
-    """Persist OPENROUTER_API_KEY to the runtime's .env (the fleet load_dotenv's it) + this process."""
+def _set_env_key(var: str, key: str) -> None:
+    """Persist `var=key` to the runtime's .env (the fleet load_dotenv's it) + this process."""
     from crewaimeat.forge import _project_root
 
     env = _project_root() / ".env"
     lines = env.read_text(encoding="utf-8").splitlines() if env.is_file() else []
-    lines = [ln for ln in lines if not ln.startswith("OPENROUTER_API_KEY=")]
-    lines.append(f"OPENROUTER_API_KEY={key}")
+    lines = [ln for ln in lines if not ln.startswith(f"{var}=")]
+    lines.append(f"{var}={key}")
     env.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    os.environ["OPENROUTER_API_KEY"] = key
+    os.environ[var] = key
+
+
+def _has_openrouter_key() -> bool:
+    return _has_env_key("OPENROUTER_API_KEY")
+
+
+def _set_openrouter_key(key: str) -> None:
+    """Persist OPENROUTER_API_KEY to the runtime's .env (the fleet load_dotenv's it) + this process."""
+    _set_env_key("OPENROUTER_API_KEY", key)
+
+
+def _has_nvidia_key() -> bool:
+    return _has_env_key("NVIDIA_KEY")
+
+
+def _set_nvidia_key(key: str) -> None:
+    """Persist NVIDIA_KEY (build.nvidia.com free tier) to the runtime's .env + this process."""
+    _set_env_key("NVIDIA_KEY", key)
 
 
 # The wizard drives one model download at a time; this is its outcome so a failed pull (no network,
@@ -364,6 +383,7 @@ def setup_snapshot() -> dict:
             "pull_error": _PULL_STATE["error"],
         },
         "openrouter_key": _has_openrouter_key(),
+        "nvidia_key": _has_nvidia_key(),
         "brain_count": len(bs),
         "first_agent": first,
         "first_agent_connected": bool(first_auth.get("authorized")),
@@ -693,6 +713,15 @@ def create_app(token: str | None = None) -> FastAPI:
         if not body.key or not body.key.strip():
             raise HTTPException(status_code=400, detail="key is required")
         _set_openrouter_key(body.key.strip())
+        return {"ok": True}
+
+    @app.post("/api/setup/nvidia-key", dependencies=[require_token])
+    def set_nvidia_key_route(body: KeyIn) -> dict:
+        """Store an NVIDIA NIM key (build.nvidia.com free tier — the slow-but-free cloud option) in the
+        runtime's .env, so crews route to it with no local model and no paid key."""
+        if not body.key or not body.key.strip():
+            raise HTTPException(status_code=400, detail="key is required")
+        _set_nvidia_key(body.key.strip())
         return {"ok": True}
 
     @app.post("/api/open", dependencies=[require_token])
@@ -1161,7 +1190,12 @@ def create_app(token: str | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=f"no brain '{agent}'")
         tmpl = brain_templates.get(b["template_id"])
         meta = tmpl.offer if tmpl else None
-        return {"available": meta is not None, "offer": meta, "enabled": bool((b["policy"] or {}).get("offer_enabled"))}
+        # Auto-advertise is the default for an agency agent; absent flag reads as enabled (matches build_crewspec).
+        return {
+            "available": meta is not None,
+            "offer": meta,
+            "enabled": bool((b["policy"] or {}).get("offer_enabled", True)),
+        }
 
     @app.post("/api/agents/{agent}/offer/publish", dependencies=[require_token])
     def publish_offer(agent: str) -> dict:
@@ -1499,7 +1533,9 @@ def create_app(token: str | None = None) -> FastAPI:
             for b in bl
         ]
 
-        has_model = bool((snap.get("ollama") or {}).get("has_model") or snap.get("openrouter_key"))
+        has_model = bool(
+            (snap.get("ollama") or {}).get("has_model") or snap.get("openrouter_key") or snap.get("nvidia_key")
+        )
         actions: list = []
         if not has_model or os.environ.get("PYTEST_CURRENT_TEST"):
             text = advisor.scripted_reply(jrny, lang)  # model-free: still useful from the very first step

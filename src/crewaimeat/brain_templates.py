@@ -46,7 +46,14 @@ class Template:
     i18n: dict = field(default_factory=dict)  # {lang: {title?, description?, default_prose?}} overrides
     offer: dict | None = None  # optional offer META (crew_offer shape) the agent can ADVERTISE on the
     #   node so others can request this capability — id/title/ask/example/cost/latency/… . None = the
-    #   template offers nothing to request. Advertising is opt-in per brain (policy.offer_enabled).
+    #   template offers nothing to request. In the agency, a created agent auto-advertises it (the operator
+    #   can turn it off via policy.offer_enabled); the offer is (re)published on every start by run_crew.
+    tags: list[str] | None = None  # capability TAGS the agent advertises (aimeat_agent_tags_set) so the
+    #   ecosystem-app picker matches it by tag, not only exact name. Charset [a-z0-9._-]. None -> brains
+    #   derives a sensible default from the offer id / template id so an agency agent is never identity-less.
+    capabilities: dict | None = None  # {technical:[{name,type}], domain:[...], languages:[...]} reported via
+    #   aimeat_agent_capabilities_report (OVERWRITES the generic onboarding defaults). None -> brains derives
+    #   {domain:[description], languages:[…]} so the picker reads what the agent ACTUALLY does.
 
     def localized(self, lang: str = "en") -> dict:
         """A plain dict view of this template with `lang` strings applied (English fallback per field)."""
@@ -60,6 +67,8 @@ class Template:
             "policy_fields": self.policy_fields,
             "languages": ["en", *sorted(self.i18n.keys())],
             "offer": self.offer,
+            "tags": self.tags,
+            "capabilities": self.capabilities,
         }
 
 
@@ -102,7 +111,8 @@ _TOPIC_WATCHER_POLICY = {
     "key_mode": "date",  # how each run's key is suffixed so outputs are distinct + sortable by apps on the
     #   node: "latest" (one key, overwritten) | "date" (watch.<agent>.YYYY-MM-DD) | "timestamp" (…THH-MM-SS)
     "visibility": "owner",  # owner | public
-    "offer_enabled": False,  # opt-in: advertise this agent's capability on the node so others can request it
+    "offer_enabled": True,  # advertise this agent's capability on the node so others can discover + request it
+    #   (on by default for an agency-created agent; set False to keep the agent private / unlisted)
 }
 
 # What this agent advertises others can request from it (crew_offer META shape). Free to advertise; the
@@ -256,7 +266,7 @@ def _default_policy(cron: str | None = "0 8 * * *", autonomy: str = "draft") -> 
         "publish_key": "",
         "key_mode": "date",
         "visibility": "owner",
-        "offer_enabled": False,
+        "offer_enabled": True,  # auto-advertise the template's offer (opt out per brain to keep it unlisted)
     }
 
 
