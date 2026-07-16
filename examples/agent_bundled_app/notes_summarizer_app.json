@@ -1,0 +1,53 @@
+{
+  "app_id": "agent-notes-demo",
+  "title": "Notes Summarizer (agent-bundled demo)",
+  "description": "Slice-1 acceptance artifact for Agent-Bundled Apps: a tiny app whose manifest embeds a declarative crew-def. Deploying it makes the owner's own fleet instantiate the 'notes-summarizer' agent (spec doc-76ab674).",
+  "cortex": {
+    "agents": [
+      {
+        "agent_name": "notes-summarizer",
+        "temperature": 0.25,
+        "process": "sequential",
+        "discover": false,
+        "memory": false,
+        "tags": ["notes", "summarization", "role.task-runner"],
+        "capabilities": {
+          "technical": [{ "name": "summarization", "type": "skill" }],
+          "domain": ["notes", "summarization"],
+          "languages": ["en"]
+        },
+        "offers": [
+          {
+            "id": "summarize-notes",
+            "title": "Notes Summarizer",
+            "ask": "Send me raw notes text and I return a short structured summary (key points + action items). I do NOT fabricate content or act on the notes.",
+            "example": "Summarize: standup notes from Monday ...",
+            "cost": "cheap",
+            "latency": "minutes",
+            "repeatability": "idempotent",
+            "verification": "ungated",
+            "consequences": []
+          }
+        ],
+        "agents": [
+          {
+            "name": "summarizer",
+            "role": "Notes Summarizer",
+            "goal": "Turn raw notes into a short, faithful structured summary",
+            "backstory": "You condense messy notes into key points and action items. You never invent content that is not in the notes; when the notes are empty or unreadable you say so instead of guessing.",
+            "allow_delegation": false
+          }
+        ],
+        "tasks": [
+          {
+            "id": "summarize",
+            "agent": "summarizer",
+            "description": "Summarize the following notes faithfully. Notes / request:\n{{ctx.prompt}}\n\nProduce: (1) a 2-3 sentence summary, (2) key points as bullets, (3) action items as bullets (or 'none'). Use ONLY what is in the notes.",
+            "expected_output": "A structured summary: short paragraph, key-point bullets, action-item bullets."
+          }
+        ]
+      }
+    ]
+  },
+  "html": "<!doctype html>\n<html>\n<head><meta charset=\"utf-8\"><title>Notes Summarizer — agent-bundled demo</title></head>\n<body>\n<h1>Notes Summarizer</h1>\n<p>This app bundles its own agent. Deploy it from the app page (or queue a <code>deploy-app-agent</code> task on your crew-forge) and your OWN fleet runs <code>notes-summarizer-agent-notes-demo</code>.</p>\n<p>Liveness: memory key <code>agents.notes-summarizer-agent-notes-demo.deploy</code> (owner-visible) — <code>status: \"live\"</code> after deploy, <code>\"undeployed\"</code> after undeploy.</p>\n<p>Task the deployed agent with raw notes; it returns key points + action items.</p>\n</body>\n</html>\n"
+}

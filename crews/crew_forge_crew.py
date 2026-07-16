@@ -32,6 +32,7 @@ from crewai import Agent, Task
 
 from crewaimeat import forge_catalog, forge_json
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
+from crewaimeat.app_deploy import build_deploy_domain, is_deploy_app_agent, is_undeploy_app_agent
 from crewaimeat.crew_registry import make_registry_tools
 from crewaimeat.forge import forge_precedent_block, make_forge_json_tools, make_forge_tools, make_manage_tools
 
@@ -150,6 +151,11 @@ COMMAND_SERVICES = [
 
 
 def build_domain(ctx: BuildContext) -> tuple[list[Agent], list[Task]]:
+    # Agent-Bundled Apps (spec doc-76ab674): the node deploys/undeploys an app-embedded crew-def by
+    # scope.kind — a deterministic one-tool domain, exactly like the adopt-contract branch pattern.
+    task = ctx.task or {}
+    if is_deploy_app_agent(task) or is_undeploy_app_agent(task):
+        return build_deploy_domain(ctx, AGENT_NAME)
     text = (ctx.prompt or "").strip()
     # Offers surface: an order routes by the RESOLVED offer (scope.offer_id), never by
     # boilerplate in the description. fleet-status -> /list; build-crew -> the raw request.
