@@ -369,6 +369,27 @@ FLEET_IDENTITY: dict[str, dict] = {
             "languages": ["en", "fi"],
         },
     },
+    "cadence-followup": {  # CADENCE CRM — watches records, drafts follow-up crm-tasks (Tier-2 of the app engine)
+        "tags": [
+            "workspace-contract",
+            "crm",
+            "sales-followup",
+            "role.workspace-contract",
+            "contract.cadence-followup",
+        ],
+        "capabilities": {
+            "technical": [_skill("workspace-contract"), _skill("cadence-followup")],
+            "domain": [
+                "CADENCE CRM follow-up watch-logic (cold contacts, new leads, negative-call follow-ups, "
+                "stale/closing deals, overdue tasks) — mirrors the Tier-1 app engine so both agree",
+                "drafts or auto-creates crm-task follow-ups under an autonomy band (propose | auto)",
+                "deterministic, no LLM; never contacts anyone or moves a deal",
+                "consumes:crm-records",
+                "produces:crm-tasks",
+            ],
+            "languages": ["fi", "en"],
+        },
+    },
     "ledger-reader": {  # Company Brain — bank statements -> facts, on the company's own machine
         "tags": [
             "ledger",

@@ -229,6 +229,34 @@ _OFFER_META: dict[str, dict] = {
             "- **model:** bytedance-seed/seedream-4.5 · **size:** 2K · **aspect:** 16:9 · **cost:** ~$0.04\n\n…"
         ),
     },
+    "cadence-followup": {
+        "agent": "cadence-followup",
+        "title": "CADENCE follow-up assistant",
+        "ask": (
+            "Adopt me onto your CADENCE CRM workspace and I watch contacts, deals and activities and "
+            "draft follow-up tasks (call/email reminders) for stale, cold and overdue relationships and "
+            "closing deals — the same watch-logic the app's Follow-up tab runs. I do NOT contact anyone, "
+            "send anything, or move deals; I only create crm-task records for you to action."
+        ),
+        "example": (
+            "No request record needed — I draft a 'call' task when a contact goes cold (14+ days), a new "
+            "lead has no task, a call went poorly, or a deal nears its expected close."
+        ),
+        "cost": "cheap",
+        "latency": "seconds",
+        "verification": "deterministic",  # the scan is pure code — no LLM, reproducible
+        "dataHandling": "local-only",  # reads/writes the workspace only; nothing leaves to a third party or LLM
+        "consequences": [],
+        "success_ns": "crm.tasks",  # records->records contract: signals key the workspace record spaces
+        "required_ns": "crm.contacts",
+        "sample": (
+            "## Follow-up drafted — cold contact\n\n"
+            "**Ota yhteyttä: Matti Meikäläinen (ei kontaktia 21 pv)** · type: call · priority: normaali · "
+            "due: today+1\n\n"
+            "> no contact in 21 days · [cadence-followup:cold_contact:c-abc123]\n\n"
+            "*Drafted for your review — I create the task, you decide when to act.*\n\n…"
+        ),
+    },
 }
 
 
@@ -236,6 +264,7 @@ def _contracts():
     """All CONTRACT dicts on the OSS side, imported lazily (keeps import cost off the crews)."""
     from crewaimeat import (
         activity_contract,
+        cadence_contract,
         company_contract,
         image_contract,
         image_request_contract,
@@ -254,6 +283,7 @@ def _contracts():
             image_contract,
             image_request_contract,
             mail_contract,
+            cadence_contract,
         )
     ]
 
@@ -309,7 +339,9 @@ def offer_from_contract(contract: dict, with_sample: bool = False) -> dict:
         "cost": meta["cost"],
         "latency": meta["latency"],
         "repeatability": "idempotent",  # output-existence dedup is the contract convention
-        "verification": "gated",  # records are schema-validated at the boundary
+        # records are schema-validated at the boundary (gated); a pure-code contract with no LLM in the
+        # loop (e.g. CADENCE follow-up) is "deterministic" instead — authored per contract.
+        "verification": meta.get("verification", "gated"),
         "dataHandling": meta.get("dataHandling", "llm-provider"),
         "availability": {"boundToLastSeen": True, "scheduleBorn": None},
         "requirements": list(_BASE_REQUIREMENTS),
@@ -335,6 +367,14 @@ def offer_from_contract(contract: dict, with_sample: bool = False) -> dict:
         offer["required_to_function"] = Sig.exists(key_glob=wsk + in_ns + ".{request}.*")
         offer["success_signal"] = Sig.exists(key_glob=wsk + out_ns + ".{request}.*")
         offer["deliverable"]["location"]["key"] = wsk + out_ns + ".{request}.latest"
+    elif meta.get("success_ns") and meta.get("required_ns"):
+        # A records->records contract (e.g. CADENCE follow-up: reads crm.contacts, writes crm.tasks) has
+        # no single request-keyed document to template — it produces many per-run task keys. Key the whole
+        # workspace record space: needs at least one input record, succeeds once it has written any output.
+        wsk = "organism.{org}.w.{ws}."
+        offer["required_to_function"] = Sig.nonempty(key_glob=wsk + meta["required_ns"] + ".*")
+        offer["success_signal"] = Sig.count_nonempty(key_glob=wsk + meta["success_ns"] + ".*", min=1)
+        offer["deliverable"]["location"]["key"] = wsk + meta["success_ns"] + ".*"
     return offer
 
 
@@ -1334,7 +1374,7 @@ def crew_offer(agent: str, meta: dict, with_sample: bool = False) -> dict:
     return offer
 
 
-PILOT_AGENTS = ("web-researcher", "activity-reporter", "image-scout", "postman")
+PILOT_AGENTS = ("web-researcher", "activity-reporter", "image-scout", "postman", "cadence-followup")
 CREW_AGENTS = tuple(_CREW_OFFERS)
 
 
