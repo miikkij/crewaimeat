@@ -51,3 +51,4 @@ benchmarks/locomo/.data/
 # to this public repo.
 /secretary/
 .lingua-images/
+.ec-images/

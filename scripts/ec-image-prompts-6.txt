@@ -1,0 +1,16 @@
+# Experience Center — sixth batch (2026-07-18): composition-level dedup.
+# These lessons echoed their sibling tour slides' metaphors (triptych, stairs, gauge+coin,
+# idea-build-done, pipeline, trio-row). Each gets a genuinely DIFFERENT metaphor.
+# les-l0-identities also fixes swapped labels (old image had GHII over the robot!).
+
+les-l0-identities=Three ID badges hanging on hooks on a wooden board: a blue badge with a simple human icon labeled GHII, a green badge with a robot icon labeled GAII, and an amber badge with an app-window icon labeled GEAI; thin red strings run from the green and amber badges to the blue badge. Labels exactly as given, one per badge.
+les-l1-what-agent=A blue human relaxing in an armchair with a coffee mug; beside the chair a cheerful green robot walks past pushing a wheelbarrow stacked with amber folders; a small wall clock above. No words or letters anywhere.
+les-l3-automation-levels=A control panel with one large amber rotary dial with three positions marked only by icons: a pointing finger, an alarm clock, and an infinity symbol; a blue hand turns the dial toward the infinity position; a small green robot stands beside the panel giving a thumbs up. No words or letters anywhere.
+les-l4-build-first=A blue human hands a small recipe card to a green robot wearing a white chef hat behind a kitchen counter; on the counter a mixing bowl with a whisk, and under a glass dome a finished cake shaped like a small blue app window with a cherry on top. No words or letters anywhere.
+les-l5-pattern=A large amber machine with a funnel hopper on top and a round window on its side showing a small green robot working inside; a blue human pours a jar of gray paper scraps into the hopper; from the machine's front slot a neat glowing blue card slides out onto a tray. No words or letters anywhere.
+les-l6-meters=A blue human reading a wall-mounted amber utility meter with a circular dial and a small number counter; beside it on a wooden table stands a classic red cash register with a coin on its tray; a thin vertical dashed line separates the meter wall from the register table. No words or letters anywhere.
+les-l6-accelerate=A friendly rocket lifting off from a small launch pad, a blue human and a green robot visible together in its round window; amber flame and soft smoke clouds below, small motion lines beside the rocket; tiny milestone pennants planted on the ground fading behind. No words or letters anywhere.
+
+les-l5-pattern=A short factory conveyor belt moving left to right: at the start a blue app window tips amber envelopes onto the belt; midway a green robot stamps each envelope with a small tool; at the end a green app window on a stand displays a framed, glowing finished chart. No funnel, no words or letters anywhere.
+
+les-l4-app-agents=A blue app window styled as a small street kiosk with a service hatch; three green robots queue in front of it, the first handing an amber coin over the counter; a small open manual book stands on the counter beside the hatch. No words or letters anywhere.

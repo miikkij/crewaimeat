@@ -1,0 +1,6 @@
+# Experience Center — fifth batch (2026-07-18): L3 restructure + L5 agent-facing.
+# Rules: unique composition per record; at most ONE short label; NEVER sentences in images.
+
+les-l3-hello=A friendly reception scene: a green robot at a desk presenting an open passport-like booklet to a blue human; the booklet pages show only small icons (a wrench, a chat bubble, a gear) and no words; beside the desk a tall checklist board with green check marks; a small label HELLO on the desk sign.
+les-l3-offerings=A green robot behind a small wooden market stall; three cards hang from the stall roof: one with an amber coin icon, one with a chain-link icon, one with a green check icon; a blue human customer stands in front choosing; no words or letters anywhere.
+les-l5-agentfacing=A large blue app box opened like a wooden crate with its front panel down as a ramp; two small green robots walk out of the crate carrying tiny toolboxes; on top of the crate sits a small amber book with a bookmark; no words or letters anywhere.

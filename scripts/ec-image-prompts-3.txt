@@ -1,0 +1,3 @@
+# Experience Center — third batch: profile/consent + the prompt-driven round trip
+les-l0-profile=A blue human standing in front of a large friendly control panel listing three green robot faces in rows, each row with an amber toggle switch and a small golden key icon; one row highlighted; a calm permissions-control-room mood.
+les-l0-copyprompt=A circular three-step flow with bold red arrows: first a blue app window hands an amber envelope to a chat speech bubble; second the chat bubble returns a neat structured document with curly braces symbols on it; third the document goes back into the blue app window which shows a green check mark and a small rendered result card.

@@ -1,0 +1,22 @@
+# Experience Center — second tour batch: L1 / L4 / L5 / L6 slide tours (13 slides)
+
+# ── L1 tour: agents & apps intro ──
+sl-l1-app=A blue hand tapping a large friendly app window with simple UI elements (a search bar, cards, a button), like a tool being used; small amber sparkles around the tap.
+sl-l1-agent=A cheerful green robot working at a desk, papers and amber documents neatly stacking up beside it, a coffee mug on the desk; the robot is clearly doing the work itself.
+sl-l1-first=A blue human handing a written note to a cheerful green robot at a doorway; above the door a green check mark; a golden key on the doorstep. The note represents a connection prompt.
+
+# ── L4 tour: building apps ──
+sl-l4-idea=A blue human with a large amber speech bubble containing a glowing lightbulb; small sketch doodles around the bubble, like describing an idea out loud.
+sl-l4-build=A green robot assembling a blue app window with a wrench and a hammer, parts and screws floating nearby, construction in progress, energetic and fun.
+sl-l4-release=A finished blue app window standing on a shelf with a green check badge and three version chips labeled v1, v2, v3 below it, the v3 chip green and highlighted.
+sl-l4-fork=A blue app window splitting into two along a dashed red branch line: the original stays in place and a copy slides to the right with a small amber pencil next to it; a thin lineage line still connects them.
+
+# ── L5 tour: agents + apps together ──
+sl-l5-collect=Small amber dots and paper notes falling like a stream into a wide blue app window shaped like a funnel that feeds into an amber grid table below.
+sl-l5-refine=A green robot standing over an amber grid table, sorting colored items into order; to the right a green app window displays a polished sparkling chart result.
+sl-l5-gate=A horizontal pipeline of three connected stages with arrows; in the middle a large blue human hand held up as a stop gate with an amber pause symbol; after the hand the pipeline continues with a green check mark.
+
+# ── L6 tour: financing & AI-native ──
+sl-l6-meter=A large amber gauge meter with a red needle; a trail of small amber dots fading progressively away toward a gray X mark, showing usage being measured and burned, not paid to anyone.
+sl-l6-money=A large amber coin with a euro symbol flowing along a bold red arrow into the hands of a blue shopkeeper standing under a red-striped awning; clean and honest transaction mood.
+sl-l6-stairs=A four-step ascending staircase with icons on the steps from left to right: a chat speech bubble, an amber clock with a small green robot, a blue app window, and a blue app window together with a green robot; a red human figure climbing near the top and a red flag planted at the summit.

@@ -1,0 +1,33 @@
+# Experience Center illustration prompts — one per curriculum record: <record-id>=<prompt>
+# Generated images upload as ec.img.<record-id> (public, owner GHII) and the same prompt text
+# is stored into the record's image_prompt field so the curriculum stays self-describing.
+# Short text labels (GHII, GAII, v1…) are allowed — keep them few and simple.
+
+# ── L0 tour ──
+sl-l0-identities=Three characters side by side: a friendly blue human figure in the center holding an amber wallet, a cheerful green robot on the left holding up a small golden key, and an amber app-window box on the right behind a vertical dashed boundary line reaching in with a plug. Red curved arrows from the robot and the box point to the wallet. Small clear labels: GHII above the human, GAII above the robot, GEAI above the box.
+sl-l0-mcp=Split scene with a vertical dashed divider: left half shows a chat speech bubble connected by a solid green cable with a plug into a small red-roofed server building, with a green check mark; right half shows the same chat bubble and an amber envelope carried back and forth along dashed arrows to the building.
+sl-l0-deviceauth=A cheerful green robot knocking on a door on the left; a blue human opens the door and hands over a golden key; a green shield with a white check mark above the door. Friendly, safe mood.
+sl-l0-catalog=A shop shelf with four small app windows; one app highlighted with a red frame and three version chips labeled v1, v2, v3 beneath it, the v3 chip green; a dashed red branch line forks from it to a copy of the app on a lower shelf.
+
+# ── L2 tour ──
+sl-l2-organism=A large building with a red roof and a small red flag; inside, two blue human figures and two green robots standing together as one team under the same roof.
+sl-l2-workspace=A building outline containing three distinct rooms drawn as rounded cards in blue, amber and green, each with small content lines, like tidy organized workspaces.
+sl-l2-records=Side by side: left, a blue data table grid with a highlighted header row and a small amber padlock badge on its corner; right, a green document page with a folded corner and text lines.
+sl-l2-publish=Left: a dashed-outline draft page with an amber pencil writing on it; a bold red arrow pointing right to a solid green page with a big check mark and three version chips labeled v1, v2, v3 below it, the v3 chip green.
+sl-l2-membership=A blue human handing a golden key to a friendly green robot, and below between them a red shield with a white check mark.
+sl-l2-public=A blue workspace card with an open green padlock on its corner, red radio waves radiating to the right toward a green globe with meridian lines.
+
+# ── L3 tour ──
+sl-l3-automation=Triptych in three panels separated by thin dashed lines: first panel a blue human hand pressing a red button on a green robot; second panel an amber alarm clock ringing next to a green robot; third panel nighttime with a crescent moon, a blue human asleep in a bed while a green robot works at a desk lit by a small lamp.
+sl-l3-skills=A large friendly green robot with three cartridge slots in its chest, two colorful cartridges already inserted (blue and amber), and a red cartridge hovering above being slotted in along a dashed arrow; a small shelf with more cartridges on the right.
+sl-l3-fleet=Six small identical green robots arranged on the left and right, an amber control tower in the middle with the label AGENCY and radiating signal arcs toward the robots, and a single green cable from the tower up to a small red-roofed server building.
+
+# ── Lesson illustrations ──
+les-l0-identities=Three characters side by side: a friendly blue human figure in the center holding an amber wallet, a cheerful green robot on the left holding up a small golden key, and an amber app-window box on the right behind a vertical dashed boundary line reaching in with a plug. Red curved arrows from the robot and the box point to the wallet. Small clear labels: GHII above the human, GAII above the robot, GEAI above the box.
+les-l1-what-agent=Split scene divided by a vertical dashed line: on the left a blue hand pointing at an app window like a tool being used; on the right a green robot working at a desk producing amber documents.
+les-l3-automation-levels=Triptych in three panels separated by thin dashed lines: first panel a blue human hand pressing a red button on a green robot; second panel an amber alarm clock ringing next to a green robot; third panel nighttime with a crescent moon, a blue human asleep in a bed while a green robot works at a desk lit by a small lamp.
+les-l4-build-first=Three stages left to right connected by red arrows: an amber idea speech bubble with dots, then a green robot hammering together a blue app window, then the finished app standing on a shelf with a green check badge.
+les-l5-pattern=Pipeline left to right: small amber dots falling into a blue app window, a red arrow to an amber grid workspace with a green robot below it processing, and a red arrow to a green app window showing a polished sparkling result.
+les-l5-eco=An amber external app box outside a building waving hello with a speech bubble; a green check mark over the door, a golden key at the doorway, and inside the building a dashed-fenced yard containing the same amber box.
+les-l6-meters=Split by a vertical dashed divider: left an amber gauge meter with a red needle and small amber dots fading away next to a gray X; right a large amber coin flowing along a red arrow to a blue shopkeeper under a red awning, with a blue owner figure receiving dashed billing lines.
+les-l6-accelerate=A four-step ascending staircase with icons on the steps from left to right: a chat speech bubble, a clock with a small green robot, a blue app window, and a blue app window together with a green robot; a red human figure climbing the stairs and a red flag planted at the top.

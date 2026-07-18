@@ -1,0 +1,13 @@
+# Experience Center — seventh batch (2026-07-18): B1-B4 business lessons (9 images).
+# Rules: unique metaphor per record (checked against ALL existing academy images);
+# at most ONE short label; never sentences.
+
+les-b1-company=A blue office building with a large round golden seal bearing a white check mark mounted beside its entrance; a friendly green robot doorman stands at the door; a small red flag on the roof. No words or letters anywhere.
+les-b1-psp=A small armored delivery truck with an amber coin painted on its side driving along a straight road from a blue app window on the left to a blue shopkeeper waving at a shop door on the right; no stops or middlemen along the road. No words or letters anywhere.
+les-b1-sell=A glass display case with three shelves: a small green robot figurine on top, a small blue app window in the middle, and an amber gear at the bottom, each with a small blank price tag; a blue human arranges them proudly. No words or letters anywhere.
+les-b2-api=A stone bridge over a river connecting an old gray server rack on the left bank to a bright green meadow on the right bank where three small green robots wait; an amber road runs across the bridge. No words or letters anywhere.
+les-b2-turbo=A blue engine block with a large amber turbine bolted on top, red speed lines swirling around the turbine, and a green robot mechanic beside it giving a thumbs up; a small label TURBO on the turbine.
+les-b2-billing=A turnstile gate where a queue of small green robots each insert an amber coin to pass through; beyond the gate a glowing blue cube rests on a pedestal. No words or letters anywhere.
+les-b3-incubator=A glass greenhouse with rows of amber pots inside, small green robots growing from them at different stages — a tiny sprout-like one, a half-grown one, and a full-sized one; a watering can hangs by the door. No words or letters anywhere.
+les-b3-dedicated=A walled compound with a closed amber gate; inside the walls a small server building with a wall monitor showing a green heartbeat line; outside the walls a blue caretaker figure tends the grounds without seeing in. No words or letters anywhere.
+les-b4-portals=Two office buildings on opposite sides; a stream of small green robots carrying amber envelopes flows between them along a curved path, bypassing a faded crumbling gray archway in the middle. No words or letters anywhere.

@@ -1,0 +1,25 @@
+# Experience Center — fourth batch (2026-07-18): UNIQUE images for every record.
+# Rule: never reuse one image across records — each lesson gets its OWN composition,
+# deliberately different from its sibling tour slide.
+
+# ── Replacements for the 10 lessons that shared an image with a tour slide ──
+les-l0-mcp=A large blue chat speech bubble with an electrical socket on its side; a blue human plugs in a thick green cable that runs from a small red-roofed server building; bright amber connection sparks at the plug and a small label MCP above the socket.
+les-l0-catalog=A friendly storefront with a wide display window showing rows of small colorful app cards on shelves; a blue human reaches in and picks one glowing amber card.
+les-l1-what-app=A blue human carrying an open amber toolbox; inside the toolbox, small blue app windows stand upright like tools; the human lifts one app window out with the other hand.
+les-l1-connect-first=A blue human and a green robot shaking hands across a small desk; on the desk an approval checklist with green check marks and a golden key; a subtle red stamp mark floating above the handshake.
+les-l2-first-organism=An empty green lot where a blue human and a green robot together plant a tall red flag; next to them an unrolled blueprint showing a simple house outline; a few foundation stones already laid.
+les-l2-records-docs=Two wooden shelves side by side separated by a thin dashed divider: the left shelf holds a row of identical amber boxes with neat labels and one small padlock; the right shelf holds a loose stack of green notebooks with bookmarks.
+les-l3-skills=A green robot sitting on a stool reading a large open book labeled SKILL; an amber lightbulb glows above its head; behind it a small bookshelf with more slim books.
+les-l3-crewaimeat=A large dark terminal window with an amber command line glowing; a line of small green robots marches out of the terminal doorway like recruits, each carrying a tiny toolbox.
+les-l4-versions-forks=A blue filing cabinet with three drawers labeled v1, v2 and v3; the v3 drawer is open and glowing amber while a blue hand places a new app window inside; the lower drawers closed and slightly faded.
+les-l5-workflows=A relay race on a curved track: three green robots passing a glowing amber baton from one to the next; midway a blue human referee stands at a checkpoint holding up a green check flag.
+
+# ── New L0 tour: MCP setup in 5 steps (sl-l0-mcp-step1..5) ──
+sl-l0-mcp-step1=Step scene: a blue human standing at a bright signup kiosk with a large card showing a name field and a key icon; a small green sprout growing in a pot beside the kiosk.
+sl-l0-mcp-step2=Step scene: a large settings panel with a gear icon at the top and rows of chat-bubble icons; a blue hand holds a magnifying glass over one row highlighted in amber.
+sl-l0-mcp-step3=Step scene: a blue hand dropping a long amber address chip labeled aimeat.io/v1/mcp into a glowing slot on a settings panel; small red arrows pointing into the slot.
+sl-l0-mcp-step4=Step scene: an approval dialog with three amber toggle switches and a large green APPROVE button being pressed by a blue hand; a golden key hanging beside the dialog.
+sl-l0-mcp-step5=Step scene: a blue speech bubble containing only three dots, a red arrow pointing right, and a green robot presenting a white card with a neat bulleted list made of green dots and gray lines (no letters); a large green check mark beside the card. No words or letters anywhere in the image.
+
+# ── New lesson: knowledge packages (L2) ──
+les-l2-knowledge=A blue human pours a jumble of gray crumpled notes from a gray speech bubble into a large amber funnel machine; out of the machine slide neat labeled boxes, one with a green PUBLIC tag and one with a red PRIVATE tag.
