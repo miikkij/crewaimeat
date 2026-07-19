@@ -42,7 +42,7 @@ _FILE_TEMPLATE = '''\
 Only build_domain below is crew-specific; crewaimeat.aimeat_crew.run_crew provides the
 AIMEAT wiring (onboarding, daemon, liaison publish/complete, live progress, date
 injection). See SCAFFOLD_CANON.md. Register + approve before running:
-  npx aimeat@1.34.0 connect --url https://aimeat.io --owner <your-aimeat-account> --agent {agent_name}
+  npx aimeat@2.0.0 connect --url https://aimeat.io --owner <your-aimeat-account> --agent {agent_name}
 
 Run: uv run python crews/{fname}
 """
@@ -243,7 +243,7 @@ _VERIFY_URL_RE = re.compile(r"(https?://\S*(?:verif|activate|device|connect|auth
 
 # PIN the connector version (not @latest). `@latest` silently auto-updated and broke us (v1.33 removed
 # `connect add`); pinning gives reproducible behavior and a deliberate bump when a new connector ships.
-AIMEAT_CONNECTOR = "aimeat@1.34.0"
+AIMEAT_CONNECTOR = "aimeat@2.0.0"
 
 
 def register_fleet(owner: str, url: str = "https://aimeat.io", agents: list[str] | None = None) -> str:
@@ -818,7 +818,7 @@ def register_and_launch(agent_name: str) -> str:
         _ok, reg_line = register_agent(agent_name, owner)
     else:
         reg_line = (
-            "AIMEAT_OWNER is not set — register manually: npx aimeat@1.34.0 connect "
+            "AIMEAT_OWNER is not set — register manually: npx aimeat@2.0.0 connect "
             f"--url https://aimeat.io --owner <your-aimeat-account> --agent {agent_name}"
         )
 
@@ -1022,7 +1022,7 @@ def reauth(agent_name: str) -> str:
     if not owner:
         return (
             "AIMEAT_OWNER is not set, so I cannot re-auth. Set it in .env, then run:\n"
-            f"  npx aimeat@1.34.0 connect --url https://aimeat.io --owner <your-aimeat-account> "
+            f"  npx aimeat@2.0.0 connect --url https://aimeat.io --owner <your-aimeat-account> "
             f"--agent {agent_name}"
         )
     ok, out = register_agent(agent_name, owner)
