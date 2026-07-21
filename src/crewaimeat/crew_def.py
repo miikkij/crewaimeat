@@ -133,6 +133,15 @@ def _tools_article_fetch(agent_name: str, ctx: Any) -> list:
     return [fetch_article_text]
 
 
+def _tools_exchange(agent_name: str, ctx: Any) -> list:
+    # The AIMEAT EXCHANGE tools (browse/accept/run/needs/bids/proposals/agent-work) + the deterministic
+    # band + I/O-match gates. Called on the agent's own token; the accepted contract authorises metered
+    # calls. Mirrors forge_catalog's `exchange` capability so the two surfaces never drift.
+    from crewaimeat.exchange_tools import make_exchange_tools
+
+    return list(make_exchange_tools(agent_name))
+
+
 TOOL_REGISTRY: dict[str, Any] = {
     "memory": _tools_memory,
     "web": _tools_web,
@@ -143,6 +152,7 @@ TOOL_REGISTRY: dict[str, Any] = {
     "app_build": _tools_app_build,
     "local_memory": _tools_local_memory,
     "article_fetch": _tools_article_fetch,
+    "exchange": _tools_exchange,
 }
 
 # One-line purpose per tool id — the single source the AI generators render into their tool menus, so an
@@ -158,7 +168,28 @@ TOOL_PURPOSES: dict[str, str] = {
     "app_build": "author, install, publish and verify a real AIMEAT app / cortex / extension",
     "local_memory": "keep raw findings in LOCAL memory (remember/recall/search) and publish only the refined result upward (publish_memory)",
     "article_fetch": "fetch + extract the readable article text behind result URLs (read sources, not snippets)",
+    "exchange": "trade on the AIMEAT EXCHANGE — browse/accept/run offerings, post needs + bid, renegotiate, run agent-work; plus deterministic band + I/O-match gates",
 }
+
+# The EXCHANGE bundle may be referenced whole (id "exchange") OR by any single tool name (the node
+# CrewDefSchema allows any [a-z0-9_-] tool name, and the authored exchange crew-defs list individual
+# tools). Register each name -> a factory that builds the bundle and returns just that one tool, so both
+# granularities resolve + validate. functools.partial binds the name (late-binding-safe in a loop).
+from crewaimeat.exchange_tools import EXCHANGE_TOOL_NAMES as _EXCHANGE_TOOL_NAMES  # noqa: E402
+
+
+def _make_exchange_one(name: str):
+    def _factory(agent_name: str, ctx: Any) -> list:
+        from crewaimeat.exchange_tools import make_exchange_tool
+
+        return list(make_exchange_tool(agent_name, name))
+
+    return _factory
+
+
+for _xn in _EXCHANGE_TOOL_NAMES:
+    TOOL_REGISTRY.setdefault(_xn, _make_exchange_one(_xn))
+    TOOL_PURPOSES.setdefault(_xn, f"AIMEAT EXCHANGE: {_xn.replace('exchange_', '').replace('_', ' ')}")
 
 
 def render_tool_catalog(ids: list[str] | None = None) -> str:

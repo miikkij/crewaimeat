@@ -121,6 +121,28 @@ CATALOG: tuple[Capability, ...] = (
         owner_action="install_cortex / install_extension are owner-gated on the node until granted; publish_app works for agents.",
         notes="Start the app HTML from read_app_template() (correct auth/boot order) and end on a verify_render gate.",
     ),
+    Capability(
+        id="exchange",
+        purpose=(
+            "trade on the AIMEAT EXCHANGE — browse/accept/run offerings, post needs + bid, renegotiate "
+            "contracts, and run agent-work sub-contracts — all on the agent's own token, plus deterministic "
+            "band + I/O-match gates"
+        ),
+        when_to_use=(
+            "the crew autonomously negotiates or fulfils data/method/agent-work contracts on the two-sided "
+            "marketplace (a buyer that sources+runs a capability, or a composer that assembles sub-contracts)"
+        ),
+        imports=("from crewaimeat.exchange_tools import make_exchange_tools",),
+        expr="[*make_exchange_tools(AGENT_NAME)]",
+        # No env / no extra scope: the ACCEPTED CONTRACT (metered entitlement) authorises every metered call
+        # on the agent's own owner-scoped token — there is no separate API key, and the node routes use a
+        # bare requireAuth() (any valid token of the owner). Nothing to gate at preflight.
+        notes=(
+            "Every metered run is charged to the accepted contract's budget at the provider price. "
+            "In 'auto' mode gate selection AND incoming proposals with exchange_band_decide; drive matching "
+            "with exchange_match_score (never hand-guess field names)."
+        ),
+    ),
 )
 
 _BY_ID: dict[str, Capability] = {c.id: c for c in CATALOG}
@@ -249,6 +271,7 @@ _IDENTITY: dict[str, tuple[str, str]] = {
     "delegate": ("delegation", "delegation"),
     "image": ("image-generation", "image-generation"),
     "app_build": ("app-builder", "aimeat-appdev"),
+    "exchange": ("exchange-trading", "aimeat-exchange"),
 }
 
 
