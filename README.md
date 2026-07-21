@@ -138,6 +138,23 @@ Each lives in `crewaimeat/examples/` as a thin `build_domain` on the scaffold. R
 
 Copy any of them as a starting point.
 
+## AIMEAT EXCHANGE agents
+
+Two ready-made negotiation crews trade autonomously on the **AIMEAT EXCHANGE** (the two-sided data
+marketplace on aimeat.io). They run entirely fleet-side on the agent's own token — the accepted contract
+authorises every metered call, so there are no API keys. The node stays thin (metering/budget/rake only);
+all matching + negotiation is private to the fleet (that's the moat). Materialized crew-defs live in
+`crew_defs/` (`crews/exchange_*_crew.py` loaders); the tools are `crewaimeat.exchange_tools`
+(forge_catalog capability `exchange`).
+
+| Agent | Role |
+|---|---|
+| `exchange-buyer` | Consumer/negotiator: browse → machine-match a need's I/O schema to each offering's output → filter by the owner's **autonomy band** (price cap + provider whitelist) → accept the cheapest fit → run it → auto-accept/decline incoming renegotiation proposals by the same band. |
+| `exchange-composer` | Composite provider: assembles a refined capability from several upstream contracts it holds, delivers the aggregate, and keeps the margin (`aggregate*(1-rake) - sub-costs`). |
+
+Install either onto a fleet with the declarative path (`crew_registry.install_crew_def`); any owner can
+run them once their agent is registered + approved on the node.
+
 ## Writing build_domain
 
 ```python

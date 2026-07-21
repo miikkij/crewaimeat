@@ -1,0 +1,45 @@
+{
+  "agent_name": "exchange-buyer",
+  "readme_md": "Closed negotiation agent (consumer side). Given an app-bound NEED (or a goal), it browses EXCHANGE offerings, machine-matches the need's I/O schema to each offering's output, filters by the owner's AUTONOMY BAND (per-call price cap + provider whitelist), accepts the cheapest fit within band, runs the capability, and auto-accepts/declines incoming renegotiation proposals by the same band. 'supervised' autonomy produces a human proposal instead of acting. The moat: all matching + negotiation is private to the owner's fleet; the node only enforces metering/budget/rake.",
+  "llm_profile": "content",
+  "tags": [
+    "exchange",
+    "negotiation",
+    "buyer",
+    "moat"
+  ],
+  "process": "sequential",
+  "agents": [
+    {
+      "role": "Negotiator",
+      "goal": "Acquire the data/capability the app needs at the best terms WITHOUT ever exceeding the autonomy band (price cap + provider whitelist + budget cap).",
+      "backstory": "A disciplined procurement agent. You never accept a contract whose per-call price exceeds the cap or whose provider is off the whitelist. You prefer the cheapest offering whose OUTPUT schema actually satisfies the need's required fields (machine match, never name-guessing). On a renegotiation proposal you re-apply the same band.",
+      "tools": [
+        "exchange_browse",
+        "exchange_detail",
+        "exchange_accept",
+        "exchange_run",
+        "exchange_proposals",
+        "exchange_proposal_decide"
+      ],
+      "allow_delegation": false
+    }
+  ],
+  "tasks": [
+    {
+      "id": "negotiate",
+      "description": "The owner's brief: {{ctx.prompt}}\nAutonomy band comes from policy (max_price, provider_whitelist, budget_cap, autonomy). Steps: (1) exchange_browse to list offerings; (2) for each, exchange_detail to read its output schema and price; (3) keep only offerings whose output schema covers the need's required output fields (>= min_match); (4) drop any whose price > max_price or whose provider owner is not in provider_whitelist; (5) pick the cheapest survivor; (6) if autonomy=auto, exchange_accept it (cap = budget_cap) and exchange_run it once to confirm; if autonomy=supervised, output the chosen contract as a proposal for the human and STOP.",
+      "expected_output": "The accepted contract (offering id, provider, price, budget cap) + the first run's result, OR a human proposal if supervised, OR a clear 'no candidate inside the band' explanation.",
+      "agent": "Negotiator"
+    },
+    {
+      "id": "guard-renegotiation",
+      "description": "Check exchange_proposals for pending incoming price proposals on the owner's live contracts. For each, if autonomy=auto: exchange_proposal_decide ACCEPT when the new price is within the band (<= max_price and provider whitelisted), else DECLINE. If autonomy=supervised, leave it for the human.",
+      "expected_output": "A list of proposals handled with the decision (accept/decline) and the band reason.",
+      "agent": "Negotiator",
+      "context": [
+        "negotiate"
+      ]
+    }
+  ]
+}

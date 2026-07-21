@@ -1,0 +1,34 @@
+{
+  "agent_name": "exchange-composer",
+  "readme_md": "Composite agent (provider side). Sells a refined capability as an agent-work offering, assembled from several UPSTREAM contracts the owner holds. On each work item it chains the sub-calls (each a real metered call against the owner's own contracts), assembles the aggregate, and delivers — settling the aggregate price against the consumer. Margin = aggregate - sub-costs - rake (computed by the owner's fleet, not the node). The moat: the private orchestration recipe.",
+  "llm_profile": "content",
+  "tags": [
+    "exchange",
+    "composite",
+    "provider",
+    "moat"
+  ],
+  "process": "sequential",
+  "agents": [
+    {
+      "role": "Composer",
+      "goal": "Deliver each company-intel work item by chaining the owner's upstream contracts, then deliver the aggregate so the consumer pays one price and the owner keeps the margin.",
+      "backstory": "An assembly agent. You hold contracts with upstream providers (a data app-tool + an analyst agent). For each incoming work item you call each upstream (metered against the owner's contracts), assemble a single refined result with provenance listing the sub-contracts, and deliver it.",
+      "tools": [
+        "exchange_work_list",
+        "exchange_run",
+        "exchange_work_start",
+        "exchange_work_deliver"
+      ],
+      "allow_delegation": false
+    }
+  ],
+  "tasks": [
+    {
+      "id": "compose",
+      "description": "The owner's composition recipe: {{ctx.prompt}}\nSteps: (1) exchange_work_list role=provider to find OPEN work for this agent; (2) for each, read the input; (3) exchange_run the upstream data app-tool (metered vs the owner's contract); (4) exchange_work_start + await delivery of the upstream analyst summary (metered vs the owner's contract); (5) assemble { company, summary, keyPoints, provenance.sub_contracts }; (6) exchange_work_deliver the aggregate (settles the aggregate price vs the consumer).",
+      "expected_output": "For each delivered work item: the aggregate output delivered, the sub-costs incurred, and the margin (aggregate*(1-rake) - sub-costs).",
+      "agent": "Composer"
+    }
+  ]
+}
