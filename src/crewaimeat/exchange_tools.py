@@ -10,7 +10,16 @@ Auth model: every call uses the AGENT'S OWN owner-scoped AIMEAT token (``_token`
 (the metered entitlement) authorises the metered call — there is NO separate API key, and the provider's
 upstream keys stay server-side. These tools are thin wrappers over EXISTING node REST endpoints
 (``exchange.ts`` = entitlements/proposals/work, ``exchange-market.ts`` = offerings/needs/bids). Zero node
-changes. Native REST (not MCP) — several of these have no MCP surface, so a crew must call REST directly.
+changes.
+
+Native REST BY DESIGN (not the MCP tools). The node shipped generic EXCHANGE MCP tools in aimeat 2.1.0
+(``aimeat_exchange_work*`` / ``aimeat_exchange_proposal*`` / ``aimeat_app_tool_invoke``, on both the
+public and connector MCP surfaces), so the earlier "no MCP surface" gap is closed. We STILL call REST
+directly, deliberately: (1) the EXCHANGE routes are ``requireAuth`` (not ``requireScope``), so the
+accepted contract ALONE authorises the call — the MCP tools are ``exchange:read``/``write`` scope-gated,
+and our agents onboard with ``memory:*`` + ``catalogue:read`` only; (2) direct REST works OFF-fleet too,
+whereas connector-MCP tools work only while the agent is attached in-fleet. The 2.1.0 MCP tools are the
+right path for OTHER (non-crewaimeat / Claude-chat) agents to trade; this fleet-side moat stays on REST.
 
 Embedded negotiation logic (deterministic, ported verbatim from the prod negotiator so the agent never
 name-guesses or LLM-guesses a price gate):
