@@ -28,18 +28,19 @@ def _band(**over):
 
 def test_band_auto_acts_only_within_price_and_whitelist():
     d = ex.band_decision(80, "happydude500001", _band())
-    assert d["decision"] == "auto"
+    assert d["decision"] == "auto" and d["in_band"] is True
 
 
-def test_band_price_over_max_forces_propose():
+def test_band_price_over_max_auto_mode_rejects():
+    # auto mode + out of band (price>cap) -> REJECT (skip candidate / decline proposal), not propose
     d = ex.band_decision(120, "happydude500001", _band())
-    assert d["decision"] == "propose"
+    assert d["decision"] == "reject" and d["in_band"] is False
     assert any("max_price" in r for r in d["reasons"])
 
 
-def test_band_provider_not_whitelisted_forces_propose():
+def test_band_provider_not_whitelisted_auto_mode_rejects():
     d = ex.band_decision(50, "stranger", _band())
-    assert d["decision"] == "propose"
+    assert d["decision"] == "reject"
     assert any("whitelist" in r for r in d["reasons"])
 
 
@@ -52,6 +53,18 @@ def test_band_supervised_never_acts_even_within_price():
 def test_band_boundary_price_equals_max_is_auto():
     # price <= max_price (inclusive) is within band
     assert ex.band_decision(100, "happydude500001", _band())["decision"] == "auto"
+
+
+def test_band_empty_whitelist_allows_any_provider():
+    # verbatim negotiator: whitelist only constrains when NON-empty
+    d = ex.band_decision(3, "anyone", _band(provider_whitelist=[]))
+    assert d["decision"] == "auto"
+
+
+def test_band_normalises_provider_gaii_to_owner():
+    # a provider GAII (agent#owner@node) is accepted and matched by owner
+    d = ex.band_decision(3, "some-agent#happydude500001@aimeat-finland-001-genesis", _band())
+    assert d["decision"] == "auto"
 
 
 # ── machine I/O match (recursive property-name intersection over need output) ─────────────────────────
@@ -69,12 +82,15 @@ def test_schema_property_names_recurses_nested_and_arrays():
     assert ex.schema_property_names(schema) == {"price", "rows", "ticker", "close"}
 
 
-def test_schema_property_names_walks_composition_and_defs():
+def test_schema_property_names_is_verbatim_properties_and_items_only():
+    # verbatim negotiator.schema_fields: allOf/$defs are NOT walked (proven prod schemas are flat) —
+    # only properties + object items. Reproduces the proven decisions exactly.
     schema = {
-        "allOf": [{"properties": {"a": {}}}, {"$ref": "#/$defs/b"}],
+        "allOf": [{"properties": {"a": {}}}],
         "$defs": {"b": {"properties": {"c": {}}}},
+        "properties": {"top": {}},
     }
-    assert ex.schema_property_names(schema) == {"a", "c"}
+    assert ex.schema_property_names(schema) == {"top"}
 
 
 def test_match_score_is_intersection_over_need():

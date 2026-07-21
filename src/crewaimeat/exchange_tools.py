@@ -36,41 +36,24 @@ from crewaimeat.generator_tool import _discover_owner, _token
 EXCHANGE_TIMEOUT = 45  # node round-trip; a metered run may touch a provider's upstream, so generous
 
 
-# ── deterministic negotiator logic (pure, unit-tested; ported verbatim from prod negotiator) ─────────
+# ── deterministic negotiator logic (pure, unit-tested; ported VERBATIM from the prod negotiator.py) ───
 def schema_property_names(schema: object) -> set[str]:
-    """Recursively collect EVERY property name declared anywhere in a JSON Schema.
-
-    Walks ``properties`` (its keys ARE property names), then recurses through the value schemas and the
-    standard containers (``items``, ``$defs``/``definitions``, ``allOf``/``anyOf``/``oneOf``,
-    ``additionalProperties`` when it is a schema). Deterministic, no name-guessing — the match is a set
-    intersection over these canonical machine names."""
+    """Recursively collect every declared property name in a JSON schema — verbatim ``schema_fields``
+    from the prod negotiator: walk ``properties`` (its keys ARE property names) + recurse into each
+    value, and recurse into ``items`` when it is an object. (Deliberately does NOT walk allOf/anyOf/
+    $defs — the proven prod offerings use flat property/items schemas, and the match must reproduce the
+    proven decisions exactly.) Deterministic, no name-guessing — the match is a set intersection."""
     names: set[str] = set()
-
-    def walk(node: object) -> None:
-        if isinstance(node, dict):
-            props = node.get("properties")
-            if isinstance(props, dict):
-                for key, sub in props.items():
-                    names.add(key)
-                    walk(sub)
-            for k in ("items", "additionalProperties", "not", "if", "then", "else"):
-                if k in node:
-                    walk(node[k])
-            for k in ("allOf", "anyOf", "oneOf"):
-                v = node.get(k)
-                if isinstance(v, list):
-                    for sub in v:
-                        walk(sub)
-            for k in ("$defs", "definitions"):
-                v = node.get(k)
-                if isinstance(v, dict):
-                    for sub in v.values():
-                        walk(sub)
-        elif isinstance(node, list):
-            for sub in node:
-                walk(sub)
-
-    walk(schema)
+    if not isinstance(schema, dict):
+        return names
+    props = schema.get("properties")
+    if isinstance(props, dict):
+        for key, sub in props.items():
+            names.add(key)
+            names |= schema_property_names(sub)
+    items = schema.get("items")
+    if isinstance(items, dict):
+        names |= schema_property_names(items)
     return names
 
 
@@ -85,34 +68,43 @@ def match_score(need_output: object, offering_output: object) -> float:
     return len(need & off) / len(need)
 
 
+def owner_of(gaii: str) -> str:
+    """The owner name from a GAII/GHII — verbatim from the prod negotiator: ``a#owner@node`` and
+    ``owner@node`` and a bare ``owner`` all resolve to ``owner``. Idempotent, so a provider GAII OR a
+    bare owner both work at the band gate."""
+    return (gaii or "").split("@")[0].split("#")[-1]
+
+
 def band_decision(price: float, provider_owner: str, band: dict) -> dict:
     """The autonomy gate, enforced identically at offering SELECTION and at every incoming renegotiation
-    PROPOSAL. Returns {"decision": "auto"|"propose", "reasons": [...]}.
-
-    'auto' (act without a human) requires ALL of: autonomy=='auto', price <= max_price, and
-    provider_owner in provider_whitelist. Anything else → 'propose' (surface to the human, never act).
-    budget_cap is reported as a reason when the price would exceed it, but the hard gate is
-    price+provider (verbatim from the prod negotiator)."""
+    PROPOSAL. Returns {"decision", "in_band", "reasons"} where decision is:
+      * "auto"    — autonomy=='auto' AND in band → act (accept the offering / accept the proposal);
+      * "reject"  — autonomy=='auto' AND out of band → do NOT act (skip the candidate / DECLINE the proposal);
+      * "propose" — autonomy=='supervised' → surface to a human, never act.
+    In band (verbatim ``band_ok``) = price <= max_price AND (whitelist empty OR provider owner whitelisted).
+    A provider GAII is normalised to its owner; budget_cap/min_match are NOT band gates (cap is the accept
+    budget, min_match is the I/O-match filter)."""
     autonomy = str(band.get("autonomy") or "supervised").lower()
     max_price = band.get("max_price")
     whitelist = band.get("provider_whitelist") or []
-    budget_cap = band.get("budget_cap")
+    prov = owner_of(provider_owner)
     reasons: list[str] = []
 
-    priced_ok = isinstance(max_price, (int, float)) and price <= max_price
-    if not priced_ok:
-        reasons.append(f"price {price} exceeds max_price {max_price}")
-    provider_ok = provider_owner in whitelist
-    if not provider_ok:
-        reasons.append(f"provider '{provider_owner}' not in whitelist {list(whitelist)}")
-    if isinstance(budget_cap, (int, float)) and price > budget_cap:
-        reasons.append(f"price {price} exceeds budget_cap {budget_cap}")
+    if not (isinstance(max_price, (int, float)) and price <= max_price):
+        reasons.append(f"price {price} > max_price {max_price}")
+    if whitelist and prov not in whitelist:
+        reasons.append(f"provider '{prov}' not in whitelist {list(whitelist)}")
+    in_band = not reasons
 
-    if autonomy == "auto" and priced_ok and provider_ok:
-        return {"decision": "auto", "reasons": ["within band: price<=max_price AND provider whitelisted"]}
     if autonomy != "auto":
-        reasons.insert(0, "autonomy is 'supervised' — propose, never act")
-    return {"decision": "propose", "reasons": reasons}
+        return {
+            "decision": "propose",
+            "in_band": in_band,
+            "reasons": ["autonomy 'supervised' — propose to a human, never act", *reasons],
+        }
+    if in_band:
+        return {"decision": "auto", "in_band": True, "reasons": ["within band: price<=max_price AND provider allowed"]}
+    return {"decision": "reject", "in_band": False, "reasons": reasons}
 
 
 # ── the tools ────────────────────────────────────────────────────────────────
@@ -407,8 +399,10 @@ def make_exchange_tools(agent_name: str, owner: str | None = None) -> list:
     def exchange_band_decide(price: float, provider_owner: str, band_json: str) -> str:
         """The autonomy GATE — run it at BOTH offering selection AND every incoming renegotiation proposal.
         `band_json` = {autonomy, max_price, provider_whitelist:[owner], budget_cap, min_match}. Returns
-        {decision:'auto'|'propose', reasons:[...]}. 'auto' (act without a human) requires autonomy=='auto'
-        AND price<=max_price AND provider_owner in provider_whitelist; anything else is 'propose'."""
+        {decision, in_band, reasons}: 'auto' = act (accept offering / accept proposal); 'reject' = auto
+        mode but out of band → skip the candidate / DECLINE the proposal; 'propose' = supervised → surface
+        to a human. In band = price<=max_price AND (whitelist empty OR provider whitelisted); a provider
+        GAII is accepted (normalised to its owner)."""
         band, jerr = _load("band_json", band_json)
         if jerr:
             return f"ERROR: {jerr}"
