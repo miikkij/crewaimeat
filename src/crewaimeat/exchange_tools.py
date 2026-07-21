@@ -115,32 +115,6 @@ def band_decision(price: float, provider_owner: str, band: dict) -> dict:
     return {"decision": "propose", "reasons": reasons}
 
 
-def _provider_owner_of(offering: dict) -> str:
-    """The provider OWNER handle from an offering (for the whitelist check). Prefers the explicit
-    ``providerOwner``; falls back to the owner segment of ``providerGhii`` (``owner@node``)."""
-    po = offering.get("providerOwner")
-    if isinstance(po, str) and po:
-        return po
-    ghii = offering.get("providerGhii") or ""
-    return ghii.split("@", 1)[0] if isinstance(ghii, str) and "@" in ghii else ""
-
-
-def _offering_price(offering: dict) -> float | None:
-    """Best-effort per-call price off a listed offering record (for the band gate at selection). The
-    node's accept path is authoritative on price; this is the agent's pre-check."""
-    for key in ("pricePerCall", "price_per_call", "price"):
-        v = offering.get(key)
-        if isinstance(v, (int, float)):
-            return float(v)
-    pricing = offering.get("pricing")
-    if isinstance(pricing, dict):
-        for key in ("pricePerCall", "blockPrice", "periodPrice"):
-            v = pricing.get(key)
-            if isinstance(v, (int, float)):
-                return float(v)
-    return None
-
-
 # ── the tools ────────────────────────────────────────────────────────────────
 def make_exchange_tools(agent_name: str, owner: str | None = None) -> list:
     """Return the EXCHANGE crewai tools for ``agent_name`` (called with its own owner-scoped token)."""
