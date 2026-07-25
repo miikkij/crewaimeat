@@ -1888,13 +1888,17 @@ def _publish_readme(agent_name: str, readme_md: str, commands: list[dict] | None
 
 
 def _effective_mode(spec: CrewSpec) -> str:
-    """The AIMEAT agent mode to set on start. Explicit `spec.mode` wins; otherwise crewaimeat crews are
-    task-runners — EXCEPT DM-serviceable / self-monitoring crews, which need the interactive message
-    surface (chat/inbox) that task-runner mode drops, so they stay 'interactive'."""
+    """The AIMEAT agent mode to set on start. Default is TASK-RUNNER (tasks auto-activate + process);
+    a crew is interactive (every task gated behind a manual 'Start this task') ONLY when it sets
+    ``mode='interactive'`` EXPLICITLY.
+
+    self_monitor / dm_serviceable no longer force interactive (they did until 2026-07-26, which silently
+    flipped joker/joker-v2 + the dm-serviceable crews to interactive on every fleet restart). Those
+    features do NOT need interactive mode: the post-task reputation check, the DM inbound drain, and the
+    ``messages`` listen all run regardless of mode — forcing interactive only stalled every task behind
+    the button. (Owner: these are task-runners, not interactive.)"""
     if spec.mode:
         return spec.mode
-    if spec.dm_serviceable or spec.self_monitor:
-        return "interactive"
     return "task-runner"
 
 
