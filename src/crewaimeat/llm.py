@@ -234,7 +234,16 @@ def _flatten_endpoints(providers: list, for_tool_use: bool) -> list[dict]:
         for m in prov.get("models", []):
             mid = m.get("id") if isinstance(m, dict) else m
             ctx = (m.get("context") if isinstance(m, dict) else None) or prov_ctx or _FALLBACK_CONTEXT
-            lm = mid if (not prefix or mid.startswith(prefix)) else prefix + mid
+            # OpenRouter's meta-ROUTER slugs (`openrouter/free`, `openrouter/auto`) live UNDER the
+            # `openrouter/` namespace ON OpenRouter, so litellm needs its provider prefix TOO ->
+            # `openrouter/openrouter/free`. The generic startswith-skip below (which avoids double-
+            # prefixing an already-litellm-formatted id) would wrongly leave `openrouter/free`, which
+            # litellm parses as model `free` -> OpenRouter 404 "Model free not found". So for the
+            # openrouter type, an `openrouter/`-namespaced slug still gets the prefix.
+            if ptype == "openrouter" and mid.startswith("openrouter/"):
+                lm = prefix + mid
+            else:
+                lm = mid if (not prefix or mid.startswith(prefix)) else prefix + mid
             ap: dict = {}
             if for_tool_use and ptype != "ollama":
                 ap["parallel_tool_calls"] = False  # AIMEAT task writes race if batched in one turn
