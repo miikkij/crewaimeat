@@ -36,6 +36,7 @@ from pathlib import Path
 # NVIDIA NIM + DashScope are both OpenAI-compatible embedding endpoints, so they ride CrewAI's `openai`
 # embedder provider with a custom `api_base` (there is NO native `nvidia` provider in crewai 1.14.x).
 _NVIDIA_BASE = "https://integrate.api.nvidia.com/v1"
+_OPENROUTER_BASE = "https://openrouter.ai/api/v1"  # OpenAI-compatible /v1/embeddings (verified live)
 _QWEN_BASE = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 
 # Per-tier default embedding models (override via env). gemma/qwen CHAT models are NOT embedders — the
@@ -43,6 +44,10 @@ _QWEN_BASE = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 _OLLAMA_MODEL = os.getenv("AIMEAT_EMBED_OLLAMA_MODEL", "nomic-embed-text")
 _NVIDIA_MODEL = os.getenv("AIMEAT_EMBED_NVIDIA_MODEL", "nvidia/nv-embedqa-e5-v5")
 _QWEN_MODEL = os.getenv("AIMEAT_EMBED_QWEN_MODEL", "text-embedding-v3")
+# OpenRouter embeddings — default text-embedding-3-small (1536 dims, $0.02/M): the sensible dedup/recall
+# choice over -large (3072 dims, $0.13/M ~6.5x) for marginal retrieval gain. Routes to OpenAI/Azure (cloud,
+# NOT local-private) — ollama (nomic-embed-text) stays the private option, preferred when the daemon is up.
+_OPENROUTER_MODEL = os.getenv("AIMEAT_EMBED_OPENROUTER_MODEL", "openai/text-embedding-3-small")
 
 
 def _seg(s: str) -> str:
@@ -119,6 +124,18 @@ def _tier_embedder(tier: str) -> tuple[dict, str] | None:
             },
             f"qwen-{_seg(_QWEN_MODEL)}",
         )
+    if tier == "openrouter":
+        return (
+            {
+                "provider": "openai",
+                "config": {
+                    "api_key": os.getenv("OPENROUTER_API_KEY", ""),
+                    "api_base": _OPENROUTER_BASE,
+                    "model_name": _OPENROUTER_MODEL,
+                },
+            },
+            f"openrouter-{_seg(_OPENROUTER_MODEL)}",
+        )
     return None
 
 
@@ -130,13 +147,17 @@ def _tier_reachable(tier: str) -> tuple[bool, str]:
         return (True, "ok") if os.getenv("NVIDIA_API_KEY") else (False, "NVIDIA_API_KEY not set")
     if tier == "qwen":
         return (True, "ok") if os.getenv("DASHSCOPE_API_KEY") else (False, "DASHSCOPE_API_KEY not set")
+    if tier == "openrouter":
+        return (True, "ok") if os.getenv("OPENROUTER_API_KEY") else (False, "OPENROUTER_API_KEY not set")
     return False, f"unknown tier '{tier}'"
 
 
 def _ordered_tiers(bias: str) -> list[str]:
     """Cascade order for a bias. ollama (free+local) is always first; the bias decides the cloud tail:
-    privacy drops the free-but-cloud nvidia tier; cost promotes free nvidia ahead of paid qwen."""
-    return ["ollama", "nvidia", "qwen"] if bias == "cost" else ["ollama", "qwen"]
+    privacy drops the free-but-cloud nvidia tier; cost promotes free nvidia ahead of paid qwen. openrouter
+    (OpenAI embeddings via OpenRouter, cloud) is the UNIVERSAL last-resort cloud fallback in both biases —
+    it exists so memory works out of the box when only OPENROUTER_API_KEY is set (no ollama/nvidia/qwen)."""
+    return ["ollama", "nvidia", "qwen", "openrouter"] if bias == "cost" else ["ollama", "qwen", "openrouter"]
 
 
 def _resolve_bias(bias: str | None) -> str:
