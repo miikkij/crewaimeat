@@ -21,7 +21,7 @@ import sys
 import requests
 from crewai.tools import tool
 
-from crewaimeat.aimeat_crew import _aimeat_call
+from crewaimeat.aimeat_crew import _aimeat_call, today_local
 
 # Topics that signal a genuine fit for AIMEAT (agent substrate / shared memory / multi-agent).
 KEYWORDS = [
@@ -195,7 +195,7 @@ def scan_hn(hours: int = 48, limit: int = 12) -> dict:
     # Skips are LOGGED with the match. Memory degrades LOUD to None -> the full ranked list stands.
     from crewaimeat.pipeline_memory import open_store
 
-    today = datetime.date.today().isoformat()
+    today = today_local()
     store = open_store("some-listener")
     if store:
         kept = []

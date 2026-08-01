@@ -30,7 +30,7 @@ from zoneinfo import ZoneInfo
 from aimeat_crewai.provenance import HumanInvolvement, Level, Method, declare, source
 from crewai.tools import tool
 
-from crewaimeat.aimeat_crew import _aimeat_call, member_workspaces
+from crewaimeat.aimeat_crew import _aimeat_call, member_workspaces, today_local
 from crewaimeat.engagements import engaged_pairs
 from crewaimeat.local_marks import last_local_run, mark_local_run
 
@@ -412,7 +412,7 @@ def check_inbox() -> dict:
                 sender = email_mod.utils.parseaddr(msg.get("From") or "")[1].lower()
                 if "[AIMEAT#" not in subject or sender not in allow:
                     continue  # not ours / not the owner — leave untouched
-                res = _ingest_radar_lines(_reply_text(msg), datetime.date.today().isoformat())
+                res = _ingest_radar_lines(_reply_text(msg), today_local())
                 imap.store(num, "+FLAGS", "\\Seen")
                 out["processed"] += 1
                 for k in ("added", "skipped", "unparsed"):

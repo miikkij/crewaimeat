@@ -364,6 +364,23 @@ def _now_context() -> str:
         )
 
 
+def today_local() -> str:
+    """TODAY as YYYY-MM-DD in the fleet's editorial timezone (AIMEAT_CREW_TZ, default Europe/Helsinki).
+
+    USE THIS ANY TIME A CALENDAR DAY BECOMES A KEY, a filename or a record field. `date.today()` reads
+    the MACHINE's clock, which is right on a Helsinki workstation and silently wrong on a UTC host —
+    and "silently wrong by one day" is the failure that cost us a whole edition (see _now_context).
+    A container image is UTC by default, so this is not hypothetical for anything shipped.
+
+    Instants are a different question: a timestamp ("when did this happen") stays UTC and should keep
+    using datetime.now(timezone.utc). This is only for the calendar day something BELONGS to.
+    """
+    try:
+        return datetime.now(ZoneInfo(os.getenv("AIMEAT_CREW_TZ", "Europe/Helsinki"))).date().isoformat()
+    except Exception:  # noqa: BLE001 — no tzdata: UTC is the only clock, and saying so beats guessing
+        return datetime.now(timezone.utc).date().isoformat()
+
+
 def _runtime_max_execution_time() -> int | None:
     """Optional fleet-wide wall-clock bound (seconds) for each agent's task, from
     AIMEAT_AGENT_MAX_EXECUTION_TIME. A wall-clock bound stops a STUCK run while letting a

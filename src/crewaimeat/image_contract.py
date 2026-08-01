@@ -25,7 +25,6 @@ aimeat_storage_upload shell-tool mapping is broken anyway: sends `content` where
 from __future__ import annotations
 
 import base64
-import datetime
 import hashlib
 import json
 import os
@@ -36,7 +35,7 @@ import urllib.parse
 import requests
 from crewai.tools import tool
 
-from crewaimeat.aimeat_crew import _aimeat_call, _serve_api, member_workspaces
+from crewaimeat.aimeat_crew import _aimeat_call, _serve_api, member_workspaces, today_local
 from crewaimeat.generator_tool import _discover_owner, _token
 from crewaimeat.ledger_report import report_llm_usage
 
@@ -301,7 +300,7 @@ def process_moodboards(max_items: int = 2, targets: list[tuple[str, str]] | None
         from crewaimeat.engagements import engaged_pairs
 
         pairs = engaged_pairs(AGENT, pairs, contract=CONTRACT["id"])
-    today = datetime.date.today().isoformat()
+    today = today_local()
     processed = failed = 0
     for oid, wid in pairs:
         if processed + failed >= max_items:

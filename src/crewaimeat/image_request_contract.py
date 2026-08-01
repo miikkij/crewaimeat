@@ -16,9 +16,7 @@ restart-surviving guard, backed by a per-run processed-set, a bounded batch per 
 
 from __future__ import annotations
 
-import datetime
-
-from crewaimeat.aimeat_crew import _aimeat_call, member_workspaces
+from crewaimeat.aimeat_crew import _aimeat_call, member_workspaces, today_local
 from crewaimeat.seedream_gen import generate_image
 
 AGENT = "image-maker"
@@ -88,7 +86,7 @@ def process_image_requests(max_items: int = 3, targets: list[tuple[str, str]] | 
         from crewaimeat.engagements import engaged_pairs
 
         pairs = engaged_pairs(AGENT, pairs, contract=CONTRACT["id"])
-    today = datetime.date.today().isoformat()
+    today = today_local()
     processed = failed = 0
     for oid, wid in pairs:
         if processed + failed >= max_items:

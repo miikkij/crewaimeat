@@ -15,12 +15,11 @@ It never posts anywhere external; it only reads + writes the workspace.
 
 from __future__ import annotations
 
-import datetime
 import sys
 
 from crewai.tools import tool
 
-from crewaimeat.aimeat_crew import _aimeat_call, member_workspaces
+from crewaimeat.aimeat_crew import _aimeat_call, member_workspaces, today_local
 from crewaimeat.article_extract import _MIN_CHARS, _trafilatura_text
 from crewaimeat.fetch_pipeline import _searxng_urls
 from crewaimeat.llm import get_llm
@@ -124,7 +123,7 @@ def process_research_requests(max_items: int = 5, targets: list[tuple[str, str]]
         from crewaimeat.engagements import engaged_pairs
 
         pairs = engaged_pairs(AGENT, pairs, contract=CONTRACT["id"])
-    today = datetime.date.today().isoformat()
+    today = today_local()
     processed = failed = 0
     for oid, wid in pairs:
         if processed + failed >= max_items:

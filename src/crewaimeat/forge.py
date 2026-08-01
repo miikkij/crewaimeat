@@ -660,7 +660,7 @@ def _remember_build(
     store = _forge_store()
     if store is None:
         return
-    import datetime as _dt
+    from crewaimeat.aimeat_crew import today_local  # local import: forge is imported early, avoid a cycle
 
     text = (
         f"ORDER: {request.strip()[:600]}\n"
@@ -674,7 +674,7 @@ def _remember_build(
         metadata={
             "category": "build",
             "agent_name": agent_name,
-            "date": _dt.date.today().isoformat(),
+            "date": today_local(),
         },
     )
 

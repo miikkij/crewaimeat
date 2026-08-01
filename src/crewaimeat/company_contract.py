@@ -19,14 +19,13 @@ profile says plainly when a number is not public.
 
 from __future__ import annotations
 
-import datetime
 import re
 import sys
 
 import requests
 from crewai.tools import tool
 
-from crewaimeat.aimeat_crew import _aimeat_call, member_workspaces
+from crewaimeat.aimeat_crew import _aimeat_call, member_workspaces, today_local
 from crewaimeat.article_extract import _trafilatura_text
 from crewaimeat.llm import get_llm
 
@@ -277,7 +276,7 @@ def process_company_research(max_items: int = 3, targets: list[tuple[str, str]] 
         from crewaimeat.engagements import engaged_pairs
 
         pairs = engaged_pairs(AGENT, pairs, contract=CONTRACT["id"])
-    today = datetime.date.today().isoformat()
+    today = today_local()
     processed = failed = 0
     for oid, wid in pairs:
         if processed + failed >= max_items:

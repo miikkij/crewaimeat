@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from crewai import Agent, Task
 
-from crewaimeat.aimeat_crew import CrewSpec, run_crew
+from crewaimeat.aimeat_crew import CrewSpec, run_crew, today_local
 from crewaimeat.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is set, else []
 
 AGENT_NAME = "finnish-corporate-researcher"
@@ -26,7 +26,6 @@ Deep-dive public-source research on Finnish companies — extracts data from asi
 
 
 def build_domain(ctx):
-    from datetime import date
 
     # ── Agent 1: Y-tunnus & Registry Lookup Specialist ──────────────────────
     agent_registry_lookup = Agent(
@@ -189,7 +188,7 @@ def build_domain(ctx):
             "into a single, authoritative Finnish corporate research report.\n\n"
             "Structure the report as follows:\n\n"
             "# [Company Name] — Corporate Research Report\n"
-            f"*Research date: {date.today().isoformat()}*\n"
+            f"*Research date: {today_local()}*\n"
             f"*Query: {ctx.prompt}*\n\n"
             "## 1. Company Identity & Registry\n"
             "(All registry fields with source URLs)\n\n"

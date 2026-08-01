@@ -31,7 +31,7 @@ import sys
 
 from crewai.tools import tool
 
-from crewaimeat.aimeat_crew import _aimeat_call, member_workspaces
+from crewaimeat.aimeat_crew import _aimeat_call, member_workspaces, today_local
 
 AGENT = "cadence-followup"
 
@@ -478,7 +478,8 @@ def process_cadence_followups(
         from crewaimeat.engagements import engaged_pairs
 
         pairs = engaged_pairs(AGENT, pairs, contract=CONTRACT["id"])
-    today = datetime.date.today()
+    # Editorial-zone day, not the machine's: this date becomes `luotu` and the due-date arithmetic.
+    today = datetime.date.fromisoformat(today_local())
     luonut = _own_gaii()
     created = published = skipped = failed = 0
     for oid, wid in pairs:

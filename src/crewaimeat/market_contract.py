@@ -30,7 +30,7 @@ import sys
 
 from crewai.tools import tool
 
-from crewaimeat.aimeat_crew import _aimeat_call, member_workspaces
+from crewaimeat.aimeat_crew import _aimeat_call, member_workspaces, today_local
 from crewaimeat.article_extract import _trafilatura_text
 from crewaimeat.llm import get_llm
 
@@ -216,7 +216,7 @@ def process_market_scans(max_items: int = 2, targets: list[tuple[str, str]] | No
 
         pairs = engaged_pairs(AGENT, pairs, contract=CONTRACT["id"])
     now = datetime.datetime.now(datetime.timezone.utc)
-    today = datetime.date.today().isoformat()
+    today = today_local()
     processed = failed = 0
     for oid, wid in pairs:
         if processed + failed >= max_items:
