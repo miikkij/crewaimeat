@@ -23,6 +23,8 @@ import re
 import sys
 from zoneinfo import ZoneInfo
 
+from aimeat_crewai.provenance import HumanInvolvement, Level, declare
+
 from crewaimeat import dm, orchestrator, session_store, storage
 from crewaimeat.aimeat_crew import _aimeat_call
 from crewaimeat.generator_tool import _discover_owner, _token
@@ -219,7 +221,24 @@ def add_tip(
     if images:
         entry["images"] = images
     items.append(entry)
-    res = _aimeat_call(agent, "aimeat_memory_write", {"key": key, "value": items, "visibility": "owner"})
+    # PROVENANCE: a tip is a READER's own words — the node's default (ai-generated / none) would
+    # record a person's writing as model-written, so we say otherwise. `refined` means the sender ran
+    # it through their OWN AI chat before sending (the sanomat-vinkki block), which is exactly
+    # ASSISTED: a person wrote it, a model polished it. Either way the human authored it, so
+    # human_involvement is full-human. The write is the whole accumulated list, so one refined tip
+    # makes the key as a whole "assisted" — claiming ORIGINAL for a list a model touched would be the
+    # overstatement that matters.
+    level = Level.ASSISTED if any(i.get("refined") for i in items) else Level.ORIGINAL
+    res = _aimeat_call(
+        agent,
+        "aimeat_memory_write",
+        {
+            "key": key,
+            "value": items,
+            "visibility": "owner",
+            "ai_provenance": declare(level, human_involvement=HumanInvolvement.FULL_HUMAN),
+        },
+    )
     if res is None:
         raise RuntimeError(f"tip write failed — {key} not updated (tunnel/transport)")
     return date, edition

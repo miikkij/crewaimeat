@@ -13,16 +13,10 @@ from crewai import LLM
 
 # All 27 crews under crews/ (module names, imported as ``crews.<name>``).
 CREW_MODULES = [
-    "aimeat_app_builder_crew",
-    "aimeat_app_conductor_crew",
-    "aimeat_app_designer_crew",
-    "aimeat_app_editor_crew",
-    "aimeat_app_specs_designer_crew",
     "aimeat_cortex_fixer_crew",
     "aimeat_crew_forge_crew",
     "aimeat_extension_builder_crew",
     "aimeat_realtime_builder_crew",
-    "aimeat_sdlc_architect_crew",
     "crew_forge_crew",
     "daily_briefing_crew_crew",
     "editorial_writer_crew",

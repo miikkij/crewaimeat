@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 
 import requests
+from aimeat_crewai.provenance import HumanInvolvement, Level, Method, declare, source
 
 from crewaimeat.aimeat_crew import _aimeat_call
 from crewaimeat.llm import get_llm
@@ -29,31 +30,38 @@ def _strip_html(html: str) -> str:
     return text.strip()
 
 
-def _fetch_sources() -> str:
+def _fetch_sources() -> tuple[str, list[str]]:
     """Today's PUBLIC space-weather data: NOAA SWPC 3-day forecast (public domain) + spaceweather.com
-    narrative (aurora / sunspot / solar-wind context). Facts only — the article reproduces them in Finnish."""
-    out = []
+    narrative (aurora / sunspot / solar-wind context). Facts only — the article reproduces them in Finnish.
+
+    Returns (text, urls) where `urls` are ONLY the feeds that actually came back 200 — the article's
+    provenance must cite what was really read, not what we hoped to read."""
+    out, used = [], []
+    noaa = "https://services.swpc.noaa.gov/text/3-day-forecast.txt"
     try:
-        r = requests.get("https://services.swpc.noaa.gov/text/3-day-forecast.txt", timeout=20)
+        r = requests.get(noaa, timeout=20)
         r.encoding = "utf-8"
         if r.status_code == 200:
             out.append("=== NOAA SWPC 3-DAY FORECAST (public domain) ===\n" + r.text.strip()[:3500])
+            used.append(noaa)
     except Exception as e:  # noqa: BLE001
         out.append(f"(NOAA forecast unavailable: {e!r})")
+    swc = "https://spaceweather.com/"
     try:
-        r = requests.get("https://spaceweather.com/", timeout=20)
+        r = requests.get(swc, timeout=20)
         r.encoding = "utf-8"
         if r.status_code == 200:
             out.append("=== spaceweather.com narrative (facts only) ===\n" + _strip_html(r.text)[:3500])
+            used.append(swc)
     except Exception as e:  # noqa: BLE001
         out.append(f"(spaceweather.com unavailable: {e!r})")
-    return "\n\n".join(out) if out else "No space-weather sources reachable."
+    return ("\n\n".join(out) if out else "No space-weather sources reachable."), used
 
 
 def write_space_weather(agent_name: str, date: str, edition: str) -> str:
     """Fetch NOAA/spaceweather.com and write ONE original Finnish 'Avaruussää tänään' article into
     news.<date>.<edition>.article.avaruussaa (public). The edition is passed in, never guessed."""
-    sources = _fetch_sources()
+    sources, source_urls = _fetch_sources()
     llm = get_llm(for_tool_use=False, temperature=0.6, agent_name=agent_name)
     prompt = (
         "Olet TÄHTI SOINTU, AIMEAT Sanomat'n avaruussää-kirjeenvaihtaja. Kirjoita YKSI alkuperäinen, "
@@ -72,7 +80,25 @@ def write_space_weather(agent_name: str, date: str, edition: str) -> str:
         art = llm.call([{"role": "user", "content": prompt}])
         art = art if isinstance(art, str) else str(art)
     key = f"news.{date}.{edition}.article.{_AVARUUSSAA}"
-    _aimeat_call(agent_name, "aimeat_memory_write", {"key": key, "value": art, "visibility": "public"})
+    # PROVENANCE: a model wrote this Finnish article from real NOAA/spaceweather.com readings at the
+    # desk's direction — SYNTHESIZED, citing only the feeds that actually answered. It publishes on
+    # the edition schedule with no reviewer, so human_involvement stays NONE.
+    _aimeat_call(
+        agent_name,
+        "aimeat_memory_write",
+        {
+            "key": key,
+            "value": art,
+            "visibility": "public",
+            "ai_provenance": declare(
+                Level.SYNTHESIZED,
+                method=Method.SYNTHESIZED,
+                human_involvement=HumanInvolvement.NONE,
+                model=getattr(llm, "model", None),
+                sources=[source(u) for u in source_urls],
+            ),
+        },
+    )
     return f"avaruussaa {len(art)} chars -> {key}"
 
 

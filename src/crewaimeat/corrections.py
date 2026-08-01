@@ -23,6 +23,8 @@ import json
 import re
 from zoneinfo import ZoneInfo
 
+from aimeat_crewai.provenance import HumanInvolvement, Level, declare
+
 from crewaimeat.aimeat_crew import _aimeat_call
 from crewaimeat.llm import get_llm
 from crewaimeat.reader_desk import next_evening_edition
@@ -52,7 +54,21 @@ def read_index(agent: str) -> list[dict]:
 
 def _write_index(agent: str, items: list[dict]) -> None:
     value = {"items": items, "updated": _today()}
-    res = _aimeat_call(agent, "aimeat_memory_write", {"key": INDEX_KEY, "value": value, "visibility": "public"})
+    # PROVENANCE: the index is a MIXED record and the honest label depends on what is in it. Every
+    # `claim` is a reader's verbatim words (human); `perustelu`/`oikaisu` are the arbiter model's
+    # prose. So: no ruling text yet -> ORIGINAL, and a person authored all of it (FULL_HUMAN). Once a
+    # ruling is in -> ASSISTED (human claims, model-filled rulings), and we claim NO review, because
+    # set_status writes the ruling at "odottaa-hyvaksyntaa" — BEFORE the editor has read it. Naming a
+    # review there would be a false statement in a compliance record; NONE only under-claims.
+    has_model_text = any(it.get("perustelu") or it.get("oikaisu") for it in items)
+    prov = (
+        declare(Level.ASSISTED, human_involvement=HumanInvolvement.NONE)
+        if has_model_text
+        else declare(Level.ORIGINAL, human_involvement=HumanInvolvement.FULL_HUMAN)
+    )
+    res = _aimeat_call(
+        agent, "aimeat_memory_write", {"key": INDEX_KEY, "value": value, "visibility": "public", "ai_provenance": prov}
+    )
     if res is None:
         raise CorrectionsUnavailable(f"index write failed — {INDEX_KEY} not updated (tunnel/transport)")
 
@@ -162,7 +178,21 @@ def publish_correction(agent: str, entry: dict, correction_text: str) -> tuple[s
         f"\n---\n\n## Oikaisu ({entry['id']})\n\n{correction_text.strip()}\n\n"
         f"*Oikaisupyyntö vastaanotettu {entry.get('created')}. — Lakiosasto*\n"
     )
-    res = _aimeat_call(agent, "aimeat_memory_write", {"key": key, "value": body, "visibility": "public"})
+    # PROVENANCE: the correction text is the arbiter model's prose, so the level stays AI_GENERATED.
+    # human_involvement is EDITORIAL_CONTROL and it is EARNED: this function only runs after
+    # hitl.ask_approval showed the editor the full correction text and they answered — a rejection
+    # there stops publication (sanomat_desk_crew). That is a person reading the substance with the
+    # power to say no, which is the only thing that upgrades this field.
+    res = _aimeat_call(
+        agent,
+        "aimeat_memory_write",
+        {
+            "key": key,
+            "value": body,
+            "visibility": "public",
+            "ai_provenance": declare(Level.AI_GENERATED, human_involvement=HumanInvolvement.EDITORIAL_CONTROL),
+        },
+    )
     if res is None:
         raise CorrectionsUnavailable(f"correction publish failed — {key} not written (tunnel/transport)")
     set_status(

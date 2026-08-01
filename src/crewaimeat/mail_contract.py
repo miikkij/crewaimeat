@@ -27,6 +27,7 @@ from email.message import EmailMessage
 from email.utils import make_msgid
 from zoneinfo import ZoneInfo
 
+from aimeat_crewai.provenance import HumanInvolvement, Level, Method, declare, source
 from crewai.tools import tool
 
 from crewaimeat.aimeat_crew import _aimeat_call, member_workspaces
@@ -638,12 +639,24 @@ def build_morning_report() -> dict:
     # agent's GAII + the key (not broadcast/indexed); flip visibility to "owner" to keep the full briefing
     # to the owner's own agents. Best-effort; never blocks or alters the send.
     try:
+        # PROVENANCE: the digest recombines real material — activity records, the HN radar, a
+        # competitor scan — and two of its sections (_insights_section, _competitor_section) are
+        # model-written prose, so SYNTHESIZED. The radar URLs are cited because they are the one part
+        # a reader can actually go and check. It is sent on the morning schedule with nobody reading
+        # it first, so human_involvement stays NONE — the owner receiving the mail afterwards is not
+        # a review step, because by then it has already gone out.
         _call(
             "aimeat_memory_write",
             {
                 "key": "mail.morning.public.latest",
                 "value": {"date": now.date().isoformat(), "subject": subject, "body_md": body, "radar": radar},
                 "visibility": "public",
+                "ai_provenance": declare(
+                    Level.SYNTHESIZED,
+                    method=Method.SYNTHESIZED,
+                    human_involvement=HumanInvolvement.NONE,
+                    sources=[source(str(r["url"])) for r in (radar or []) if isinstance(r, dict) and r.get("url")],
+                ),
             },
         )
     except Exception:  # noqa: BLE001

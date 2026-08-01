@@ -111,6 +111,16 @@ def build_category_raw(agent_name: str, category: str, date: str, edition: str, 
         raw.append(
             {"title": c.get("title") or content.split("\n", 1)[0][:80], "url": c["url"], "content": content[:6000]}
         )
+    # PROVENANCE — DELIBERATELY NOT DECLARED HERE, and that is not an oversight.
+    # This value is third-party press text a scraper extracted verbatim. No model of ours wrote it,
+    # so "ai-generated" is false; but we cannot verify a PERSON wrote the source either (a scraped
+    # outlet may itself publish model-written copy), and asserting "original" about someone else's
+    # authorship is exactly the generous-direction overstatement that matters. The frozen vocabulary
+    # has no slot for "quoted verbatim from elsewhere", so declaring any level would make US the
+    # attestor (stampedBy: principal) of a claim we cannot stand behind. Left undeclared, the node
+    # records its own inference instead, clearly marked stampedBy: node / observed: false.
+    # The sources ARE stated — one hop downstream on the ARTICLE (write_pipeline._publish_article),
+    # which is the honest `synthesized` write and the one a reader actually sees.
     _aimeat_call(
         agent_name,
         "aimeat_memory_write",

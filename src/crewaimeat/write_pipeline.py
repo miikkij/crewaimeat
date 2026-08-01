@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 
+from aimeat_crewai.provenance import HumanInvolvement, Level, Method, declare, source
+
 from crewaimeat.aimeat_crew import _aimeat_call
 from crewaimeat.llm import get_llm
 from crewaimeat.prose_style import FINNISH_NATIVE_STYLE
@@ -114,13 +116,45 @@ def _read_raw(agent_name: str, category: str, date: str, edition: str) -> list:
     return []  # the list call SUCCEEDED but the key is genuinely absent/empty
 
 
-def _publish_article(agent_name: str, date: str, edition: str, category: str, article: str) -> bool:
+def _publish_article(
+    agent_name: str,
+    date: str,
+    edition: str,
+    category: str,
+    article: str,
+    raw: list | None = None,
+    model: str | None = None,
+) -> bool:
     """Publish one article; True on success. `_aimeat_call` retries transient transport failures, so
-    None back means the publish genuinely failed (tunnel down longer than the retries)."""
+    None back means the publish genuinely failed (tunnel down longer than the retries).
+
+    PROVENANCE: this is the write a READER actually sees, so it is where the label belongs. A model
+    wrote the prose from real scraped material at the desk's direction — that is SYNTHESIZED, and the
+    `sources` are the scraped URLs, which is what lets a reader follow the claim instead of taking it
+    on trust. human_involvement stays NONE: the desk runs on a schedule (18:00) and nobody reads the
+    article before it goes public. The owner queueing the edition is not a person reading the
+    substance with the power to reject it."""
+    srcs = [
+        source(u)
+        for u in dict.fromkeys(  # de-dup, keep order
+            str(a.get("url")) for a in (raw or []) if isinstance(a, dict) and a.get("url")
+        )
+    ]
     res = _aimeat_call(
         agent_name,
         "aimeat_memory_write",
-        {"key": f"news.{date}.{edition}.article.{category}", "value": article, "visibility": "public"},
+        {
+            "key": f"news.{date}.{edition}.article.{category}",
+            "value": article,
+            "visibility": "public",
+            "ai_provenance": declare(
+                Level.SYNTHESIZED,
+                method=Method.SYNTHESIZED,
+                human_involvement=HumanInvolvement.NONE,
+                model=model,
+                sources=srcs,
+            ),
+        },
     )
     return res is not None
 
@@ -191,7 +225,7 @@ def write_edition_articles(agent_name: str, date: str, edition: str, categories:
             lines.append(f"  {cat:18s} WRITE FAILED — llm error: {exc}")
             failed.append(cat)
             continue
-        if not _publish_article(agent_name, date, edition, cat, art):
+        if not _publish_article(agent_name, date, edition, cat, art, raw=raw, model=getattr(llm, "model", None)):
             lines.append(f"  {cat:18s} {len(art)} chars — PUBLISH FAILED (tunnel/transport)")
             failed.append(cat)
             continue

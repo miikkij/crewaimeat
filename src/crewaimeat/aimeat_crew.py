@@ -679,6 +679,31 @@ def _is_transient_error(err) -> bool:
     return any(m in s for m in _TRANSIENT_ERR_MARKERS)
 
 
+def _warn_if_provenance_dropped(agent_name: str, tool: str, data: object) -> None:
+    """LOG LOUD when a declaration we sent was NOT recorded.
+
+    Every write tool echoes `ai_provenance` saying what actually happened: `recorded: true` (ours was
+    stored) or `recorded: false` (the route would not carry it, so the node stamped its own default).
+    `recorded: false` is NOT a crew failure — the write succeeded and the node's default OVER-states
+    the model's share rather than under-stating it, which is the safe direction. But it must never be
+    silent: a dropped `level: "original"` turns text a person wrote into "model-written", and that is
+    the one error nobody can spot afterwards. This cost us a whole session of silent drops on an
+    unwired connector (crewaimeat pins the floor that fixes it; see pyproject).
+
+    An old CLI omits the echo entirely — that reads the same as a drop, and is reported the same way."""
+    echo = data.get("ai_provenance") if isinstance(data, dict) else None
+    if isinstance(echo, dict) and echo.get("recorded"):
+        return
+    reason = (echo or {}).get("reason") if isinstance(echo, dict) else None
+    if not isinstance(echo, dict):
+        reason = "no ai_provenance echo in the response — the CLI predates the provenance surface"
+    print(
+        f"[{agent_name}] {tool}: ai_provenance NOT recorded ({reason or 'route declined the declaration'}); "
+        f"the node stamped its own default instead — content a person wrote is now recorded as model-written",
+        file=sys.stderr,
+    )
+
+
 def _aimeat_call(
     agent_name: str, tool: str, payload: dict, *, retries: int = 3, backoff: float = 1.5, quiet: bool = False
 ) -> dict | None:
@@ -695,7 +720,10 @@ def _aimeat_call(
     for attempt in range(retries):
         api = _serve_api()
         if api is None:
-            return _aimeat_call_subprocess(agent_name, tool, payload)
+            data = _aimeat_call_subprocess(agent_name, tool, payload)
+            if "ai_provenance" in payload:
+                _warn_if_provenance_dropped(agent_name, tool, data)
+            return data
         base, session = api
         last = attempt + 1 >= retries
         try:
@@ -733,7 +761,10 @@ def _aimeat_call(
             if not quiet:  # quiet=True for EXPECTED probe failures (e.g. listing an org you don't serve)
                 print(f"[{agent_name}] {tool} failed: {err or f'HTTP {r.status_code}'}", file=sys.stderr)
             return None
-        return body.get("data")
+        data = body.get("data")
+        if "ai_provenance" in payload:
+            _warn_if_provenance_dropped(agent_name, tool, data)
+        return data
     return None
 
 

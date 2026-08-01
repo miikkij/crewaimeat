@@ -13,6 +13,8 @@ fidelity, instructed to rewrite as a Finnish gonzo writer — not translate). On
 
 from __future__ import annotations
 
+from aimeat_crewai.provenance import HumanInvolvement, Level, Method, declare
+
 from crewaimeat.aimeat_crew import _aimeat_call
 from crewaimeat.llm import get_llm
 from crewaimeat.memory_tools import make_memory_tools
@@ -99,10 +101,26 @@ def build_editorial_and_index(agent_name: str, date: str, edition: str) -> str:
         ed = llm_fi.call([{"role": "user", "content": _PROMPT_LOCALIZE + en.strip()}])
         ed = ed if isinstance(ed, str) else str(ed)
 
+    # PROVENANCE: two models wrote this — one drafted the English column from the day's own articles,
+    # a second localised it to native Finnish. SYNTHESIZED (real material recombined at the desk's
+    # direction) and the model named is the one whose words actually ship, the Finnish localiser.
+    # No `sources`: the inputs are this paper's own internal article keys, not URLs a reader could
+    # follow, and a source list nobody can open would dress the column up without informing anyone.
+    # Scheduled publish, no reviewer -> human_involvement NONE.
     _aimeat_call(
         agent_name,
         "aimeat_memory_write",
-        {"key": f"news.{date}.{edition}.editorial", "value": ed, "visibility": "public"},
+        {
+            "key": f"news.{date}.{edition}.editorial",
+            "value": ed,
+            "visibility": "public",
+            "ai_provenance": declare(
+                Level.SYNTHESIZED,
+                method=Method.SYNTHESIZED,
+                human_involvement=HumanInvolvement.NONE,
+                model=getattr(llm_fi, "model", None),
+            ),
+        },
     )
     # Remember the PUBLISHED Finnish column (query language = storage language, so tomorrow's FI
     # headlines match against FI columns) — this is what future prior-art recalls rank against.

@@ -86,12 +86,21 @@ def dm_send(
     subject: str | None = None,
     conversation_id: str | None = None,
     attachments: list[dict] | None = None,
+    ai_provenance: dict | None = None,
 ) -> dict | None:
     """Low-level send (aimeat_dm_send). Prefer `dm_reply` (consented) / `dm_initiate` (owner-gated) —
-    they carry the safety policy. `to` = "owner@node" | "agent#owner@node" | "eco:app#owner@node"."""
+    they carry the safety policy. `to` = "owner@node" | "agent#owner@node" | "eco:app#owner@node".
+
+    PROVENANCE: a DM is read by a PERSON, so this is one of the few places a label actually surfaces.
+    Left unset, the node records `ai-generated` / `none` — right for the common case, a crew handing
+    back a model-written deliverable. Pass `ai_provenance=declare(...)` when the crew knows better,
+    above all when the body RELAYS WORDS A PERSON WROTE (quoting a reader's tip back, forwarding an
+    operator's answer): silence there records that person's writing as the machine's."""
     if not body and not attachments:
         raise ValueError("dm_send needs a body or attachments")
     payload: dict = {"to": to}
+    if ai_provenance:
+        payload["ai_provenance"] = ai_provenance
     if body:
         payload["body"] = body
     if reply_to:
@@ -114,16 +123,27 @@ def dm_reply(
     conversation_id: str | None = None,
     reply_to: str | None = None,
     attachments: list[dict] | None = None,
+    ai_provenance: dict | None = None,
 ) -> dict | None:
     """Reply WITHIN an existing thread / to a requester — already consented, so it auto-sends. Requires
     thread context (conversation_id or reply_to) so it can't be repurposed to cold-DM a stranger. This is
-    the deliverable hand-back path: reply to the DM that triggered a crew with the result + attachments."""
+    the deliverable hand-back path: reply to the DM that triggered a crew with the result + attachments.
+
+    See dm_send on `ai_provenance` — pass it when the body is not the crew's own model-written prose."""
     if not (conversation_id or reply_to):
         raise ValueError(
             "dm_reply requires conversation_id or reply_to (in-thread only). "
             "Use dm_initiate for a NEW contact (owner-gated)."
         )
-    return dm_send(agent, to, body, conversation_id=conversation_id, reply_to=reply_to, attachments=attachments)
+    return dm_send(
+        agent,
+        to,
+        body,
+        conversation_id=conversation_id,
+        reply_to=reply_to,
+        attachments=attachments,
+        ai_provenance=ai_provenance,
+    )
 
 
 def dm_initiate(

@@ -10,6 +10,8 @@ import json
 import re
 import sys
 
+from aimeat_crewai.provenance import HumanInvolvement, Level, Method, declare
+
 from crewaimeat.aimeat_crew import _aimeat_call
 from crewaimeat.llm import get_llm
 from crewaimeat.prose_style import FINNISH_NATIVE_STYLE
@@ -77,10 +79,24 @@ def build_features(agent_name: str, date: str, edition: str) -> str:
                             f"publishing anyway (logged, no hole in the paper)",
                             file=sys.stderr,
                         )
+        # PROVENANCE: a feature tidbit is invented by the model outright — no outside material to
+        # recombine, so AI_GENERATED rather than SYNTHESIZED, and no `sources` to cite. This matches
+        # what the node would infer anyway, but declaring it makes the paper the ATTESTOR of a fact it
+        # actually knows (stampedBy: principal) and names the model, instead of leaving an inference.
         _aimeat_call(
             agent_name,
             "aimeat_memory_write",
-            {"key": f"news.{date}.{edition}.article.{cat}", "value": out, "visibility": "public"},
+            {
+                "key": f"news.{date}.{edition}.article.{cat}",
+                "value": out,
+                "visibility": "public",
+                "ai_provenance": declare(
+                    Level.AI_GENERATED,
+                    method=Method.FULLY_GENERATED,
+                    human_involvement=HumanInvolvement.NONE,
+                    model=getattr(llm, "model", None),
+                ),
+            },
         )
         if store:
             store.remember(out, source="tidbit", metadata={"date": date, "edition": edition, "category": cat})
@@ -159,10 +175,23 @@ def build_quiz(agent_name: str, date: str, edition: str) -> str:
             continue
         err = _valid_quiz(quiz)
         if err is None:
+            # PROVENANCE: the quiz is written FROM the day's own articles, so it recombines real
+            # material — SYNTHESIZED. Its inputs are internal article keys, so there is no URL a
+            # reader could follow and no honest `sources` list to attach.
             _aimeat_call(
                 agent_name,
                 "aimeat_memory_write",
-                {"key": f"news.{date}.{edition}.quiz", "value": quiz, "visibility": "public"},
+                {
+                    "key": f"news.{date}.{edition}.quiz",
+                    "value": quiz,
+                    "visibility": "public",
+                    "ai_provenance": declare(
+                        Level.SYNTHESIZED,
+                        method=Method.SYNTHESIZED,
+                        human_involvement=HumanInvolvement.NONE,
+                        model=getattr(llm, "model", None),
+                    ),
+                },
             )
             return f"quiz={len(quiz['questions'])}Q"
         if attempt == 2:
