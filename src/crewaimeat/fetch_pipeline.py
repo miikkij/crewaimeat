@@ -109,7 +109,15 @@ def build_category_raw(agent_name: str, category: str, date: str, edition: str, 
         if not content.strip():
             continue
         raw.append(
-            {"title": c.get("title") or content.split("\n", 1)[0][:80], "url": c["url"], "content": content[:6000]}
+            {
+                "title": c.get("title") or content.split("\n", 1)[0][:80],
+                "url": c["url"],
+                # WHEN we actually read it — the article's provenance cites `retrieved_at`, and a
+                # timestamp invented at publish time would be a guess about the past. Stamped here,
+                # at the only moment that knows it.
+                "fetched_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+                "content": content[:6000],
+            }
         )
     # PROVENANCE — DELIBERATELY NOT DECLARED HERE, and that is not an oversight.
     # This value is third-party press text a scraper extracted verbatim. No model of ours wrote it,

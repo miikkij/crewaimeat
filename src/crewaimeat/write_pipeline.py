@@ -134,12 +134,20 @@ def _publish_article(
     on trust. human_involvement stays NONE: the desk runs on a schedule (18:00) and nobody reads the
     article before it goes public. The owner queueing the edition is not a person reading the
     substance with the power to reject it."""
-    srcs = [
-        source(u)
-        for u in dict.fromkeys(  # de-dup, keep order
-            str(a.get("url")) for a in (raw or []) if isinstance(a, dict) and a.get("url")
-        )
-    ]
+    # Cite title + retrieved_at when the raw recorded them, so a reader gets a followable reference
+    # rather than a bare link. NEVER reconstruct either: an item scraped before fetch_pipeline started
+    # stamping `fetched_at` simply has no retrieval time, and omitting it is the honest answer. An
+    # invented source list is worse than an empty one — it is the exact failure this paper exists to
+    # expose, published under a label that claims machine-checkable provenance.
+    srcs, seen = [], set()
+    for a in raw or []:
+        if not isinstance(a, dict) or not a.get("url"):
+            continue
+        u = str(a["url"])
+        if u in seen:
+            continue
+        seen.add(u)
+        srcs.append(source(u, title=(a.get("title") or None), retrieved_at=(a.get("fetched_at") or None)))
     res = _aimeat_call(
         agent_name,
         "aimeat_memory_write",

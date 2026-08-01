@@ -133,7 +133,19 @@ def make_memory_tools(agent_name: str) -> list:
                 clean.append(
                     {
                         k: it.get(k)
-                        for k in ("gaii", "key", "title", "date", "summary", "edition", "category", "kind", "sources")
+                        for k in (
+                            "gaii",
+                            "key",
+                            "title",
+                            "date",
+                            "summary",
+                            "edition",
+                            "category",
+                            "kind",
+                            "sources",
+                            "source_urls",  # count AND addresses — an allowlist that drops
+                            # source_urls would silently strip the evidence back out of a hand-built row
+                        )
                         if it.get(k) is not None
                     }
                 )
@@ -199,6 +211,7 @@ def make_memory_tools(agent_name: str) -> list:
         lr = _aimeat_call(agent_name, "aimeat_memory_list", {"owner_scope": True, "prefix": f"news.{date}.{edition}."})
         rows = ((lr or {}).get("items") if isinstance(lr, dict) else None) or []
         raw_counts: dict = {}
+        raw_urls: dict = {}
         for it in rows:
             k = it.get("key") or ""
             if k.startswith(f"news.{date}.{edition}.raw."):
@@ -208,7 +221,19 @@ def make_memory_tools(agent_name: str) -> list:
                 try:
                     if isinstance(v, str) and v.strip()[:1] == "[":
                         v = json.loads(v)
-                    raw_counts[k.rsplit(".", 1)[-1]] = len(v) if isinstance(v, list) else 0
+                    cat_k = k.rsplit(".", 1)[-1]
+                    raw_counts[cat_k] = len(v) if isinstance(v, list) else 0
+                    # The ADDRESSES, not just the tally. A paper that reports a source COUNT it cannot
+                    # substantiate is making the weakest version of the claim it exists to make — and the
+                    # URLs are right here in the raw we are already reading. Only what is actually
+                    # recorded: never reconstruct or guess an address (dedup, keep order).
+                    raw_urls[cat_k] = list(
+                        dict.fromkeys(
+                            str(a["url"])
+                            for a in (v if isinstance(v, list) else [])
+                            if isinstance(a, dict) and a.get("url")
+                        )
+                    )
                 except Exception:  # noqa: BLE001
                     raw_counts[k.rsplit(".", 1)[-1]] = 0
         FEATURE = {"koodaus", "prompt-niksi", "matikka"}
@@ -235,7 +260,9 @@ def make_memory_tools(agent_name: str) -> list:
                 "title": (f"Editorial | {date} {edition}" if is_ed else f"{cat.capitalize()} | {date}"),
             }
             if (not is_ed) and (cat not in FEATURE) and (cat in raw_counts):
-                entry["sources"] = raw_counts[cat]
+                entry["sources"] = raw_counts[cat]  # the COUNT stays — app + agent face both read it
+                if raw_urls.get(cat):
+                    entry["source_urls"] = raw_urls[cat]  # ...and now the addresses behind the count
             clean.append(entry)
         if not clean:
             return f"FAILED: no article/editorial keys found for {date} {edition}."
