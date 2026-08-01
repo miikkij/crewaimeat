@@ -761,8 +761,14 @@ def _aimeat_call(
             if not quiet:  # quiet=True for EXPECTED probe failures (e.g. listing an org you don't serve)
                 print(f"[{agent_name}] {tool} failed: {err or f'HTTP {r.status_code}'}", file=sys.stderr)
             return None
+        # NB we return `data` and DISCARD `body["meta"]` — the same envelope-carrier discard that cost
+        # the connector its inbound provenance (it unwrapped `resp.data ?? resp`, binning the envelope
+        # that GET /v1/memory/:key serves the record on; fixed connector-side in 2.5.0 by folding the
+        # block into the result). Nothing here needs `meta` today, and the block now arrives inside
+        # `data`. If something ever DOES need an envelope-level field, add it explicitly — reading it
+        # off a return value that never carried it is the bug, one layer up.
         data = body.get("data")
-        if "ai_provenance" in payload:
+        if "ai_provenance" in payload:  # only when WE declared — a read never carries one outbound
             _warn_if_provenance_dropped(agent_name, tool, data)
         return data
     return None
