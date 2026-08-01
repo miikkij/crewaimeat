@@ -331,22 +331,37 @@ def _now_context() -> str:
     """Deterministic current-time context (no LLM). Without it the model
     hallucinates the date and cannot anchor time-related questions.
 
-    UTC is always the baseline. Europe/Helsinki is best-effort: if zoneinfo's
-    tz database is missing (Windows without `tzdata`) it degrades to UTC only.
+    LOCAL TIME IS "TODAY"; UTC IS REFERENCE ONLY. This order is load-bearing, not cosmetic.
+    Between local midnight and the UTC offset (00:00-03:00 in Helsinki summer) the two are on
+    DIFFERENT DATES, and this string used to lead with UTC and call it "the single source of truth
+    for 'today'". Field evidence 2026-08-02: the evening edition moved to 00:17 Helsinki, and two
+    crews given this same context resolved "today" differently in the same run — space-weather took
+    the local date (2026-08-02, correct) while news-fetcher took the UTC date and wrote every raw key
+    to 2026-08-01. The workflow verified 2026-08-02, found nothing, and skipped the whole edition.
+    A coin flip between two dates is not something prompt wording can fix, so the ambiguity is
+    removed here: one date is named "today", the other is labelled as reference.
+
+    Europe/Helsinki is best-effort: if zoneinfo's tz database is missing (Windows without `tzdata`)
+    it degrades to UTC only — and then UTC IS the local clock, so it is named "today" honestly.
     """
     now_utc = datetime.now(timezone.utc)
-    local_part = ""
     try:
         now_local = now_utc.astimezone(ZoneInfo(os.getenv("AIMEAT_CREW_TZ", "Europe/Helsinki")))
-        local_part = f" = {now_local:%Y-%m-%d %H:%M} {now_local.tzname()} ({now_local:%A})"
-    except Exception:  # noqa: BLE001 — tzdata missing etc.; UTC is enough as reference
-        pass
-    return (
-        f"CURRENT TIME (reference for anything time/date related): "
-        f"{now_utc:%Y-%m-%d %H:%M} UTC{local_part}. Treat THIS as the single source "
-        f"of truth for 'today'/'now' references. "
-        f"Verify up-to-date facts with web search."
-    )
+        return (
+            f"CURRENT TIME (reference for anything time/date related): TODAY IS "
+            f"{now_local:%Y-%m-%d} ({now_local:%A}), local time {now_local:%H:%M} {now_local.tzname()}. "
+            f"Treat that LOCAL date as 'today'/'now' whenever you resolve a date — including dated keys "
+            f"and filenames. For reference only, the same instant in UTC is {now_utc:%Y-%m-%d %H:%M} UTC; "
+            f"near midnight the UTC date can differ from today's date, and when it does, TODAY is the "
+            f"local one above. Verify up-to-date facts with web search."
+        )
+    except Exception:  # noqa: BLE001 — tzdata missing etc.; UTC is the only clock we have
+        return (
+            f"CURRENT TIME (reference for anything time/date related): TODAY IS "
+            f"{now_utc:%Y-%m-%d} ({now_utc:%A}), {now_utc:%H:%M} UTC. Treat that date as 'today'/'now' "
+            f"whenever you resolve a date — including dated keys and filenames. "
+            f"Verify up-to-date facts with web search."
+        )
 
 
 def _runtime_max_execution_time() -> int | None:
