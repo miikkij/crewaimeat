@@ -115,10 +115,18 @@ def build_category_raw(agent_name: str, category: str, date: str, edition: str, 
     # This value is third-party press text a scraper extracted verbatim. No model of ours wrote it,
     # so "ai-generated" is false; but we cannot verify a PERSON wrote the source either (a scraped
     # outlet may itself publish model-written copy), and asserting "original" about someone else's
-    # authorship is exactly the generous-direction overstatement that matters. The frozen vocabulary
-    # has no slot for "quoted verbatim from elsewhere", so declaring any level would make US the
-    # attestor (stampedBy: principal) of a claim we cannot stand behind. Left undeclared, the node
-    # records its own inference instead, clearly marked stampedBy: node / observed: false.
+    # authorship is exactly the generous-direction overstatement that matters.
+    #
+    # THE LINE, stated so this does not read as contradicting reader_desk/corrections, which DO
+    # declare ORIGINAL for text a stranger wrote: there, the author submitted to us through our own
+    # channel — a consenting human on our surface, whose act of submitting is the evidence of
+    # authorship. A scraped page never addressed us. The test is the consenting-submission surface,
+    # not "is this human text".
+    #
+    # Absence is the DESIGNED answer for verbatim third-party material, not a gap: unstated is a
+    # first-class reading, and declaring a level would make US the attestor (stampedBy: principal) of
+    # a claim we cannot stand behind. Left undeclared, the node records its own inference instead,
+    # clearly marked stampedBy: node / observed: false.
     # The sources ARE stated — one hop downstream on the ARTICLE (write_pipeline._publish_article),
     # which is the honest `synthesized` write and the one a reader actually sees.
     _aimeat_call(

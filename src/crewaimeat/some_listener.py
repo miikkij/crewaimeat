@@ -250,13 +250,18 @@ def scan_hn(hours: int = 48, limit: int = 12) -> dict:
                 for r in ranked
             ],
         }
-        # PROVENANCE — DELIBERATELY NOT DECLARED, same reasoning as fetch_pipeline's raw.
-        # NO MODEL TOUCHES THIS RECORD: the titles/snippets are third-party HN posts and the score and
-        # `why` come from _score(), which is plain arithmetic over points/comments. So "ai-generated"
-        # is false — but we cannot verify a person wrote the HN text either, and "original" asserts
-        # authorship for strangers. The frozen vocabulary has no level for "deterministic code output
-        # over quoted material", and declaring one would make US the attestor of a claim we cannot
-        # stand behind. Left undeclared, the node's stamp is at least marked as its own inference.
+        # PROVENANCE — DELIBERATELY NOT DECLARED, same reasoning as fetch_pipeline's raw: the
+        # titles/snippets are third-party HN posts from strangers who never submitted to us, so we
+        # can assert nothing about who wrote them. Absence is the designed answer there.
+        #
+        # This record is ALSO the second, sharper case: NO MODEL TOUCHES IT AT ALL. `score` and `why`
+        # come from _score(), plain arithmetic over points/comments. What is missing from the
+        # vocabulary is not a new level — `original` already behaves correctly for deterministic
+        # output (no AI-disclosure, no icon); its GLOSS ("a person wrote it") is what does not cover
+        # machine-computed content. The real gap is that there is no way to declare "this write is not
+        # authored content, no statement applies", so a heartbeat or an index gets stamped
+        # "AI-generated, no human review" — noise that devalues the labels that matter. That is a node
+        # design question (aimeat-dev has it), not something to paper over from this side.
         _aimeat_call(
             "some-listener",
             "aimeat_memory_write",

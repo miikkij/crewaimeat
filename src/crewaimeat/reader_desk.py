@@ -221,14 +221,24 @@ def add_tip(
     if images:
         entry["images"] = images
     items.append(entry)
-    # PROVENANCE: a tip is a READER's own words — the node's default (ai-generated / none) would
-    # record a person's writing as model-written, so we say otherwise. `refined` means the sender ran
-    # it through their OWN AI chat before sending (the sanomat-vinkki block), which is exactly
-    # ASSISTED: a person wrote it, a model polished it. Either way the human authored it, so
-    # human_involvement is full-human. The write is the whole accumulated list, so one refined tip
-    # makes the key as a whole "assisted" — claiming ORIGINAL for a list a model touched would be the
-    # overstatement that matters.
-    level = Level.ASSISTED if any(i.get("refined") for i in items) else Level.ORIGINAL
+    # PROVENANCE: a tip is a READER's own words, submitted to us. The node's default
+    # (ai-generated / none) would record a person's writing as model-written, so we say otherwise.
+    #
+    # WHY WE MAY SPEAK FOR THIS AUTHOR AT ALL — the same reason fetch_pipeline's scraped raw stays
+    # UNDECLARED. A reader sends a tip through our own channel, knowing it is going to the paper:
+    # they are a consenting human on our surface, and their act of submitting IS the evidence of
+    # authorship. A scraped page is a stranger who never addressed us, so there we can assert
+    # nothing. That is the line — the consenting-submission surface, not "is it human text".
+    #
+    # `refined` = the sender ran it through their OWN AI chat before sending (the sanomat-vinkki
+    # block arrives inside the DM they composed). ASSISTED: a person wrote it, a model polished it.
+    #
+    # human_involvement describes review of THE MODEL'S CONTRIBUTION, not authorship. For a refined
+    # tip the sender saw the polished text and chose to send it — a person examining the model's work
+    # with the power to discard it, which is EDITORIAL_CONTROL. `full-human` there would be a false
+    # statement in a compliance record. An unrefined tip has no model contribution to review, so it
+    # is ORIGINAL / FULL_HUMAN. One refined tip makes the whole accumulated list assisted.
+    refined_any = any(i.get("refined") for i in items)
     res = _aimeat_call(
         agent,
         "aimeat_memory_write",
@@ -236,7 +246,10 @@ def add_tip(
             "key": key,
             "value": items,
             "visibility": "owner",
-            "ai_provenance": declare(level, human_involvement=HumanInvolvement.FULL_HUMAN),
+            "ai_provenance": declare(
+                Level.ASSISTED if refined_any else Level.ORIGINAL,
+                human_involvement=(HumanInvolvement.EDITORIAL_CONTROL if refined_any else HumanInvolvement.FULL_HUMAN),
+            ),
         },
     )
     if res is None:

@@ -60,6 +60,12 @@ def _write_index(agent: str, items: list[dict]) -> None:
     # ruling is in -> ASSISTED (human claims, model-filled rulings), and we claim NO review, because
     # set_status writes the ruling at "odottaa-hyvaksyntaa" — BEFORE the editor has read it. Naming a
     # review there would be a false statement in a compliance record; NONE only under-claims.
+    #
+    # WHY ORIGINAL IS SAYABLE HERE but not for fetch_pipeline's scraped raw, which is also "text a
+    # stranger wrote that we are relaying": the requester filed this claim THROUGH our correction
+    # channel, addressed to us, knowing it goes to the paper. Submission on our own surface is the
+    # evidence of authorship. A scraped page never addressed us and we can assert nothing about who
+    # wrote it. The test is the consenting-submission surface, not "does this look human-written".
     has_model_text = any(it.get("perustelu") or it.get("oikaisu") for it in items)
     prov = (
         declare(Level.ASSISTED, human_involvement=HumanInvolvement.NONE)
