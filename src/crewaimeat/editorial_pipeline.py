@@ -13,13 +13,12 @@ fidelity, instructed to rewrite as a Finnish gonzo writer — not translate). On
 
 from __future__ import annotations
 
-from aimeat_crewai.provenance import HumanInvolvement, Level, Method
+from aimeat_crewai.provenance import HumanInvolvement, Level, Method, declare
 
 from crewaimeat.aimeat_crew import _aimeat_call
 from crewaimeat.llm import get_llm, resolved_model, resolved_provider
 from crewaimeat.memory_tools import make_memory_tools
 from crewaimeat.prose_style import FINNISH_NATIVE_STYLE
-from crewaimeat.provenance_block import declare_block
 
 _EXCL = {"koodaus", "prompt-niksi", "matikka", "editorial"}
 
@@ -115,7 +114,7 @@ def build_editorial_and_index(agent_name: str, date: str, edition: str) -> str:
             "key": f"news.{date}.{edition}.editorial",
             "value": ed,
             "visibility": "public",
-            "ai_provenance": declare_block(
+            "ai_provenance": declare(
                 Level.SYNTHESIZED,
                 method=Method.SYNTHESIZED,
                 human_involvement=HumanInvolvement.NONE,

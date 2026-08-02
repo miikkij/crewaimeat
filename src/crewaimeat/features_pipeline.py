@@ -10,12 +10,11 @@ import json
 import re
 import sys
 
-from aimeat_crewai.provenance import HumanInvolvement, Level, Method
+from aimeat_crewai.provenance import HumanInvolvement, Level, Method, declare
 
 from crewaimeat.aimeat_crew import _aimeat_call
 from crewaimeat.llm import get_llm, resolved_model, resolved_provider
 from crewaimeat.prose_style import FINNISH_NATIVE_STYLE
-from crewaimeat.provenance_block import declare_block
 
 _TIDBITS = {
     "koodaus": (
@@ -91,7 +90,7 @@ def build_features(agent_name: str, date: str, edition: str) -> str:
                 "key": f"news.{date}.{edition}.article.{cat}",
                 "value": out,
                 "visibility": "public",
-                "ai_provenance": declare_block(
+                "ai_provenance": declare(
                     Level.AI_GENERATED,
                     method=Method.FULLY_GENERATED,
                     human_involvement=HumanInvolvement.NONE,
@@ -187,7 +186,7 @@ def build_quiz(agent_name: str, date: str, edition: str) -> str:
                     "key": f"news.{date}.{edition}.quiz",
                     "value": quiz,
                     "visibility": "public",
-                    "ai_provenance": declare_block(
+                    "ai_provenance": declare(
                         Level.SYNTHESIZED,
                         method=Method.SYNTHESIZED,
                         human_involvement=HumanInvolvement.NONE,

@@ -12,12 +12,11 @@ from __future__ import annotations
 
 import json
 
-from aimeat_crewai.provenance import HumanInvolvement, Level, Method, source
+from aimeat_crewai.provenance import HumanInvolvement, Level, Method, declare, source
 
 from crewaimeat.aimeat_crew import _aimeat_call
 from crewaimeat.llm import get_llm, resolved_model, resolved_provider
 from crewaimeat.prose_style import FINNISH_NATIVE_STYLE
-from crewaimeat.provenance_block import declare_block
 
 PERSONAS: dict[str, str] = {
     "talous": "Markus Markka",
@@ -157,7 +156,7 @@ def _publish_article(
             "key": f"news.{date}.{edition}.article.{category}",
             "value": article,
             "visibility": "public",
-            "ai_provenance": declare_block(
+            "ai_provenance": declare(
                 Level.SYNTHESIZED,
                 method=Method.SYNTHESIZED,
                 human_involvement=HumanInvolvement.NONE,

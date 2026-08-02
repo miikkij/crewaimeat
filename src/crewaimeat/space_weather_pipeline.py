@@ -14,12 +14,11 @@ from __future__ import annotations
 import re
 
 import requests
-from aimeat_crewai.provenance import HumanInvolvement, Level, Method, source
+from aimeat_crewai.provenance import HumanInvolvement, Level, Method, declare, source
 
 from crewaimeat.aimeat_crew import _aimeat_call
 from crewaimeat.llm import get_llm, resolved_model, resolved_provider
 from crewaimeat.prose_style import FINNISH_NATIVE_STYLE
-from crewaimeat.provenance_block import declare_block
 
 _AVARUUSSAA = "avaruussaa"
 
@@ -91,7 +90,7 @@ def write_space_weather(agent_name: str, date: str, edition: str) -> str:
             "key": key,
             "value": art,
             "visibility": "public",
-            "ai_provenance": declare_block(
+            "ai_provenance": declare(
                 Level.SYNTHESIZED,
                 method=Method.SYNTHESIZED,
                 human_involvement=HumanInvolvement.NONE,
