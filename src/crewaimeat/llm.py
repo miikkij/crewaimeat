@@ -48,6 +48,17 @@ def last_response_model() -> str | None:
     return _LAST_RESPONSE_MODEL.get()
 
 
+"""Who SERVED the last completion (openrouter/ollama/xai/...) — the endpoint that actually answered,
+not the first one configured. Distinct from the model: "which model" and "who ran it" are different
+questions, and with a fall-through chain the answer can be a different provider than the primary."""
+_LAST_SERVED_PROVIDER: ContextVar[str | None] = ContextVar("aimeat_last_served_provider", default=None)
+
+
+def resolved_provider() -> str | None:
+    """The provider that served the most recent call in this context, or None if not observed."""
+    return _LAST_SERVED_PROVIDER.get()
+
+
 def resolved_model(llm) -> str | None:
     """The model that ACTUALLY served the last call, else the configured id.
 
@@ -330,6 +341,7 @@ def _flatten_endpoints(providers: list, for_tool_use: bool) -> list[dict]:
             eps.append(
                 {
                     "label": f"{prov.get('name', ptype)}:{mid}",
+                    "provider": ptype,  # who SERVES it (openrouter/ollama/xai/...) — the provenance `provider`
                     "model": lm,
                     "base_url": base_url,
                     "api_key": api_key,
@@ -353,10 +365,11 @@ class MultiProviderLLM(BaseLLM):
 
     _llms: list = PrivateAttr(default_factory=list)
     _labels: list = PrivateAttr(default_factory=list)
+    _providers: list = PrivateAttr(default_factory=list)
     _context_window: int = PrivateAttr(default=_FALLBACK_CONTEXT)
 
     def __init__(self, endpoints: list[dict], temperature: float):
-        llms, labels, models, contexts = [], [], [], []
+        llms, labels, models, contexts, providers = [], [], [], [], []
         for ep in endpoints:
             # NB: context is enforced via get_context_window_size() below (the outer LLM CrewAI queries),
             # not as a constructor kwarg — the concrete completion class would leak it into the API call.
@@ -387,6 +400,7 @@ class MultiProviderLLM(BaseLLM):
             _install_response_model_capture(llm)
             llms.append(llm)
             labels.append(ep["label"])
+            providers.append(ep.get("provider"))
             models.append(ep["model"])
             contexts.append(ep["context"])
         if not llms:  # nothing usable in the whole chain → let get_llm fall back to env config
@@ -394,6 +408,7 @@ class MultiProviderLLM(BaseLLM):
         super().__init__(model=models[0], temperature=temperature)
         self._llms = llms
         self._labels = labels
+        self._providers = providers
         self._context_window = contexts[0]  # the first ENDPOINT THAT INITIALISED (the effective primary)
 
     def call(self, *args, **kwargs):
@@ -401,9 +416,14 @@ class MultiProviderLLM(BaseLLM):
         # Clear first: a stale value from an EARLIER call would silently stamp this article with the
         # previous one's model — worse than recording nothing, because it reads as observed fact.
         _LAST_RESPONSE_MODEL.set(None)
+        _LAST_SERVED_PROVIDER.set(None)
         for i, (llm, label) in enumerate(zip(self._llms, self._labels)):
             try:
-                return llm.call(*args, **kwargs)
+                out = llm.call(*args, **kwargs)
+                # Record the provider only on SUCCESS, and only the endpoint that actually answered —
+                # after a fall-through the primary is not who served it.
+                _LAST_SERVED_PROVIDER.set(self._providers[i] if i < len(self._providers) else None)
+                return out
             except Exception as e:  # fall through to the next endpoint
                 last = e
                 more = i + 1 < len(self._llms)

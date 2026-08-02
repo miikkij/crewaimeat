@@ -12,11 +12,12 @@ from __future__ import annotations
 
 import json
 
-from aimeat_crewai.provenance import HumanInvolvement, Level, Method, declare, source
+from aimeat_crewai.provenance import HumanInvolvement, Level, Method, source
 
 from crewaimeat.aimeat_crew import _aimeat_call
-from crewaimeat.llm import get_llm, resolved_model
+from crewaimeat.llm import get_llm, resolved_model, resolved_provider
 from crewaimeat.prose_style import FINNISH_NATIVE_STYLE
+from crewaimeat.provenance_block import declare_block
 
 PERSONAS: dict[str, str] = {
     "talous": "Markus Markka",
@@ -124,6 +125,7 @@ def _publish_article(
     article: str,
     raw: list | None = None,
     model: str | None = None,
+    provider: str | None = None,
 ) -> bool:
     """Publish one article; True on success. `_aimeat_call` retries transient transport failures, so
     None back means the publish genuinely failed (tunnel down longer than the retries).
@@ -155,11 +157,12 @@ def _publish_article(
             "key": f"news.{date}.{edition}.article.{category}",
             "value": article,
             "visibility": "public",
-            "ai_provenance": declare(
+            "ai_provenance": declare_block(
                 Level.SYNTHESIZED,
                 method=Method.SYNTHESIZED,
                 human_involvement=HumanInvolvement.NONE,
                 model=model,
+                provider=provider,  # who SERVED it — a router alias answers neither question alone
                 sources=srcs,
             ),
         },
@@ -235,8 +238,8 @@ def write_edition_articles(agent_name: str, date: str, edition: str, categories:
             continue
         # The model that actually served THIS article — read immediately after the generating call,
         # before anything else can route a completion (the desk loops over categories).
-        used_model = resolved_model(llm)
-        if not _publish_article(agent_name, date, edition, cat, art, raw=raw, model=used_model):
+        used_model, used_provider = resolved_model(llm), resolved_provider()
+        if not _publish_article(agent_name, date, edition, cat, art, raw=raw, model=used_model, provider=used_provider):
             lines.append(f"  {cat:18s} {len(art)} chars — PUBLISH FAILED (tunnel/transport)")
             failed.append(cat)
             continue
