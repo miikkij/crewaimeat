@@ -16,7 +16,7 @@ from __future__ import annotations
 from aimeat_crewai.provenance import HumanInvolvement, Level, Method, declare
 
 from crewaimeat.aimeat_crew import _aimeat_call
-from crewaimeat.llm import get_llm
+from crewaimeat.llm import get_llm, resolved_model
 from crewaimeat.memory_tools import make_memory_tools
 from crewaimeat.prose_style import FINNISH_NATIVE_STYLE
 
@@ -118,7 +118,7 @@ def build_editorial_and_index(agent_name: str, date: str, edition: str) -> str:
                 Level.SYNTHESIZED,
                 method=Method.SYNTHESIZED,
                 human_involvement=HumanInvolvement.NONE,
-                model=getattr(llm_fi, "model", None),
+                model=resolved_model(llm_fi),
             ),
         },
     )

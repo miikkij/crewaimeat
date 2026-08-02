@@ -17,7 +17,7 @@ import requests
 from aimeat_crewai.provenance import HumanInvolvement, Level, Method, declare, source
 
 from crewaimeat.aimeat_crew import _aimeat_call
-from crewaimeat.llm import get_llm
+from crewaimeat.llm import get_llm, resolved_model
 from crewaimeat.prose_style import FINNISH_NATIVE_STYLE
 
 _AVARUUSSAA = "avaruussaa"
@@ -94,7 +94,7 @@ def write_space_weather(agent_name: str, date: str, edition: str) -> str:
                 Level.SYNTHESIZED,
                 method=Method.SYNTHESIZED,
                 human_involvement=HumanInvolvement.NONE,
-                model=getattr(llm, "model", None),
+                model=resolved_model(llm),
                 sources=[source(u) for u in source_urls],
             ),
         },

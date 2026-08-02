@@ -13,7 +13,7 @@ import sys
 from aimeat_crewai.provenance import HumanInvolvement, Level, Method, declare
 
 from crewaimeat.aimeat_crew import _aimeat_call
-from crewaimeat.llm import get_llm
+from crewaimeat.llm import get_llm, resolved_model
 from crewaimeat.prose_style import FINNISH_NATIVE_STYLE
 
 _TIDBITS = {
@@ -94,7 +94,7 @@ def build_features(agent_name: str, date: str, edition: str) -> str:
                     Level.AI_GENERATED,
                     method=Method.FULLY_GENERATED,
                     human_involvement=HumanInvolvement.NONE,
-                    model=getattr(llm, "model", None),
+                    model=resolved_model(llm),
                 ),
             },
         )
@@ -189,7 +189,7 @@ def build_quiz(agent_name: str, date: str, edition: str) -> str:
                         Level.SYNTHESIZED,
                         method=Method.SYNTHESIZED,
                         human_involvement=HumanInvolvement.NONE,
-                        model=getattr(llm, "model", None),
+                        model=resolved_model(llm),
                     ),
                 },
             )

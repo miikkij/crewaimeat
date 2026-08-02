@@ -15,7 +15,7 @@ import json
 from aimeat_crewai.provenance import HumanInvolvement, Level, Method, declare, source
 
 from crewaimeat.aimeat_crew import _aimeat_call
-from crewaimeat.llm import get_llm
+from crewaimeat.llm import get_llm, resolved_model
 from crewaimeat.prose_style import FINNISH_NATIVE_STYLE
 
 PERSONAS: dict[str, str] = {
@@ -233,7 +233,10 @@ def write_edition_articles(agent_name: str, date: str, edition: str, categories:
             lines.append(f"  {cat:18s} WRITE FAILED — llm error: {exc}")
             failed.append(cat)
             continue
-        if not _publish_article(agent_name, date, edition, cat, art, raw=raw, model=getattr(llm, "model", None)):
+        # The model that actually served THIS article — read immediately after the generating call,
+        # before anything else can route a completion (the desk loops over categories).
+        used_model = resolved_model(llm)
+        if not _publish_article(agent_name, date, edition, cat, art, raw=raw, model=used_model):
             lines.append(f"  {cat:18s} {len(art)} chars — PUBLISH FAILED (tunnel/transport)")
             failed.append(cat)
             continue

@@ -22,10 +22,84 @@ from __future__ import annotations
 import json
 import os
 import sys
+from contextvars import ContextVar
 
 from crewai import LLM
 from crewai.llms.base_llm import BaseLLM
 from pydantic import PrivateAttr
+
+# The model the PROVIDER SAYS it actually used, from the completion response body. A ContextVar, not
+# a plain global, because the fleet runs every agent as a thread in ONE process — a global would let
+# one desk's article be stamped with another desk's model.
+#
+# WHY THIS EXISTS AT ALL: `getattr(llm, "model")` is the CONFIGURED id, and for a routing alias like
+# `openrouter/openrouter/free` that is a POOL, not a model — it satisfies the provenance field
+# without answering "who wrote this". CrewAI does not surface the routed model: LLMCallCompletedEvent
+# is built with `model=self.model` (the configured value), and `.call()` returns only the text. The
+# response body is the sole place the truth exists, so we read it there.
+_LAST_RESPONSE_MODEL: ContextVar[str | None] = ContextVar("aimeat_last_response_model", default=None)
+
+
+def last_response_model() -> str | None:
+    """The model the provider reported on the most recent completion IN THIS CONTEXT, or None.
+
+    None means "not observed" — never a licence to guess. Callers should fall back to the configured
+    id and record THAT honestly rather than inventing a concrete model name."""
+    return _LAST_RESPONSE_MODEL.get()
+
+
+def resolved_model(llm) -> str | None:
+    """The model that ACTUALLY served the last call, else the configured id.
+
+    Read it straight after the generating call — that is the moment it is true, the same discipline
+    as stamping `fetched_at` at scrape time. The fallback is deliberately the RAW configured string:
+    `openrouter/openrouter/free` recorded as itself is honest and legible as a pool, whereas naming a
+    concrete model because one "probably" ran would be a fabricated fact in a published record."""
+    return last_response_model() or getattr(llm, "model", None)
+
+
+def _install_response_model_capture(inner) -> None:
+    """Wrap one provider client so each completion records the model the response reports.
+
+    Best-effort by design: a CrewAI/OpenAI-SDK internal moved or made read-only must never break a
+    crew's writing. It degrades to "not observed", the caller falls back to the configured id, and
+    the failure is printed ONCE rather than per call."""
+    getter = getattr(inner, "_get_sync_client", None)
+    if getter is None or getattr(inner, "_aimeat_model_capture", False):
+        return
+
+    def patched(*a, **k):
+        client = getter(*a, **k)
+        try:
+            completions = client.chat.completions
+            if not getattr(completions, "_aimeat_wrapped", False):
+                original_create = completions.create
+
+                def create(*ca, **ck):
+                    resp = original_create(*ca, **ck)
+                    reported = getattr(resp, "model", None)
+                    if reported:
+                        _LAST_RESPONSE_MODEL.set(str(reported))
+                    return resp
+
+                completions.create = create
+                completions._aimeat_wrapped = True
+        except Exception as exc:  # noqa: BLE001 — never let telemetry break generation
+            if not getattr(inner, "_aimeat_capture_warned", False):
+                print(
+                    f"[llm] could not observe the response model ({type(exc).__name__}: {exc}); "
+                    f"provenance will record the CONFIGURED id instead",
+                    file=sys.stderr,
+                )
+                inner._aimeat_capture_warned = True
+        return client
+
+    try:
+        inner._get_sync_client = patched
+        inner._aimeat_model_capture = True
+    except Exception:  # noqa: BLE001 — a frozen model object; configured id remains the fallback
+        pass
+
 
 # provider type -> model-id prefix.
 # `nvidia` = NVIDIA NIM (build.nvidia.com): an OpenAI-compatible endpoint used the SAME way NVIDIA's own
@@ -310,6 +384,7 @@ class MultiProviderLLM(BaseLLM):
                     file=sys.stderr,
                 )
                 continue
+            _install_response_model_capture(llm)
             llms.append(llm)
             labels.append(ep["label"])
             models.append(ep["model"])
@@ -323,6 +398,9 @@ class MultiProviderLLM(BaseLLM):
 
     def call(self, *args, **kwargs):
         last: Exception | None = None
+        # Clear first: a stale value from an EARLIER call would silently stamp this article with the
+        # previous one's model — worse than recording nothing, because it reads as observed fact.
+        _LAST_RESPONSE_MODEL.set(None)
         for i, (llm, label) in enumerate(zip(self._llms, self._labels)):
             try:
                 return llm.call(*args, **kwargs)
