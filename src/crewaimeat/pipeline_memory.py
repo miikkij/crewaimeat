@@ -42,7 +42,7 @@ def _memory_cls():  # seam for offline tests (monkeypatch this, never the crewai
     return Memory
 
 
-def _default_analysis_llm(agent_name: str, embedder_tag: str) -> Any:
+def default_analysis_llm(agent_name: str, embedder_tag: str) -> Any:
     """The LLM crewai's encoder uses to infer scope/categories/importance on remember().
 
     When the cascade picked local ollama, analysis rides a local model too (free, private —
@@ -60,11 +60,41 @@ def _default_analysis_llm(agent_name: str, embedder_tag: str) -> Any:
         # fails 30x faster into the same defaults path. (NOT the reasoning-model max_tokens trap: this
         # is a plain instruct model emitting JSON, not burning budget on reasoning tokens.)
         return LLM(model=model, temperature=0.1, base_url=base, max_tokens=2048)
+    # CLOUD TIER: a CONCRETE model, never the crew's own chain.
+    #
+    # The chain's primary is the `openrouter/free` META-ROUTER, which picks a different model per
+    # call and guarantees nothing about structured output. crewai asks for the MemoryAnalysis schema
+    # via response_format, the router hands back markdown ("**suggested_scope**: ... ```json{...}```"),
+    # pydantic parses from column 1, sees `*`, and raises json_invalid. Observed on every remember():
+    # one wasted round trip plus a wall of LLM Error panels, on a call whose whole output is a small
+    # metadata JSON. The pool even routed to a content-safety classifier in our tests — such a model
+    # cannot honour a schema at all.
+    #
+    # So: name the model. Default is gpt-oss-120b (already configured in the content-free/coding
+    # profiles) which honours response_format; override with AIMEAT_MEMORY_ANALYSIS_MODEL, which now
+    # works on EVERY tier rather than only the ollama one.
+    key = os.getenv("OPENROUTER_API_KEY")
+    if key:
+        from crewai import LLM
+
+        model = os.getenv("AIMEAT_MEMORY_ANALYSIS_MODEL", "openrouter/openai/gpt-oss-120b")
+        print(
+            f"[pipemem] {agent_name}: embedder tier {embedder_tag} -> encode analysis on {model}",
+            file=sys.stderr,
+        )
+        return LLM(
+            model=model,
+            temperature=0.1,
+            base_url="https://openrouter.ai/api/v1",
+            api_key=key,
+            max_tokens=2048,  # the analysis output is a small JSON; a runaway fails fast into defaults
+        )
+
     from crewaimeat.llm import get_llm
 
     print(
-        f"[pipemem] {agent_name}: non-ollama embedder tier ({embedder_tag}) -> "
-        f"encode analysis uses the crew's own get_llm chain",
+        f"[pipemem] {agent_name}: no OPENROUTER_API_KEY -> encode analysis falls back to the crew's "
+        f"own get_llm chain (expect MemoryAnalysis json_invalid if it routes to a free meta-router)",
         file=sys.stderr,
     )
     return get_llm(agent_name=agent_name)
@@ -206,7 +236,7 @@ def open_store(
         return None
     store_dir = memory_store_path(agent_name, principal="owner", embedder_tag=tag, scope=scope)
     mem = _memory_cls()(
-        llm=analysis_llm if analysis_llm is not None else _default_analysis_llm(agent_name, tag),
+        llm=analysis_llm if analysis_llm is not None else default_analysis_llm(agent_name, tag),
         embedder=embedder,
         storage=str(store_dir),
         root_scope=f"/pipeline/{agent_name}",

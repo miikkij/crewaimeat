@@ -101,8 +101,11 @@ def _read_raw(agent_name: str, category: str, date: str, edition: str) -> list:
     a tunnel drop as 'no raw'. `_aimeat_call` already retries transient failures, so a None here means
     the failure persisted."""
     key = f"news.{date}.{edition}.raw.{category}"
-    # Fast path: own-gaii read (best-effort; the owner-scope list below is the authoritative source).
-    r = _aimeat_call(agent_name, "aimeat_memory_read", {"key": key})
+    # Fast path: own-gaii read. quiet=True because this probe is DESIGNED to miss — the raw was
+    # written by news-fetcher, so it is never under the writer's own GAII, and the owner-scope list
+    # below is the real source. Logging it printed a NOT_FOUND line per category per edition that
+    # reads like a failure while the edition is publishing perfectly.
+    r = _aimeat_call(agent_name, "aimeat_memory_read", {"key": key}, quiet=True)
     if isinstance(r, dict) and r.get("value") is not None:
         return _coerce_list(r.get("value"))
     # Authoritative: news-fetcher (a sibling) wrote the raw with owner visibility → owner-scope list.

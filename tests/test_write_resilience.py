@@ -23,7 +23,7 @@ def test_transient_classification():
 
 # ── _read_raw: failed read ≠ empty raw ────────────────────────────────────────
 def _fake_call(read_ret, list_ret):
-    def _call(agent, tool, payload):
+    def _call(agent, tool, payload, **_kw):
         return read_ret if tool == "aimeat_memory_read" else list_ret
 
     return _call

@@ -1014,8 +1014,14 @@ def _build_crew_memory(spec: CrewSpec, task: dict) -> Any:
         f"embedder={tag} -> {store}",
         file=sys.stderr,
     )
+    # The encode-analysis LLM must NOT be the crew's own chain: its primary is the `openrouter/free`
+    # META-ROUTER, which does not honour response_format, so crewai's MemoryAnalysis schema comes back
+    # as markdown and pydantic raises json_invalid on EVERY remember(). Same reasoning (and the same
+    # helper) as pipeline_memory -- one concrete, schema-capable model instead of a routing pool.
+    from crewaimeat.pipeline_memory import default_analysis_llm
+
     return Memory(
-        llm=get_llm(agent_name=spec.agent_name),
+        llm=default_analysis_llm(spec.agent_name, tag),
         embedder=embedder,
         storage=str(store),
         root_scope=f"/crew/{spec.agent_name}",
