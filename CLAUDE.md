@@ -80,6 +80,17 @@ status cells, append decisions), so the two sides stay synced without drifting p
   fleet** (`scripts/start_fleet.ps1` → `fleet_host`) so it attaches as a THREAD to the ONE shared loopback
   serve daemon (all agents in one process, crewai imported once). Only APPROVED agents come online; an
   unapproved one waits and joins itself once approved.
+- **`--mode task-runner` is load-bearing, not boilerplate.** A task is auto-activated ONLY when the
+  agent's mode is `task-runner` (`autoActivated = queued && mode === 'task-runner'`); every other mode
+  (`interactive`/`autonomous`/`coordinator`) follows `queued → (OWNER starts it) → active → done`. There
+  is NO `aimeat_task_start` tool, and the REST `/start` is owner-only — so an interactive agent has no
+  route out of `queued` and `aimeat_task_complete` answers *"Only active tasks can be completed"*. That
+  is a SAFETY BOUNDARY: an interactive agent is an open-ended model in a conversation (talk-into-able,
+  prompt-injectable), so nothing it decides reaches the world until a person says yes; a task-runner is
+  narrow and largely deterministic (the loop is code, the model writes only prose), which is what the
+  owner pre-authorised at registration. Breadth of capability trades against freedom to act. An agent
+  can self-correct with `aimeat_agent_mode_set` at startup BEFORE onboarding (the handler migrates
+  passed steps into the new mode's flow). Full explanation for agents: `skills/aimeat-agent-modes/`.
 - **Connector tools (`aimeat_workspace_*`, `aimeat_memory_*`, `memory_read_public`, task poll/push) work
   ONLY while the agent is attached / running in-fleet.** Off-fleet (a bare `uv run … -c` one-liner, a
   background loop) those reads fail quietly — `manifest=null`, empty lists — which is exactly what the
