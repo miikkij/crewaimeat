@@ -75,6 +75,10 @@ const PUB_GAII="postman#happydude500001@aimeat-finland-001-genesis";
 const INDEX_KEY="aamukatsaus.share.index";
 const KEY_BRIEF="mail.morning.public", KEY_PULSE="mail.pulse", KEY_QUEUE="some.queue.latest", KEY_GROK="some.grok";
 let TAB="katsaus", BRIEF_DATE=null, INDEX=null, SESSION=null;
+/* Reading source for the briefing: null = the open public mirror; otherwise a space someone has
+   shared with the signed-in viewer. Only the briefing has a per-subscriber form — pulse, queue and
+   the Grok archive are the operator's own instrumentation and stay on the public mirror. */
+let SHARES=[], SOURCE=null;
 
 const esc=s=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const linkify=s=>esc(s).replace(/(https?:\/\/[^\s<)"']+)/g,'<a class="link" href="$1" target="_blank" rel="noopener">$1</a>');
@@ -112,6 +116,37 @@ async function loadIndex(){
   INDEX=(await pub(INDEX_KEY))||{briefing:[],pulse:[],grok:[],queue:null};
   return INDEX;
 }
+
+/* ── shared spaces (node share model, 2026-08-11) ─────────────────────────────
+   A share is (owner, group, key_pattern); the record itself stays PRIVATE, so getPublic() — which
+   fetches unauthenticated — cannot read it. The authenticated route is the same path with the
+   session's credential: AIMEAT.auth.getSession().fetch(). `**` covers keys written later, which is
+   what lets a subscription work without re-sharing every day.
+   The API was on a node branch and not deployed when this was written, so everything here treats a
+   404 as "no shares" and the app falls back to the public mirror unchanged. */
+async function authFetch(path){
+  const s=AIMEAT.auth.getSession&&AIMEAT.auth.getSession();
+  if(!s||!s.fetch) return null;
+  try{
+    const r=await s.fetch(path);
+    const body=r&&r.json?await r.json():r;
+    return body&&body.ok===false?null:(body&&body.data!==undefined?body.data:body);
+  }catch(e){ return null; }
+}
+async function discoverShares(){
+  if(!SESSION) return [];
+  const d=await authFetch("/v1/shares/incoming");
+  const all=(d&&(d.shares||d.items))||[];
+  // Only shares of an Aamukatsaus space; anything else in the inbox is someone else's business.
+  return all.filter(s=>String((s&&s.key_pattern)||"").startsWith("aamukatsaus."))
+            .map(s=>({pattern:s.key_pattern, owner:s.owner_ghii||s.owner||s.owner_gaii,
+                      space:String(s.key_pattern).replace(/\.\*+$/,"")}));
+}
+/* One record from a shared space — authenticated, by the SHARER's ghii. */
+async function shared(owner,key){
+  return await authFetch("/v1/memory/"+encodeURIComponent(owner)+"/"+encodeURIComponent(key)+"?soft=1")
+    .then(d=>(d&&d.value!==undefined)?d.value:null).catch(()=>null);
+}
 const dayOf=k=>String(k||"").slice(-10);
 const isDay=k=>/\d{4}-\d{2}-\d{2}$/.test(String(k||""));
 
@@ -145,14 +180,36 @@ const empty=(t,s)=>'<div class="text-center opacity-70 py-16"><div class="font-s
 
 /* ── Katsaus ─────────────────────────────────────────────────────────────── */
 async function viewKatsaus(el){
-  const idx=await loadIndex();
-  const days=(idx.briefing||[]).filter(isDay);
-  const key=(BRIEF_DATE&&days.find(k=>dayOf(k)===BRIEF_DATE))||days[0]||null;
-  const rec=key?await pub(key):await val(KEY_BRIEF+".latest", KEY_BRIEF+".latest");
-  if(!rec) return el.innerHTML=empty("Ei vielä yhtään raporttia",
-    "Aamuraportti julkaisee mail.morning.public.* seuraavassa ajossa.");
+  let days=[], rec=null, key=null;
+  if(SOURCE){
+    // A subscribed space: the sharer's own dated records. There is no public index for it — the
+    // share grants reading, not listing — so the dates are probed backwards from today. `**` means
+    // tomorrow's key is covered too, which is why nothing has to be re-shared.
+    const today=new Date();
+    for(let i=0;i<14;i++){
+      const d=new Date(today.getTime()-i*86400000).toISOString().slice(0,10);
+      days.push(SOURCE.space+"."+d);
+    }
+    key=(BRIEF_DATE&&days.find(k=>dayOf(k)===BRIEF_DATE))||null;
+    if(key) rec=await shared(SOURCE.owner,key);
+    else for(const k of days){ rec=await shared(SOURCE.owner,k); if(rec){ key=k; break; } }
+    days=days.filter(k=>k===key||!BRIEF_DATE);
+  }else{
+    const idx=await loadIndex();
+    days=(idx.briefing||[]).filter(isDay);
+    key=(BRIEF_DATE&&days.find(k=>dayOf(k)===BRIEF_DATE))||days[0]||null;
+    rec=key?await pub(key):await val(KEY_BRIEF+".latest", KEY_BRIEF+".latest");
+  }
+  if(!rec) return el.innerHTML=empty(SOURCE?"Tilauksessa ei vielä ole raporttia":"Ei vielä yhtään raporttia",
+    SOURCE?("Tila "+SOURCE.space+" on jaettu sinulle, mutta siihen ei ole vielä kirjoitettu.")
+          :"Aamuraportti julkaisee mail.morning.public.* seuraavassa ajossa.");
   const label=key?dayOf(key):(rec.date||"viimeisin");
-  let h='<div class="flex flex-wrap items-center gap-3 mb-3"><h1 class="text-xl font-semibold">'+esc(label)+"</h1>";
+  let h="";
+  if(SHARES.length) h+='<div class="flex flex-wrap items-center gap-2 mb-3"><span class="text-sm opacity-70">Lähde</span>'+
+    '<select id="src" class="select select-sm select-bordered"><option value=""'+(SOURCE?"":" selected")+
+    ">Avoin katsaus</option>"+SHARES.map((s,i)=>'<option value="'+i+'"'+(SOURCE===s?" selected":"")+">"+
+    esc(s.space)+"</option>").join("")+"</select></div>";
+  h+='<div class="flex flex-wrap items-center gap-3 mb-3"><h1 class="text-xl font-semibold">'+esc(label)+"</h1>";
   if(days.length) h+='<select id="d" class="select select-sm select-bordered">'+days.map(k=>{
     const v=dayOf(k); return '<option'+(k===key?" selected":"")+">"+esc(v)+"</option>"; }).join("")+"</select>"+
     '<span class="text-sm opacity-70">'+days.length+" päivää arkistossa</span>";
@@ -161,6 +218,8 @@ async function viewKatsaus(el){
   el.innerHTML=h+card('<div class="md min-w-0">'+md(rec.body_md||"(raporttia ei voitu lukea)")+"</div>");
   const sel=el.querySelector("#d");
   if(sel) sel.onchange=e=>{ BRIEF_DATE=e.target.value; render(); };
+  const src=el.querySelector("#src");
+  if(src) src.onchange=e=>{ SOURCE=e.target.value===""?null:SHARES[+e.target.value]; BRIEF_DATE=null; render(); };
 }
 
 /* ── Pulssi ──────────────────────────────────────────────────────────────── */
@@ -320,6 +379,9 @@ async function boot(){
       onLogin:s=>{ SESSION=s||AIMEAT.auth.getSession(); INDEX=null; render(); },
       onLogout:()=>{ SESSION=null; INDEX=null; render(); }});
   try{ SESSION=(await AIMEAT.auth.login())||AIMEAT.auth.getSession(); }catch(e){ SESSION=null; }
+  // Silent when the share API is absent (it was on a node branch when this shipped): no shares
+  // found means the source selector never appears and the app behaves exactly as before.
+  try{ SHARES=await discoverShares(); }catch(e){ SHARES=[]; }
   // NO login gate on reading. The data is a public mirror, so a colleague opens the link and sees
   // exactly what the owner sees; signing in only adds the owner's fresher un-mirrored copy and the
   // ability to submit a Grok run.
