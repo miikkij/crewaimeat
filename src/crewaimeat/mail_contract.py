@@ -326,7 +326,7 @@ def _ingest_radar_lines(text: str, found_date: str) -> dict:
 
     d = _call("aimeat_workspace_read", {"organism_id": _HOME_ORG, "ws": _RADAR_WS}) or {}
     existing = {o.get("id") for o in (d.get("objects", {}) or {}).get("opportunity", [])}
-    added = skipped = bad = 0
+    added = skipped = bad = rejected = 0
     for line in text.splitlines():
         m = _RADAR_LINE.match(line.strip().strip("`"))
         if not m:
@@ -340,7 +340,11 @@ def _ingest_radar_lines(text: str, found_date: str) -> dict:
             continue
         rec = {
             "id": oid,
-            "source": f"grok-{platform.lower()}",
+            # The opportunity schema constrains `source` to hn|reddit|x|other. It used to be written
+            # as "grok-x", which failed SCHEMA_VALIDATION on EVERY hit — measured 2026-08-11: 0 of
+            # 664 opportunities came from Grok, so this path had never once added a record and said
+            # nothing about it. The scouting tool is not the platform; it is recorded in `angle`.
+            "source": platform.lower() if platform.lower() in ("hn", "reddit", "x") else "other",
             "url": url,
             "title": title[:120],
             "summary": why[:300],
@@ -362,9 +366,19 @@ def _ingest_radar_lines(text: str, found_date: str) -> dict:
             if wrote
             else None
         )
-        added += 1 if (wrote and pub) else 0
+        if wrote and pub:
+            added += 1
+        else:
+            # A rejected write used to vanish into `added += 0`. That silence is exactly how a whole
+            # scouting path ran for weeks producing nothing — count it and say so.
+            rejected += 1
+            print(
+                f"[{AGENT}] radar ingest: {oid} NOT stored ({'publish' if wrote else 'write'} refused) — "
+                f"the hit was parsed but never reached the Social Radar",
+                file=sys.stderr,
+            )
         existing.add(oid)
-    return {"added": added, "skipped": skipped, "unparsed": bad}
+    return {"added": added, "skipped": skipped, "unparsed": bad, "rejected": rejected}
 
 
 def _reply_text(msg) -> str:
@@ -453,9 +467,15 @@ def _radar_items() -> list[dict]:
     )
 
 
-def _insights_section(events: list[dict], radar: list[dict]) -> str:
-    """Effort analysis + accomplishments + TODAY's action points (incl. SOME threads worth a reply)."""
+def _insights_section(events: list[dict], radar: list[dict], pulse: dict | None = None) -> str:
+    """Effort analysis + accomplishments + TODAY's action points (incl. SOME threads worth a reply).
+
+    `pulse` is the MEASURED half of the input and the reason this section can be trusted at all.
+    Without it the analyst saw only workspace-object events — which the newspaper, the workflow runs
+    and the spend never touch — and honestly reported a busy night as "ei konkreettista toimintaa".
+    """
     from crewaimeat.llm import get_llm
+    from crewaimeat.pulse import as_prompt_lines
 
     ev_lines = (
         "\n".join(
@@ -463,12 +483,15 @@ def _insights_section(events: list[dict], radar: list[dict]) -> str:
             f"{e.get('type')}/{e.get('instance')}"
             for e in events[:200]
         )
-        or "(no events)"
+        or "(no workspace-object events)"
     )
     radar_lines = "\n".join(f"- {r['title']} — {r['url']}" for r in radar) or "(radar empty)"
     prompt = (
         "You are a sharp, warm morning-briefing analyst for a one-person AI-agent project.\n\n"
-        f"RAW ACTIVITY (last 24h, who did what):\n{ev_lines}\n\n"
+        f"MEASURED OUTPUT (last 24h — counts, not opinions; these are the fleet's real deliverables):\n"
+        f"{as_prompt_lines(pulse or {})}\n\n"
+        f"WORKSPACE EVENTS (last 24h — note this covers workspace objects ONLY, so an empty list here "
+        f"does NOT mean nothing happened; judge activity from the MEASURED OUTPUT above):\n{ev_lines}\n\n"
         f"SOME RADAR (fresh threads where engaging might be worth it):\n{radar_lines}\n\n"
         "Write THREE markdown sections, in Finnish, concise and concrete:\n"
         "## Mihin tehot menivät\n(2-4 sentences: where the effort actually went, any imbalance worth noticing)\n\n"
@@ -598,13 +621,30 @@ def build_morning_report() -> dict:
         events = _gather(_HOME_ORG, "*", since)
     except Exception:  # noqa: BLE001
         events = []
+    # Structure any Grok run pasted into the app since the last pass, BEFORE the radar is read —
+    # otherwise last night's scouted threads would sit in the inbox and miss today's briefing.
+    try:
+        from crewaimeat.grok_inbox import drain as drain_grok
+
+        drain_grok()
+    except Exception as exc:  # noqa: BLE001 — a bad paste never blocks the morning mail
+        print(f"[{AGENT}] grok inbox drain skipped ({exc!r})", file=sys.stderr)
     radar = _radar_items()
+    # The MEASURED half of the analyst's input (newspaper, spend, memory writes). Collected and
+    # published first so the same numbers back the mail, the Aamukatsaus app and tomorrow's trend.
+    try:
+        from crewaimeat.pulse import publish as publish_pulse
+
+        pulse = publish_pulse()
+    except Exception as exc:  # noqa: BLE001 — the mail goes out regardless; the analyst just loses depth
+        print(f"[{AGENT}] pulse unavailable ({exc!r}) — analysis falls back to events only", file=sys.stderr)
+        pulse = None
     extra = _extra_sections(now)
     body = (
         f"# Huomenta! ☀️ {now.strftime('%A %d.%m.%Y')}\n\n"
         + _activity_section(now)
         + "\n"
-        + _insights_section(events, radar)
+        + _insights_section(events, radar, pulse)
         + "\n"
         + (extra + "\n" if extra else "")
         + _radar_section(radar)
@@ -645,22 +685,39 @@ def build_morning_report() -> dict:
         # a reader can actually go and check. It is sent on the morning schedule with nobody reading
         # it first, so human_involvement stays NONE — the owner receiving the mail afterwards is not
         # a review step, because by then it has already gone out.
-        _call(
-            "aimeat_memory_write",
-            {
-                "key": "mail.morning.public.latest",
-                "value": {"date": now.date().isoformat(), "subject": subject, "body_md": body, "radar": radar},
-                "visibility": "public",
-                "ai_provenance": declare(
-                    Level.SYNTHESIZED,
-                    method=Method.SYNTHESIZED,
-                    human_involvement=HumanInvolvement.NONE,
-                    sources=[source(str(r["url"])) for r in (radar or []) if isinstance(r, dict) and r.get("url")],
-                ),
-            },
+        value = {
+            "date": now.date().isoformat(),
+            "subject": subject,
+            "body_md": body,
+            "radar": radar,
+            "pulse": pulse,  # the measured numbers, so a reader can check the prose against them
+        }
+        prov = declare(
+            Level.SYNTHESIZED,
+            method=Method.SYNTHESIZED,
+            human_involvement=HumanInvolvement.NONE,
+            sources=[source(str(r["url"])) for r in (radar or []) if isinstance(r, dict) and r.get("url")],
         )
+        # BOTH keys, and the per-day one is the point: `.latest` is overwritten every morning, so
+        # until now no briefing survived the next one and nothing could be compared or looked back at.
+        # The dated key is what makes the Aamukatsaus app an archive instead of a second inbox.
+        for key in (f"mail.morning.public.{now.date().isoformat()}", "mail.morning.public.latest"):
+            _call(
+                "aimeat_memory_write",
+                {"key": key, "value": value, "visibility": "public", "ai_provenance": prov},
+            )
     except Exception:  # noqa: BLE001
         pass
+    # Rebuild the Aamukatsaus public surface LAST, so it mirrors this morning's briefing, pulse,
+    # queue and Grok archive in one pass. What becomes public is listed in crewaimeat.share_public.
+    try:
+        from crewaimeat.review_queue import publish as publish_queue
+        from crewaimeat.share_public import sync as sync_public
+
+        publish_queue()  # the queue is rebuilt here too — it has no schedule of its own
+        sync_public()
+    except Exception as exc:  # noqa: BLE001 — sharing never blocks the mail that was already sent
+        print(f"[{AGENT}] public share sync skipped ({exc!r})", file=sys.stderr)
     print(f"[{AGENT}] morning report {rid}: {'FAILED ' + err if err else 'sent'}{img_note}", file=sys.stderr)
     return {"sent": 0 if err else 1, "failed": 1 if err else 0}
 

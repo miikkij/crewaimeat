@@ -17,6 +17,7 @@ import requests
 from aimeat_crewai.provenance import HumanInvolvement, Level, Method, declare, source
 
 from crewaimeat.aimeat_crew import _aimeat_call
+from crewaimeat.edition_status import step_status
 from crewaimeat.llm import get_llm, resolved_model, resolved_provider
 from crewaimeat.prose_style import FINNISH_NATIVE_STYLE
 
@@ -61,6 +62,11 @@ def _fetch_sources() -> tuple[str, list[str]]:
 def write_space_weather(agent_name: str, date: str, edition: str) -> str:
     """Fetch NOAA/spaceweather.com and write ONE original Finnish 'Avaruussää tänään' article into
     news.<date>.<edition>.article.avaruussaa (public). The edition is passed in, never guessed."""
+    with step_status(agent_name, date, edition, "spaceWeather") as st:
+        return _write_space_weather(agent_name, date, edition, st)
+
+
+def _write_space_weather(agent_name: str, date: str, edition: str, st) -> str:
     sources, source_urls = _fetch_sources()
     llm = get_llm(for_tool_use=False, temperature=0.6, agent_name=agent_name)
     prompt = (
@@ -83,7 +89,7 @@ def write_space_weather(agent_name: str, date: str, edition: str) -> str:
     # PROVENANCE: a model wrote this Finnish article from real NOAA/spaceweather.com readings at the
     # desk's direction — SYNTHESIZED, citing only the feeds that actually answered. It publishes on
     # the edition schedule with no reviewer, so human_involvement stays NONE.
-    _aimeat_call(
+    written = _aimeat_call(
         agent_name,
         "aimeat_memory_write",
         {
@@ -100,6 +106,11 @@ def write_space_weather(agent_name: str, date: str, edition: str) -> str:
             ),
         },
     )
+    if written is None:
+        # The article never landed, so the step is not done — the workflow's success signal reads the
+        # same absence and goes output-RED. The status record agrees with it instead of contradicting it.
+        st.fail()
+        return f"avaruussaa PUBLISH FAILED (tunnel/transport) -> {key}"
     return f"avaruussaa {len(art)} chars -> {key}"
 
 

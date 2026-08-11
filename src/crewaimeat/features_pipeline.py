@@ -13,6 +13,7 @@ import sys
 from aimeat_crewai.provenance import HumanInvolvement, Level, Method, declare
 
 from crewaimeat.aimeat_crew import _aimeat_call
+from crewaimeat.edition_status import step_status
 from crewaimeat.llm import get_llm, resolved_model, resolved_provider
 from crewaimeat.prose_style import FINNISH_NATIVE_STYLE
 
@@ -133,6 +134,16 @@ def build_quiz(agent_name: str, date: str, edition: str) -> str:
     """The news quiz from the day's articles — SKIPPED loudly when articles aren't readable yet
     (the 17:45 schedule can race the 17:25 writers); a retry guard re-calls this until they are.
     A failed/skipped build never writes, so an existing good quiz is never clobbered."""
+    with step_status(agent_name, date, edition, "features") as st:
+        report = _build_quiz(agent_name, date, edition)
+        # This stage says "no" by RETURNING, not by raising — a skipped quiz is a correct refusal to
+        # fabricate, but it is not a finished step, and the status record must not round it up to one.
+        if "SKIPPED" in report or "FAILED" in report:
+            st.fail()
+        return report
+
+
+def _build_quiz(agent_name: str, date: str, edition: str) -> str:
     arts = []
     r = _aimeat_call(
         agent_name, "aimeat_memory_list", {"owner_scope": True, "prefix": f"news.{date}.{edition}.article."}

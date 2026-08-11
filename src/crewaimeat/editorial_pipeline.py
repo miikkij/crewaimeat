@@ -16,6 +16,7 @@ from __future__ import annotations
 from aimeat_crewai.provenance import HumanInvolvement, Level, Method, declare
 
 from crewaimeat.aimeat_crew import _aimeat_call
+from crewaimeat.edition_status import step_status
 from crewaimeat.llm import get_llm, resolved_model, resolved_provider
 from crewaimeat.memory_tools import make_memory_tools
 from crewaimeat.prose_style import FINNISH_NATIVE_STYLE
@@ -47,6 +48,15 @@ _PROMPT_LOCALIZE = (
 
 
 def build_editorial_and_index(agent_name: str, date: str, edition: str) -> str:
+    with step_status(agent_name, date, edition, "editorial") as st:
+        report = _build_editorial_and_index(agent_name, date, edition)
+        # NO_ARTICLES is a refusal, not a finished column — the desks have not delivered yet.
+        if report.startswith("NO_ARTICLES"):
+            st.fail()
+        return report
+
+
+def _build_editorial_and_index(agent_name: str, date: str, edition: str) -> str:
     heads = []
     r = _aimeat_call(
         agent_name, "aimeat_memory_list", {"owner_scope": True, "prefix": f"news.{date}.{edition}.article."}

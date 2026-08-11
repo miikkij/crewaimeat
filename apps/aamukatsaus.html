@@ -1,0 +1,324 @@
+<!doctype html>
+<!--
+  Aamukatsaus — the morning briefing as a shared surface instead of one person's inbox.
+
+  Built against /v1/prompts/build-app (the canonical spec). Two things the first cut got wrong and
+  this one gets right, both written down so the next edit does not undo them:
+
+  1. NAMESPACE RULE (spec §"Namespace rule"). Everything shown here is written by AGENTS over MCP —
+     postman, some-analyst — so it lives under the AGENT's GAII, not the signed-in human's. A plain
+     AIMEAT.data.get() reads the human's own namespace and finds nothing, which is exactly why the
+     first version rendered an empty page for the owner. Every read below therefore goes through
+     list({ownerScope:true}) + get(key,{agent:owner_gaii}).
+  2. THEME. The platform owns light/dark (data-theme) AND the palette (data-palette); the login pill
+     carries both controls. The first cut hardcoded its own colours behind prefers-color-scheme, so
+     the user's toggle did nothing. Here every colour is a daisyUI/theme token.
+
+  Reads (all agent-written): mail.morning.public.<date> · mail.pulse.<date> · some.queue.latest ·
+  some.grok.<date>.  Writes exactly one kind of key: some.grok.inbox.<ts>, a raw paste an agent
+  structures later. The browser never parses a Grok run and never touches a workspace.
+-->
+<html lang="fi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="aimeat-app" content="aamukatsaus.html">
+<meta name="aimeat-locales" content="fi">
+<meta name="aimeat-scopes" content="memory:read memory:write">
+<title>Aamukatsaus · crewaimeat</title>
+<script>
+/* Restore BOTH theme axes before first paint (spec) — no flash of the wrong look, and the login
+   pill's controls keep working because we never own them. */
+(function(){ function mode(t){ document.documentElement.setAttribute("data-theme", t==="dark"?"dark":"light"); }
+  function pal(p){ if(p && p!=="aimeat") document.documentElement.setAttribute("data-palette", p); else document.documentElement.removeAttribute("data-palette"); }
+  mode(localStorage.getItem("aimeat-theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+  pal(localStorage.getItem("aimeat-palette"));
+  addEventListener("storage", function(e){ if(e.key==="aimeat-theme" && e.newValue) mode(e.newValue);
+    if(e.key==="aimeat-palette" && e.newValue) pal(e.newValue); }); })();
+</script>
+<link href="https://aimeat.io/lib/daisyui@5.css" rel="stylesheet" type="text/css">
+<link href="https://aimeat.io/lib/aimeat-theme.css" rel="stylesheet" type="text/css">
+<link href="https://aimeat.io/lib/aimeat-daisyui-bridge.css" rel="stylesheet" type="text/css">
+<script src="https://aimeat.io/lib/tailwindcss@4.js"></script>
+<style>
+  /* Only structure — never colour. Wide content scrolls inside its own box so the page body never
+     scrolls sideways on a phone (appdev pitfall grid-track-blowout). */
+  .scroll-x{ overflow-x:auto; min-width:0 }
+  .md h1,.md h2{ font-size:var(--text-title); margin:1.4rem 0 .4rem; font-weight:650 }
+  .md h3{ margin:1rem 0 .3rem; font-weight:600 }
+  .md p{ margin:.4rem 0 } .md ul{ margin:.4rem 0 .4rem 1.2rem; list-style:disc }
+  .md a{ text-decoration:underline }
+  .md pre,pre.raw{ white-space:pre-wrap; word-break:break-word }
+</style>
+</head>
+<body class="bg-base-100 text-base-content min-h-screen">
+<div class="navbar bg-base-200 border-b border-base-300 sticky top-0 z-10 gap-1 flex-wrap">
+  <span class="font-semibold px-2">☀️ Aamukatsaus</span>
+  <div role="tablist" class="tabs tabs-box tabs-sm">
+    <button role="tab" class="tab tab-active" data-tab="katsaus">Katsaus</button>
+    <button role="tab" class="tab" data-tab="pulssi">Pulssi</button>
+    <button role="tab" class="tab" data-tab="jono">Jono</button>
+    <button role="tab" class="tab" data-tab="grok">Grok</button>
+  </div>
+  <div class="flex-1"></div>
+  <span id="header-auth"></span>
+</div>
+<main class="max-w-4xl mx-auto p-4 pb-24">
+  <div id="status" class="opacity-70 py-8 text-center">Ladataan…</div>
+  <div id="view"></div>
+</main>
+<script>
+/* The ONE writer whose public mirror this app reads (crewaimeat.share_public). Everything else is
+   discovered from the index it publishes: getPublic() needs an EXACT key and there is no public
+   listing, so without the index the archive and date pickers would be impossible. */
+const PUB_GAII="postman#happydude500001@aimeat-finland-001-genesis";
+const INDEX_KEY="aamukatsaus.share.index";
+const KEY_BRIEF="mail.morning.public", KEY_PULSE="mail.pulse", KEY_QUEUE="some.queue.latest", KEY_GROK="some.grok";
+let TAB="katsaus", BRIEF_DATE=null, INDEX=null, SESSION=null;
+
+const esc=s=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const linkify=s=>esc(s).replace(/(https?:\/\/[^\s<)"']+)/g,'<a class="link" href="$1" target="_blank" rel="noopener">$1</a>');
+const num=n=>(n==null?"–":typeof n==="number"?n.toLocaleString("fi-FI"):String(n));
+const usd=n=>(n==null?"–":"$"+Number(n).toFixed(4));
+
+/* ── data ─────────────────────────────────────────────────────────────────────
+   PUBLIC FIRST, so a colleague who was given the link sees exactly what the owner sees, without an
+   account. The authenticated read is a FALLBACK for the owner only: the public mirror is rebuilt
+   once a day, so between the agents writing and the mirror running the owner would otherwise see
+   stale data. Agent-written keys need ownerScope (spec §Namespace rule) and meta:true keeps a
+   listing from inlining every value. */
+async function pub(key){
+  try{ return await AIMEAT.data.getPublic(PUB_GAII, key); }catch(e){ return null; }
+}
+async function ownList(prefix){
+  if(!SESSION) return [];
+  try{
+    const r=await AIMEAT.data.list({prefix, ownerScope:true, meta:true});
+    return ((r&&r.items)||[]).filter(i=>i&&typeof i.key==="string");
+  }catch(e){ return []; }
+}
+async function ownGet(key){
+  if(!SESSION) return null;
+  try{ return await AIMEAT.data.get(key,{ownerScope:true}); }catch(e){ return null; }
+}
+/* One value: the shared copy if there is one, otherwise the owner's own. */
+async function val(publicKey, ownerKey){
+  const p=await pub(publicKey);
+  if(p!=null) return p;
+  return ownerKey?await ownGet(ownerKey):null;
+}
+async function loadIndex(){
+  if(INDEX) return INDEX;
+  INDEX=(await pub(INDEX_KEY))||{briefing:[],pulse:[],grok:[],queue:null};
+  return INDEX;
+}
+const dayOf=k=>String(k||"").slice(-10);
+const isDay=k=>/\d{4}-\d{2}-\d{2}$/.test(String(k||""));
+
+/* Minimal markdown — the briefing is authored as markdown by postman and the CSP forbids loading a
+   parser, so this covers exactly what the mail emits: headings, bold, italics, links, bullets. */
+function md(src){
+  const out=[]; let list=false;
+  for(const line of String(src||"").split("\n")){
+    const h=esc(line).replace(/\*\*(.+?)\*\*/g,"<b>$1</b>")
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,'<a class="link" href="$2" target="_blank" rel="noopener">$1</a>')
+      .replace(/(^|[\s(])(https?:\/\/[^\s<)"']+)/g,'$1<a class="link" href="$2" target="_blank" rel="noopener">$2</a>')
+      .replace(/(^|\s)_([^_]+)_(?=\s|$)/g,"$1<i>$2</i>");
+    const close=()=>{ if(list){ out.push("</ul>"); list=false; } };
+    if(/^###\s/.test(line)){ close(); out.push("<h3>"+h.replace(/^###\s/,"")+"</h3>"); }
+    else if(/^##\s/.test(line)){ close(); out.push("<h2>"+h.replace(/^##\s/,"")+"</h2>"); }
+    else if(/^#\s/.test(line)){ close(); out.push("<h1>"+h.replace(/^#\s/,"")+"</h1>"); }
+    else if(/^[-*]\s/.test(line)||/^\d+\.\s/.test(line)){
+      if(!list){ out.push("<ul>"); list=true; }
+      out.push("<li>"+h.replace(/^[-*]\s/,"").replace(/^\d+\.\s/,"")+"</li>"); }
+    else if(!line.trim()) close();
+    else { close(); out.push("<p>"+h+"</p>"); }
+  }
+  if(list) out.push("</ul>");
+  return out.join("\n");
+}
+const card=(inner,cls="")=>'<div class="card bg-base-200 border border-base-300 mb-3 '+cls+'"><div class="card-body p-4 min-w-0">'+inner+"</div></div>";
+const stat=(v,label,tone="")=>'<div class="card bg-base-200 border border-base-300"><div class="card-body p-3 min-w-0">'+
+  '<div class="text-2xl font-semibold '+tone+'">'+v+'</div><div class="text-xs opacity-70">'+esc(label)+"</div></div></div>";
+const empty=(t,s)=>'<div class="text-center opacity-70 py-16"><div class="font-semibold mb-1">'+esc(t)+
+  '</div><div class="text-sm">'+esc(s||"")+"</div></div>";
+
+/* ── Katsaus ─────────────────────────────────────────────────────────────── */
+async function viewKatsaus(el){
+  const idx=await loadIndex();
+  const days=(idx.briefing||[]).filter(isDay);
+  const key=(BRIEF_DATE&&days.find(k=>dayOf(k)===BRIEF_DATE))||days[0]||null;
+  const rec=key?await pub(key):await val(KEY_BRIEF+".latest", KEY_BRIEF+".latest");
+  if(!rec) return el.innerHTML=empty("Ei vielä yhtään raporttia",
+    "Aamuraportti julkaisee mail.morning.public.* seuraavassa ajossa.");
+  const label=key?dayOf(key):(rec.date||"viimeisin");
+  let h='<div class="flex flex-wrap items-center gap-3 mb-3"><h1 class="text-xl font-semibold">'+esc(label)+"</h1>";
+  if(days.length) h+='<select id="d" class="select select-sm select-bordered">'+days.map(k=>{
+    const v=dayOf(k); return '<option'+(k===key?" selected":"")+">"+esc(v)+"</option>"; }).join("")+"</select>"+
+    '<span class="text-sm opacity-70">'+days.length+" päivää arkistossa</span>";
+  else h+='<span class="badge badge-warning badge-sm">arkisto alkaa seuraavasta ajosta</span>';
+  h+="</div>";
+  el.innerHTML=h+card('<div class="md min-w-0">'+md(rec.body_md||"(raporttia ei voitu lukea)")+"</div>");
+  const sel=el.querySelector("#d");
+  if(sel) sel.onchange=e=>{ BRIEF_DATE=e.target.value; render(); };
+}
+
+/* ── Pulssi ──────────────────────────────────────────────────────────────── */
+async function viewPulssi(el){
+  const idx=await loadIndex();
+  const p=await val("mail.pulse.public.latest", KEY_PULSE+".latest");
+  if(!p) return el.innerHTML=empty("Pulssidataa ei vielä ole","crewaimeat.pulse kirjoittaa sen aamuajossa.");
+  const e=p.edition||{}, s=(p.spend||{}).totals||{}, by=(p.spend||{}).by_agent||[];
+  const done=(e.articles||0)>=12&&e.editorial;
+  let h='<h1 class="text-xl font-semibold">Pulssi</h1><div class="text-sm opacity-70 mb-3">Mitattu '+
+    esc(p.generated_at||"")+" · ikkuna "+(p.window_hours||24)+" h</div>";
+  h+='<div class="grid grid-cols-2 md:grid-cols-3 gap-2 mb-4">'+
+    stat(num(e.articles),"artikkelia"+(done?" · lehti valmis":" · vajaa"),done?"text-success":"text-warning")+
+    stat(num(e.raw_categories),"raw-kategoriaa")+stat(num(e.keys),"muistiavainta / painos")+
+    stat(num(s.calls),"LLM-kutsua")+stat(usd(s.cost_usd),"kulut 24 h")+stat(num(s.total_tokens),"tokenia")+"</div>";
+  if(by.length) h+='<h2 class="font-semibold mb-2">Kulut agenteittain</h2>'+card('<div class="scroll-x">'+
+    '<table class="table table-sm"><thead><tr><th>agentti</th><th>kutsuja</th><th>tokeneita</th><th>$</th></tr></thead><tbody>'+
+    by.map(g=>"<tr><td>"+esc(g.agent)+"</td><td>"+num(g.calls)+"</td><td>"+num(g.tokens)+"</td><td>"+usd(g.cost_usd)+"</td></tr>").join("")+
+    "</tbody></table></div>");
+  if((p.memory||[]).length) h+='<h2 class="font-semibold mb-2">Muistiin kirjoitettu</h2>'+card('<div class="scroll-x">'+
+    '<table class="table table-sm"><thead><tr><th>nimiavaruus</th><th>avainta</th></tr></thead><tbody>'+
+    p.memory.map(m=>"<tr><td>"+esc(m.namespace)+"</td><td>"+num(m.written)+"</td></tr>").join("")+"</tbody></table></div>");
+  const days=(idx.pulse||[]).filter(isDay).slice(0,14);
+  if(days.length>1){
+    const rows=[];
+    for(const k of days){ const r=await pub(k); if(r) rows.push([dayOf(k),(r.edition||{}).articles,((r.spend||{}).totals||{}).calls,((r.spend||{}).totals||{}).cost_usd]); }
+    h+='<h2 class="font-semibold mb-2">Viime päivät</h2>'+card('<div class="scroll-x">'+
+      '<table class="table table-sm"><thead><tr><th>päivä</th><th>artikkeleita</th><th>LLM-kutsuja</th><th>$</th></tr></thead><tbody>'+
+      rows.map(r=>"<tr><td>"+esc(r[0])+"</td><td>"+num(r[1])+"</td><td>"+num(r[2])+"</td><td>"+usd(r[3])+"</td></tr>").join("")+
+      "</tbody></table></div>");
+  }
+  el.innerHTML=h;
+}
+
+/* ── Jono ────────────────────────────────────────────────────────────────── */
+async function viewJono(el){
+  const q=await val("some.queue.public.latest", KEY_QUEUE);
+  if(!q) return el.innerHTML=empty("Jonoa ei ole vielä koottu","crewaimeat.review_queue.publish() kirjoittaa some.queue.latest.");
+  const b=q.backlog||{}, items=q.items||[];
+  let h='<h1 class="text-xl font-semibold">Katselmointijono</h1><div class="text-sm opacity-70 mb-3">Koottu '+
+    esc(q.generated_at||"")+" · enintään "+(q.fresh_days||7)+" vrk vanhat</div>";
+  h+='<div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">'+
+    stat(num(items.length),"odottaa sinua","text-success")+stat(num(b.drafts_expired),"vanhentunut","text-warning")+
+    stat(num(b.opportunities_total),"osumaa yhteensä")+
+    stat(num(b.posted_total),"koskaan postattu",(b.posted_total||0)>0?"text-success":"text-error")+"</div>";
+  if(b.note) h+=card('<span class="text-sm opacity-80">'+esc(b.note)+"</span>");
+  if(!items.length) h+=empty("Ei tuoreita luonnoksia","Kaikki ajankohtainen on käsitelty.");
+  for(const it of items){
+    h+='<details class="collapse collapse-arrow bg-base-200 border border-base-300 mb-2"><summary class="collapse-title min-w-0">'+
+      '<div class="flex flex-wrap items-center gap-2"><span class="badge badge-sm badge-primary">fit '+num(it.fit_score)+"</span>"+
+      '<span class="badge badge-sm badge-ghost">'+esc(it.platform||"?")+"</span>"+
+      '<span class="font-semibold">'+esc(it.title)+"</span></div>"+
+      (it.url?'<a class="link text-sm" href="'+esc(it.url)+'" target="_blank" rel="noopener">Avaa ketju →</a>'
+             :'<span class="text-sm text-error">linkki puuttuu</span>')+
+      '</summary><div class="collapse-content min-w-0">'+
+      (it.summary?'<p class="text-sm opacity-80 mb-1">'+esc(it.summary)+"</p>":"")+
+      (it.angle?'<p class="text-sm mb-2"><b>Kulma:</b> '+esc(it.angle)+"</p>":"")+
+      '<pre class="raw bg-base-300 rounded p-3 text-sm">'+linkify(it.draft||"(luonnos tyhjä)")+"</pre>"+
+      '<div class="text-xs opacity-60 mt-1">'+esc(it.id)+" · löydetty "+esc(it.found_date||"?")+"</div></div></details>";
+  }
+  el.innerHTML=h;
+}
+
+/* ── Grok ────────────────────────────────────────────────────────────────── */
+function grokPromptFrom(body){
+  const m=String(body||"").match(/## Grok-ajo[\s\S]*?```([\s\S]*?)```/);
+  return m?m[1].trim():"";
+}
+async function viewGrok(el){
+  const idx=await loadIndex();
+  const brief=await val(KEY_BRIEF+".latest", KEY_BRIEF+".latest")||await pub((idx.briefing||[])[0]||"");
+  const prompt=grokPromptFrom(brief&&brief.body_md);
+  let h='<h1 class="text-xl font-semibold">Grok-ajo</h1><div class="text-sm opacity-70 mb-3">'+
+    "Aja prompti Grokissa ja liitä tuloste tähän. Agentti jäsentää sen, vie osumat Social Radarille ja arkistoi ajon.</div>";
+  h+=card('<div class="flex items-center gap-3 mb-2"><b>Prompti</b>'+
+    '<button id="copy" class="btn btn-xs"'+(prompt?"":" disabled")+">Kopioi</button></div>"+
+    '<pre class="raw bg-base-300 rounded p-3 text-sm">'+esc(prompt||"(promptia ei löytynyt viimeisimmästä raportista)")+"</pre>");
+  h+=card("<b>Grokin tuloste</b>"+
+    '<p class="text-sm opacity-70 mb-2">Yksi rivi per osuma: <code>SCORE | PLATFORM | TITLE | URL | WHY</code></p>'+
+    (SESSION
+      ? '<textarea id="paste" class="textarea textarea-bordered w-full font-mono text-sm" rows="9" placeholder="Liitä Grokin tuloste tähän sellaisenaan…"></textarea>'+
+        '<div class="flex items-center gap-3 mt-2"><button id="send" class="btn btn-sm btn-primary">Tallenna jäsennettäväksi</button>'+
+        '<span id="sent" class="text-sm opacity-70"></span></div>'
+      // Reading is open to anyone with the link; WRITING needs an account, because the paste lands
+      // in the writer's own namespace and only the owner's agents drain that inbox.
+      : '<div class="alert alert-info text-sm">Kirjaudu (oikea yläkulma) tallentaaksesi ajon. Promptin voi kopioida ilman kirjautumista.</div>'));
+  const gDays=((await loadIndex()).grok||[]).filter(isDay).slice(0,10);
+  if(gDays.length){
+    h+='<h2 class="font-semibold mb-2">Arkisto</h2>';
+    for(const gk of gDays){
+      const rec=await pub(gk), runs=(rec&&rec.runs)||[];
+      h+='<details class="collapse collapse-arrow bg-base-200 border border-base-300 mb-2">'+
+        '<summary class="collapse-title"><b>'+esc(dayOf(gk))+'</b> <span class="opacity-70 text-sm">'+
+        runs.length+" ajo(a)</span></summary><div class=\"collapse-content min-w-0\">"+
+        runs.map(r=>{ const res=r.result||{};
+          return '<div class="flex flex-wrap gap-2 mb-1"><span class="badge badge-sm badge-success">'+num(res.added)+" lisätty</span>"+
+            '<span class="badge badge-sm badge-ghost">'+num(res.skipped)+" jo tiedossa</span>"+
+            (res.rejected?'<span class="badge badge-sm badge-error">'+num(res.rejected)+" hylätty</span>":"")+
+            '<span class="text-xs opacity-60">'+esc(r.pasted_at||"")+" · "+esc(r.by||"")+"</span></div>"+
+            '<pre class="raw bg-base-300 rounded p-2 text-xs">'+esc((r.text||"").slice(0,1200))+"</pre>"; }).join("")+
+        "</div></details>";
+    }
+  }
+  el.innerHTML=h;
+  const copy=el.querySelector("#copy");
+  if(copy) copy.onclick=async()=>{ try{ await navigator.clipboard.writeText(prompt); copy.textContent="Kopioitu ✓"; }
+    catch(e){ copy.textContent="Kopiointi ei onnistunut"; } };
+  const send=el.querySelector("#send");
+  if(send) send.onclick=async()=>{
+    const ta=el.querySelector("#paste"), btn=el.querySelector("#send"), note=el.querySelector("#sent");
+    const text=(ta.value||"").trim();
+    if(!text){ note.textContent="Liitä ensin tuloste."; return; }
+    btn.disabled=true; note.textContent="Tallennetaan…";
+    try{
+      const ts=new Date().toISOString().replace(/[-:]/g,"").slice(0,15);
+      await AIMEAT.data.set("some.grok.inbox."+ts,
+        {pasted_at:new Date().toISOString(),by:"app",text:text,status:"pending"},{visibility:"owner"});
+      ta.value=""; note.textContent="Tallennettu ✓ — agentti jäsentää sen seuraavassa ajossa.";
+    }catch(e){ note.textContent="Tallennus ei onnistunut: "+((e&&e.message)||e); }
+    btn.disabled=false;
+  };
+}
+
+/* ── shell ───────────────────────────────────────────────────────────────── */
+const VIEWS={katsaus:viewKatsaus,pulssi:viewPulssi,jono:viewJono,grok:viewGrok};
+async function render(){
+  const el=document.getElementById("view"), st=document.getElementById("status");
+  st.textContent="Ladataan…"; el.innerHTML="";
+  try{ await VIEWS[TAB](el); st.textContent=""; }
+  catch(e){ st.innerHTML='<div class="alert alert-error">Näkymän lataus epäonnistui: '+esc((e&&e.message)||e)+"</div>"; }
+}
+document.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{
+  TAB=b.dataset.tab;
+  document.querySelectorAll("[data-tab]").forEach(x=>x.classList.toggle("tab-active",x===b));
+  render();
+});
+function loadScript(src){ return new Promise((res,rej)=>{ const s=document.createElement("script");
+  s.src=src; s.onload=res; s.onerror=()=>rej(new Error("skriptin lataus epäonnistui: "+src));
+  document.head.appendChild(s); }); }
+async function boot(){
+  const st=document.getElementById("status");
+  // /v1/libs/ — NOT /lib/, which is the CSS/vendor path and 404s for these two (curated pitfall
+  // invented-lib-urls). Verified against the spec and with a live request before publishing.
+  try{ await loadScript("https://aimeat.io/v1/libs/aimeat-auth.js"); await loadScript("https://aimeat.io/v1/libs/aimeat-data.js"); }
+  catch(e){ st.textContent=String((e&&e.message)||e); return; }
+  // BOTH auth paths (curated pitfall handle-both-auth-paths): the silent restore below, and the
+  // onLogin callback for a fresh sign-in through the pill.
+  if(AIMEAT.auth.mountLoginButton)
+    AIMEAT.auth.mountLoginButton("#header-auth",{
+      onLogin:s=>{ SESSION=s||AIMEAT.auth.getSession(); INDEX=null; render(); },
+      onLogout:()=>{ SESSION=null; INDEX=null; render(); }});
+  try{ SESSION=(await AIMEAT.auth.login())||AIMEAT.auth.getSession(); }catch(e){ SESSION=null; }
+  // NO login gate on reading. The data is a public mirror, so a colleague opens the link and sees
+  // exactly what the owner sees; signing in only adds the owner's fresher un-mirrored copy and the
+  // ability to submit a Grok run.
+  render();
+}
+boot();
+</script>
+</body>
+</html>

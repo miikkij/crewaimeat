@@ -4,7 +4,8 @@ The actual work (curated feeds + SearXNG search + ALWAYS trafilatura full-text s
 in plain code — `crewaimeat.fetch_pipeline.build_edition_raw`. Scraping a page is not a judgement call, so it
 is NOT left to the LLM: the old crew-driven researcher kept skipping trafilatura and storing 1-line snippets.
 This crew is now a thin wrapper: the agent only resolves the target date+edition from the request and calls
-`fetch_edition_raw` ONCE; the tool scrapes everything deterministically and writes rich raw.
+`fetch_edition_raw` ONCE; the tool scrapes everything deterministically and writes rich raw — as ONE
+`news.<date>.<edition>.raw` record, not one key per category.
 
 Register + approve, then run:
   npx aimeat@latest connect add --agent news-fetcher --mode task-runner --url https://aimeat.io --owner <you>
@@ -23,8 +24,15 @@ AGENT_NAME = "news-fetcher"
 README = """[[FIGLET:slant]["News Fetcher"]]
 
 Deterministic Finnish news fetch: curated RSS feeds + SearXNG search + **always-on trafilatura full-text
-scraping** per category, written to `news.<date>.<edition>.raw.<category>`. The scraping runs in code, not at
-the LLM's discretion, so the raw is real article bodies — never stubs.
+scraping** per category, written to ONE key — `news.<date>.<edition>.raw`, every category under its
+`categories` field. The scraping runs in code, not at the LLM's discretion, so the raw is real article
+bodies — never stubs.
+
+**Retention:** the raw key is written with `ttl_hours = 14 days`, so the node expires it by itself — no
+prune step to schedule and forget. Raw is scraped SOURCE material: the desks read it while the edition is
+being made and nobody reads it afterwards. It only became expirable once it was one key a day; as 21 keys
+an expiry was 21 chances to age out half a day's sources mid-run. **Nothing else in the edition expires** —
+the articles, editorial, quiz and front-page index are the published newspaper.
 
 **How to task me:** "Hae <date> <edition> uutiset" — I resolve the date/edition and run the deterministic fetch.
 """

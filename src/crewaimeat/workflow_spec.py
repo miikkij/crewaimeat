@@ -13,8 +13,10 @@ A signal is a tree evaluated against owner memory with `{var}` templated from th
   comp  {all:[...]} | {any:[...]} | {when:<sig>, then:<sig>}
   the literal "none"                                        — no gate, always OK
 
-Deterministic checks: exists · nonempty · count_nonempty(min) · json_valid ·
+Deterministic checks: exists · nonempty · count_nonempty(min[, path]) · json_valid ·
 json_field(path, min|equals|nonempty). Pure functions over a fake memory map are unit-tested.
+`count_nonempty` with a `path` counts the non-empty entries INSIDE one record instead of counting
+matching keys — what a producer that consolidated N keys into one still needs to prove.
 """
 
 from __future__ import annotations
@@ -135,8 +137,24 @@ def check_signal(node: Any, vars: dict, lister, llm_judge=None) -> tuple[bool, s
     check = node.get("op") or node.get("check") or "exists"  # node grammar uses `op`; `check` kept as alias
     ents = _entries(lister, key_glob)
     if check == "count_nonempty":
-        n = sum(1 for e in ents if _nonempty(e.get("value")))
         need = int(node.get("min", 1))
+        # With a `path`, count the non-empty entries INSIDE one record instead of counting matching
+        # keys — the same question ("did at least N of them arrive?") asked of data that now lives in
+        # one value. An object counts its values, an array its items; anything else counts as zero,
+        # because "how many entries" has no answer for a scalar and inventing one would let a signal
+        # pass on a record shaped nothing like what the producer promised.
+        if node.get("path"):
+            obj = _as_obj(ents[0].get("value")) if ents else None
+            container = _dig(obj, node["path"]) if obj is not None else None
+            if isinstance(container, dict):
+                vals = list(container.values())
+            elif isinstance(container, list):
+                vals = container
+            else:
+                vals = []
+            n = sum(1 for v in vals if _nonempty(v))
+            return n >= need, f"{n} nonempty in {key_glob}.{node['path']} (need {need})"
+        n = sum(1 for e in ents if _nonempty(e.get("value")))
         return n >= need, f"{n} nonempty at {key_glob} (need {need})"
     val = ents[0].get("value") if ents else None
     if check == "exists":
@@ -176,7 +194,7 @@ def check_signal(node: Any, vars: dict, lister, llm_judge=None) -> tuple[bool, s
 # instead of hand-rolling them; this module keeps only the crew-specific EVALUATOR (check_signal /
 # check_workflow — the package builds+validates but does not evaluate), the WORKFLOWS definition, and
 # node_definition(). Each entry also carries deliverable_location.key — where the agent WRITES.
-_RAW = "news.{date}.{edition}.raw.*"
+_RAW = "news.{date}.{edition}.raw"  # ONE key; every category under its `categories` field
 _ART = "news.{date}.{edition}.article.*"
 _QUIZ = "news.{date}.{edition}.quiz"
 _EDITORIAL = "news.{date}.{edition}.editorial"
@@ -185,11 +203,27 @@ _RAW_MIN = 12  # ~20 categories fetched; loud floor
 _ART_MIN = 12  # the day's article set across both desks
 _DOWN_MIN = 3  # features/editorial just need a handful to work on
 
+
+def _count_in(key: str, path: str, min: int) -> dict:  # noqa: A002 — `min` mirrors the node's field name
+    """`count_nonempty` scoped to a PATH INSIDE one record, rather than across matching keys.
+
+    The node's signal grammar grew `path` when the raw stopped being 21 keys and became one; the
+    published builder (`aimeat_crewai.workflow_spec.Sig`) predates it, so the leaf is built by Sig —
+    which still validates the op and the integer `min` — and the field added on top. When Sig learns
+    `path`, this collapses into a plain `Sig.count_nonempty(key=…, path=…)` call."""
+    return {**Sig.count_nonempty(key=key, min=min), "path": path}
+
+
+# The fetch step's gate: >= 12 non-empty categories INSIDE news.<date>.<edition>.raw. It used to
+# count matching raw.* KEYS; counting entries inside the one record is the same question asked of
+# the new shape, and it is why the categories sit under a field instead of at the record root.
+_RAW_SIG = _count_in(_RAW, "categories", _RAW_MIN)
+
 AGENT_SIGNALS: dict[str, dict] = {
     # offer id -> {required_to_function, success_signal, deliverable_location}
     "fetch-edition-raw": {
         "required_to_function": NONE,  # reads live feeds, not memory — no input gate
-        "success_signal": Sig.count_nonempty(key_glob=_RAW, min=_RAW_MIN),
+        "success_signal": _RAW_SIG,
         "deliverable_location": {"key": _RAW},
     },
     # Desk A + Desk B both write into the shared news.<date>.<edition>.article.* namespace
@@ -197,13 +231,17 @@ AGENT_SIGNALS: dict[str, dict] = {
     # is the article set filling up. NB the shared namespace means one desk's count can include the
     # other's — the gate reliably catches the whole-pipeline-dry failure (the 06-12 class) even if it
     # can't perfectly attribute a single silent desk.
+    # Both desks' INPUT moves to the new raw shape with the fetcher, in the same deploy: the workflow
+    # gates on these, so descriptors ahead of the fetcher make every run input-red and descriptors
+    # behind it make every run output-red. Their OUTPUT signal is untouched — it counts article.*
+    # keys, and the articles are not changing.
     "evening-write-a": {
-        "required_to_function": Sig.count_nonempty(key_glob=_RAW, min=_RAW_MIN),
+        "required_to_function": _RAW_SIG,
         "success_signal": Sig.count_nonempty(key_glob=_ART, min=_ART_MIN),
         "deliverable_location": {"key": _ART},
     },
     "evening-write-b": {
-        "required_to_function": Sig.count_nonempty(key_glob=_RAW, min=_RAW_MIN),
+        "required_to_function": _RAW_SIG,
         "success_signal": Sig.count_nonempty(key_glob=_ART, min=_ART_MIN),
         "deliverable_location": {"key": _ART},
     },

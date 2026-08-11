@@ -1140,7 +1140,8 @@ _CREW_OFFERS: dict[str, list[dict]] = {
                 "## Edition raw — 2026-06-16 evening (per category)\n\n"
                 "- **talous:** 6 lähdettä, full-text poimittu ✓\n"
                 "- **politiikka:** 5 ✓ · **urheilu:** 7 ✓ · **tiede:** 4 ✓ … (20 kategoriaa)\n\n"
-                "Yhteensä 112 artikkelin raakateksti tallennettu `news.2026-06-16.evening.raw.*`. "
+                "Yhteensä 112 artikkelin raakateksti tallennettu YHTEEN avaimeen "
+                "`news.2026-06-16.evening.raw` (kategoriat sen `categories`-kentässä). "
                 "Ei LLM:ää — haku + ekstraktio koodissa.\n\n…"
             ),
         },

@@ -4,6 +4,43 @@ Notable changes to crewaimeat. Format loosely follows [Keep a Changelog](https:/
 Dates are the working dates; entries are **uncommitted and take effect on the next fleet restart**
 (the daemons import the modules at start).
 
+## [Unreleased] — 2026-08-09
+
+### Changed
+- **Sanomat evening pipeline: 44 memory keys per edition → ~25, plus a shared status record.**
+  Measured on aimeat.io 2026-08-09: `news.*` held 2,993 keys over 68 edition-days and grew 44 a run
+  with nothing ageing it out. The shipped per-principal ceiling is 1000 (`AIMEAT_MEMORY_MAX_KEYS`);
+  aimeat.io runs 100,000, which no other node does — so at 44 keys/run a default-configured node
+  exhausted itself in 23 edition-days. One value holds 1024 kB and a day's whole raw measures 457 kB
+  median / 515 kB at the worst observed day, so the 21-way split was a habit, not a requirement.
+  - **One raw key.** `news.<date>.<edition>.raw.<category>` ×21 → `news.<date>.<edition>.raw` with
+    `{fetchedAt, categories:{…}}`. Categories sit under a FIELD so the success signal can point at
+    exactly the payload and metadata can live beside it. A single plain write (news-fetcher is the
+    only writer of that key), guarded: over 800 kB it says so LOUDLY at 17:00 rather than surprising
+    the run with a 413. Measured in UTF-8 bytes — Finnish raw is full of two-byte characters, so a
+    character count under-reports the thing being capped.
+  - **Retention.** The raw key is written with `ttl_hours = 14 days`, so the node expires it itself.
+    Raw is scraped source nobody reads after the edition ships; it only became expirable once it was
+    one key a day. **Nothing else expires** — articles, editorial, quiz and front-page index are the
+    published newspaper.
+  - **A shared status record** (`news.<date>.<edition>.status`, new `crewaimeat.edition_status`).
+    Six steps patch ONLY their own field through `PATCH /v1/memory/:key` (RFC 7386 merge patch, the
+    node compare-and-swaps and retries a lost swap). `owner_scope` is baked in, not a caller's
+    argument: memory is keyed by the WRITER, so six agents patching "one key" without it produce SIX
+    records in six namespaces and nothing merges — with every write returning ok. Verified against
+    aimeat.io: three agents, distinct fields, version 1→2→3, one record under the owner GHII.
+  - **Offer descriptors moved in the same deploy**, because the workflow gates on them: descriptors
+    ahead of the fetcher = every run input-red, behind it = output-red. `fetch-edition-raw` and both
+    desks' `required_to_function` now use `count_nonempty` with `path: "categories"` (count entries
+    INSIDE one record instead of matching keys). Signals that glob `article.*` are untouched — the
+    articles are not changing, and each keeps its own `ai_provenance_id` behind the app's per-article
+    AI label.
+  - Forward-only: the 68 published editions are NOT rewritten. The desks read the new key and fall
+    back per category to the old ones, which also covers `lukijoilta` — written by sanomat-desk as
+    reader tips arrive by DM, long after the 17:00 fetch, so it keeps its own key.
+  - New: `scripts/verify_edition_consolidation.py` (read-only, works off-fleet) checks the key count,
+    the raw record, that the status record is ONE owner-held record, and every step's signals.
+
 ## [Unreleased] — 2026-07-13
 
 ### Added

@@ -806,6 +806,74 @@ def _aimeat_call(
     return None
 
 
+def _aimeat_rest(
+    agent_name: str, method: str, path: str, body: dict | None = None, *, retries: int = 3, backoff: float = 1.5
+) -> dict | None:
+    """Deterministic REST call on the agent's behalf (a `/v1/...` node route). No LLM.
+
+    The sibling of `_aimeat_call` for routes the connector publishes no MCP tool for — today that is
+    PATCH /v1/memory/:key (the RFC 7386 merge patch six crews use to share one status record). Same
+    transport and the same retry policy: the loopback serve daemon proxies ANY /v1 path over its
+    persistent tunnel, so an in-fleet call costs one keep-alive request.
+
+    Fallback when no daemon is running: a DIRECT authed request with the agent's stored token. That
+    path deliberately differs from `_aimeat_call`'s subprocess fallback — `aimeat connect call` only
+    reaches TOOLS, and a REST route has none — and it is the one that keeps off-fleet scripts honest
+    (the connector tool surface returns empty off-fleet; a direct authed call really works or really
+    fails).
+
+    Returns the envelope's `data` on success, None on failure (logged loud)."""
+    for attempt in range(retries):
+        last = attempt + 1 >= retries
+        api = _serve_api()
+        try:
+            if api is not None:
+                base, session = api
+                r = session.request(
+                    method, f"{base}{path}", json=body, headers={"X-Aimeat-Agent": agent_name}, timeout=60
+                )
+            else:
+                if _aimeat_read_token is None:
+                    print(f"[{agent_name}] {method} {path}: no daemon and no token reader", file=sys.stderr)
+                    return None
+                token, node_url = _aimeat_read_token(agent_name)
+                r = requests.request(
+                    method,
+                    f"{node_url.rstrip('/')}{path}",
+                    json=body,
+                    headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                    timeout=60,
+                )
+        except requests.RequestException as exc:
+            _serve_reset()  # daemon gone mid-flight -> re-discover it on the next try
+            if last:
+                print(f"[{agent_name}] {method} {path} failed ({exc}); gave up after {retries} tries", file=sys.stderr)
+                return None
+            print(f"[{agent_name}] {method} {path} failed ({exc}); retry {attempt + 1}/{retries}", file=sys.stderr)
+            time.sleep(backoff * (2**attempt))
+            continue
+        try:
+            env = r.json()
+        except ValueError:
+            print(f"[{agent_name}] {method} {path} returned non-JSON (HTTP {r.status_code})", file=sys.stderr)
+            return None
+        if r.status_code >= 400 or not (isinstance(env, dict) and env.get("ok")):
+            err = (env or {}).get("error") if isinstance(env, dict) else None
+            # A 5xx / tunnel hiccup is worth another try; a 400/403 (malformed patch, missing scope)
+            # is the node's verdict and must fail fast and LOUD — it is a bug in us, not weather.
+            if (r.status_code >= 500 or _is_transient_error(err)) and not last:
+                _serve_reset()
+                print(
+                    f"[{agent_name}] {method} {path} transient ({err}); retry {attempt + 1}/{retries}", file=sys.stderr
+                )
+                time.sleep(backoff * (2**attempt))
+                continue
+            print(f"[{agent_name}] {method} {path} failed: HTTP {r.status_code} {err or ''}", file=sys.stderr)
+            return None
+        return env.get("data")
+    return None
+
+
 def _aimeat_call_subprocess(agent_name: str, tool: str, payload: dict) -> dict | None:
     """Legacy one-shot `aimeat connect call` subprocess (Windows: cmd /c). Kept as the fallback
     for environments without the loopback daemon."""
@@ -1984,6 +2052,12 @@ def run_crew(spec: CrewSpec) -> None:
     [liaison, *your domain agents] with tasks [*your domain tasks, finalize] and
     runs it. Stop with Ctrl+C.
     """
+    # .env + shadowing report. Idempotent, so the fleet host (which already called it) pays nothing;
+    # this call is what covers a crew started on its own (watchdog.ps1 -> crews/<name>_crew.py), which
+    # never goes through the host. See crewaimeat.env_guard for what this prevents.
+    from crewaimeat.env_guard import load_env
+
+    load_env()
     # A rare native crash (observed: Windows exit 0xC0000409) leaves no Python traceback by
     # default. faulthandler dumps the C/Python stack on a fatal signal so the NEXT one is
     # diagnosable instead of a silent exit code; harmless when nothing crashes.

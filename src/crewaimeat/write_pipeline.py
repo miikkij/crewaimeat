@@ -15,6 +15,7 @@ import json
 from aimeat_crewai.provenance import HumanInvolvement, Level, Method, declare, source
 
 from crewaimeat.aimeat_crew import _aimeat_call
+from crewaimeat.edition_status import step_status
 from crewaimeat.llm import get_llm, resolved_model, resolved_provider
 from crewaimeat.prose_style import FINNISH_NATIVE_STYLE
 
@@ -95,11 +96,50 @@ def _coerce_list(v) -> list:
     return v if isinstance(v, list) else []
 
 
+def _read_edition_raw(agent_name: str, date: str, edition: str) -> dict | None:
+    """The edition's ONE raw record as {category: [items]}, or None when that key does not exist.
+
+    None means "this edition predates the single-key raw" and the caller falls back to the old
+    per-category keys — which is what lets the fetcher and the desks ship in the same deploy without
+    a flag day, and lets every one of the 68 already-published editions keep working untouched.
+    Distinct from {}: an EMPTY categories map is a real (if useless) new-shape record, not an absence.
+
+    Raises RawReadError on a transport-level failure, for the same reason `_read_raw` does: a tunnel
+    drop that reads as 'no raw' silently drops the whole desk."""
+    key = f"news.{date}.{edition}.raw"
+    # quiet=True for the same reason as in _read_raw: news-fetcher wrote it, so the writer's own-gaii
+    # probe is DESIGNED to miss and its NOT_FOUND line reads like a failure mid-healthy-edition.
+    r = _aimeat_call(agent_name, "aimeat_memory_read", {"key": key}, quiet=True)
+    value = r.get("value") if isinstance(r, dict) else None
+    if value is None:
+        lr = _aimeat_call(agent_name, "aimeat_memory_list", {"owner_scope": True, "prefix": key})
+        if lr is None:
+            raise RawReadError(f"raw read failed for {date} {edition} ({key}) — tunnel/transport down")
+        for it in (lr.get("items") or []) if isinstance(lr, dict) else []:
+            # An exact-key match: the prefix also matches the OLD news.<date>.<edition>.raw.<cat> keys.
+            if it.get("key") == key and it.get("value") is not None:
+                value = it.get("value")
+                break
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return None
+    cats = value.get("categories") if isinstance(value, dict) else None
+    return {k: _coerce_list(v) for k, v in cats.items()} if isinstance(cats, dict) else None
+
+
 def _read_raw(agent_name: str, category: str, date: str, edition: str) -> list:
-    """The scraped raw for one category, or [] if it is genuinely empty/absent. Raises RawReadError
-    if the read FAILS at the transport level — so the caller fails loud instead of silently treating
-    a tunnel drop as 'no raw'. `_aimeat_call` already retries transient failures, so a None here means
-    the failure persisted."""
+    """The scraped raw for one category from the OLD per-category key, or [] if it is genuinely
+    empty/absent. Raises RawReadError if the read FAILS at the transport level — so the caller fails
+    loud instead of silently treating a tunnel drop as 'no raw'. `_aimeat_call` already retries
+    transient failures, so a None here means the failure persisted.
+
+    THE FALLBACK PATH. Editions from before the single-key raw are read through here; today's are
+    read once by `_read_edition_raw`. Remove it after one real 17:00 run has been checked end to end
+    — not before, and not by deleting the old keys, which age out on their own."""
     key = f"news.{date}.{edition}.raw.{category}"
     # Fast path: own-gaii read. quiet=True because this probe is DESIGNED to miss — the raw was
     # written by news-fetcher, so it is never under the writer's own GAII, and the owner-scope list
@@ -172,11 +212,26 @@ def _publish_article(
     return res is not None
 
 
-def write_edition_articles(agent_name: str, date: str, edition: str, categories: list[str]) -> str:
+def write_edition_articles(
+    agent_name: str, date: str, edition: str, categories: list[str], *, status_step: str | None = None
+) -> str:
     """Write a full article for every category with real raw. Resilient: a read/publish that fails
     at the transport level, or an LLM error on one category, is recorded and the loop CONTINUES with
     the rest — then, if anything failed, it raises WriteIncomplete so the step is honestly RED (and
-    retried) rather than a silent partial. Idempotent — re-running fills only the gaps."""
+    retried) rather than a silent partial. Idempotent — re-running fills only the gaps.
+
+    `status_step` ("writeA" | "writeB") names the field this run owns in the edition's shared status
+    record. It is explicit and defaults to None — an ad-hoc partial re-write of three categories is
+    not the workflow's Desk A step, and inferring one from the category list would let it claim to
+    be. The workflow's two call sites (make_write_tools, the inspector's re-run) pass it; nothing
+    else needs to."""
+    if status_step is None:
+        return _write_edition_articles(agent_name, date, edition, categories)
+    with step_status(agent_name, date, edition, status_step):
+        return _write_edition_articles(agent_name, date, edition, categories)
+
+
+def _write_edition_articles(agent_name: str, date: str, edition: str, categories: list[str]) -> str:
     llm = get_llm(for_tool_use=False, temperature=0.7, agent_name=agent_name)
     # DESK MEMORY (delta reporting): recall what this desk already published on a similar story and
     # show it to the writer — news that resurfaces gets framed as "what changed", not retold from
@@ -186,9 +241,27 @@ def write_edition_articles(agent_name: str, date: str, edition: str, categories:
     store = open_store(agent_name)
     lines = [f"deterministic write — {date} {edition} ({agent_name})"]
     failed: list[str] = []
+    # ONE read for the whole desk (the edition's single raw record), instead of one per category.
+    # None = an edition written before the consolidation → fall back to the old per-category keys.
+    try:
+        edition_raw = _read_edition_raw(agent_name, date, edition)
+    except RawReadError as exc:
+        # The one read the whole desk depends on failed at the transport level. Report it in the
+        # desk's own shape (every category failed) so the step goes RED and is retried — the same
+        # contract as before, when the failure surfaced one category at a time.
+        lines.append(f"  RAW READ FAILED — {exc}")
+        raise WriteIncomplete("\n".join(lines), list(categories)) from exc
+    if edition_raw is None:
+        lines.append("  (no single-key raw — reading the pre-consolidation news.*.raw.<category> keys)")
     for cat in categories:
         try:
-            raw = _read_raw(agent_name, cat, date, edition)
+            raw = edition_raw.get(cat) if edition_raw is not None else None
+            if raw is None:
+                # Not in the consolidated record. TWO reasons, one rule: either this edition predates
+                # the consolidation, or the category has a DIFFERENT PRODUCER — `lukijoilta` is written
+                # by sanomat-desk as reader tips arrive by DM, which can be long after the 17:00 fetch,
+                # so it keeps its own key rather than being merged into a record news-fetcher owns.
+                raw = _read_raw(agent_name, cat, date, edition)
         except RawReadError as exc:
             lines.append(f"  {cat:18s} READ FAILED — {exc}")
             failed.append(cat)
@@ -258,6 +331,7 @@ def make_write_tools(agent_name: str, desk: str) -> list:
     from crewai.tools import tool
 
     cats = DESK_A if desk.upper() == "A" else DESK_B
+    step = "writeA" if desk.upper() == "A" else "writeB"
 
     @tool("write_edition_articles")
     def write_edition_articles_tool(date: str, edition: str) -> str:
@@ -265,7 +339,9 @@ def make_write_tools(agent_name: str, desk: str) -> list:
         raw. Call ONCE with the resolved date+edition; the loop runs in code (no category skipped) and grok
         writes each article from the scraped raw. Returns a per-category char-count report."""
         try:
-            return write_edition_articles(agent_name, (date or "").strip(), (edition or "").strip(), cats)
+            return write_edition_articles(
+                agent_name, (date or "").strip(), (edition or "").strip(), cats, status_step=step
+            )
         except WriteIncomplete as exc:
             # Surface the partial report + the loud failure tail so the agent reports it; the workflow's
             # article-count gate still flags the desk RED, and the step retry re-runs to fill the gaps.

@@ -199,7 +199,7 @@ def make_memory_tools(agent_name: str) -> list:
         """Build the PUBLIC front-page index for a date+edition DETERMINISTICALLY — no hand-built JSON, so it
         cannot miss an article or miscount. Discovers every news.<date>.<edition>.article.<category> (+ the
         .editorial) key with its owner gaii, reads each body for a title+teaser, and COUNTS each news
-        article's web sources from its raw (news.<date>.<edition>.raw.<category>) so the viewer can show
+        article's web sources from the edition raw (news.<date>.<edition>.raw) so the viewer can show
         'Pohjana N verkkolähdettä'. Read-modify-writes the index under YOUR OWN gaii at visibility='public'.
         Prefer this over index_frontpage in the editorial/publisher stage. Args: date (YYYY-MM-DD), edition
         (morning|evening). Returns OK + item count + PUBLISHER gaii + INDEX_KEY."""
@@ -212,30 +212,44 @@ def make_memory_tools(agent_name: str) -> list:
         rows = ((lr or {}).get("items") if isinstance(lr, dict) else None) or []
         raw_counts: dict = {}
         raw_urls: dict = {}
+
+        def _record_raw(cat_k: str, items) -> None:
+            """Tally one category's sources and keep their ADDRESSES.
+
+            A paper that reports a source COUNT it cannot substantiate is making the weakest version
+            of the claim it exists to make — and the URLs are right here in the raw we are already
+            reading. Only what is actually recorded: never reconstruct or guess an address (dedup,
+            keep order)."""
+            if isinstance(items, str) and items.strip()[:1] == "[":
+                try:
+                    items = json.loads(items)
+                except ValueError:
+                    items = None
+            lst = items if isinstance(items, list) else []
+            raw_counts[cat_k] = len(lst)
+            raw_urls[cat_k] = list(dict.fromkeys(str(a["url"]) for a in lst if isinstance(a, dict) and a.get("url")))
+
         for it in rows:
             k = it.get("key") or ""
-            if k.startswith(f"news.{date}.{edition}.raw."):
+            # Both raw shapes: the consolidated `…raw` record (every category under `categories`) and
+            # the pre-consolidation `…raw.<category>` keys, so an already-published edition still
+            # rebuilds its front page with the same source counts it shipped with.
+            if k == f"news.{date}.{edition}.raw":
                 v = it.get("value")
                 if v is None:
                     v = _owner_scope_value(k)
-                try:
-                    if isinstance(v, str) and v.strip()[:1] == "[":
+                if isinstance(v, str):
+                    try:
                         v = json.loads(v)
-                    cat_k = k.rsplit(".", 1)[-1]
-                    raw_counts[cat_k] = len(v) if isinstance(v, list) else 0
-                    # The ADDRESSES, not just the tally. A paper that reports a source COUNT it cannot
-                    # substantiate is making the weakest version of the claim it exists to make — and the
-                    # URLs are right here in the raw we are already reading. Only what is actually
-                    # recorded: never reconstruct or guess an address (dedup, keep order).
-                    raw_urls[cat_k] = list(
-                        dict.fromkeys(
-                            str(a["url"])
-                            for a in (v if isinstance(v, list) else [])
-                            if isinstance(a, dict) and a.get("url")
-                        )
-                    )
-                except Exception:  # noqa: BLE001
-                    raw_counts[k.rsplit(".", 1)[-1]] = 0
+                    except ValueError:
+                        v = None
+                for cat_k, items in (((v or {}).get("categories") or {}) if isinstance(v, dict) else {}).items():
+                    _record_raw(cat_k, items)
+            elif k.startswith(f"news.{date}.{edition}.raw."):
+                v = it.get("value")
+                if v is None:
+                    v = _owner_scope_value(k)
+                _record_raw(k.rsplit(".", 1)[-1], v)
         FEATURE = {"koodaus", "prompt-niksi", "matikka"}
         clean = []
         for it in rows:

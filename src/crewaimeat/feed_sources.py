@@ -131,27 +131,65 @@ def _clean(html: str) -> str:
     return re.sub(r"<[^>]+>", "", html or "").strip()
 
 
+# Consolidated raw records read during ONE fetch run, keyed by memory key. This is called once per
+# category, and a whole edition's raw is ~500 kB — without the cache, one 20-category run would pull
+# the same three ~500 kB records twenty times over (30 MB instead of 1.5 MB). Safe to hold: a past
+# edition's raw is written once and never changes. `reset_seen_cache()` clears it at the start of a
+# run so a long-lived daemon never answers tomorrow's fetch out of yesterday's memory.
+_RAW_RECORD_CACHE: dict[str, dict | None] = {}
+
+
+def reset_seen_cache() -> None:
+    """Drop the cached raw records. Called at the start of each edition fetch."""
+    _RAW_RECORD_CACHE.clear()
+
+
 def _recent_seen_urls(agent_name: str, category: str, limit_keys: int = 3) -> set[str]:
-    """URLs already used in the most recent editions for this category — so we don't repeat them."""
+    """URLs already used in the most recent editions for this category — so we don't repeat them.
+
+    Reads BOTH raw shapes, because the two coexist for as long as the old keys survive their ttl:
+    the consolidated `news.<date>.<edition>.raw` (this category under its `categories` field) and the
+    pre-consolidation `news.<date>.<edition>.raw.<category>`. Missing one shape would not fail —
+    it would quietly stop excluding recent URLs, and the paper would start repeating itself."""
+    import json
+
     seen: set[str] = set()
+
+    def _add(items) -> None:
+        if isinstance(items, str) and items.strip()[:1] == "[":
+            try:
+                items = json.loads(items)
+            except ValueError:
+                return
+        for a in items if isinstance(items, list) else []:
+            if isinstance(a, dict) and a.get("url"):
+                seen.add(a["url"])
+
     try:
         r = _aimeat_call(agent_name, "aimeat_memory_list", {"owner_scope": True, "prefix": "news."})
         rows = (r or {}).get("items") if isinstance(r, dict) else None
         keys = sorted(
-            (it.get("key", "") for it in (rows or []) if it.get("key", "").endswith(".raw." + category)), reverse=True
+            (
+                it.get("key", "")
+                for it in (rows or [])
+                if it.get("key", "").endswith(".raw." + category) or it.get("key", "").endswith(".raw")
+            ),
+            reverse=True,
         )[:limit_keys]
         for k in keys:
-            v = (_aimeat_call(agent_name, "aimeat_memory_read", {"key": k}) or {}).get("value")
-            if isinstance(v, str) and v.strip()[:1] == "[":
-                import json
-
-                try:
-                    v = json.loads(v)
-                except Exception:  # noqa: BLE001
-                    v = []
-            for a in v if isinstance(v, list) else []:
-                if isinstance(a, dict) and a.get("url"):
-                    seen.add(a["url"])
+            if k.endswith(".raw"):  # consolidated record — read once per run, dig out this category
+                if k not in _RAW_RECORD_CACHE:
+                    v = (_aimeat_call(agent_name, "aimeat_memory_read", {"key": k}) or {}).get("value")
+                    if isinstance(v, str):
+                        try:
+                            v = json.loads(v)
+                        except ValueError:
+                            v = None
+                    _RAW_RECORD_CACHE[k] = v if isinstance(v, dict) else None
+                rec = _RAW_RECORD_CACHE[k]
+                _add((rec.get("categories") or {}).get(category) if rec else None)
+            else:
+                _add((_aimeat_call(agent_name, "aimeat_memory_read", {"key": k}) or {}).get("value"))
     except Exception:  # noqa: BLE001
         pass
     return seen

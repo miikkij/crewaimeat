@@ -238,6 +238,15 @@ def main() -> None:
     # Pin AIMEAT_HOME to this checkout (mirrors the entrypoints) so a dev clone uses its own tokens/serve.
     os.environ.setdefault("AIMEAT_HOME", str(Path.cwd() / ".aimeat"))
 
+    # Load .env BEFORE any crew imports or LLM use, and report anything the ambient environment
+    # shadows. Both halves are load-bearing: nothing else on this path ever read .env (`uv run` does
+    # not, and llm.py just calls os.getenv), so the fleet silently ran on whatever the launching shell
+    # exported; and when both existed the environment won without a word. A stale OPENROUTER_API_KEY
+    # inherited by every VS Code terminal cost two days that way — twice.
+    from crewaimeat.env_guard import load_env
+
+    load_env()
+
     selected = [a for a in args.agents.split(",") if a.strip()] or None
     if args.list:
         for p in _select_crews(selected):

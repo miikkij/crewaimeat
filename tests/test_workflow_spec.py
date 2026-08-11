@@ -25,8 +25,13 @@ def _full_edition(
     n_raw=12, n_art=12, quiz=True, editorial=True, space_weather=True, frontpage_date="2026-06-11"
 ) -> dict:
     mem = {}
-    for i in range(n_raw):
-        mem[f"news.2026-06-11.evening.raw.cat{i}"] = f"raw text {i}"
+    # ONE raw record, every category under `categories` — the shape the fetch step writes today.
+    mem["news.2026-06-11.evening.raw"] = {
+        "fetchedAt": "2026-06-11T14:00:00+00:00",
+        "categories": {
+            f"cat{i}": [{"url": f"https://example.test/{i}", "content": f"raw text {i}"}] for i in range(n_raw)
+        },
+    }
     for i in range(n_art):
         mem[f"news.2026-06-11.evening.article.cat{i}"] = f"article body {i}"
     mem["news.2026-06-11.evening.article.talous"] = "Talousartikkeli sisältö."
@@ -60,6 +65,57 @@ def test_exists_nonempty_count():
         L,
     )
     assert ok is False and "1 nonempty" in obs  # only .a is nonempty
+
+
+# ── count_nonempty with a `path`: count INSIDE one record, not across keys ────
+def _raw_record(n_cats: int, n_empty: int = 0) -> dict:
+    cats = {f"cat{i}": [{"content": f"x{i}"}] for i in range(n_cats)}
+    cats.update({f"empty{i}": [] for i in range(n_empty)})
+    return {"news.2026-06-11.evening.raw": {"fetchedAt": "…", "categories": cats}}
+
+
+def test_count_nonempty_path_counts_entries_inside_one_record():
+    sig = {
+        "kind": "deterministic",
+        "op": "count_nonempty",
+        "key": "news.{date}.{edition}.raw",
+        "path": "categories",
+        "min": 12,
+    }
+    ok, obs = check_signal(sig, VARS, lister_from(_raw_record(12)))
+    assert ok and "12 nonempty" in obs
+    # empty categories do NOT count — 11 real + 3 empty is still short of the floor
+    ok, obs = check_signal(sig, VARS, lister_from(_raw_record(11, n_empty=3)))
+    assert ok is False and "11 nonempty" in obs
+
+
+def test_count_nonempty_path_missing_record_is_zero_not_a_crash():
+    sig = {
+        "kind": "deterministic",
+        "op": "count_nonempty",
+        "key": "news.{date}.{edition}.raw",
+        "path": "categories",
+        "min": 12,
+    }
+    assert check_signal(sig, VARS, lister_from({}))[0] is False
+    # a record of the wrong shape counts as zero rather than passing on a stray truthy value
+    wrong = {"news.2026-06-11.evening.raw": {"categories": "not-a-container"}}
+    assert check_signal(sig, VARS, lister_from(wrong))[0] is False
+
+
+def test_json_string_record_is_parsed_before_counting():
+    """The connector sometimes hands a value back as a JSON string; the signal must still see it."""
+    import json as _json
+
+    mem = {"news.2026-06-11.evening.raw": _json.dumps(_raw_record(12)["news.2026-06-11.evening.raw"])}
+    sig = {
+        "kind": "deterministic",
+        "op": "count_nonempty",
+        "key": "news.{date}.{edition}.raw",
+        "path": "categories",
+        "min": 12,
+    }
+    assert check_signal(sig, VARS, lister_from(mem))[0]
 
 
 def test_json_array_match():
