@@ -213,8 +213,15 @@ async function viewJono(el){
       '<div class="flex flex-wrap items-center gap-2"><span class="badge badge-sm badge-primary">fit '+num(it.fit_score)+"</span>"+
       '<span class="badge badge-sm badge-ghost">'+esc(it.platform||"?")+"</span>"+
       '<span class="font-semibold">'+esc(it.title)+"</span></div>"+
-      (it.url?'<a class="link text-sm" href="'+esc(it.url)+'" target="_blank" rel="noopener">Avaa ketju →</a>'
-             :'<span class="text-sm text-error">linkki puuttuu</span>')+
+      // The date and the thread id are on the ROW, not hidden in the body: HN reposts the same story
+      // and Ask HN questions recur, so two rows legitimately share a title while being different
+      // discussions. Without something distinguishing them the list looks duplicated and a reviewer
+      // has to open both to find out it is not.
+      '<div class="text-sm flex flex-wrap gap-3 items-center">'+
+      (it.url?'<a class="link" href="'+esc(it.url)+'" target="_blank" rel="noopener">Avaa ketju →</a>'
+             :'<span class="text-error">linkki puuttuu</span>')+
+      (it.found_date?'<span class="opacity-60">löydetty '+esc(it.found_date)+"</span>":"")+
+      '<span class="opacity-50 font-mono text-xs">'+esc(String(it.id||"").replace(/^draft-opp-/,""))+"</span></div>"+
       '</summary><div class="collapse-content min-w-0">'+
       (it.summary?'<p class="text-sm opacity-80 mb-1">'+esc(it.summary)+"</p>":"")+
       (it.angle?'<p class="text-sm mb-2"><b>Kulma:</b> '+esc(it.angle)+"</p>":"")+
