@@ -102,9 +102,15 @@ def _build_editorial_and_index(agent_name: str, date: str, edition: str) -> str:
         en = en if isinstance(en, str) else str(en)
 
     # STEP 2: native-Finnish gonzo localisation (lower temperature for fidelity — anchored to the English).
-    # Route to the grok-FREE default profile (content-free -> gpt-oss-120b): grok garbles Finnish (English
-    # calques + invented words — proven), gpt-oss writes it natively. agent_name=None -> the default profile.
-    llm_fi = get_llm(for_tool_use=False, temperature=0.65, agent_name=None)
+    # This step used to be forced onto the DEFAULT profile (agent_name=None -> content-free -> gpt-oss),
+    # because grok garbles Finnish (English calques, invented words) and gpt-oss did not. That constraint
+    # was about GROK, not about gpt-oss being the best Finnish available — and it quietly meant the
+    # editorial's SHIPPING text ignored whatever the desk was routed to.
+    # Since 2026-08-12 the Sanomat crews run the `news` profile (DeepSeek V4 Pro), whose Finnish was
+    # measured before switching: idiomatic, no calques. So the localisation now uses the crew's OWN
+    # routing like every other step. The two-step itself stays — the English draft is what carries the
+    # gonzo voice, and anchoring the Finnish to it is why the column reads as written rather than translated.
+    llm_fi = get_llm(for_tool_use=False, temperature=0.65, agent_name=agent_name)
     ed = llm_fi.call([{"role": "user", "content": _PROMPT_LOCALIZE + en.strip()}])
     ed = ed if isinstance(ed, str) else str(ed)
     if len(ed.strip()) < 400:  # localise hiccup → one retry
