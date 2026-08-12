@@ -215,7 +215,13 @@ async function viewKatsaus(el){
     '<span class="text-sm opacity-70">'+days.length+" päivää arkistossa</span>";
   else h+='<span class="badge badge-warning badge-sm">arkisto alkaa seuraavasta ajosta</span>';
   h+="</div>";
-  el.innerHTML=h+card('<div class="md min-w-0">'+md(rec.body_md||"(raporttia ei voitu lukea)")+"</div>");
+  // A recovered day was reconstructed from the mail-request record, which stores body_md[:6000].
+  // Saying so is not a detail: a briefing that stops mid-sentence must not read as the whole thing.
+  const note=rec.truncated
+    ? '<div class="alert alert-warning text-sm mb-3">Tämä päivä on palautettu arkistotietueesta, joka '+
+      'tallentaa raportin 6000 ensimmäistä merkkiä. Loppu on vain lähetetyssä sähköpostissa.</div>'
+    : (rec.recovered_from?'<div class="text-sm opacity-60 mb-2">Palautettu arkistotietueesta.</div>':"");
+  el.innerHTML=h+note+card('<div class="md min-w-0">'+md(rec.body_md||"(raporttia ei voitu lukea)")+"</div>");
   const sel=el.querySelector("#d");
   if(sel) sel.onchange=e=>{ BRIEF_DATE=e.target.value; render(); };
   const src=el.querySelector("#src");

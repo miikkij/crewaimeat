@@ -116,6 +116,62 @@ def _agent_face(index: dict, pulse: dict | None, queue: dict | None) -> bool:
 PUB_PREFIXES = "mail.morning.public.* · mail.pulse.public.* · some.queue.public.* · some.grok.public.*"
 
 
+HOME_ORG = "b784641b-a4dd-4d69-adb6-9954dc813e1e"
+HOME_WS = "ws-mq5vvdgsjwp"  # Internal — where the morning report's mail-request records live
+_BODY_CAP = 6000  # mail_contract stores body_md[:6000] in the record; longer briefings are cut
+
+
+def backfill_briefings(limit: int = 60) -> dict:
+    """Recover the briefing archive from the `morning-<date>` mail-request records.
+
+    WHY THIS IS NEEDED. `mail.morning.public.latest` is overwritten every morning, and the dated key
+    that preserves each day only started being written on 2026-08-11. Every briefing before that
+    exists as prose in a sent email and as a `mail-request` record — but nowhere the app can read.
+    58 of them were sitting in the Internal workspace while the app said "the archive starts with
+    the next run".
+
+    HONESTY: the record stores `body_md[:6000]`, so most recovered days are TRUNCATED. Each one is
+    marked `truncated: true` and carries `recovered_from`, because a briefing that stops mid-sentence
+    must not be presented as the whole thing. The full text of an old day exists only in the email
+    that was sent.
+
+    Gaps only — a dated key that already exists is never replaced by a truncated recovery."""
+    idx_now = {it.get("key") for it in _list("mail.morning.public.", WRITER)}
+    d = _aimeat_call(WRITER, "aimeat_workspace_read", {"organism_id": HOME_ORG, "ws": HOME_WS}) or {}
+    reqs = [o for o in ((d.get("objects") or {}).get("mail-request") or []) if isinstance(o, dict)]
+    mornings = sorted(
+        (o for o in reqs if str(o.get("id", "")).startswith("morning-")),
+        key=lambda o: o.get("id", ""),
+        reverse=True,
+    )[:limit]
+
+    written, skipped = [], 0
+    for o in mornings:
+        date = str(o.get("id", ""))[len("morning-") :]
+        key = f"mail.morning.public.{date}"
+        if key in idx_now:
+            skipped += 1
+            continue
+        body = o.get("body_md") or ""
+        if not body.strip():
+            continue
+        value = {
+            "date": date,
+            "subject": o.get("subject") or f"Aamuraportti · {date}",
+            "body_md": body,
+            "recovered_from": f"mail-request/{o.get('id')}",
+            "truncated": len(body) >= _BODY_CAP,
+        }
+        if _publish(key, value):
+            written.append(key)
+    print(
+        f"[{WRITER}] backfill: {len(written)} briefing(s) recovered, {skipped} already present "
+        f"({sum(1 for k in written if k)} of them from truncated records)",
+        file=sys.stderr,
+    )
+    return {"written": written, "skipped": skipped}
+
+
 def sync(now: datetime.datetime | None = None) -> dict:
     """Mirror the current Aamukatsaus data to public keys and rewrite the index.
 
