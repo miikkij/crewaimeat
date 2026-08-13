@@ -123,10 +123,20 @@ def _is_stale(published: str | None, today: datetime.date) -> bool:
     torstaina")."""
     if not published:
         return False
+    s = str(published).strip()
+    d = None
     try:
-        d = datetime.date.fromisoformat(str(published)[:10])
+        d = datetime.date.fromisoformat(s[:10])
     except ValueError:
-        return False
+        # A source may still hand us RFC-822 ("Wed, 28 Feb 2024 16:16:00 GMT"). Left unparsed it
+        # would read as "no date" and sail past this filter — which is exactly how the 2024 bridge
+        # story would have come back in through a feed after the first fix.
+        try:
+            from email.utils import parsedate_to_datetime
+
+            d = parsedate_to_datetime(s).date()
+        except (TypeError, ValueError):
+            return False
     return (today - d).days > FRESH_DAYS
 
 

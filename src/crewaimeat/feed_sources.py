@@ -118,11 +118,47 @@ def _parse_feed(url: str, limit: int = 8) -> list[dict]:
             {
                 "title": title.strip(),
                 "url": link.strip(),
-                "published": getattr(e, "published", "") or getattr(e, "updated", ""),
+                # ISO, always. feedparser gives `published` as the feed's own string — usually
+                # RFC-822 ("Wed, 28 Feb 2024 16:16:00 GMT") — which `date.fromisoformat` cannot
+                # parse, so a staleness check on it silently answers "not stale" and every dated
+                # feed item bypasses the filter. `published_parsed` is the already-parsed struct,
+                # so normalise here, once, at the only place that sees the feed.
+                "published": _iso_date(e),
                 "summary": _clean(summ)[:300],
             }
         )
     return out
+
+
+def _iso_date(entry) -> str:
+    """One feed entry's publication date as `YYYY-MM-DD`, or "" when the feed states none.
+
+    Prefers feedparser's `published_parsed` (a struct_time it has already normalised from whatever
+    the feed used) over the raw `published` string. Falls back to email.utils for an RFC-822 string
+    when only that is present, and to the first 10 chars when the feed already speaks ISO.
+    Returns "" rather than guessing: an unparseable date must read as UNKNOWN, because the
+    staleness check treats unknown as "keep and mark" while a wrong date would be believed."""
+    for attr in ("published_parsed", "updated_parsed"):
+        st = getattr(entry, attr, None)
+        if st:
+            try:
+                return f"{st.tm_year:04d}-{st.tm_mon:02d}-{st.tm_mday:02d}"
+            except (AttributeError, TypeError):
+                pass
+    raw = (getattr(entry, "published", "") or getattr(entry, "updated", "") or "").strip()
+    if not raw:
+        return ""
+    try:
+        from email.utils import parsedate_to_datetime
+
+        return parsedate_to_datetime(raw).date().isoformat()
+    except (TypeError, ValueError):
+        pass
+    try:
+        datetime.date.fromisoformat(raw[:10])
+        return raw[:10]
+    except ValueError:
+        return ""
 
 
 def _clean(html: str) -> str:
