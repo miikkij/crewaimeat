@@ -292,14 +292,37 @@ def _write_edition_articles(agent_name: str, date: str, edition: str, categories
             if store
             else ""
         )
+        # THE DATING RULE. On 2026-08-13 a desk wrote "Espoon Tapiolassa viime torstaina aamulla
+        # sattunut kävelysillan romahdus" about an accident from 2024: the source was a category
+        # LANDING PAGE whose teasers span years, the raw carried no publication date, and the model
+        # filled the gap with recency nobody had claimed. The fetch step now records `published_at`
+        # (None when the source states none) — this tells the desk what to do with it. It is stated
+        # before the sources, in the imperative, because it is the one error that turns the paper
+        # into misinformation rather than merely bad prose.
+        dating = (
+            "\n\nAJANKOHTA — EHDOTON SÄÄNTÖ:\n"
+            "Jokaisella lähteellä on kenttä `published_at`. Se on lähteen OMA julkaisupäivä, tai "
+            "null jos lähde ei kerro sitä. `fetched_at` on vain se hetki jolloin me haimme sivun — "
+            "se EI kerro milloin tapahtuma sattui.\n"
+            "- ÄLÄ KOSKAAN kirjoita 'tänään', 'eilen', 'viime torstaina', 'viikonloppuna' tai muuta "
+            "ajankohtaa, ellei se lue lähteen tekstissä tai käy ilmi `published_at`-kentästä.\n"
+            "- Jos `published_at` on null, kirjoita tapahtumasta ILMAN ajankohtaa. Se on täysin "
+            "hyväksyttävää: 'Tapiolassa on sattunut kävelysillan romahdus' on oikein, "
+            "'viime torstaina sattunut' on väärin jos kukaan ei ole niin sanonut.\n"
+            "- Jos `published_at` on selvästi vanha, älä esitä asiaa uutena. Kerro se taustana tai "
+            "jätä se pois.\n"
+            "- Listasivu tai hälytysnäkymä lähteenä: siinä on eri-ikäisiä nostoja. Älä oleta että "
+            "mikään niistä on tuore."
+        )
         prompt = (
             f"Kirjoita TÄYSIMITTAINEN, syvällinen suomenkielinen uutisartikkeli kategoriaan '{cat}' näistä "
             "lähteistä. VÄHINTÄÄN 4-6 kappaletta — ei stub, ei yksi kappale. Journalistinen ote, omin "
             "sanoin (älä kopioi suoraan), taustoita ja yhdistä lähteet luontevaksi jutuksi. Aloita "
             f"otsikolla. {extra} Lopeta omalle rivilleen '— {persona}'."
             + FINNISH_NATIVE_STYLE
+            + dating
             + (f"\n\n{prior}" if prior else "")
-            + f"\n\nLÄHTEET (JSON):\n{src}"
+            + f"\n\nTÄNÄÄN ON {date}.\n\nLÄHTEET (JSON):\n{src}"
         )
         try:
             art = llm.call([{"role": "user", "content": prompt}])

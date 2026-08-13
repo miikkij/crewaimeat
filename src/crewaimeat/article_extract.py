@@ -47,6 +47,38 @@ def _isolated_extract(args: list[str], stdin_text: str | None = None, timeout: i
         return ""
 
 
+def _isolated_doc(args: list[str], stdin_text: str | None = None, timeout: int = _EXTRACT_TIMEOUT) -> dict:
+    """The same isolated extraction, returning {text, date} instead of text alone.
+
+    `date` is what the PAGE claims as its publication date, or None when it declares none. The
+    distinction matters more than it looks: a source with no date is not a fresh source, and the
+    caller must be able to tell the two apart rather than defaulting to "today"."""
+    try:
+        r = subprocess.run(
+            [sys.executable, "-m", "crewaimeat._extract_worker", *args],
+            input=stdin_text,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return {"text": "", "date": None}
+    out = (r.stdout or "").strip()
+    if not out:
+        return {"text": "", "date": None}
+    try:
+        d = json.loads(out)
+        return {"text": d.get("text") or "", "date": d.get("date") or None}
+    except (ValueError, AttributeError):
+        return {"text": "", "date": None}
+
+
+def _trafilatura_doc(url: str) -> dict:
+    """Extracted text + the page's own publication date for one URL."""
+    return _isolated_doc(["--url", url])
+
+
 def _domain(u: str) -> str:
     try:
         return urlparse(u).netloc.lower().replace("www.", "")

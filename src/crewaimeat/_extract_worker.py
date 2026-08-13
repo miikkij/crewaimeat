@@ -32,11 +32,21 @@ def main() -> None:
         except (AttributeError, ValueError):
             pass
         html = sys.stdin.read()
-    text = ""
+    text, date = "", None
     if html:
         text = trafilatura.extract(html, include_comments=False, favor_recall=True) or ""
+        # WHEN THE PAGE SAYS IT WAS PUBLISHED. Without this the raw carried only `fetched_at` —
+        # when WE looked — and a writer with no publication date cannot tell a story from last
+        # night from one from 2024. It did not abstain: it invented "viime torstaina" for an event
+        # that was two years old. Extracted here because the metadata comes from the same parsed
+        # HTML, and this subprocess is the only place allowed to touch lxml.
+        try:
+            md = trafilatura.extract_metadata(html)
+            date = getattr(md, "date", None) or None
+        except Exception:  # noqa: BLE001 — a page with no/odd metadata is undated, not a failure
+            date = None
     sys.stdout.write(
-        json.dumps({"text": text})
+        json.dumps({"text": text, "date": date})
     )  # ensure_ascii=True: pure-ASCII stdout survives any (cp1252) Windows pipe encoding
 
 

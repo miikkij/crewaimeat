@@ -27,7 +27,7 @@ import sys
 import requests
 
 from crewaimeat.aimeat_crew import _aimeat_call
-from crewaimeat.article_extract import _MIN_CHARS, _playwright_text, _trafilatura_text
+from crewaimeat.article_extract import _MIN_CHARS, _playwright_text, _trafilatura_doc, _trafilatura_text
 from crewaimeat.edition_status import seed_status, step_status
 from crewaimeat.feed_sources import FEED_REGISTRY, _parse_feed, _recent_seen_urls, reset_seen_cache
 
@@ -44,6 +44,12 @@ RAW_TTL_HOURS = 14 * 24
 # site) — and it must be shouted about at 17:00 while there is still an evening to fix it, not
 # discovered as a 413 that silently costs an edition.
 RAW_WARN_BYTES = 800 * 1024
+
+# How old a DATED source may be and still count as news. Undated sources are not dropped by
+# this (see `_is_stale`) — they are marked, because the desks' own prompt must then refuse to
+# invent a timeframe for them. 14 days is generous for evergreen categories (filosofia, ruoka)
+# while still excluding the years-old landing-page teasers that produced the 2026-08-13 error.
+FRESH_DAYS = 14
 
 # category -> (keyword query, language, time_range) for categories with no/thin feed (paikallinen/saa…)
 CATEGORY_QUERY: dict[str, tuple[str, str, str]] = {
@@ -93,6 +99,37 @@ def _scrape(url: str) -> str:
     return txt
 
 
+def _scrape_doc(url: str) -> tuple[str, str | None]:
+    """Body text plus the page's OWN publication date (None when the page declares none).
+
+    The Playwright fallback renders JS and returns text only, so a page that needs it stays
+    undated rather than borrowing a date it never gave."""
+    doc = _trafilatura_doc(url)
+    txt, date = doc.get("text") or "", doc.get("date")
+    if len(txt) < _MIN_CHARS:
+        alt = _playwright_text(url)
+        if len(alt) > len(txt):
+            txt = alt
+    return txt, date
+
+
+def _is_stale(published: str | None, today: datetime.date) -> bool:
+    """True when the source states a date and that date is older than the freshness window.
+
+    Undated is NOT stale — it is unknown, and it is handled differently: unknown items are kept
+    and marked, because dropping everything undated would empty the categories whose sources are
+    landing pages. What must never happen again is a story being DATED by the writer when nothing
+    in the source supports it (2026-08-13: a 2024 bridge collapse was published as "viime
+    torstaina")."""
+    if not published:
+        return False
+    try:
+        d = datetime.date.fromisoformat(str(published)[:10])
+    except ValueError:
+        return False
+    return (today - d).days > FRESH_DAYS
+
+
 def fetch_category_raw(agent_name: str, category: str, max_items: int = 6) -> list[dict]:
     """Feed/search -> ALWAYS trafilatura -> the rich raw items for ONE category.
 
@@ -128,17 +165,27 @@ def fetch_category_raw(agent_name: str, category: str, max_items: int = 6) -> li
         chosen_items.append(c)
         if len(chosen_items) >= max_items:
             break
-    # 3) ALWAYS scrape full text
+    # 3) ALWAYS scrape full text — and capture WHEN THE SOURCE SAYS IT WAS PUBLISHED
     raw: list[dict] = []
+    today = datetime.date.today()
     for c in chosen_items:
-        body = _scrape(c["url"])
+        body, page_date = _scrape_doc(c["url"])
         content = body if body.strip() else (c.get("summary") or "")
         if not content.strip():
             continue
+        # The feed's own date wins over the page's: a feed entry states the date of THAT entry,
+        # while a scraped page may be a landing page whose metadata describes the site.
+        published = (c.get("published") or "").strip() or page_date
+        if _is_stale(published, today):
+            continue  # provably older than the window — not news, whatever the page looks like
         raw.append(
             {
                 "title": c.get("title") or content.split("\n", 1)[0][:80],
                 "url": c["url"],
+                # WHEN THE SOURCE SAYS IT WAS PUBLISHED, or None when it says nothing. Kept apart
+                # from `fetched_at` on purpose: one is the story's age, the other is when we looked,
+                # and conflating them is what let a 2024 event be printed as "last Thursday".
+                "published_at": published or None,
                 # WHEN we actually read it — the article's provenance cites `retrieved_at`, and a
                 # timestamp invented at publish time would be a guess about the past. Stamped here,
                 # at the only moment that knows it.
