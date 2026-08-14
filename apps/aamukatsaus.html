@@ -24,7 +24,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="aimeat-app" content="aamukatsaus.html">
 <meta name="aimeat-locales" content="fi">
-<meta name="aimeat-scopes" content="memory:read memory:write">
+<!-- memory:write is the Grok paste and the "copy to myself" button, both landing in the READER's own
+     namespace. messages:send is the subscription: an app cannot write into our memory, so an order
+     travels as a DM to postman, who validates and saves it. Nothing here asks for share:manage —
+     handing out access to memory is not something a briefing reader should be asked to approve. -->
+<meta name="aimeat-scopes" content="memory:read memory:write messages:send">
 <title>Aamukatsaus · crewaimeat</title>
 <script>
 /* Restore BOTH theme axes before first paint (spec) — no flash of the wrong look, and the login
@@ -59,6 +63,7 @@
     <button role="tab" class="tab" data-tab="pulssi">Pulssi</button>
     <button role="tab" class="tab" data-tab="jono">Jono</button>
     <button role="tab" class="tab" data-tab="grok">Grok</button>
+    <button role="tab" class="tab" data-tab="tilaus">Tilaus</button>
   </div>
   <div class="flex-1"></div>
   <span id="header-auth"></span>
@@ -221,7 +226,25 @@ async function viewKatsaus(el){
     ? '<div class="alert alert-warning text-sm mb-3">Tämä päivä on palautettu arkistotietueesta, joka '+
       'tallentaa raportin 6000 ensimmäistä merkkiä. Loppu on vain lähetetyssä sähköpostissa.</div>'
     : (rec.recovered_from?'<div class="text-sm opacity-60 mb-2">Palautettu arkistotietueesta.</div>':"");
+  // "Kopioi itselleni": a share can be withdrawn, and then this day is gone from the reader's view
+  // even though they read it. A copy lands in THEIR namespace and is theirs to keep — ordinary
+  // memory handling. `copiedFrom` travels with it so a kept copy never loses where it came from,
+  // and `generatedBy` survives, so the AI provenance is not laundered by the act of copying.
+  const canCopy=SESSION&&rec.body_md;
+  if(canCopy) h+='<div class="flex items-center gap-3 mb-3"><button id="keep" class="btn btn-sm">Kopioi itselleni</button>'+
+    '<span id="kept" class="text-sm opacity-70"></span></div>';
   el.innerHTML=h+note+card('<div class="md min-w-0">'+md(rec.body_md||"(raporttia ei voitu lukea)")+"</div>");
+  const keep=el.querySelector("#keep");
+  if(keep) keep.onclick=async()=>{
+    const note2=el.querySelector("#kept");
+    keep.disabled=true; note2.textContent="Kopioidaan…";
+    try{
+      await AIMEAT.data.set("aamukatsaus.kopio."+(label||"latest"),
+        {...rec, copiedFrom:{gaii:SOURCE?SOURCE.owner:PUB_GAII, key:key||(KEY_BRIEF+".latest"),
+                             copiedAt:new Date().toISOString()}},{visibility:"private"});
+      note2.textContent="Tallennettu omaan muistiisi ✓";
+    }catch(e){ note2.textContent="Kopiointi ei onnistunut: "+((e&&e.message)||e); keep.disabled=false; }
+  };
   const sel=el.querySelector("#d");
   if(sel) sel.onchange=e=>{ BRIEF_DATE=e.target.value; render(); };
   const src=el.querySelector("#src");
@@ -356,8 +379,67 @@ async function viewGrok(el){
   };
 }
 
+/* ── Tilaus ──────────────────────────────────────────────────────────────────
+   An order travels as a MESSAGE, not as a write. An app grant resolves to its own owner's
+   namespace, so a reader's browser has no route into ours — but `messages:send` is a scope an app
+   may hold, and postman already drains a federated inbox. So the order is DMed, validated on our
+   side where the validation lives, and answered. No group, no share and no owner action stand
+   between a reader and placing one.
+   Reading the order back uses the share, when there is one: that is the only way the subscriber can
+   verify what we actually hold about them rather than what they meant to send. */
+const ORDER_MARKER="[AAMUKATSAUS-TILAUS]";
+async function currentOrder(){
+  for(const s of SHARES){
+    const o=await shared(s.owner, s.space+".prefs");
+    if(o&&o.subscriber) return o;
+  }
+  return null;
+}
+async function viewTilaus(el){
+  if(!SESSION) return el.innerHTML=empty("Kirjaudu tilataksesi",
+    "Tilaus lähetetään sinun nimissäsi, joten se vaatii tilin. Kirjaudu oikeasta yläkulmasta.");
+  const cur=await currentOrder();
+  const v=k=>esc(((cur&&cur[k])||(k==="topic"?"":[])).toString().split(",").join(", "));
+  let h='<h1 class="text-xl font-semibold mb-1">Oma aamukatsaus</h1>'+
+    '<div class="text-sm opacity-70 mb-4">Kolme kenttää, ja katsaus rakentuu niistä joka aamu. '+
+    "Jätä kenttä tyhjäksi jos et halua sitä osiota.</div>";
+  if(cur) h+='<div class="alert alert-success text-sm mb-4">Tilaus on voimassa ('+esc(cur.subscriber)+
+    "). Alla on se mitä pidämme tallessa — muokkaa ja lähetä, niin se korvautuu.</div>";
+  const field=(id,title,help,val,ph)=>card("<b>"+esc(title)+"</b>"+
+    '<p class="text-sm opacity-70 mb-2">'+esc(help)+"</p>"+
+    '<input id="'+id+'" class="input input-bordered w-full" value="'+val+'" placeholder="'+esc(ph)+'">');
+  h+=field("f_comp","Kilpailijat","Ketä seurataan. Yksi haku per nimi, pilkulla eroteltuna.",
+           v("competitors"),"Kilpailija Oy, toinen firma");
+  h+=field("f_radar","Aiheseuranta","Mistä aiheista haluat viikon uutuudet.",
+           v("radar"),"tekoäly sote-alalla, hoitajapula");
+  h+=field("f_topic","Grok-ajo","Yksi aihe, josta saat valmiin promptin ajettavaksi.",
+           v("topic"),"agenttien käyttö terveydenhuollossa");
+  h+='<div class="flex flex-wrap items-center gap-3 mt-2"><button id="order" class="btn btn-primary">'+
+    (cur?"Päivitä tilaus":"Tilaa")+'</button><span id="ordered" class="text-sm opacity-70"></span></div>'+
+    '<p class="text-sm opacity-60 mt-4">Enintään 5 hakua per kenttä — jokainen on oikea haku joka '+
+    "aamu, ja katto pitää tilauksen hinnan ennustettavana.</p>";
+  el.innerHTML=h;
+  el.querySelector("#order").onclick=async()=>{
+    const btn=el.querySelector("#order"), note=el.querySelector("#ordered");
+    const g=id=>(el.querySelector("#"+id).value||"").trim();
+    const order={competitors:g("f_comp"),radar:g("f_radar"),topic:g("f_topic")};
+    if(!order.competitors&&!order.radar&&!order.topic){
+      note.textContent="Täytä ainakin yksi kenttä — tyhjä tilaus tuottaisi tyhjän katsauksen."; return; }
+    btn.disabled=true; note.textContent="Lähetetään…";
+    const s=AIMEAT.auth.getSession&&AIMEAT.auth.getSession();
+    try{
+      const r=await s.fetch("/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({to:PUB_GAII,subject:"Aamukatsaus-tilaus",
+          body:ORDER_MARKER+"\n"+JSON.stringify(order)})});
+      const b=r&&r.json?await r.json():r;
+      if(b&&b.ok===false) throw new Error((b.error&&(b.error.message||b.error.code))||"lähetys epäonnistui");
+      note.textContent="Lähetetty ✓ — saat vahvistuksen viestinä, ja katsaus alkaa seuraavana aamuna.";
+    }catch(e){ note.textContent="Lähetys ei onnistunut: "+((e&&e.message)||e); btn.disabled=false; }
+  };
+}
+
 /* ── shell ───────────────────────────────────────────────────────────────── */
-const VIEWS={katsaus:viewKatsaus,pulssi:viewPulssi,jono:viewJono,grok:viewGrok};
+const VIEWS={katsaus:viewKatsaus,pulssi:viewPulssi,jono:viewJono,grok:viewGrok,tilaus:viewTilaus};
 async function render(){
   const el=document.getElementById("view"), st=document.getElementById("status");
   st.textContent="Ladataan…"; el.innerHTML="";

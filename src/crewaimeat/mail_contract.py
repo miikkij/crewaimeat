@@ -295,9 +295,13 @@ def _radar_section(radar: list[dict]) -> str:
 # same mail with the output; _check_inbox() recognizes the reply by the [AIMEAT#...] subject token,
 # parses the strict line format and feeds the finds into the Social Radar as opportunity records.
 # --------------------------------------------------------------------------- #
-GROK_PROMPT = """Etsi X:stä ja Redditistä VIIMEISEN 24 TUNNIN ajalta keskusteluketjut, joissa kannattaisi
-osallistua keskusteluun aiheista: AI-agentit, agenttien orkestrointi (CrewAI/LangGraph tms.),
-multi-agent-järjestelmät, agenttien muisti/koordinaatio/auditointi, "AI agent infrastructure".
+_OUR_GROK_TOPICS = (
+    "AI-agentit, agenttien orkestrointi (CrewAI/LangGraph tms.), multi-agent-järjestelmät, "
+    'agenttien muisti/koordinaatio/auditointi, "AI agent infrastructure"'
+)
+
+_GROK_TEMPLATE = """Etsi X:stä ja Redditistä VIIMEISEN 24 TUNNIN ajalta keskusteluketjut, joissa kannattaisi
+osallistua keskusteluun aiheista: {topics}.
 Kriteerit: aito kysymys tai keskustelu johon asiantunteva vastaus tuo arvoa (EI mainosketjuja,
 EI riitelyä, EI paikkoja joissa self-promo olisi spämmiä). Max 8 osumaa, paras ensin.
 
@@ -305,6 +309,17 @@ TULOSTA TÄSMÄLLEEN tässä muodossa, yksi rivi per osuma, ei mitään muuta te
 SCORE | PLATFORM | TITLE | URL | WHY
 jossa SCORE = 0-5 (kuinka hyvin vastaus olisi tervetullut), PLATFORM = x tai reddit,
 TITLE = ketjun otsikko lyhyesti, URL = suora linkki ketjuun, WHY = yksi lause miksi + millä kulmalla."""
+
+
+def grok_prompt(topic: str | None = None) -> str:
+    """The Grok run, aimed at a topic. Ours by default, a subscriber's when they named one.
+
+    The OUTPUT FORMAT is deliberately not parameterised: `_ingest_radar_lines` parses these lines,
+    and one definition of the line format is the whole reason that parser is shared."""
+    return _GROK_TEMPLATE.format(topics=(topic or "").strip() or _OUR_GROK_TOPICS)
+
+
+GROK_PROMPT = grok_prompt()
 
 _SUBJECT_TOKEN = "[AIMEAT#morning-{date}]"
 _RADAR_LINE = re.compile(r"^\s*([0-5])\s*\|\s*(\w+)\s*\|\s*([^|]+?)\s*\|\s*(https?://\S+?)\s*\|\s*(.+?)\s*$")
@@ -509,15 +524,20 @@ def _insights_section(events: list[dict], radar: list[dict], pulse: dict | None 
         return f"## Tänään kannattaa\n\n- (analyysin tuotanto epäonnistui: {exc!r})\n"
 
 
-def _competitor_section() -> str:
-    """What commercial players in our domain sell, advertise and discuss — a daily sweep."""
+def _competitor_section(queries: list[str] | None = None, domain: str | None = None) -> str:
+    """What commercial players in our domain sell, advertise and discuss — a daily sweep.
+
+    `queries`/`domain` are what make this reusable for a SUBSCRIBER: the same sweep, run on their
+    competitors and described in their words. Absent them it is our own watch, unchanged."""
     from crewaimeat.article_extract import _trafilatura_text
     from crewaimeat.fetch_pipeline import _searxng_urls
     from crewaimeat.llm import get_llm
 
-    queries = [
-        q.strip() for q in (os.getenv("AIMEAT_COMPETITOR_QUERIES") or "").split(",") if q.strip()
-    ] or _COMPETITOR_QUERIES
+    queries = (
+        queries
+        or [q.strip() for q in (os.getenv("AIMEAT_COMPETITOR_QUERIES") or "").split(",") if q.strip()]
+        or _COMPETITOR_QUERIES
+    )
     docs: list[str] = []
     for q in queries:
         for u in _searxng_urls(q, "en", "week", n=3):
@@ -532,7 +552,7 @@ def _competitor_section() -> str:
     if not docs:
         return "## Kilpailijakatsaus\n\n- (ei tuoreita osumia tällä haulla tänään)\n"
     prompt = (
-        "You are a competitor-watch analyst for an AI-agent substrate/orchestration product.\n\n"
+        f"You are a competitor-watch analyst for {domain or 'an AI-agent substrate/orchestration product'}.\n\n"
         "SOURCES (this week, our domain):\n\n" + "\n\n".join(docs) + "\n\nWrite ONE markdown section in Finnish:\n"
         "## Kilpailijakatsaus\n(4-7 bullets: WHO did/said WHAT — what they sell, what they advertise, "
         "what people discuss; each bullet names the player and cites its source URL in parentheses. "
@@ -730,6 +750,13 @@ def idle_pass() -> dict:
     if morning_report_due():
         m = build_morning_report()
         res = {k: res[k] + m[k] for k in res}
+        # Subscribers get theirs in the same window, and a failure there never touches ours: our
+        # report is already written and sent by this line. build_all reports per subscriber.
+        from crewaimeat.subscriber_briefing import build_all
+
+        subs = build_all()
+        if subs["built"] or subs["failed"]:
+            print(f"[{AGENT}] subscriber briefings: {len(subs['built'])} built, {len(subs['failed'])} failed")
     inbox = check_inbox()
     if inbox.get("processed"):
         print(f"[{AGENT}] inbox pass: {inbox}")

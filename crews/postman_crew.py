@@ -71,6 +71,17 @@ def run() -> None:
         if res.get("sent") or res.get("failed"):
             print(f"[{AGENT_NAME}] mail poll: {res}")
 
+    # on_dm: an Aamukatsaus subscription arrives as a marked DM. handle_dm ignores every DM that
+    # does not carry the marker, so the ordinary inbox is untouched; a marked one is validated,
+    # saved and ANSWERED, because an order that vanished and an order that was rejected look the
+    # same to the person who sent it.
+    def _on_dm(event: dict) -> None:
+        from crewaimeat.subscriber_intake import handle_dm
+
+        saved = handle_dm(event)
+        if saved:
+            print(f"[{AGENT_NAME}] subscription saved: {saved['subscriber']}")
+
     run_crew(
         CrewSpec(
             agent_name=AGENT_NAME,
@@ -79,6 +90,8 @@ def run() -> None:
             temperature=0.3,
             idle_hook=_poll,
             idle_hook_seconds=120,
+            listen_for=["dms"],
+            on_dm=_on_dm,
         )
     )
 
