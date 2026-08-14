@@ -100,6 +100,11 @@ def set_prefs(subscriber: str, order: dict, *, by: str = "app", agent: str = AGE
     value = {
         **clean,
         "subscriber": subscriber,
+        # The DM thread the order arrived in — the route the briefing goes back out through. Kept
+        # from the existing record when an edit does not carry one, so re-ordering from a different
+        # surface never silently cuts off delivery.
+        "conversation_id": order.get("conversation_id") or existing.get("conversation_id"),
+        "ghii": order.get("ghii") or existing.get("ghii"),
         "active": bool(order.get("active", existing.get("active", True))),
         "created_at": existing.get("created_at") or now,
         "updated_at": now,

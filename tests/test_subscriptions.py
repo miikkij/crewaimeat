@@ -121,3 +121,33 @@ def test_one_subscriber_failing_never_costs_the_others(monkeypatch, wired):
     monkeypatch.setattr(sb, "build", _build)
     res = sb.build_all(date="2026-08-14")
     assert "a" in res["failed"] and [b["subscriber"] for b in res["built"]] == ["b"]
+
+
+# ── delivery: the reply is what makes a subscription need NO owner action ──
+def test_the_briefing_is_delivered_down_the_thread_it_was_ordered_on(monkeypatch, wired):
+    """A group share cannot be automated — creating the group and admitting the member are
+    requireRole('owner') on every surface. A reply to the thread the order arrived in needs nobody."""
+    sent = {}
+
+    # The stub mirrors the REAL signature — dm_reply(agent, to, body, *, conversation_id=…). A
+    # looser stub passed while the live call was wrong, which is how a signature bug reached a
+    # live run: a test double that accepts anything tests nothing about how it is called.
+    def _reply(agent, to, body, *, conversation_id=None, **_kw):
+        sent.update(to=to, text=body, conv=conversation_id)
+        return {"ok": True}
+
+    monkeypatch.setattr("crewaimeat.dm.dm_reply", _reply)
+    monkeypatch.setattr(
+        sb, "get_prefs", lambda s, **_k: {"subscriber": s, "topic": "purjehdus", "conversation_id": "c-42"}
+    )
+    out = sb.build("acme-oy", date="2026-08-14")
+    assert out["delivered"] is True
+    assert sent["conv"] == "c-42" and "Grok-ajo" in sent["text"]
+
+
+def test_an_order_with_no_thread_is_archived_but_reported_as_undelivered(monkeypatch, wired, capsys):
+    """Silence here would be the worst case: a briefing written every morning that no one receives."""
+    monkeypatch.setattr(sb, "get_prefs", lambda s, **_k: {"subscriber": s, "topic": "x"})
+    out = sb.build("acme-oy", date="2026-08-14")
+    assert out["delivered"] is False
+    assert "NOT delivered" in capsys.readouterr().err

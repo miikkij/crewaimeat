@@ -28,7 +28,7 @@
      namespace. messages:send is the subscription: an app cannot write into our memory, so an order
      travels as a DM to postman, who validates and saves it. Nothing here asks for share:manage —
      handing out access to memory is not something a briefing reader should be asked to approve. -->
-<meta name="aimeat-scopes" content="memory:read memory:write messages:send">
+<meta name="aimeat-scopes" content="memory:read memory:write messages:send messages:read">
 <title>Aamukatsaus · crewaimeat</title>
 <script>
 /* Restore BOTH theme axes before first paint (spec) — no flash of the wrong look, and the login
@@ -184,9 +184,31 @@ const empty=(t,s)=>'<div class="text-center opacity-70 py-16"><div class="font-s
   '</div><div class="text-sm">'+esc(s||"")+"</div></div>";
 
 /* ── Katsaus ─────────────────────────────────────────────────────────────── */
+/* A subscriber's OWN briefings arrive as messages, not as a share: creating a group and admitting a
+   member are owner-role acts on every surface, so a shared subscription would cost the owner two
+   clicks per subscriber forever. A reply to the thread the order came in on costs nobody anything —
+   and a message you received is already yours, which settles the copy question too.
+   So the reader's inbox is a SOURCE here, read with their own credential. */
+async function inboxBriefings(){
+  if(!SESSION) return [];
+  const d=await authFetch("/v1/messages?per_page=50");
+  const msgs=(d&&(d.messages||d.items))||[];
+  return msgs.filter(m=>String(m.senderGhii||"").startsWith("postman#")&&
+                        /^Aamukatsaus \d{4}-\d{2}-\d{2}/.test(String(m.body||"")))
+    .map(m=>({date:String(m.body).slice(12,22), body_md:String(m.body).replace(/^Aamukatsaus \S+\n+/,""),
+              from:m.senderGhii, at:m.createdAt}))
+    .sort((a,b)=>b.date.localeCompare(a.date));
+}
 async function viewKatsaus(el){
   let days=[], rec=null, key=null;
-  if(SOURCE){
+  if(SOURCE==="oma"){
+    // The reader's own subscription, from their inbox.
+    const mine=await inboxBriefings();
+    if(!mine.length) return el.innerHTML=empty("Tilaustasi ei ole vielä toimitettu",
+      "Tilaus on vastaanotettu, mutta ensimmäinen katsaus rakennetaan seuraavana aamuna klo 7. Se saapuu sinulle viestinä.");
+    rec=(BRIEF_DATE&&mine.find(m=>m.date===BRIEF_DATE))||mine[0];
+    days=mine.map(m=>"oma."+m.date); key="oma."+rec.date;
+  }else if(SOURCE){
     // A subscribed space: the sharer's own dated records. There is no public index for it — the
     // share grants reading, not listing — so the dates are probed backwards from today. `**` means
     // tomorrow's key is covered too, which is why nothing has to be re-shared.
@@ -210,9 +232,11 @@ async function viewKatsaus(el){
           :"Aamuraportti julkaisee mail.morning.public.* seuraavassa ajossa.");
   const label=key?dayOf(key):(rec.date||"viimeisin");
   let h="";
-  if(SHARES.length) h+='<div class="flex flex-wrap items-center gap-2 mb-3"><span class="text-sm opacity-70">Lähde</span>'+
+  const hasOwn=SOURCE==="oma"||(await inboxBriefings()).length>0;
+  if(SHARES.length||hasOwn) h+='<div class="flex flex-wrap items-center gap-2 mb-3"><span class="text-sm opacity-70">Lähde</span>'+
     '<select id="src" class="select select-sm select-bordered"><option value=""'+(SOURCE?"":" selected")+
-    ">Avoin katsaus</option>"+SHARES.map((s,i)=>'<option value="'+i+'"'+(SOURCE===s?" selected":"")+">"+
+    ">Avoin katsaus</option>"+(hasOwn?'<option value="oma"'+(SOURCE==="oma"?" selected":"")+
+    ">Oma tilaukseni</option>":"")+SHARES.map((s,i)=>'<option value="'+i+'"'+(SOURCE===s?" selected":"")+">"+
     esc(s.space)+"</option>").join("")+"</select></div>";
   h+='<div class="flex flex-wrap items-center gap-3 mb-3"><h1 class="text-xl font-semibold">'+esc(label)+"</h1>";
   if(days.length) h+='<select id="d" class="select select-sm select-bordered">'+days.map(k=>{
@@ -240,7 +264,7 @@ async function viewKatsaus(el){
     keep.disabled=true; note2.textContent="Kopioidaan…";
     try{
       await AIMEAT.data.set("aamukatsaus.kopio."+(label||"latest"),
-        {...rec, copiedFrom:{gaii:SOURCE?SOURCE.owner:PUB_GAII, key:key||(KEY_BRIEF+".latest"),
+        {...rec, copiedFrom:{gaii:(SOURCE&&SOURCE.owner)||PUB_GAII, key:key||(KEY_BRIEF+".latest"),
                              copiedAt:new Date().toISOString()}},{visibility:"private"});
       note2.textContent="Tallennettu omaan muistiisi ✓";
     }catch(e){ note2.textContent="Kopiointi ei onnistunut: "+((e&&e.message)||e); keep.disabled=false; }
@@ -248,7 +272,8 @@ async function viewKatsaus(el){
   const sel=el.querySelector("#d");
   if(sel) sel.onchange=e=>{ BRIEF_DATE=e.target.value; render(); };
   const src=el.querySelector("#src");
-  if(src) src.onchange=e=>{ SOURCE=e.target.value===""?null:SHARES[+e.target.value]; BRIEF_DATE=null; render(); };
+  if(src) src.onchange=e=>{ const v=e.target.value;
+    SOURCE=v===""?null:(v==="oma"?"oma":SHARES[+v]); BRIEF_DATE=null; render(); };
 }
 
 /* ── Pulssi ──────────────────────────────────────────────────────────────── */

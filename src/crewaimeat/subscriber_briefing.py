@@ -114,8 +114,41 @@ def build(subscriber: str, *, date: str | None = None, agent: str = AGENT) -> di
     key = publish(subscriber, value, day, agent=agent)
     if not key:
         raise RuntimeError(f"briefing for {subscriber} was built but NOT saved — {len(markdown)} chars lost")
-    print(f"[{agent}] briefing {key}: {', '.join(produced)}", file=sys.stderr)
-    return {"subscriber": subscriber, "key": key, "sections": produced, "chars": len(markdown)}
+    delivered = _deliver(order, markdown, day, agent=agent)
+    print(f"[{agent}] briefing {key}: {', '.join(produced)}{'' if delivered else ' (NOT delivered)'}", file=sys.stderr)
+    return {"subscriber": subscriber, "key": key, "sections": produced, "chars": len(markdown), "delivered": delivered}
+
+
+def _deliver(order: dict, markdown: str, day: str, *, agent: str) -> bool:
+    """Send the briefing back down the thread the order came in on.
+
+    WHY THIS AND NOT A SHARE. A group share cannot be automated at all: creating a group and
+    admitting a member are `requireRole('owner')` on every surface, by design — an agent may hand
+    out access to a key space but must never assemble its own audience. So a shared subscription
+    costs the owner two acts per subscriber, forever, and no scope or bugfix changes that.
+
+    A reply does not. The subscriber wrote to us to subscribe, which makes answering them consented,
+    and `dm_reply` sends without an owner in the loop. The briefing arrives in their own inbox, which
+    also settles the copy question — a message they received is already theirs to keep.
+
+    The record in our memory is unchanged and still the archive; a share on top of it stays
+    available for a subscriber who wants live access to the whole history."""
+    from crewaimeat.dm import dm_reply
+
+    conv = order.get("conversation_id")
+    if not conv:
+        print(
+            f"[{agent}] {order.get('subscriber')}: no conversation on the order — briefing is in "
+            "memory but was NOT delivered. Orders placed through the app always carry one.",
+            file=sys.stderr,
+        )
+        return False
+    # dm_reply(agent, to, body, conversation_id=…): the recipient AND the thread. The thread is what
+    # makes this a consented reply rather than a cold DM the connector would refuse.
+    if dm_reply(agent, order.get("ghii") or "", f"Aamukatsaus {day}\n\n{markdown}", conversation_id=conv) is None:
+        print(f"[{agent}] {order.get('subscriber')}: delivery FAILED on conversation {conv}", file=sys.stderr)
+        return False
+    return True
 
 
 def build_all(*, date: str | None = None, agent: str = AGENT) -> dict:

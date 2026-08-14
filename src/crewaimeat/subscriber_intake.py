@@ -83,19 +83,22 @@ def handle_dm(event: dict, *, agent: str = AGENT) -> dict | None:
     try:
         order = parse_order(body)
     except InvalidOrder as exc:
-        _answer(conv, f"Tilausta ei voitu lukea: {exc}", agent)
+        _answer(conv, f"Tilausta ei voitu lukea: {exc}", agent, sender)
         return None
     if order is None:
         return None
 
     try:
         sub = subscriber_id(sender)
-        saved = set_prefs(sub, order, by=f"dm:{sender}", agent=agent)
+        # The thread is the DELIVERY ROUTE, so it is stored with the order. They wrote to us to
+        # subscribe, which makes replying to them consented — and that is the whole reason the
+        # morning briefing needs no group, no share and no owner action to reach them.
+        saved = set_prefs(sub, {**order, "conversation_id": conv, "ghii": sender}, by=f"dm:{sender}", agent=agent)
     except (InvalidOrder, RuntimeError) as exc:
-        _answer(conv, f"Tilaus EI tallentunut: {exc}", agent)
+        _answer(conv, f"Tilaus EI tallentunut: {exc}", agent, sender)
         return None
 
-    _answer(conv, _confirmation(saved), agent)
+    _answer(conv, _confirmation(saved), agent, sender)
     return saved
 
 
@@ -113,11 +116,13 @@ def _confirmation(saved: dict) -> str:
     return "\n".join(lines)
 
 
-def _answer(conversation_id: str, text: str, agent: str) -> None:
+def _answer(conversation_id: str, text: str, agent: str, to: str = "") -> None:
+    """`dm_reply(agent, to, body, conversation_id=…)` — the recipient AND the thread, because the
+    thread is what makes the reply consented rather than a cold DM."""
     if not conversation_id:
         print(f"[{agent}] order handled but no conversation to answer: {text[:80]}", file=sys.stderr)
         return
-    if dm_reply(agent, conversation_id, text) is None:
+    if dm_reply(agent, to, text, conversation_id=conversation_id) is None:
         print(f"[{agent}] could NOT answer the order in {conversation_id}: {text[:80]}", file=sys.stderr)
 
 
