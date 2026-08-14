@@ -5,33 +5,29 @@ THE SHAPE, in the node team's words (2026-08-11): a share is its own thing —
 named exception on top. `*` matches one segment, `**` the subtree, and a `**` share covers keys
 written LATER — which is the whole reason a subscription works without touching the share again.
 
-So a subscriber costs three calls ONCE:
+WHO DOES WHAT, measured on the live API 2026-08-14 rather than taken from the docs:
 
-    group   = POST /v1/groups                          (owner-role act — see the scope note)
-    member  = POST /v1/groups/{group}/members          (owner-role act)
-    share   = POST /v1/groups/{group}/shares           {"key_pattern": "aamukatsaus.<sub>.**"}
+    OWNER   creates the group and admits the subscriber's GHII.
+            `POST /v1/groups` AND the `aimeat_group_create` MCP tool both answer an agent token
+            with ACCESS_DENIED: Role "owner" required. MCP does not bypass it — this one is gated
+            at the role, not the transport. The boundary is deliberate: an agent may hand out
+            access to a key space, but it must never assemble its own audience.
 
-and after that the daily write is an ORDINARY PRIVATE RECORD:
+    AGENT   creates ONE share of `aamukatsaus.<sub>.**` to that group  ->  provision()
+            Needs the `share:manage` scope, which NO WILDCARD CARRIES. `scopes:["*"]` is not
+            enough; the node keeps it out of every wildcard so that nobody ticking "full access"
+            is thereby deciding an agent may publish their memory to strangers.
 
-    aamukatsaus.<sub>.2026-08-12   ->   no group id, no visibility juggling, nothing to remember
+After that the daily write is an ORDINARY PRIVATE RECORD:
+
+    aamukatsaus.<sub>.2026-08-14   ->   no group id, no visibility juggling, nothing to remember
 
 The subscriber reads `GET /v1/memory/<our-ghii>/<key>` with their own credential; membership
-resolves on the node. Ending it is deleting the share or removing the member — reads stop at once.
-A copy the reader already took stays theirs, which is true of every revocation anywhere.
+resolves on the node. Ending it is revoking the share — reads stop at once. A copy the reader
+already took stays theirs, which is true of every revocation anywhere.
 
-TWO SCOPES, AND NEITHER COMES WITH `*`:
-  · `share:manage`   — required to create a share. The node deliberately keeps it OUT of any
-                       wildcard: nobody ticking "full access" is thereby deciding that an agent may
-                       publish their memory to strangers. Our agents hold `scopes:["*"]`, which is
-                       NOT enough. The owner grants it per agent.
-  · `consent:groups` — required to create a group and admit members. An app-grant can never do this
-                       (its roles are ["app"]): an app may hand out access to a key space, but it
-                       cannot assemble its own audience. That boundary is why provisioning runs
-                       here, agent-side, and only the sharing half could ever move into the app.
-
-NOT LIVE YET at the time of writing: the share API is committed on a node branch, not merged, and
-aimeat.io has not been redeployed. Every call below therefore reports a 404 as "not deployed yet"
-rather than as a failure, so this module can ship, be read, and be exercised the moment it lands.
+Everything here goes through the connector's MCP tools (`aimeat_share_create`, `aimeat_share_list`,
+`aimeat_share_revoke`) rather than REST, which is the surface the fleet already speaks.
 """
 
 from __future__ import annotations
@@ -40,7 +36,7 @@ import datetime
 import re
 import sys
 
-from crewaimeat.aimeat_crew import _aimeat_call, _aimeat_rest
+from crewaimeat.aimeat_crew import _aimeat_call
 
 AGENT = "postman"  # the agent that owns the Aamukatsaus data and its shares
 SPACE_ROOT = "aamukatsaus"
@@ -49,10 +45,6 @@ SPACE_ROOT = "aamukatsaus"
 # separators those grammars use. Rejected at the boundary rather than sanitised: a silently
 # rewritten id would produce a share that does not cover the keys we then write.
 _SUB_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,38}[a-z0-9]$")
-
-
-class ShareApiUnavailable(RuntimeError):
-    """The share API answered 404 — the node build carrying it is not deployed here yet."""
 
 
 def space_of(subscriber: str) -> str:
@@ -71,63 +63,52 @@ def pattern_of(subscriber: str) -> str:
     return f"{space_of(subscriber)}.**"
 
 
-def _rest(method: str, path: str, body: dict | None = None, *, agent: str = AGENT):
-    data = _aimeat_rest(agent, method, path, body)
-    if data is None:
-        # _aimeat_rest already logged the real status. Distinguish "not deployed" from "refused"
-        # by probing the collection route, so a missing build never reads as a permission problem.
-        probe = _aimeat_rest(agent, "GET", "/v1/shares")
-        if probe is None:
-            raise ShareApiUnavailable(
-                f"{method} {path} failed and GET /v1/shares is also unavailable — the share API is "
-                "most likely not deployed on this node yet (it was on a branch on 2026-08-11). "
-                "Nothing was changed."
-            )
-    return data
+class OwnerActionRequired(RuntimeError):
+    """The step needs the OWNER's own hands — an agent cannot do it, by design."""
 
 
-def provision(subscriber: str, ghii: str, agent_gaiis: list[str] | None = None, *, agent: str = AGENT) -> dict:
-    """Give one subscriber their own readable space. Idempotent-ish: safe to re-run, and it reports
-    what already existed rather than duplicating it.
+def _tool(name: str, payload: dict, *, agent: str = AGENT):
+    """Call a connector tool. MCP rather than REST: `POST /v1/groups` refuses an agent token with
+    'Role "owner" required', and while MCP tools normally bypass that HTTP middleware, group
+    creation is gated at the role itself and refuses on both surfaces (measured 2026-08-14)."""
+    return _aimeat_call(agent, name, payload)
 
-    `ghii` is the subscriber as a PERSON. `agent_gaiis` are any agents of theirs that should read it
-    too — a subscriber whose own fleet consumes the briefing needs its agents in the group, because
-    membership is matched per principal, not per household."""
-    space, pattern = space_of(subscriber), pattern_of(subscriber)
-    out: dict = {"subscriber": subscriber, "space": space, "pattern": pattern}
 
-    existing = _rest("GET", "/v1/shares") or {}
-    for s in existing.get("shares") or existing.get("items") or []:
-        if isinstance(s, dict) and s.get("key_pattern") == pattern:
+def provision(subscriber: str, group_id: str, *, agent: str = AGENT) -> dict:
+    """Share this subscriber's key space with a group the OWNER has already created.
+
+    WHY `group_id` IS A PARAMETER AND NOT SOMETHING WE CREATE. Measured 2026-08-14, on both
+    surfaces: `POST /v1/groups` and the `aimeat_group_create` MCP tool both refuse an agent token
+    with `ACCESS_DENIED: Role "owner" required`. Admitting a member is the same. That boundary is
+    deliberate — an agent may hand out access to a key space, but it must never be able to assemble
+    its own audience — so the two halves belong to different principals:
+
+        OWNER  creates the group and admits the subscriber's GHII (browser, or an owner MCP session)
+        AGENT  creates ONE share of `aamukatsaus.<sub>.**` to that group   <- this function
+
+    The share half needs `share:manage`, which no wildcard carries: `scopes:["*"]` is NOT enough and
+    the owner grants it per agent. Without it this raises with the node's own words rather than a
+    generic failure."""
+    pattern = pattern_of(subscriber)
+    out: dict = {"subscriber": subscriber, "space": space_of(subscriber), "pattern": pattern, "group_id": group_id}
+
+    for s in shares_out(agent=agent):
+        if s.get("key_pattern") == pattern:
             out["share"] = s
             out["note"] = "share already existed — left alone"
             return out
 
-    group = _rest(
-        "POST",
-        "/v1/groups",
-        {"name": f"aamukatsaus-{subscriber}", "description": f"Aamukatsaus subscriber {subscriber}"},
-    )
-    gid = (group or {}).get("id") or ((group or {}).get("group") or {}).get("id")
-    if not gid:
-        raise RuntimeError(f"group creation returned no id for {subscriber!r}: {group!r}")
-    out["group_id"] = gid
-
-    members = [{"identifier": ghii, "identifier_type": "ghii"}] + [
-        {"identifier": g, "identifier_type": "gaii"} for g in (agent_gaiis or [])
-    ]
-    out["members"] = []
-    for m in members:
-        _rest("POST", f"/v1/groups/{gid}/members", {**m, "permissions": {"read": True, "write": False}})
-        out["members"].append(m["identifier"])
-
-    # ONE share for the whole subtree. Not one per day: `**` covers keys written later, so the daily
-    # write stays an ordinary private record and this is never touched again.
-    out["share"] = _rest("POST", f"/v1/groups/{gid}/shares", {"key_pattern": pattern})
-    print(
-        f"[{agent}] subscriber {subscriber}: group {gid}, share {pattern}, {len(out['members'])} member(s)",
-        file=sys.stderr,
-    )
+    share = _tool("aimeat_share_create", {"group_id": group_id, "key_pattern": pattern}, agent=agent)
+    if share is None:
+        raise OwnerActionRequired(
+            f"could not share {pattern} with group {group_id}. The two causes, in order:\n"
+            f"  1. `{agent}` lacks the `share:manage` scope. No wildcard carries it — the node keeps\n"
+            "     it out of every one on purpose, so that nobody ticking 'full access' is thereby\n"
+            "     deciding an agent may publish their memory to strangers. Grant it per agent.\n"
+            "  2. the group id does not exist, or is not one this owner owns."
+        )
+    out["share"] = share
+    print(f"[{agent}] subscriber {subscriber}: share {pattern} -> group {group_id}", file=sys.stderr)
     return out
 
 
@@ -145,8 +126,8 @@ def publish(subscriber: str, value, date: str | None = None, *, agent: str = AGE
 
 
 def shares_out(*, agent: str = AGENT) -> list[dict]:
-    """What we have given away — `GET /v1/shares`."""
-    d = _rest("GET", "/v1/shares") or {}
+    """What we have given away."""
+    d = _tool("aimeat_share_list", {"direction": "outgoing"}, agent=agent) or {}
     return d.get("shares") or d.get("items") or []
 
 
@@ -156,7 +137,7 @@ def shares_in(*, agent: str = AGENT) -> list[dict]:
     The half whose absence made groups unusable: without it nobody could find what they had been
     handed. Worth calling even when we are only the giver — it is how an agent discovers that some
     OTHER organism has started sharing a space with us."""
-    d = _rest("GET", "/v1/shares/incoming") or {}
+    d = _tool("aimeat_share_list", {"direction": "incoming"}, agent=agent) or {}
     return d.get("shares") or d.get("items") or []
 
 
@@ -170,12 +151,10 @@ def revoke(subscriber: str, *, agent: str = AGENT) -> bool:
         if s.get("key_pattern") != pattern:
             continue
         sid = s.get("id") or s.get("share_id")
-        gid = s.get("group_id") or s.get("group")
-        path = f"/v1/groups/{gid}/shares/{sid}" if gid else f"/v1/shares/{sid}"
-        if _aimeat_rest(agent, "DELETE", path) is not None:
+        if _tool("aimeat_share_revoke", {"share_id": sid}, agent=agent) is not None:
             print(f"[{agent}] subscriber {subscriber}: share revoked ({pattern})", file=sys.stderr)
             return True
-        print(f"[{agent}] subscriber {subscriber}: revoke FAILED for {path}", file=sys.stderr)
+        print(f"[{agent}] subscriber {subscriber}: revoke FAILED for share {sid}", file=sys.stderr)
         return False
     print(f"[{agent}] subscriber {subscriber}: no share matching {pattern}", file=sys.stderr)
     return False

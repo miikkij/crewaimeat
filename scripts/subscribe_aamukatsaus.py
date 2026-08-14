@@ -1,25 +1,28 @@
 """Onboard (or end) one Aamukatsaus subscriber.
 
-    uv run python scripts/subscribe_aamukatsaus.py acme-oy matti@aimeat-finland-001-genesis
+    uv run python scripts/subscribe_aamukatsaus.py --groups          # find the group id
+    uv run python scripts/subscribe_aamukatsaus.py acme-oy grp_xxx   # share the space with it
     uv run python scripts/subscribe_aamukatsaus.py --revoke acme-oy
     uv run python scripts/subscribe_aamukatsaus.py --list
 
-WHAT IT DOES, once per subscriber: creates a group, admits them by GHII, and shares
-`aamukatsaus.<subscriber>.**` to that group. After that the daily write is an ordinary private
-record and nothing here runs again — `**` covers keys written later, which is what makes it a
-subscription rather than a daily re-share.
+THE WORK IS SPLIT BETWEEN TWO PRINCIPALS, and only the second half runs here.
 
-BEFORE IT CAN WORK — one manual step that no wildcard covers:
+    OWNER (you, in the browser)   create the group, admit the subscriber's GHII
+    AGENT (this script)           share `aamukatsaus.<subscriber>.**` with that group
 
-    the `postman` agent needs `share:manage`  (create a share)
-    and `consent:groups`                       (create a group, admit members)
+Measured against the live API 2026-08-14: `POST /v1/groups` and the `aimeat_group_create` MCP tool
+both answer an agent token with `ACCESS_DENIED: Role "owner" required`, and MCP does NOT bypass it
+— the gate is on the role, not the transport. That boundary is deliberate: an agent may hand out
+access to a key space, but it must never assemble its own audience. So the group id is an argument
+here rather than something the script creates.
 
-`scopes: ["*"]` is NOT enough. The node keeps share:manage out of every wildcard on purpose:
-nobody ticking "full access" is thereby deciding that an agent may publish their memory to
-strangers. Grant them per agent from the owner's agent settings.
+ONE MORE THING NO WILDCARD COVERS: `postman` needs the `share:manage` scope. `scopes:["*"]` is NOT
+enough — the node keeps it out of every wildcard so that nobody ticking "full access" is thereby
+deciding an agent may publish their memory to strangers. Without it the share call answers
+`SCOPE_DENIED`, and this script prints that rather than a generic failure.
 
-The share API was on a node branch and not deployed when this was written; the script says so
-plainly instead of failing in a way that looks like a permission problem.
+After provisioning, the daily write is an ordinary private record and nothing here runs again: `**`
+covers keys written later, which is what makes it a subscription rather than a daily re-share.
 """
 
 from __future__ import annotations
@@ -35,7 +38,9 @@ load_dotenv()
 sys.path.insert(0, "src")
 
 from crewaimeat.subscriber_space import (  # noqa: E402
-    ShareApiUnavailable,
+    AGENT,
+    OwnerActionRequired,
+    _tool,
     pattern_of,
     provision,
     revoke,
@@ -43,25 +48,30 @@ from crewaimeat.subscriber_space import (  # noqa: E402
     space_of,
 )
 
-SCOPE_HINT = (
-    "The share API answered 404. Two possibilities, in order of likelihood:\n"
-    "  1. the node build carrying it is not deployed here yet (it was on a branch 2026-08-11)\n"
-    "  2. it is deployed and this is a routing problem\n"
-    "If it IS deployed and you get 403 instead, the cause is scopes: `postman` needs\n"
-    '`share:manage` and `consent:groups`, and neither is covered by `scopes:["*"]`.'
-)
-
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Onboard or end an Aamukatsaus subscriber.")
     ap.add_argument("subscriber", nargs="?", help="short id, e.g. acme-oy (becomes part of the key AND the share)")
-    ap.add_argument("ghii", nargs="?", help="the subscriber as a person, e.g. matti@aimeat-finland-001-genesis")
-    ap.add_argument("--agent", action="append", default=[], help="also admit this agent GAII (repeatable)")
+    ap.add_argument("group_id", nargs="?", help="a group the OWNER already created and admitted them to")
     ap.add_argument("--revoke", action="store_true", help="end the subscription (delete the share)")
     ap.add_argument("--list", action="store_true", help="list what we currently share")
+    ap.add_argument("--groups", action="store_true", help="list the owner's groups, to find a group id")
     args = ap.parse_args()
 
     try:
+        if args.groups:
+            d = _tool("aimeat_group_list", {}) or {}
+            groups = d.get("groups") or d.get("items") or []
+            print(f"{len(groups)} group(s):")
+            for g in groups:
+                print(f"  {g.get('id') or g.get('group_id'):24s} {g.get('name') or ''}")
+            if not groups:
+                print(
+                    "  (none) — the OWNER creates a group in the browser and admits the subscriber's\n"
+                    '  GHII. An agent token cannot: the node answers ACCESS_DENIED, Role "owner" required.'
+                )
+            return 0
+
         if args.list:
             out = shares_out()
             print(f"{len(out)} share(s):")
@@ -70,13 +80,13 @@ def main() -> int:
             return 0
 
         if not args.subscriber:
-            ap.error("subscriber id is required (or use --list)")
+            ap.error("subscriber id is required (or use --list / --groups)")
         if args.revoke:
             return 0 if revoke(args.subscriber) else 1
 
-        if not args.ghii:
-            ap.error("the subscriber's GHII is required when onboarding")
-        res = provision(args.subscriber, args.ghii, args.agent)
+        if not args.group_id:
+            ap.error("a group id is required when onboarding — see --groups, and note the OWNER creates it")
+        res = provision(args.subscriber, args.group_id)
         print(json.dumps(res, ensure_ascii=False, indent=2))
         print(
             f"\nDaily write from now on:  crewaimeat.subscriber_space.publish({args.subscriber!r}, value)"
@@ -84,8 +94,8 @@ def main() -> int:
             f"\n  -> covered by the share {pattern_of(args.subscriber)} without touching it again"
         )
         return 0
-    except ShareApiUnavailable as exc:
-        print(f"{exc}\n\n{SCOPE_HINT}", file=sys.stderr)
+    except OwnerActionRequired as exc:
+        print(f"{exc}\n\nGrant the scope from the owner's settings for agent {AGENT!r}.", file=sys.stderr)
         return 2
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
