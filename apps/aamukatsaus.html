@@ -202,6 +202,16 @@ async function inboxBriefings(){
 /* Every subscriber's briefing is written into the OWNER's memory as `aamukatsaus.<sub>.<date>` —
    that is what the record is for, so the owner can see and browse what the subscriptions produce.
    ownerScope reaches the agent-written keys; a non-owner's listing simply comes back empty. */
+/* Who owns this briefing. The owner's views (the subscriber list, the per-subscriber archive) must
+   appear for them even when there is NOTHING in them yet — a section that hides when empty is
+   indistinguishable from a section that is broken, which is exactly how "why do I see no
+   subscriptions" happens. */
+const OWNER=PUB_GAII.split("#")[1].split("@")[0];
+function isOwner(){
+  const s=SESSION||{}, u=s.user||{};
+  const id=String(s.ghii||s.owner||s.name||s.username||u.ghii||u.name||u.owner||"");
+  return id.split("@")[0]===OWNER;
+}
 async function subscriberList(){
   return (await ownList("aamukatsaus."))
     .filter(i=>i.key.endsWith(".prefs"))
@@ -466,7 +476,15 @@ async function viewTilaus(el){
     "aamu, ja katto pitää tilauksen hinnan ennustettavana.</p>";
   // The owner's own view of the book: who ordered what, and whether it is being produced. Reads
   // ownerScope, so for anyone else this block simply does not appear.
-  const subs=await subscriberList();
+  const subs=isOwner()?await subscriberList():[];
+  if(isOwner()&&!subs.length){
+    h+='<h2 class="font-semibold mt-6 mb-2">Tilaukset (0)</h2>'+
+      card('<p class="text-sm">Yhtään tilausta ei ole vielä tehty.</p>'+
+      '<p class="text-sm opacity-70 mt-2">Tilaus syntyy kun joku täyttää tämän lomakkeen ja painaa Tilaa. '+
+      "Se saapuu postmanille viestinä, tallentuu ja saa vahvistuksen heti; ensimmäinen katsaus "+
+      "rakennetaan seuraavana aamuna klo 7. Kun tilauksia on, ne näkyvät tässä ja niiden katsaukset "+
+      "Katsaus-välilehden Lähde-valikossa.</p>");
+  }
   if(subs.length){
     let rows="";
     for(const s of subs){
@@ -501,7 +519,17 @@ async function viewTilaus(el){
       const b=r&&r.json?await r.json():r;
       if(b&&b.ok===false) throw new Error((b.error&&(b.error.message||b.error.code))||"lähetys epäonnistui");
       note.textContent="Lähetetty ✓ — saat vahvistuksen viestinä, ja katsaus alkaa seuraavana aamuna.";
-    }catch(e){ note.textContent="Lähetys ei onnistunut: "+((e&&e.message)||e); btn.disabled=false; }
+    }catch(e){
+      // A LIVE APP GRANT KEEPS THE SCOPES IT WAS APPROVED WITH and gains nothing when the app is
+      // updated. Sending an order needs messages:send, which older grants do not carry — so the
+      // fix is a re-approval, and saying that beats a bare 403 the reader cannot act on.
+      const m=String((e&&e.message)||e);
+      note.textContent=/scope|403|denied|permission/i.test(m)
+        ? "Lähetys estyi oikeuksiin: appi tarvitsee luvan lähettää viesti puolestasi. Kirjaudu ulos ja "+
+          "takaisin sisään — hyväksyntäruudussa näkyy uusi rivi, ja sen jälkeen tilaaminen toimii. ("+m+")"
+        : "Lähetys ei onnistunut: "+m;
+      btn.disabled=false;
+    }
   };
 }
 
