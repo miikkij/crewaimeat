@@ -199,9 +199,25 @@ async function inboxBriefings(){
               from:m.senderGhii, at:m.createdAt}))
     .sort((a,b)=>b.date.localeCompare(a.date));
 }
+/* Every subscriber's briefing is written into the OWNER's memory as `aamukatsaus.<sub>.<date>` —
+   that is what the record is for, so the owner can see and browse what the subscriptions produce.
+   ownerScope reaches the agent-written keys; a non-owner's listing simply comes back empty. */
+async function subscriberList(){
+  return (await ownList("aamukatsaus."))
+    .filter(i=>i.key.endsWith(".prefs"))
+    .map(i=>i.key.slice("aamukatsaus.".length,-".prefs".length))
+    .filter(s=>s&&s.indexOf(".")<0).sort();
+}
 async function viewKatsaus(el){
   let days=[], rec=null, key=null;
-  if(SOURCE==="oma"){
+  if(SOURCE&&SOURCE.sub){
+    // The owner reading one subscriber's briefings, straight from our own memory.
+    const all=(await ownList("aamukatsaus."+SOURCE.sub+".")).map(i=>i.key).filter(isDay).sort().reverse();
+    if(!all.length) return el.innerHTML=empty("Tilaajalla ei vielä ole katsauksia",
+      esc(SOURCE.sub)+" on tilannut, mutta ensimmäinen katsaus rakennetaan seuraavana aamuna klo 7.");
+    days=all; key=(BRIEF_DATE&&all.find(k=>dayOf(k)===BRIEF_DATE))||all[0];
+    rec=await ownGet(key);
+  }else if(SOURCE==="oma"){
     // The reader's own subscription, from their inbox.
     const mine=await inboxBriefings();
     if(!mine.length) return el.innerHTML=empty("Tilaustasi ei ole vielä toimitettu",
@@ -233,11 +249,15 @@ async function viewKatsaus(el){
   const label=key?dayOf(key):(rec.date||"viimeisin");
   let h="";
   const hasOwn=SOURCE==="oma"||(await inboxBriefings()).length>0;
-  if(SHARES.length||hasOwn) h+='<div class="flex flex-wrap items-center gap-2 mb-3"><span class="text-sm opacity-70">Lähde</span>'+
+  const subs=await subscriberList();  // empty for anyone who is not the owner
+  if(SHARES.length||hasOwn||subs.length) h+='<div class="flex flex-wrap items-center gap-2 mb-3"><span class="text-sm opacity-70">Lähde</span>'+
     '<select id="src" class="select select-sm select-bordered"><option value=""'+(SOURCE?"":" selected")+
     ">Avoin katsaus</option>"+(hasOwn?'<option value="oma"'+(SOURCE==="oma"?" selected":"")+
     ">Oma tilaukseni</option>":"")+SHARES.map((s,i)=>'<option value="'+i+'"'+(SOURCE===s?" selected":"")+">"+
-    esc(s.space)+"</option>").join("")+"</select></div>";
+    esc(s.space)+"</option>").join("")+
+    (subs.length?'<optgroup label="Tilaukset">'+subs.map(s=>'<option value="sub:'+esc(s)+'"'+
+      (SOURCE&&SOURCE.sub===s?" selected":"")+">"+esc(s)+"</option>").join("")+"</optgroup>":"")+
+    "</select></div>";
   h+='<div class="flex flex-wrap items-center gap-3 mb-3"><h1 class="text-xl font-semibold">'+esc(label)+"</h1>";
   if(days.length) h+='<select id="d" class="select select-sm select-bordered">'+days.map(k=>{
     const v=dayOf(k); return '<option'+(k===key?" selected":"")+">"+esc(v)+"</option>"; }).join("")+"</select>"+
@@ -273,7 +293,8 @@ async function viewKatsaus(el){
   if(sel) sel.onchange=e=>{ BRIEF_DATE=e.target.value; render(); };
   const src=el.querySelector("#src");
   if(src) src.onchange=e=>{ const v=e.target.value;
-    SOURCE=v===""?null:(v==="oma"?"oma":SHARES[+v]); BRIEF_DATE=null; render(); };
+    SOURCE=v===""?null:(v==="oma"?"oma":(v.startsWith("sub:")?{sub:v.slice(4)}:SHARES[+v]));
+    BRIEF_DATE=null; render(); };
 }
 
 /* ── Pulssi ──────────────────────────────────────────────────────────────── */
@@ -443,6 +464,27 @@ async function viewTilaus(el){
     (cur?"Päivitä tilaus":"Tilaa")+'</button><span id="ordered" class="text-sm opacity-70"></span></div>'+
     '<p class="text-sm opacity-60 mt-4">Enintään 5 hakua per kenttä — jokainen on oikea haku joka '+
     "aamu, ja katto pitää tilauksen hinnan ennustettavana.</p>";
+  // The owner's own view of the book: who ordered what, and whether it is being produced. Reads
+  // ownerScope, so for anyone else this block simply does not appear.
+  const subs=await subscriberList();
+  if(subs.length){
+    let rows="";
+    for(const s of subs){
+      const o=await ownGet("aamukatsaus."+s+".prefs")||{};
+      const days=(await ownList("aamukatsaus."+s+".")).map(i=>i.key).filter(isDay).sort();
+      rows+="<tr><td class='align-top'><b>"+esc(s)+"</b>"+(o.active===false?' <span class="badge badge-ghost badge-sm">tauolla</span>':"")+
+        "</td><td class='align-top text-sm'>"+
+        [["Kilpailijat",(o.competitors||[]).join(", ")],["Aiheseuranta",(o.radar||[]).join(", ")],
+         ["Grok",o.topic||""]].filter(p=>p[1]).map(p=>"<div><span class='opacity-60'>"+p[0]+":</span> "+esc(p[1])+"</div>").join("")+
+        "</td><td class='align-top text-sm whitespace-nowrap'>"+(days.length
+          ? esc(dayOf(days[days.length-1]))+' <span class="opacity-60">('+days.length+" kpl)</span>"
+          : '<span class="badge badge-warning badge-sm">ei vielä</span>')+"</td></tr>";
+    }
+    h+='<h2 class="font-semibold mt-6 mb-2">Tilaukset ('+subs.length+")</h2>"+
+      card('<div class="overflow-x-auto"><table class="table table-sm"><thead><tr><th>Tilaaja</th>'+
+      "<th>Mitä seurataan</th><th>Viimeisin</th></tr></thead><tbody>"+rows+"</tbody></table></div>"+
+      '<p class="text-sm opacity-60 mt-2">Katsaukset löytyvät Katsaus-välilehden Lähde-valikosta.</p>');
+  }
   el.innerHTML=h;
   el.querySelector("#order").onclick=async()=>{
     const btn=el.querySelector("#order"), note=el.querySelector("#ordered");
