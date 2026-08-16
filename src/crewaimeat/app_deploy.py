@@ -253,7 +253,12 @@ def deploy_app_agent(agent: str, task: dict) -> str:
     agent_name = _scope_field(scope, "agent_name")
     _guard_owner(scope.get("owner"), "the task scope")
 
-    app = _aimeat_call(agent, "aimeat_app_get", {"app_id": app_id})
+    # The TOOL's parameter is `group_id`, on both the shell surface and the MCP catalog
+    # (/v1/packages/<group_id>); our scope field is called app_id and holds the same identifier.
+    # We sent `app_id` and it was silently dropped, so `requiredString(input,'group_id')` would have
+    # failed this call every time — connector 3.3.1 now refuses it outright with UNKNOWN_PARAMETER,
+    # which is how this surfaced at all.
+    app = _aimeat_call(agent, "aimeat_app_get", {"group_id": app_id})
     if app is None:
         raise DeployError(f"aimeat_app_get returned nothing for app {app_id!r} — cannot deploy what I cannot read")
     if isinstance(app, dict):  # defense in depth: the app record's own owner must be this fleet's
