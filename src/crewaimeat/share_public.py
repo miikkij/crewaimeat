@@ -44,7 +44,26 @@ def _list(prefix: str, agent: str) -> list[dict]:
 
 
 def _read(key: str, agent: str):
-    return (_aimeat_call(agent, "aimeat_memory_read", {"key": key, "owner_scope": True}, quiet=True) or {}).get("value")
+    """Read one key from the OWNER's whole family, not just this agent's namespace.
+
+    VIA REST, DELIBERATELY. The connector's `aimeat_memory_read` does not declare `owner_scope`, so
+    zod drops it and the read silently narrows to the calling agent — an omission the node team
+    confirmed 2026-08-16, alongside the same gap on `aimeat_memory_write`. It fails as NOT_FOUND,
+    which reads as "the key is missing" rather than "you were not allowed to look that far".
+
+    Measured, same token and same key: `aimeat_memory_read(key, owner_scope=True)` -> NOT_FOUND;
+    `GET /v1/memory/<key>?owner_scope=true` -> 200. That matters here more than anywhere else in
+    this repo, because the mirror reads keys SIX different agents wrote — every briefing, pulse and
+    queue record — so a narrowed read makes them look like they were never produced.
+
+    `aimeat_memory_list` is unaffected and stays on the connector."""
+    from crewaimeat.aimeat_crew import _aimeat_rest
+
+    r = _aimeat_rest(agent, "GET", f"/v1/memory/{key}?owner_scope=true&soft=1")
+    if isinstance(r, dict) and r.get("value") is not None:
+        return r["value"]
+    # Fall back to the connector: for a key this agent wrote itself, scope was never needed.
+    return (_aimeat_call(agent, "aimeat_memory_read", {"key": key}, quiet=True) or {}).get("value")
 
 
 def _publish(key: str, value) -> bool:
