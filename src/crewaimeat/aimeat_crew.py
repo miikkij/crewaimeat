@@ -1751,13 +1751,21 @@ def _make_complete_cb(
         _mark_todos_done(agent_name, tid)
         payload = {"task_id": tid, "message": "Crew finished; deliverable published to memory."}
         if mem_key:
-            # The Offers/Inbox contract: the task record's deliverableKey points at the memory key
-            # holding the deliverable — without it the Inbox shows the task but no content/sample.
-            payload["deliverableKey"] = mem_key
+            # The Offers/Inbox contract: the task record's deliverable key points at the memory key
+            # holding the deliverable — without it the Inbox shows the task but no content/sample,
+            # and `outcome` comes back with a message and no address to follow.
+            #
+            # THE FIELD IS snake_case, AND WE HAD IT WRONG. Both doors read `deliverable_key`: the
+            # MCP tool declares it (mcp/agent-tasks.ts) and the REST route reads
+            # `req.body?.deliverable_key` (routes/agent-tasks/completion.ts). We sent
+            # `deliverableKey`, which is simply ignored — no error, the completion succeeds, and the
+            # pointer is silently absent. Measured 2026-08-16: task a73ddeb9 completed with a real
+            # deliverable in memory and its outcome carried state/message/at but no deliverable_key.
+            payload["deliverable_key"] = mem_key
             payload["message"] = f"Crew finished; deliverable published to memory at {mem_key}."
         res = _aimeat_call(agent_name, "aimeat_task_complete", payload)
         print(
-            f"[{agent_name}] task completed deterministically {tid} (deliverableKey={mem_key or '-'}): {bool(res)}",
+            f"[{agent_name}] task completed deterministically {tid} (deliverable_key={mem_key or '-'}): {bool(res)}",
             file=sys.stderr,
         )
 
