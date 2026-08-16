@@ -10,13 +10,12 @@ column's name and type, and the row count. That is the whole contract — an age
 ask "what is in this file" has found a gap in the schema, and THAT is the finding, not a reason to
 write documentation. So no tool here accepts or emits a column description.
 
-ONE WORKAROUND, REPORTED RATHER THAN HIDDEN — see `resolve_descriptor`.
+The envelope workaround this module once carried is GONE — aimeat-crewai 0.20.1 accepts both
+addresses (see `resolve_descriptor`, now a pass-through kept only for callers holding either).
 """
 
 from __future__ import annotations
 
-import json
-import urllib.request
 from typing import Any
 
 from aimeat_crewai import (
@@ -31,34 +30,16 @@ from aimeat_crewai import (
 NODE = "https://aimeat.io"
 
 
-def resolve_descriptor(url: str, *, timeout: int = 60) -> str:
-    """Return an address `read_package` accepts, given either kind of address.
+def resolve_descriptor(url: str) -> str:
+    """Pass-through, kept only so callers holding either address keep working.
 
-    WORKAROUND, and it should not need to exist. `GET /v1/datapackages/<owner>/<name>` — the address
-    the docs give — answers with the node's REST ENVELOPE:
-
-        {ok, protocol, node, …, data: {descriptor: {...aimeat: {...}}, descriptor_url, latest}}
-
-    `read_package` looks for the `aimeat` block at the top level of what it fetched, does not find it
-    one layer down, and refuses with "is a Frictionless descriptor without an `aimeat` block … Read
-    it with frictionless directly." The block IS there, at `data.descriptor.aimeat`. So the
-    documented address fails on a package that is completely well-formed, and the message sends you
-    off to another library.
-
-    This unwraps the envelope and hands back `data.descriptor_url` — the permanent content-hash
-    address, which `read_package` reads without complaint. A bare descriptor URL passes through
-    untouched, so callers can hold either kind."""
-    if "/v1/datapackages/" not in url:
-        return url
-    with urllib.request.urlopen(url, timeout=timeout) as r:  # noqa: S310 — a node address, not user input
-        body = json.load(r)
-    data = body.get("data") if isinstance(body, dict) else None
-    if isinstance(data, dict) and data.get("descriptor_url"):
-        return data["descriptor_url"]
-    raise ValueError(
-        f"{url} answered without a `data.descriptor_url`, so there is no address to read. "
-        f"Top-level keys: {sorted(body) if isinstance(body, dict) else type(body).__name__}"
-    )
+    THE WORKAROUND THAT USED TO LIVE HERE IS GONE (aimeat-crewai 0.20.1). `read_package` refused
+    `/v1/datapackages/<owner>/<name>` because the `aimeat` block sits one layer down inside the REST
+    envelope; this function unwrapped it. 0.20.1 accepts both addresses, and a package read through
+    the REST one reports the PERMANENT address of the bytes it actually read — verified 2026-08-16:
+    resource_url() came back as /v1/pub/…/datapkg/laake-saatavuus/<hash>/…, not the URL handed in.
+    So there is nothing left to resolve."""
+    return url
 
 
 def open_package(url: str) -> dict[str, Any]:
