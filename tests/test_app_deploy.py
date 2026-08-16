@@ -239,8 +239,11 @@ def test_deploy_rejects_invalid_embedded_def(deploy_harness, monkeypatch):
 
 
 def test_deploy_fails_loud_when_app_unreadable(own_fleet, monkeypatch):
+    """And the failure NAMES the call it made. `aimeat_app_get` changed what it addresses twice in a
+    week (app_id -> group_id/packages -> owner+filename in connector 3.3.2), so "returned nothing"
+    on its own sends the reader to look at the app instead of at how it was asked for."""
     monkeypatch.setattr(app_deploy, "_aimeat_call", lambda *_a, **_k: None)
-    with pytest.raises(DeployError, match="aimeat_app_get returned nothing"):
+    with pytest.raises(DeployError, match=r"aimeat_app_get\(owner=.*filename=.*returned nothing"):
         deploy_app_agent("crew-forge", _deploy_task())
 
 

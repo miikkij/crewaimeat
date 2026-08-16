@@ -253,14 +253,25 @@ def deploy_app_agent(agent: str, task: dict) -> str:
     agent_name = _scope_field(scope, "agent_name")
     _guard_owner(scope.get("owner"), "the task scope")
 
-    # The TOOL's parameter is `group_id`, on both the shell surface and the MCP catalog
-    # (/v1/packages/<group_id>); our scope field is called app_id and holds the same identifier.
-    # We sent `app_id` and it was silently dropped, so `requiredString(input,'group_id')` would have
-    # failed this call every time — connector 3.3.1 now refuses it outright with UNKNOWN_PARAMETER,
-    # which is how this surfaced at all.
-    app = _aimeat_call(agent, "aimeat_app_get", {"group_id": app_id})
+    # `aimeat_app_get` has meant two different backends inside one week, so this is written against
+    # the tool as it stands rather than from memory:
+    #   3.3.0  took `app_id` — silently dropped, the call could never have worked
+    #   3.3.1  took `group_id` and served /v1/packages/<group_id> — a PACKAGE tool wearing the app
+    #          tool's name; our fix to `group_id` was correct for that build and wrong about what
+    #          the call was for
+    #   3.3.2  takes `owner` + `filename` and serves the app again; packages got their own family
+    #          (aimeat_package_get)
+    # We hold one identifier, `app_id`, and the scope does not say whether it is a filename. Rather
+    # than guess a suffix, it goes across as-is and the failure names exactly what was tried — the
+    # first real deploy will settle it, and a wrong guess here would fail as "app not found".
+    app_owner = scope.get("owner") or os.getenv("AIMEAT_OWNER", "").strip()
+    app = _aimeat_call(agent, "aimeat_app_get", {"owner": app_owner, "filename": app_id})
     if app is None:
-        raise DeployError(f"aimeat_app_get returned nothing for app {app_id!r} — cannot deploy what I cannot read")
+        raise DeployError(
+            f"aimeat_app_get(owner={app_owner!r}, filename={app_id!r}) returned nothing. "
+            "Since connector 3.3.2 the app tools address an app by owner + filename; if the scope's "
+            "app_id is a name rather than a filename, that is the mismatch to fix here."
+        )
     if isinstance(app, dict):  # defense in depth: the app record's own owner must be this fleet's
         rec = app.get("app") if isinstance(app.get("app"), dict) else app
         for f in ("owner", "owner_name", "ownerName"):
