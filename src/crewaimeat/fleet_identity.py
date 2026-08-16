@@ -115,6 +115,18 @@ FLEET_IDENTITY: dict[str, dict] = {
             "languages": ["en"],
         },
     },
+    "datapkg-analyst": {
+        "tags": ["data-packages", "frictionless", "tabular-analysis", "role.task-runner"],
+        "capabilities": {
+            "technical": ["aimeat data packages", "frictionless table schema", "pandas", "parquet"],
+            "domain": [
+                "answering questions about a published dataset from its schema",
+                "publishing a versioned data package with a real changes note",
+                "pinning a version by its permanent content-hash address",
+            ],
+            "languages": ["fi", "en"],
+        },
+    },
     "web-tester": {
         "tags": ["web-testing", "browser-automation", "vision", "role.task-runner"],
         "capabilities": {
