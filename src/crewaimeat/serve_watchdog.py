@@ -64,8 +64,11 @@ def run() -> None:
     if lock_fh is None:
         _say("[serve-watchdog] another supervisor already holds the lock — exiting", err=True)
         return
+    from crewaimeat.wake_spin import MIN_STUCK_SECONDS, SpinSweeper
+
     _say(f"[serve-watchdog] supervising the shared serve daemon (every {INTERVAL}s)")
     last_pid = None
+    sweeper = SpinSweeper()
     try:
         while True:
             try:
@@ -86,6 +89,22 @@ def run() -> None:
                     else:
                         _say(f"[serve-watchdog] serve daemon live: pid {pid}, port {doc.get('port')}, {n} agents")
                     last_pid = pid
+
+                # WAKE-SPIN SWEEP. `/local/wake/next` is level-triggered and consumes nothing, so one
+                # queued push makes every wake return instantly and the daemon's idle wait becomes
+                # zero. Measured on this machine 2026-08-17: ONE stuck agent of 61 drove 28 req/s at
+                # the node and 76 % of a CPU; the fleet was the node's largest single traffic source.
+                # Safe because the node's store is the truth for tasks and the daemon re-lists them
+                # every cycle — this drops a redundant repeat, never an event. See wake_spin.py for
+                # why nothing younger than MIN_STUCK_SECONDS is ever touched.
+                port = doc.get("port")
+                names = [a.get("agent") for a in (doc.get("agents") or []) if isinstance(a, dict) and a.get("agent")]
+                if port and names:
+                    for agent, took in sweeper.sweep(int(port), names):
+                        _say(
+                            f"[serve-watchdog] cleared a wake-queue spin on {agent!r}: consumed {took} "
+                            f"stale element(s) after it read hot for over {MIN_STUCK_SECONDS}s"
+                        )
             except Exception as exc:  # noqa: BLE001 — a transient discover/spawn error must not kill the supervisor
                 _say(f"[serve-watchdog] ensure_serve failed (will retry): {exc!r}", err=True)
             time.sleep(INTERVAL)
