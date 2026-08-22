@@ -140,8 +140,12 @@ Check progress with the node's `aimeat_onboarding_status`, not the dashboard ste
 - **Build a new crew without coding:** queue **crew-forge** a task `/build <description>` — it designs,
   writes + validates `build_domain`, registers, and launches the new agent; the user approves it once.
 - **Scaffold a crew by hand:** `uv run crewaimeat new-crew <name>`, then edit only its `build_domain`
-  (or paste `CREW_AUTHORING_PROMPT.md` into an assistant). Give it a real identity in
-  `src/crewaimeat/fleet_identity.py` and an `offers.py` entry.
+  (or paste `CREW_AUTHORING_PROMPT.md` into an assistant). Give it a real identity IN THE CREW FILE —
+  `LLM_PROFILE`, `TAGS`, `CAPABILITIES`, `OFFERS` as module constants (there is no central registry to
+  update any more; the lists are derived from these).
+- **Check the fleet still agrees with itself:** `uv run crewaimeat doctor` (add `--live` to also ask the
+  node). `uv run crewaimeat costs` shows model spend per agent and flags any that spend without
+  producing; `uv run crewaimeat retire <agent>` stops one participating.
 - **Give crews expertise:** `skills/<name>/SKILL.md` packs, loaded via `CrewSpec(skills=[...])`
   (see `skills/README.md`); owner-linked registry skills attach automatically.
 

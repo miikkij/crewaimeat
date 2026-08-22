@@ -10,7 +10,13 @@ every PR.
 ```bash
 uv run pytest            # the whole floor
 uv run pytest -q tests/test_build_domain.py     # just the per-crew contract
+uv run crewaimeat doctor --strict               # the reconciliation gate CI also runs
 ```
+
+`doctor` is not part of pytest and is not meant to be: pytest asserts what the code DOES, doctor
+reconciles what the repo DECLARES (six registries agreeing, every node/model call taking a sanctioned
+route). Both run in CI and in the pre-commit hook. Its own floor is
+[test_doctor.py](test_doctor.py) — a quality gate without tests is an opinion.
 
 No API keys, no AIMEAT connection, no network. A dummy `OPENROUTER_API_KEY` is set in
 [conftest.py](conftest.py) only so `LLM(...)` objects construct (they are never called).
@@ -32,13 +38,33 @@ No API keys, no AIMEAT connection, no network. A dummy `OPENROUTER_API_KEY` is s
   literal `{ctx.today}`/`{ctx.prompt}`. (The synthesis report header was a non-f-string, so the
   placeholders printed verbatim.)
 
-## The `max_iter` ratchet
+## Which crews are covered — and `max_iter`
 
-`test_workers_bounded_and_non_delegating` enforces `allow_delegation=False` for **all** crews and
-`max_iter <= 40`. Six builder/fixer crews currently exceed it (audit roadmap item #2) and are
-**strict-xfail**'d in `KNOWN_MAX_ITER_GAPS`. When you cap one to `<=40`, its test flips to *xpass*
-and pytest fails until you remove it from that set — a ratchet that only tightens. Do not add a
-crew to the set to silence it; cap the crew.
+`CREW_MODULES` is **derived from disk** (`crews/*_crew.py`, a leading `_` = parked — the same rule the
+fleet host uses), so a new crew is contract-tested the day it lands and a parked one leaves the list by
+itself. It was hand-kept until 2026-08-22, by which point it named 21 of 46 live crews and still listed
+four that had been parked — 16 permanently failing tests, behind which every real regression hid.
+
+A crew with no `build_domain` is not exempt: it must be a genuine brain stub, which
+`test_brain_stubs_are_really_brain_stubs` asserts. Deleting the function moves a crew to a *stricter*
+claim, never off the floor.
+
+**`max_iter` is a backstop, not a gap to close.** An earlier version of this floor enforced
+`max_iter <= 40` with an xfail ratchet. Field data (2026-06-05, live operator runs) overturned it: the
+cap fires only on NON-convergent re-authoring loops, is load-bearing for the builder/fixer/editor crews,
+and lowering it merely makes a doomed loop fail faster — it cannot tell thrashing from legitimate build
+depth. The floor now pins the real invariant (`allow_delegation=False`) and flags only an absurd value
+(a typo). The runaway bound is a wall-clock (`AIMEAT_AGENT_MAX_EXECUTION_TIME`) plus verify-gated
+completion.
+
+## `ctx.prompt` injection, and opting out honestly
+
+`test_ctx_prompt_is_injected` requires the user's ask to reach a task description — the failure where an
+agent never sees its task and drifts to a guessed target. A crew whose real work is NOT prompt-driven (a
+deterministic pipeline woken by a record, a DM loop, a scheduled marker) opts out by declaring
+`PROMPT_INDEPENDENT = "<reason>"`. The opt-out is a **written reason, not a boolean**, precisely so it
+cannot be used to silence a real regression: absent means the strict rule applies, so a new crew is held
+to it by default and has to say out loud why it is different.
 
 ## What's next (from the testing plan)
 

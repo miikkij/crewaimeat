@@ -51,6 +51,14 @@ Reflect my answers back as a short spec (roster, order, I/O) and get my OK befor
   - Create the `Task`s in order. Prepend `ctx.today` to any time-sensitive task. Give the agent that needs my request `ctx.prompt`. The **last task's output is what gets published** to AIMEAT.
   - `return (agents, tasks)`.
 - Keep `run()` calling `run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain))`. Set `process`, `poll_seconds`, or `memory_key_prefix` only if I asked for it.
+- **Declare what the agent IS, in the same file** — these are module-level constants beside `AGENT_NAME`, and they are the ONLY place this data lives (there is no central registry):
+  - `LLM_PROFILE = "content" | "news" | "coding" | "content-free" | "image"` — which profile in `llm_providers.json` routes it. A crew that declares none falls to the file's `default` silently, so write it down even when the default is what you want.
+  - `TAGS = [...]` — how discovery finds it. Charset `[a-z0-9._-]` only; the node rejects `:` and `@`.
+  - `CAPABILITIES = {"technical": [{"name": ..., "type": "mcp"|"skill"|"tool"}], "domain": [str], "languages": [str]}` — `technical` entries are OBJECTS; free phrases ("pandas", "frictionless schema") belong in `domain`. A bare string in `technical` is accepted by the node and silently makes the agent unmatchable, so `run_crew` rejects it at the boundary.
+  - `OFFERS = [{"id", "title", "ask", "example", "cost", "latency", ...}]` — what it advertises. The `ask` MUST state negative scope ("… I do NOT do X").
+  - `SKILLS = ["<dir under skills/>"]` — optional SKILL.md expertise packs.
+- **If the crew's real work is not driven by the task prompt** — a deterministic pipeline woken by a record, a DM loop, a scheduled marker — declare `PROMPT_INDEPENDENT = "<one sentence saying why>"`. It is a written reason rather than a flag so it cannot be used to silence a real regression, and the contract test requires it whenever `ctx.prompt` does not reach a task description.
+- **Verify before you call it done:** `uv run crewaimeat doctor` must stay green — it reports a crew that declares no identity, offer or model profile, and a crew that reaches the node or builds an `LLM` by an unsanctioned route.
 - Keep all your code inside `build_domain`. If you find yourself reaching for AIMEAT/onboarding/daemon/memory/progress code, pause; the scaffold already provides it.
 
 ## Step 3: first run and verify

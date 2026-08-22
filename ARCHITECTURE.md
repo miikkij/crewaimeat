@@ -51,8 +51,12 @@ src/crewaimeat/         the LOCKED scaffold + shared machinery (the package)
   aimeat_crew.py        run_crew / CrewSpec / BuildContext — the heart; liaison + daemon + dispatch
   _home.py              AIMEAT_HOME resolution (single source of truth)
   llm.py                LLM factory: provider-profile routing + per-agent overrides
-  fleet_identity.py     curated per-agent tags + capabilities (what each agent advertises)
-  offers.py             what each agent OFFERS (crew offers + contract-derived offers)
+  agent_manifest.py     each crew's OWN declaration, read statically (the one source per agent)
+  fleet_identity.py     resolves tags + capabilities FROM the crew (empty central dict = fallback)
+  offers.py             offer machinery; the authored per-crew offers are derived from the crews
+  doctor/               registry reconciliation + call-graph route conformance + node liveness
+  retire.py             the opposite of forging an agent (park, unregister, stash token)
+  fleet_economics.py    model spend per agent, and who spends without producing
   forge.py              fleet control: launch / stop / recycle a crew, reconcile the fleet
   serve_guard.py        enforce exactly one shared serve daemon
   serve_watchdog.py     supervise the serve daemon
@@ -106,9 +110,11 @@ run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=RE
 
 `run_crew` (in [aimeat_crew.py](src/crewaimeat/aimeat_crew.py)) provides everything else:
 
-1. **Connect & onboard** — runs the Hello-Integration once; sets identity (tags via
-   `aimeat_agent_tags_set`, capabilities via `aimeat_agent_capabilities_report`) from
-   `fleet_identity.py`; publishes offers from `offers.py`.
+1. **Connect & onboard** — sets the agent's MODE (`aimeat_agent_mode_set`; task-runner by default,
+   because device auth no longer carries a `--mode` flag), runs Hello-Integration once, then sets
+   identity from the CREW's own declaration (tags via `aimeat_agent_tags_set`, capabilities via
+   `aimeat_agent_capabilities_report` — rejected at the boundary if malformed) and publishes its
+   `OFFERS`.
 2. **LLM** — builds the model via `llm.get_llm(agent_name=...)` so routing is per-agent.
 3. **Daemon loop** — polls AIMEAT for tasks; on each task, calls `build_domain(ctx)` (with
    `ctx.prompt`, `ctx.today`, `ctx.llm`, a liaison), runs the CrewAI kickoff, and writes the
@@ -161,20 +167,25 @@ so the daemon's `get_llm` and the TUI's Config display always agree. See `llm.sa
 
 ## Offers, contracts, identity, workflows (discovery surface)
 
-These are **local Python constants** — the data the fleet advertises and the TUI Config tab renders:
+These are **local Python constants** — the data the fleet advertises and the TUI Config tab renders.
+Since 2026-08-22 the per-agent half of it lives in the CREW FILE and the central lists are derived:
 
-- **`offers.py`** — `_CREW_OFFERS` (crew-task offers) + `_OFFER_META` (contract-derived offers).
-  An offer = `{id, title, ask, deliverable, signals, …}`. This is how other agents/humans discover
-  what an agent does.
+- **the crew file** — `LLM_PROFILE`, `TAGS`, `CAPABILITIES`, `OFFERS`, `SKILLS` at module level (a JSON
+  crew states the same keys in its doc). `agent_manifest.py` reads them with `ast`, never by importing.
+- **`offers.py`** — the offer MACHINERY: `_OFFER_META` (contract-derived offers) plus `crew_offers()` /
+  `crew_offer_agents()`, which assemble the authored offers from what the crews declare. An offer =
+  `{id, title, ask, deliverable, signals, …}` — how other agents and humans discover what an agent does.
 - **`*_contract.py`** — `CONTRACT = {id, spaces:[{space, namespace, mode, schema}]}`. Defines a
   contract agent's input/output spaces and their JSON schemas. `contract_adopt.py` provisions them
   into a workspace.
-- **`fleet_identity.py`** — `FLEET_IDENTITY[agent] = {tags, capabilities}` (the matcher reads these).
+- **`fleet_identity.py`** — `identity_for(agent) -> {tags, capabilities}`, resolved from the crew. The
+  `FLEET_IDENTITY` dict is empty and kept only as a fallback for an agent with no reachable crew file.
 - **`workflow_spec.py`** — `WORKFLOWS[id] = {schedule, vars, steps}`; each step binds an `agent` +
   `offer` with `after` edges and two-directional signals (`required_to_function` / `success_signal`).
 
-When you add or change an agent, keep these in sync (identity registry, an `offers.py` entry, the
-README constant) — discovery reads all of them.
+When you add or change an agent, it is ONE file: the crew's own declaration plus its `README` constant.
+Nothing central needs updating — and `crewaimeat doctor` reports any crew that leaves a field blank,
+which is the guarantee that replaced "keep these in sync".
 
 ---
 
@@ -217,9 +228,11 @@ restarts the agent via `forge.recycle_crew`.
 
 | You want to… | Touch |
 |---|---|
-| Add a new agent | `crews/<name>_crew.py` (+ `crewaimeat new-crew`), `fleet_identity.py`, `offers.py` |
+| Add a new agent | `crews/<name>_crew.py` only (+ `crewaimeat new-crew`) — declare `LLM_PROFILE` / `TAGS` / `CAPABILITIES` / `OFFERS` there; verify with `crewaimeat doctor` |
+| Remove an agent | `crewaimeat retire <agent> --apply` (parks the crew, unregisters, stashes the token) |
+| See what an agent costs | `crewaimeat costs` |
 | Give an agent a contract | a new `*_contract.py` (`CONTRACT`), wire adoption via `contract_adopt.py` |
-| Change LLM routing | `llm_providers.json` (profile) or the TUI model picker (per-agent override) |
+| Change LLM routing | the crew's `LLM_PROFILE` (its default), `llm_providers.json` → `crews` (per-machine override), or the TUI model picker (per-agent pin) |
 | Add a multi-step pipeline | `workflow_spec.py` (`WORKFLOWS`) + the deterministic `*_pipeline.py` stages |
 | Extend the TUI | `tui/agent_meta.py` (data) + `tui/render.py` (format) + `tui/app.py` (wire) — keep render pure |
 | Add fleet control | `forge.py` (logic) + `tui/actions.py` (expose) |

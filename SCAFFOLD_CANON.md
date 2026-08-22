@@ -15,7 +15,7 @@ Validated 2026-05-30 against: aimeat-crewai **0.3.4**, aimeat CLI **1.14.3**, cr
 ## 2. Lifecycle
 
 ```
-aimeat connect
+aimeat connect (+ approve in dashboard)
         │
         ▼
 Hello Integration (onboarding, once)         ← deterministic gate; LLM only if needed
@@ -47,7 +47,7 @@ Items marked *(upstream)* are now shipped in the packages, listed so you know th
 
 ## 4. The contract: what you write vs what the scaffold provides
 
-- **You write:** `build_domain(ctx)` (your `Agent`s and `Task`s), `AGENT_NAME`, and optional `CrewSpec` fields (`process`, `poll_seconds`, `memory_key_prefix`, `owner`, `max_idle_auth_failures`, and `idle_hook`/`idle_hook_seconds` for a deterministic per-cycle workspace-contract poll). Pass `llm=ctx.llm` to every agent. Prepend `ctx.today` to time-sensitive tasks. Give the user's request (`ctx.prompt`) to the agent(s) that need it. The last task's output is what gets published.
+- **You write:** `build_domain(ctx)` (your `Agent`s and `Task`s), `AGENT_NAME`, the agent's own declaration (`LLM_PROFILE`, `TAGS`, `CAPABILITIES`, `OFFERS`, `SKILLS` — module constants read statically by `agent_manifest`; there is no central registry to update), and optional `CrewSpec` fields (`process`, `poll_seconds`, `memory_key_prefix`, `owner`, `max_idle_auth_failures`, and `idle_hook`/`idle_hook_seconds` for a deterministic per-cycle workspace-contract poll). Pass `llm=ctx.llm` to every agent. Prepend `ctx.today` to time-sensitive tasks. Give the user's request (`ctx.prompt`) to the agent(s) that need it. The last task's output is what gets published.
 - **Provided by the scaffold (reuse as-is):** `aimeat_crew.py` (onboarding, daemon, `finalize`, date, auth-guard), `progress.py`, the `llm.py` wiring.
 
 ## 5. Rules

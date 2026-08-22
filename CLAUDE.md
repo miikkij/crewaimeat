@@ -37,7 +37,7 @@ status cells, append decisions), so the two sides stay synced without drifting p
   projects' fleets (no global `~/.aimeat` collision). Resolve it via `crewaimeat._home.aimeat_home()`,
   never re-derive the path. `.aimeat/` is gitignored (it holds tokens).
 - One crew = `crews/<name>_crew.py`; `build_domain(ctx) -> ([agents], [tasks])`; `AGENT_NAME` matches
-  the name used in `aimeat connect
+  the name used in `aimeat connect --agent`.
 - **Skills** = portable SKILL.md expertise packs in `skills/<name>/` (see `skills/README.md`; contract
   shared with the AIMEAT registry, spec doc-sdie0se). `CrewSpec.skills=["name"]` loads them FAIL-LOUD at
   daemon start (`crewaimeat.skills.load_skills`); agents take them like ctx.llm: `Agent(skills=ctx.skills)`
@@ -48,16 +48,32 @@ status cells, append decisions), so the two sides stay synced without drifting p
   Workspace skills (2c) are OPT-IN: `workspace_skills=True` derives targets from record_spaces (or pass
   explicit `[{"organism_id","ws"}]`); precedence local > linked > workspace-auto. Default OFF — a
   workspace is a shared surface; any member's skill would ride into the crew's prompts.
-- **New agent? Give it a real identity** — don't ship the generic Hello-Integration defaults. Add an
-  entry to the central registry `src/crewaimeat/fleet_identity.py` (charset-safe `tags` `[a-z0-9._-]`
-  + specific `capabilities` {technical, domain, languages}, derived from the agent's purpose); the
+- **The crew file is the ONE source for what an agent is.** Beside `build_domain`, a crew declares at
+  module level: `LLM_PROFILE` (which `llm_providers.json` profile routes it), `TAGS` (charset-safe
+  `[a-z0-9._-]`), `CAPABILITIES` ({technical: [{name,type}] OBJECTS, domain: [str], languages: [str]}),
+  `OFFERS` (a list), `SKILLS`. A JSON crew states the same keys in its `crew_defs/*.json` doc.
+  `crewaimeat.agent_manifest` reads them STATICALLY (ast, never by importing); `fleet_identity`,
+  `offers` and the routing map are DERIVED. This replaced three central lists that nothing required
+  you to update — which is how 13 crews ended up with no identity, 13 with no offer and 20 with no
+  routing decision (audit 2026-08-22). Never re-add an agent to a central list; put it in the crew.
+- **New agent? Give it a real identity** — don't ship the generic Hello-Integration defaults. The
   scaffold sets tags (`aimeat_agent_tags_set`) + reports capabilities (`aimeat_agent_capabilities_report`)
-  on every start. A crew may instead set `CrewSpec.tags`/`.capabilities` inline (overrides the registry).
-  Discovery/matching reads tags + capabilities + README + offers — so ALSO keep the crew's `README`
-  constant accurate and add an `offers.py` entry. Versioned ids (`consumes:x@1`) go in `capabilities`
-  /`offers`, never tags (tags reject `:`/`@`).
-- LLM routing (`llm_providers.json`): route content crews → grok; route code/app crews →
-  owl-alpha → gpt-oss-120b → minimax (grok is for content only — strong at prose, weak at code).
+  on every start, and `run_crew` REJECTS a malformed capabilities payload at the boundary (a bare string
+  in `technical` is accepted by the node and silently makes the agent unmatchable). Discovery reads tags
+  + capabilities + README + offers, so keep the crew's `README` constant accurate too. Versioned ids
+  (`consumes:x@1`) go in `capabilities`/`offers`, never tags (tags reject `:`/`@`).
+- LLM routing: the crew's own `LLM_PROFILE` is the default; `llm_providers.json` → `crews` is a
+  per-machine OVERRIDE list (empty by default). Content crews → grok is for PROSE only (strong at
+  prose, weak at code and weak in Finnish); Finnish prose → the `news` profile (DeepSeek V4 Pro);
+  code/app crews → `coding`. A crew that declares no profile falls to `default` silently; doctor
+  reports it and the fleet host names it at start-up.
+- **`crewaimeat doctor` before you claim anything is fine.** Three lenses: registries (do the crew
+  files, serve.json and the node agree), conformance (a call-graph route check — node calls go through
+  `_aimeat_call`/`_aimeat_rest`, a crew's model comes from routing not a constructor, a failure on the
+  deliverable path is visible, the connector version exists in one place), liveness (`--live`, what the
+  node believes). Runs in pre-commit + CI; `doctor-baseline.json` only ever shrinks.
+  `crewaimeat retire <agent>` is the opposite of forging one; `crewaimeat costs` shows who spends
+  without producing.
 - **Two messaging channels — keep them distinct.** (1) dashboard/owner chat (`aimeat_message_*`): the
   agent ↔ its OWN owner, private, NOT federated — the daemon already triggers crews from it. (2) the
   **federated inbox** (`aimeat_dm_*`, AIMEAT "Postilaatikko", v1.30.1+): the agent → ANYONE on the
@@ -75,28 +91,32 @@ status cells, append decisions), so the two sides stay synced without drifting p
   A leading underscore parks a crew: `crews/_foo_crew.py` is skipped (`forge._crew_files`, why the
   `_aimeat_*` crews are dormant). So "add a crew file" ≠ "agent is live".
 - Two things make it live, not just present: (1) **register once** —
-  `npx aimeat@latest connect --url https://aimeat.io --owner <owner>` --agent <name>
+  `npx aimeat@latest connect --url https://aimeat.io --owner <owner> --agent <name>`
   — and approve the one-time device flow (its token lands in the shared `serve.json`); (2) **restart the
   fleet** (`scripts/start_fleet.ps1` → `fleet_host`) so it attaches as a THREAD to the ONE shared loopback
   serve daemon (all agents in one process, crewai imported once). Only APPROVED agents come online; an
   unapproved one waits and joins itself once approved.
-- **`--mode task-runner` is load-bearing, not boilerplate.** A task is auto-activated ONLY when the
-  agent's mode is `task-runner` (`autoActivated = queued && mode === 'task-runner'`); every other mode
+- **`task-runner` mode is load-bearing, not boilerplate — and the scaffold sets it, not the CLI.**
+  Device auth no longer takes a `--mode` flag (removed in connector v1.33), so `run_crew` sets the mode
+  on EVERY start via `aimeat_agent_mode_set`, before onboarding; `CrewSpec.mode=None` derives
+  `task-runner` for every crewaimeat crew. A task is auto-activated ONLY when the agent's mode is
+  `task-runner` (`autoActivated = queued && mode === 'task-runner'`); every other mode
   (`interactive`/`autonomous`/`coordinator`) follows `queued → (OWNER starts it) → active → done`. There
   is NO `aimeat_task_start` tool, and the REST `/start` is owner-only — so an interactive agent has no
   route out of `queued` and `aimeat_task_complete` answers *"Only active tasks can be completed"*. That
   is a SAFETY BOUNDARY: an interactive agent is an open-ended model in a conversation (talk-into-able,
   prompt-injectable), so nothing it decides reaches the world until a person says yes; a task-runner is
   narrow and largely deterministic (the loop is code, the model writes only prose), which is what the
-  owner pre-authorised at registration. Breadth of capability trades against freedom to act. An agent
-  can self-correct with `aimeat_agent_mode_set` at startup BEFORE onboarding (the handler migrates
-  passed steps into the new mode's flow). Full explanation for agents: `skills/aimeat-agent-modes/`.
+  owner pre-authorised. Breadth of capability trades against freedom to act. Full explanation for
+  agents: `skills/aimeat-agent-modes/`.
 - **Connector tools (`aimeat_workspace_*`, `aimeat_memory_*`, `memory_read_public`, task poll/push) work
   ONLY while the agent is attached / running in-fleet.** Off-fleet (a bare `uv run … -c` one-liner, a
   background loop) those reads fail quietly — `manifest=null`, empty lists — which is exactly what the
   some-listener / mroom code means by "works once attached". Run cross-organism reads in-fleet.
-- **Restart the fleet** after changing an agent's identity (`fleet_identity.py` tags/capabilities), LLM
-  routing (`llm_providers.json`), or after adopting a new contract — none of it takes hold until re-attach.
+- **Restart the fleet** after changing a crew's declaration (`TAGS`/`CAPABILITIES`/`LLM_PROFILE`/
+  `OFFERS`), the providers file, or after adopting a new contract — none of it takes hold until
+  re-attach. Tags and capabilities are pushed to the node ON START, so an identity edit is invisible
+  on the node until the agent re-attaches.
 
 ## Cross-organism display — a different org shows another's data
 - A different organism (even the SAME owner) reads another's data via a **public memory key** +
