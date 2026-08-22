@@ -28,6 +28,16 @@ AGENT_NAME = "some-listener"
 # offers.py) that nothing kept in step, so an agent could — and did — come online missing from
 # all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
 LLM_PROFILE = "content-free"
+
+# What FIRES this agent. Declared here so `crewaimeat doctor --live` can compare it against the
+# node's real schedule list — the check that makes an orphaned or drifted cron visible instead of
+# something nobody dares delete because nobody is sure what it would trigger.
+SCHEDULE = {
+    "cron": "0 8 * * *",
+    "timezone": "Europe/Helsinki",
+    "purpose": "the daily HN social radar scan",
+}
+
 TAGS = ["social-radar", "role.task-runner"]
 CAPABILITIES = {
     "technical": [{"name": "some-listener", "type": "skill"}],

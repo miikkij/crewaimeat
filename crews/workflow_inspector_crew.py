@@ -30,6 +30,10 @@ AGENT_NAME = "workflow-inspector"
 # offers.py) that nothing kept in step, so an agent could — and did — come online missing from
 # all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
 LLM_PROFILE = "coding"
+
+# Why a step can be "run" and still never complete — the mode gate. Loaded fail-loud at start.
+SKILLS = ["aimeat-agent-modes"]
+
 TAGS = ["workflow-inspection", "diagnosis", "role.task-runner"]
 CAPABILITIES = {
     "technical": [{"name": "workflow-inspector", "type": "skill"}],
@@ -58,6 +62,10 @@ def build_domain(ctx: BuildContext):
         "anything that needs attention. You never fabricate output and never change "
         "workflow rules — you fix what is deterministically fixable and escalate the rest.",
         llm=ctx.llm,
+        # A stalled step is very often a MODE problem, not a broken step: only a task-runner's task
+        # auto-activates, so an interactive agent's task sits in `queued` forever and reports
+        # "Only active tasks can be completed". Without this the inspector diagnoses the symptom.
+        skills=ctx.skills,
         tools=[],
     )
     task = Task(
@@ -93,6 +101,7 @@ def run() -> None:
             build_domain=build_domain,
             readme_md=README,
             temperature=0.2,
+            skills=SKILLS,
             idle_hook=_poll,
             idle_hook_seconds=300,
         )

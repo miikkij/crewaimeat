@@ -335,6 +335,26 @@ def test_a_contract_agent_is_not_accused_of_having_no_offer(tmp_path, monkeypatc
     assert "registry.offer.missing" not in _rules(report)
 
 
+def test_a_skill_named_through_a_list_constant_counts_as_used(tmp_path):
+    """`SKILLS = ["x"]` plus `skills=SKILLS` is the normal shape for a crew. Resolving only the string
+    form reported `aimeat-agent-modes` as "loaded by nothing" while two crews were loading it — a false
+    report of exactly the kind that teaches people to ignore a check."""
+    root = _repo(tmp_path, crews={"a_crew.py": CREW.format(agent="a")}, served=["a"])
+    skill = root / "skills" / "house-voice"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("---\nname: house-voice\n---\nbody\n", encoding="utf-8")
+    (root / "crews" / "b_crew.py").write_text(
+        'AGENT_NAME = "b"\n'
+        'SKILLS = ["house-voice"]\n\n\n'
+        "def build_domain(ctx):\n    return ([], [])\n\n\n"
+        "def run():\n    run_crew(CrewSpec(agent_name=AGENT_NAME, skills=SKILLS))\n",
+        encoding="utf-8",
+    )
+    report = run(root)
+    assert "registry.skill.missing" not in _rules(report)
+    assert not any("loaded by nothing" in n for n in report.notes)
+
+
 def test_a_skill_that_does_not_exist_is_an_error(tmp_path):
     root = _repo(tmp_path, crews={"a_crew.py": CREW.format(agent="a")}, served=["a"])
     (root / "crews" / "b_crew.py").write_text(

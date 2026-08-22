@@ -11,6 +11,7 @@ possible, because there is one place.
 
     AGENT_NAME = "datapkg-analyst"
     LLM_PROFILE = "coding"
+    SCHEDULE = {"cron": "0 7 * * *", "timezone": "Europe/Helsinki"}   # what fires it, if anything
     TAGS = ["data-packages", "frictionless", "role.task-runner"]
     CAPABILITIES = {"technical": [...], "domain": [...], "languages": ["fi", "en"]}
     OFFERS = [{"id": "...", "title": "...", "ask": "...", ...}]
@@ -44,6 +45,7 @@ _CONSTANTS = {
     "OFFERS": "offers",
     "SKILLS": "skills",
     "PROMPT_INDEPENDENT": "prompt_independent",
+    "SCHEDULE": "schedule",
 }
 # The same fields as a JSON crew doc names them.
 _JSON_KEYS = {
@@ -52,6 +54,7 @@ _JSON_KEYS = {
     "capabilities": "capabilities",
     "offers": "offers",
     "skills": "skills",
+    "schedule": "schedule",
 }
 
 
@@ -69,6 +72,7 @@ class Manifest:
     offers: list | None = None
     skills: list | None = None
     prompt_independent: str | None = None
+    schedule: dict | None = None
     has_build_domain: bool = False
     has_run: bool = False
     is_brain_stub: bool = False

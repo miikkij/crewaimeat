@@ -44,6 +44,9 @@ AGENT_NAME = "crew-forge"
 # offers.py) that nothing kept in step, so an agent could — and did — come online missing from
 # all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
 LLM_PROFILE = "coding"
+
+SKILLS = ["aimeat-agent-modes"]
+
 TAGS = ["agent-builder", "fleet-management", "role.task-runner"]
 CAPABILITIES = {
     "technical": [{"name": "crew-forge", "type": "skill"}],
@@ -334,6 +337,7 @@ def _build_domain(ctx: BuildContext, request: str | None = None) -> tuple[list[A
             "importing a tool or calling its factory. You write clean, minimal Python the builder uses verbatim."
         ),
         llm=llm,
+        skills=ctx.skills,  # the MODE gate: what a forged agent will and will not be allowed to do alone
         verbose=True,
     )
     builder = Agent(
@@ -472,6 +476,7 @@ def _build_json_domain(ctx: BuildContext, request: str | None = None) -> tuple[l
             "request into a task via {{ctx.prompt}}. You output ONLY the JSON object."
         ),
         llm=llm,
+        skills=ctx.skills,  # the MODE gate: what a forged agent will and will not be allowed to do alone
         verbose=True,
     )
     builder = Agent(
@@ -548,6 +553,10 @@ def run() -> None:
             # Mixed role: the Architect designs crews (creative) while the Builder writes/validates
             # code (precise) — a balanced temperature suits both.
             temperature=0.5,
+            # It picks the MODE for every agent it forges, and the mode decides whether that agent's
+            # tasks can start without a person. Getting it wrong ships an agent that looks fine and
+            # completes nothing.
+            skills=SKILLS,
             # Builder of crews: survey existing crews/capabilities first so it reuses instead of duplicating.
             discover=True,
             # Act on inbox messages too, so the fleet can be operated by messaging crew-forge.

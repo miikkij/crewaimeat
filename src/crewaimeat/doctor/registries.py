@@ -384,23 +384,32 @@ def _declared_skills(text: str) -> set[str]:
         tree = ast.parse(text)
     except SyntaxError:
         return set()
-    consts: dict[str, str] = {}
+    # Both shapes matter: `SKILL = "x"` and `SKILLS = ["x", "y"]`. Resolving only the string form made
+    # the check report `aimeat-agent-modes` as "loaded by nothing" while two crews were loading it
+    # through `skills=SKILLS` — a false report, which is how a check earns the reputation that gets it
+    # ignored.
+    consts: dict[str, object] = {}
     for node in tree.body:
-        if (
-            isinstance(node, ast.Assign)
-            and len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Name)
-            and isinstance(node.value, ast.Constant)
-            and isinstance(node.value.value, str)
-        ):
-            consts[node.targets[0].id] = node.value.value
+        if not (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
+            continue
+        try:
+            value = ast.literal_eval(node.value)
+        except (ValueError, SyntaxError, TypeError):
+            continue
+        if isinstance(value, str) or (isinstance(value, (list, tuple)) and all(isinstance(x, str) for x in value)):
+            consts[node.targets[0].id] = value
 
-    def _name_of(node: ast.expr) -> str | None:
+    def _names_of(node: ast.expr) -> list[str]:
+        """Skill names an expression denotes: a literal, a constant, or a constant LIST."""
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            return node.value
+            return [node.value]
         if isinstance(node, ast.Name):
-            return consts.get(node.id)
-        return None
+            v = consts.get(node.id)
+            if isinstance(v, str):
+                return [v]
+            if isinstance(v, (list, tuple)):
+                return [x for x in v if isinstance(x, str)]
+        return []
 
     found: set[str] = set()
     for node in ast.walk(tree):
@@ -410,11 +419,13 @@ def _declared_skills(text: str) -> set[str]:
             if name in {"skill_body", "load_skills"}:
                 for arg in node.args[:1]:
                     items = arg.elts if isinstance(arg, (ast.List, ast.Tuple)) else [arg]
-                    found |= {n for n in (_name_of(i) for i in items) if n}
+                    for i in items:
+                        found |= set(_names_of(i))
             for kw in node.keywords:
                 if kw.arg == "skills":
                     items = kw.value.elts if isinstance(kw.value, (ast.List, ast.Tuple)) else [kw.value]
-                    found |= {n for n in (_name_of(i) for i in items) if n}
+                    for i in items:
+                        found |= set(_names_of(i))
     return found
 
 
