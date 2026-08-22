@@ -79,8 +79,10 @@ def _save_registry(pids: set[int]) -> None:
         p = _registry_path()
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(sorted(pids)), encoding="utf-8")
-    except OSError:
-        pass
+    except OSError as exc:
+        # This registry IS the single-serve invariant's memory. Losing it silently lets a second
+        # daemon survive the next dedup pass — the tunnel-stealing failure this module exists for.
+        print(f"[serve] registry write FAILED, dedup may miss a daemon: {exc!r}", file=sys.stderr)
 
 
 def _record_daemon(pid: int | None) -> None:

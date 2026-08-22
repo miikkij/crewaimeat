@@ -1031,8 +1031,9 @@ def _mark_onboarding_attempt(agent_name: str, n_drivable: int | None = None, att
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(f"{attempts} {'' if n_drivable is None else n_drivable}", encoding="utf-8")
-    except OSError:
-        pass
+    except OSError as exc:
+        # Losing this marker makes the next restart re-drive onboarding it already attempted.
+        print(f"[{agent_name}] onboarding-attempt marker write FAILED: {exc!r}", file=sys.stderr)
 
 
 def _onboarding_attempt_info(agent_name: str) -> tuple[int, int | None]:

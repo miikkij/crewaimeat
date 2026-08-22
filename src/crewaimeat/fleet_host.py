@@ -86,8 +86,10 @@ def _write_status() -> None:
         with _status_lock:
             payload = {"pid": os.getpid(), "agents": dict(_status)}
         _STATUS_FILE.write_text(json.dumps(payload), encoding="utf-8")
-    except OSError:
-        pass
+    except OSError as exc:
+        # The TUI and doctor read this file to say which agents are up. A silent failure leaves
+        # them describing a fleet that has since changed, with nothing indicating staleness.
+        print(f"[host] status file write FAILED: {exc!r}", file=sys.stderr)
 
 
 def _clear_status() -> None:

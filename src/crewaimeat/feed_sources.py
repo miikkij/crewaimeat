@@ -13,6 +13,7 @@ Search. The registry is pruned to feeds verified to return items (see scripts/ch
 from __future__ import annotations
 
 import datetime
+import sys
 
 import feedparser  # type: ignore
 
@@ -226,8 +227,8 @@ def _recent_seen_urls(agent_name: str, category: str, limit_keys: int = 3) -> se
                 _add((rec.get("categories") or {}).get(category) if rec else None)
             else:
                 _add((_aimeat_call(agent_name, "aimeat_memory_read", {"key": k}) or {}).get("value"))
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001 — an incomplete `seen` only costs a re-fetch
+        print(f"[feeds] recent-URL dedup read failed; a story may be re-fetched: {exc!r}", file=sys.stderr)
     return seen
 
 

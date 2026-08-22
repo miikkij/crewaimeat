@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 from crewaimeat import author_tool, brain_templates, brains
@@ -52,8 +53,8 @@ def data_status(agent: str) -> dict:
                 keys.append(k)
                 if publisher is None:
                     publisher = it.get("owner_gaii") or it.get("gaii")
-    except Exception:  # noqa: BLE001 — no daemon / node unreachable -> just "no data yet"
-        pass
+    except Exception as exc:  # noqa: BLE001 — best-effort: the cockpit still renders "no data yet"
+        print(f"[app_builder] data_status read failed, showing empty: {exc!r}", file=sys.stderr)
     keys.sort(reverse=True)
     return {
         "ready": bool(keys),

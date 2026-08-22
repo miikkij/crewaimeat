@@ -234,8 +234,8 @@ def scan_hn(hours: int = 48, limit: int = 12) -> dict:
     for key in (f"some.radar.{date}", "some.radar.latest"):
         try:
             _aimeat_call("some-listener", "aimeat_memory_write", {"key": key, "value": ranked, "visibility": "owner"})
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001 — the scan log on disk is still written
+            print(f"[some-listener] radar write to {key} FAILED: {exc!r}", file=sys.stderr)
 
     # Public mirror for CROSS-ORGANISM display: another organism (e.g. the M-ROOM, same owner) reads this
     # with aimeat_memory_read_public(gaii, "some.radar.public.latest") — the exact path M-ROOM already uses
@@ -267,8 +267,10 @@ def scan_hn(hours: int = 48, limit: int = 12) -> dict:
             "aimeat_memory_write",
             {"key": "some.radar.public.latest", "value": public, "visibility": "public"},
         )
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001 — best-effort, but NEVER silent: this key is the
+        # M-ROOM bridge. A swallowed failure here leaves another organism reading yesterday's
+        # radar with nothing anywhere saying so.
+        print(f"[some-listener] PUBLIC MIRROR some.radar.public.latest FAILED: {exc!r}", file=sys.stderr)
 
     # Sync new hits into the Social Radar workspace as opportunity records (deterministic, no LLM).
     radar = _sync_to_radar(ranked, date)
