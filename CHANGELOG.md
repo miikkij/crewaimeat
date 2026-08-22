@@ -39,6 +39,31 @@ Dates are the working dates; entries are **uncommitted and take effect on the ne
   in the tags the picker hands a generation request to the crew that only searches the web.
 
 ### Added
+- **`crewaimeat quality` — did the output get better when the model changed?** That question had no
+  answer: the paper's prose was routed to DeepSeek V4 Pro on 2026-08-12 because the previous chain's
+  Finnish was judged unusable, and the evidence for it working was an impression. This measures the
+  properties a bad run actually degrades — grounding (how many sources a piece cites), completeness
+  (articles per edition) and length — attributed per ARTICLE to the model that wrote it, from the
+  node's provenance record. It does NOT judge prose, and says so: style is what a deterministic check
+  cannot see, and an LLM scoring an LLM agrees with itself for reasons nobody can audit.
+
+  It took three tries to stop it inventing findings, which is the point of the entry:
+  1. A rate-limited provenance read returned the same shape as a missing one, so **40 well-sourced
+     articles were reported as "100% ungrounded"**. Unknown is not zero: the three outcomes (read ok /
+     no provenance record / read failed) are kept apart, and reads are paced under the node's limit.
+  2. The per-model comparison then said DeepSeek was **five times worse at grounding than the free
+     router**. It was an artifact: `koodaus`, `matikka` and `prompt-niksi` are generated feature
+     sections with no news sources BY DESIGN, ~3 of every ~23 articles. A category that has never
+     carried a source is now classified as generated and excluded — derived from the data, never a
+     hardcoded list that would go stale and start hiding regressions.
+  3. That classification needs evidence. Below a floor of 3 observations a category is JUDGED, not
+     excused: wrongly calling one "generated" hides a failure silently, wrongly judging one produces a
+     finding someone can check in a minute.
+
+  With those fixed, the real answer over 20 editions: **every model, every sourced category, 0%
+  ungrounded** — the switch neither helped nor hurt grounding. What it did surface is the fallback:
+  `openai/gpt-oss-120b` wrote 28 articles at a median **813 characters and 2 sources**, against
+  DeepSeek's **3,837 and 6**. When the chain falls through, the paper silently ships stubs.
 - **`crewaimeat costs` — model spend per agent, and who spends without producing.** The fleet has
   metered every model call to the node's ledger since aimeat-crewai 0.16.1, with per-agent
   attribution. Nobody read it back, which is why `crypto-weekly-reporter` — an agent whose code had

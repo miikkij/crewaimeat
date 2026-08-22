@@ -39,6 +39,7 @@ crewaimeat = "crewaimeat.scaffold:main"
 crewaimeat-tui = "crewaimeat.tui.app:main"
 crewaimeat-doctor = "crewaimeat.doctor.cli:main"   # also `crewaimeat doctor`
 crewaimeat-costs = "crewaimeat.fleet_economics:main"  # also `crewaimeat costs`
+crewaimeat-quality = "crewaimeat.quality:main"        # also `crewaimeat quality`
 research-crew = "crewaimeat.research_crew:run"
 
 [build-system]
