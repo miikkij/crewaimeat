@@ -153,6 +153,23 @@ FLEET_IDENTITY: dict[str, dict] = {
             "languages": ["en"],
         },
     },
+    "image-maker": {
+        # Deliberately distinct from image-scout below: this one MAKES a new image, the other FINDS
+        # and curates existing ones. Without that distinction in the tags, the picker cannot tell the
+        # two apart and hands an image-generation ask to the crew that only searches the web.
+        "tags": ["image-generation", "text-to-image", "seedream", "image-storage", "role.task-runner"],
+        "capabilities": {
+            "technical": [_skill("image-generation"), _tool("aimeat_storage_upload")],
+            "domain": [
+                "text-to-image generation (ByteDance Seedream 4.5 via OpenRouter)",
+                "prompt crafting for image generation",
+                "stores the result at a public AIMEAT storage URL and returns it",
+                "makes NEW images; does not edit existing files or post anywhere",
+                "consumes:image-request",
+            ],
+            "languages": ["fi", "en"],
+        },
+    },
     "image-scout": {
         "tags": ["image-scout", "moodboard", "image-curation", "image-search", "vision", "role.task-runner"],
         "capabilities": {

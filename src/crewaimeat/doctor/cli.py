@@ -70,13 +70,21 @@ def _render(report: Report, stale: list[str], *, strict: bool, colour: bool) -> 
         out.append("")
     for lens, why in sorted(report.lenses_skipped.items()):
         out.append(f"    lens '{lens}' SKIPPED — {why}")
-    n_err, n_warn = len(report.errors), len(report.warnings)
-    verdict = "FAIL" if (n_err or (strict and n_warn)) else "PASS"
+    n_err, n_warn, n_stale = len(report.errors), len(report.warnings), len(stale)
+    # A stale baseline entry FAILS under --strict, so it has to count towards the verdict too. It did
+    # not, which produced the one output a checker must never produce: "PASS" printed above a non-zero
+    # exit code. A gate that says one thing and does another is how people learn to ignore the gate.
+    verdict = "FAIL" if (n_err or (strict and (n_warn or n_stale))) else "PASS"
     tone = "31" if verdict == "FAIL" else "32"
+    tally = f"{n_err} error(s), {n_warn} warning(s)"
+    if n_stale:
+        tally += f", {n_stale} stale baseline entr{'y' if n_stale == 1 else 'ies'}"
     out.append("")
-    out.append(_colour(f"{verdict}  {n_err} error(s), {n_warn} warning(s)", tone, colour))
-    if verdict == "PASS" and not n_err and not n_warn:
+    out.append(_colour(f"{verdict}  {tally}", tone, colour))
+    if verdict == "PASS" and not (n_err or n_warn or n_stale):
         out.append("    every registry agrees and every route is sanctioned.")
+    elif verdict == "FAIL" and not (n_err or n_warn):
+        out.append("    the findings themselves are clean — the baseline just needs to shrink.")
     return "\n".join(out)
 
 

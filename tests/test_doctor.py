@@ -361,6 +361,17 @@ def test_a_baseline_entry_that_no_longer_fires_is_reported_as_stale(tmp_path):
     assert stale == ["some.rule::fixed-thing"]
 
 
+def test_a_stale_baseline_entry_alone_still_reads_as_FAIL(tmp_path, capsys):
+    """The verdict line must agree with the exit code. A stale entry fails under --strict, but the
+    renderer counted only errors and warnings — so the gate printed "PASS" directly above a non-zero
+    exit, which is how people learn to stop trusting a gate."""
+    from crewaimeat.doctor.cli import _render
+
+    text = _render(Report(findings=[]), ["some.rule::fixed-thing"], strict=True, colour=False)
+    assert "FAIL" in text and "PASS" not in text
+    assert "stale baseline" in text
+
+
 def test_an_unreadable_baseline_stops_the_run(tmp_path):
     """A corrupt baseline must never be read as 'nothing accepted' — that silently re-enables every
     finding and buries the real problem in noise."""
