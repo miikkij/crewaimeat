@@ -10,7 +10,7 @@ Quick test (after registering the agent):
   uv run python -c "from crewaimeat.some_analyst import draft_opportunities; print(draft_opportunities(limit=3))"
 
 Run as a crew:
-  npx aimeat@latest connect add --agent some-analyst --mode task-runner --url https://aimeat.io --owner <you>
+  npx aimeat@latest connect --url https://aimeat.io --owner <you> --agent some-analyst
   uv run python crews/some_analyst_crew.py
 """
 

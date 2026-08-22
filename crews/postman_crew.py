@@ -13,7 +13,7 @@ Quick test (after registering):
   uv run python -c "from crewaimeat.mail_contract import process_mail; print(process_mail())"
 
 Run as a crew:
-  npx aimeat@latest connect add --agent postman --mode task-runner --url https://aimeat.io --owner <you>
+  npx aimeat@latest connect --url https://aimeat.io --owner <you> --agent postman
   uv run python crews/postman_crew.py
 """
 

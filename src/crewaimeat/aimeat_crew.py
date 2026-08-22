@@ -158,7 +158,7 @@ BuildDomain = Callable[[BuildContext], "tuple[list[Agent], list[Task]]"]
 class CrewSpec:
     """Declares one AIMEAT-connected crew. Only `agent_name` + `build_domain` are required."""
 
-    agent_name: str  # the AIMEAT agent identity (from `aimeat connect add`)
+    agent_name: str  # the AIMEAT agent identity (from `aimeat connect`)
     build_domain: BuildDomain  # returns (domain_agents, domain_tasks)
     process: Any = Process.sequential  # sequential is the validated path; hierarchical is advanced
     poll_seconds: int = 30  # daemon poll interval

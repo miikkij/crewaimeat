@@ -1,7 +1,9 @@
 """Real interaction test for live-chat-room.html (what verify_render can't do):
 log in -> create a room -> assert msg-input gets ENABLED (the 'open' fix) -> send a
 message -> assert it renders. Single client (echo-dependent for the render step)."""
+
 import os
+
 from playwright.sync_api import sync_playwright
 
 base = "https://aimeat.io"
@@ -25,7 +27,9 @@ with sync_playwright() as p:
         pg.wait_for_timeout(500)
     login = pg.evaluate(
         "async ([u, pw]) => { try { await AIMEAT.auth.loginWithPassword(u, pw); return 'ok'; }"
-        " catch (e) { return 'ERR: ' + (e && e.message || e); } }", [u, pw])
+        " catch (e) { return 'ERR: ' + (e && e.message || e); } }",
+        [u, pw],
+    )
     pg.reload(wait_until="networkidle")
     pg.wait_for_timeout(3000)
     # create + enter a room

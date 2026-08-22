@@ -6,7 +6,7 @@ categories to write" to the LLM, which skipped ~30% and wrote some empty. This c
 agent resolves the target date+edition and calls write_edition_articles ONCE.
 
 Register + approve, then run:
-  npx aimeat@latest connect add --agent news-writer --mode task-runner --url https://aimeat.io --owner <you>
+  npx aimeat@latest connect --url https://aimeat.io --owner <you> --agent news-writer
   uv run python crews/news_writer_crew.py
 """
 

@@ -26,7 +26,7 @@ You are helping me create a new **CrewAI crew connected to AIMEAT.io**, built on
   - **Optional:** `TAVILY_API_KEY` (https://app.tavily.com) to give agents web search.
 - **AIMEAT identity:** register the agent and approve it:
   ```
-  npx aimeat@latest connect add --agent <AGENT_NAME> --mode task-runner --url https://aimeat.io --owner <your-aimeat-account>
+  npx aimeat@latest connect --url https://aimeat.io --owner <your-aimeat-account> --agent <AGENT_NAME>
   ```
   Then approve it in the AIMEAT dashboard (Profile, Agents). `<AGENT_NAME>` is the name this crew answers to; keep it for the code. `<your-aimeat-account>` is the AIMEAT username I sign in with (the agent's owner).
 
@@ -39,7 +39,7 @@ You are helping me create a new **CrewAI crew connected to AIMEAT.io**, built on
 5. **What "doing a task" means:** When a task is queued to this crew, what should it produce? What is the final deliverable (a report, a plan, an answer, data)?
 6. **Output:** Any preferred memory key prefix for published results, and any format or length expectations?
 7. **Language:** Should outputs be in a specific language, or follow the agent's choice / the language of the request? (The scaffold leaves the language to the agent.)
-8. **Names:** Confirm the `AGENT_NAME` (matches `aimeat connect add`) and the owner.
+8. **Names:** Confirm the `AGENT_NAME` (matches `aimeat connect`) and the owner.
 
 Reflect my answers back as a short spec (roster, order, I/O) and get my OK before writing code.
 

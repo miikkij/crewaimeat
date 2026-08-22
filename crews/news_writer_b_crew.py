@@ -6,7 +6,7 @@ non-empty raw gets a full Finnish article via a direct grok call from the scrape
 voice. Thin wrapper around the deterministic writer; runs in parallel with news-writer.
 
 Register + approve, then run:
-  npx aimeat@latest connect add --agent news-writer-b --mode task-runner --url https://aimeat.io --owner <you>
+  npx aimeat@latest connect --url https://aimeat.io --owner <you> --agent news-writer-b
   uv run python crews/news_writer_b_crew.py
 """
 

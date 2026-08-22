@@ -13,7 +13,7 @@ Quick test (after registering):
   uv run python -c "from crewaimeat.activity_contract import process_activity_reports; print(process_activity_reports())"
 
 Run as a crew:
-  npx aimeat@latest connect add --agent activity-reporter --mode task-runner --url https://aimeat.io --owner <you>
+  npx aimeat@latest connect --url https://aimeat.io --owner <you> --agent activity-reporter
   uv run python crews/activity_reporter_crew.py
 """
 

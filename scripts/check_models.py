@@ -28,7 +28,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from crewai import Agent, Crew, LLM, Task  # noqa: E402
+from crewai import LLM, Agent, Crew, Task  # noqa: E402
+
 from crewaimeat.llm import _flatten_endpoints, _providers_file  # noqa: E402
 from crewaimeat.searxng_search import SearxngSearchTool  # noqa: E402
 
@@ -48,12 +49,15 @@ def _build_llm(ep: dict) -> LLM:
 def _endpoints_from_models(spec: str) -> list[dict]:
     """`--models` form: comma-separated 'provider:model_id' (provider defaults to openrouter)."""
     import os
+
     eps = []
     for item in spec.split(","):
         item = item.strip()
         if not item:
             continue
-        ptype, _, mid = item.partition(":") if ":" in item and item.split(":", 1)[0] in _PREFIX else ("openrouter", "", item)
+        ptype, _, mid = (
+            item.partition(":") if ":" in item and item.split(":", 1)[0] in _PREFIX else ("openrouter", "", item)
+        )
         if not mid:
             ptype, mid = "openrouter", item
         prefix = _PREFIX.get(ptype, "")
@@ -75,7 +79,9 @@ def t_completion(ep) -> str:
 
 def t_json(ep) -> str:
     try:
-        out = _build_llm(ep).call([{"role": "user", "content": 'Return ONLY valid JSON, no prose: {"ok": true, "n": 3}'}])
+        out = _build_llm(ep).call(
+            [{"role": "user", "content": 'Return ONLY valid JSON, no prose: {"ok": true, "n": 3}'}]
+        )
         m = re.search(r"\{.*\}", out.strip().strip("`"), re.S)
         json.loads(m.group(0))
         return "PASS"
@@ -93,11 +99,21 @@ def t_tools(ep) -> str:
             """Multiply two integers and return the product."""
             return a * b
 
-        ag = Agent(role="Calculator", goal="Compute products using the multiply tool.",
-                   backstory="You ALWAYS use the multiply tool to multiply; you never compute it in your head.",
-                   llm=_build_llm(ep), tools=[_multiply], max_iter=4, verbose=False, allow_delegation=False)
-        tk = Task(description="Use the multiply tool to compute 12 * 7. Return ONLY the resulting number.",
-                  agent=ag, expected_output="84")
+        ag = Agent(
+            role="Calculator",
+            goal="Compute products using the multiply tool.",
+            backstory="You ALWAYS use the multiply tool to multiply; you never compute it in your head.",
+            llm=_build_llm(ep),
+            tools=[_multiply],
+            max_iter=4,
+            verbose=False,
+            allow_delegation=False,
+        )
+        tk = Task(
+            description="Use the multiply tool to compute 12 * 7. Return ONLY the resulting number.",
+            agent=ag,
+            expected_output="84",
+        )
         out = str(Crew(agents=[ag], tasks=[tk], verbose=False).kickoff()).strip()
         return "PASS" if "84" in out else "no-call"
     except Exception as e:
@@ -106,13 +122,22 @@ def t_tools(ep) -> str:
 
 def t_search(ep) -> str:
     try:
-        agent = Agent(role="Finnish news researcher",
-                      goal="Search the web and report real article titles.",
-                      backstory="You call the Web Search tool with PLAIN keyword queries (no dates) and report what you find.",
-                      llm=_build_llm(ep), tools=[SearxngSearchTool()], max_iter=6, verbose=False, allow_delegation=False)
-        task = Task(description="Call the Web Search tool with the query 'talous uutiset Suomi' and return TWO actual "
-                                "article titles (verbatim from the results). If nothing is found, reply NONE.",
-                    agent=agent, expected_output="Two real article titles, or NONE.")
+        agent = Agent(
+            role="Finnish news researcher",
+            goal="Search the web and report real article titles.",
+            backstory="You call the Web Search tool with PLAIN keyword queries (no dates) and report what you find.",
+            llm=_build_llm(ep),
+            tools=[SearxngSearchTool()],
+            max_iter=6,
+            verbose=False,
+            allow_delegation=False,
+        )
+        task = Task(
+            description="Call the Web Search tool with the query 'talous uutiset Suomi' and return TWO actual "
+            "article titles (verbatim from the results). If nothing is found, reply NONE.",
+            agent=agent,
+            expected_output="Two real article titles, or NONE.",
+        )
         out = str(Crew(agents=[agent], tasks=[task], verbose=False).kickoff()).strip()
         return "PASS" if (len(out) > 30 and "NONE" not in out.upper()[:12]) else "no-results"
     except Exception as e:
@@ -144,7 +169,11 @@ def main() -> None:
     seen_m: set = set()  # the same model can appear in several profiles — test each once
     eps = [e for e in eps if not (e["model"] in seen_m or seen_m.add(e["model"]))]
 
-    print(f"{'MODEL':40s} {'completion':12s} {'json':10s} " + ("" if args.quick else f"{'tools':10s} {'search':12s} ") + "VERDICT")
+    print(
+        f"{'MODEL':40s} {'completion':12s} {'json':10s} "
+        + ("" if args.quick else f"{'tools':10s} {'search':12s} ")
+        + "VERDICT"
+    )
     print("-" * (64 if args.quick else 90))
     for ep in eps:
         comp = t_completion(ep)

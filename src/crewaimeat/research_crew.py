@@ -1,7 +1,7 @@
 """research-crew — the canonical example crew on the AIMEAT scaffold.
 
 This is the reference TEMPLATE. To make your own crew: copy this file, change
-AGENT_NAME (it must match the name you used in `aimeat connect add`), and edit
+AGENT_NAME (it must match the name you used in `aimeat connect`), and edit
 ONLY `build_domain` — your agents and their tasks. Everything AIMEAT-related
 (onboarding, daemon, liaison publish/complete, live progress, date injection) is
 handled by crewaimeat.aimeat_crew.run_crew — reuse it as-is.

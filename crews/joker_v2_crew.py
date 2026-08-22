@@ -4,7 +4,7 @@ best, then a ruthless editor cuts the weak ones and presents only what actually 
 This is a deliberate A/B challenger to the original `joker` (which stays live, with its history): same
 creative domain, evolved DESIGN (draft-six -> select-best -> editor craft-gate + warm temperature).
 Register it as its OWN agent so its reputation accumulates separately and a selector can compare the two:
-  npx aimeat@latest connect add --agent joker-v2 --mode task-runner --url https://aimeat.io --owner <your-aimeat-account>
+  npx aimeat@latest connect --url https://aimeat.io --owner <your-aimeat-account> --agent joker-v2
 
 Run: uv run python crews/joker_v2_crew.py
 """

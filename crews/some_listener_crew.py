@@ -9,7 +9,7 @@ Quick test (no AIMEAT registration needed — writes the log):
   uv run python -c "from crewaimeat.some_listener import scan_hn; print(scan_hn()['log'])"
 
 Run as a crew:
-  npx aimeat@latest connect add --agent some-listener --mode task-runner --url https://aimeat.io --owner <you>
+  npx aimeat@latest connect --url https://aimeat.io --owner <you> --agent some-listener
   uv run python crews/some_listener_crew.py
 """
 

@@ -8,7 +8,7 @@ This crew is now a thin wrapper: the agent only resolves the target date+edition
 `news.<date>.<edition>.raw` record, not one key per category.
 
 Register + approve, then run:
-  npx aimeat@latest connect add --agent news-fetcher --mode task-runner --url https://aimeat.io --owner <you>
+  npx aimeat@latest connect --url https://aimeat.io --owner <you> --agent news-fetcher
   uv run python crews/news_fetcher_crew.py
 """
 

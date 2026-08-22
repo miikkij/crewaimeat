@@ -25,6 +25,7 @@ Prefer to do it by hand? Follow the [Quickstart](#quickstart) below — `startup
 - [CrewSpec options](#crewspec-options)
 - [The agent's README, commands, and services](#the-agents-readme-commands-and-services)
 - [crew-forge: an agent that makes agents](#crew-forge-an-agent-that-makes-agents)
+- [Keeping the fleet honest: doctor, retire, costs](#keeping-the-fleet-honest-doctor-retire-costs)
 - [Running the fleet (scripts)](#running-the-fleet-scripts)
 - [Fleet TUI (crewaimeat-tui)](#fleet-tui-crewaimeat-tui)
 - [aimeat-agency: the desktop app](#aimeat-agency-the-desktop-app)
@@ -50,8 +51,12 @@ You write only `build_domain(ctx)`. The scaffold (`crewaimeat/aimeat_crew.py`) h
 ```
 src/crewaimeat/     the locked scaffold + shared machinery (the installable package):
                     aimeat_crew.py (run_crew/CrewSpec), llm routing, fleet host, forge,
-                    contracts, deterministic pipelines, the TUI (tui/), the agency cockpit (agency/)
-crews/              one file per agent: <name>_crew.py with build_domain (a leading _ = parked)
+                    agent_manifest.py (each crew's own declaration, read statically),
+                    doctor/ (the reconciliation + route-conformance checker), retire.py,
+                    fleet_economics.py (crewaimeat costs), contracts, deterministic
+                    pipelines, the TUI (tui/), the agency cockpit (agency/)
+crews/              one file per agent: <name>_crew.py with build_domain PLUS the agent's own
+                    declaration (LLM_PROFILE / TAGS / CAPABILITIES / OFFERS); a leading _ = parked
 crew_defs/          declarative JSON crew definitions (interpreted by crew_def.py / forge_json.py)
 skills/             SKILL.md expertise packs crews can load (see skills/README.md)
 scripts/            fleet entrypoints: start_fleet, start_host, watchdog, view/terminate_fleet,
@@ -75,7 +80,9 @@ A more detailed map — components, the scaffold's lifecycle, fleet topology, wh
 uv sync
 
 # 2. Register your crew's identity on AIMEAT, then approve it in the dashboard
-npx aimeat@latest connect add --agent research-crew --mode task-runner --url https://aimeat.io --owner <your-aimeat-account>
+#    (device auth: it prints a code + URL, you approve once. The agent's MODE is set by the
+#     scaffold on every start — connector v1.33 removed the old `connect add … --mode` form.)
+npx aimeat@latest connect --url https://aimeat.io --owner <your-aimeat-account> --agent research-crew
 
 # 3. Create .env from the template and add your keys
 #    OPENROUTER_API_KEY=...                  (https://openrouter.ai/keys)
@@ -97,6 +104,9 @@ Then queue a task for `research-crew` from the AIMEAT dashboard (its Tasks tab, 
 | Scaffold a new crew | `uv run crewaimeat new-crew <name>` |
 | Run an example crew | `uv run python -m crewaimeat.examples.marketing_crew` |
 | Run the test floor | `uv run pytest` |
+| Check the fleet agrees with itself | `uv run crewaimeat doctor` |
+| See who spends and who delivers | `uv run crewaimeat costs` |
+| Stop an agent participating | `uv run crewaimeat retire <agent>` |
 | Add or remove a dependency | `uv add <pkg>` / `uv remove <pkg>` |
 
 ### Picking a model
@@ -177,6 +187,42 @@ def run():
 
 Output language follows the agent's judgment unless the task asks for a specific one.
 
+### The crew declares what it is
+
+Beside `build_domain`, the crew file is also where the agent's own facts live — its model routing, how
+it is discovered, what it promises. These are plain module-level constants, read **statically** (via
+`ast`, never by importing), so tooling can see them without running anything:
+
+```python
+AGENT_NAME = "my-crew"
+
+LLM_PROFILE = "coding"                    # which profile in llm_providers.json routes this crew
+TAGS = ["support-triage", "role.task-runner"]   # charset [a-z0-9._-]; how discovery finds it
+CAPABILITIES = {                          # `technical` entries are {name, type} OBJECTS
+    "technical": [{"name": "web-search", "type": "skill"}],
+    "domain": ["ticket triage", "consumes:support-request"],   # free strings; ':' allowed here
+    "languages": ["fi", "en"],
+}
+OFFERS = [{"id": "triage", "title": "...", "ask": "... — I do NOT do X."}]
+SKILLS = ["support-tone"]                 # SKILL.md packs from skills/
+```
+
+**Why here and not in a central list.** These used to live in three shared files that nothing required
+you to update, so an agent could — and routinely did — come online missing from all of them: 13 crews
+had no identity, 13 no offer, 20 no routing decision at all. Now there is one place, the lists are
+derived from it (`crewaimeat.agent_manifest`), and `crewaimeat doctor` reports any crew that leaves a
+field blank. A declarative crew (`crew_defs/*.json`) states the same fields in its JSON doc.
+
+Two of them have teeth worth knowing about:
+
+- **`LLM_PROFILE` is not decoration.** A crew that declares none resolves to the providers file's
+  `default` silently. `llm_providers.json`'s `crews` map still exists, but as a per-machine
+  **override** — the crew's own declaration is the default.
+- **`PROMPT_INDEPENDENT = "<reason>"`** opts a crew out of the rule that `ctx.prompt` must reach a task
+  description. It is a written reason rather than a boolean on purpose: a crew whose real work is a
+  deterministic pipeline or a DM loop is legitimately prompt-independent, but the opt-out must not be
+  usable to silence a genuine regression.
+
 ## Requirements
 
 - Python 3.10 to 3.13 (`requires-python = ">=3.10,<3.14"`).
@@ -191,6 +237,8 @@ Output language follows the agent's judgment unless the task asks for a specific
 - [SCAFFOLD_CANON.md](SCAFFOLD_CANON.md): how to build crews on the scaffold, and the reason each piece is there.
 - [CREW_AUTHORING_PROMPT.md](CREW_AUTHORING_PROMPT.md): the prompt that has an assistant build a crew with you.
 - [CHANGELOG.md](CHANGELOG.md): notable changes.
+- `uv run crewaimeat doctor` — the machine-checked version of "is everything still in agreement"; see
+  [Keeping the fleet honest](#keeping-the-fleet-honest-doctor-retire-costs).
 - [tests/README.md](tests/README.md): the deterministic test floor (`uv run pytest`).
 - [skills/README.md](skills/README.md): SKILL.md expertise packs for crews.
 - [aimeat-agency/README.md](aimeat-agency/README.md): the desktop appliance (Tauri shell + cockpit).
@@ -204,7 +252,7 @@ Output language follows the agent's judgment unless the task asks for a specific
 
 | Field | Default | Purpose |
 |---|---|---|
-| `agent_name` | _(required)_ | The AIMEAT identity, matching `connect add --agent`. |
+| `agent_name` | _(required)_ | The AIMEAT identity, matching `connect --agent`. |
 | `build_domain` | _(required)_ | `build_domain(ctx) -> (agents, tasks)`; the **last task's output** is published. |
 | `process` | `Process.sequential` | Sequential is the validated path; `hierarchical` is advanced (needs `manager_agent`). |
 | `poll_seconds` | `30` | How often the daemon polls the AIMEAT queue. |
@@ -261,7 +309,7 @@ A directive that fails (unknown font, LLM error) is left as a visible `[[… fai
 
 ## crew-forge: an agent that makes agents
 
-`crews/crew_forge_crew.py` is a crew whose job is to **build other crews**. Queue it a description and it designs the new crew, writes and validates its `build_domain` on this scaffold, registers the agent (`npx aimeat@latest connect add`), and launches it under the watchdog — then reports the one approval step you do in the dashboard. The new crew waits patiently for that approval (`wait_for_approval_seconds`) and comes online by itself.
+`crews/crew_forge_crew.py` is a crew whose job is to **build other crews**. Queue it a description and it designs the new crew, writes and validates its `build_domain` on this scaffold, registers the agent (`npx aimeat@latest connect`), and launches it under the watchdog — then reports the one approval step you do in the dashboard. The new crew waits patiently for that approval (`wait_for_approval_seconds`) and comes online by itself.
 
 It's driven by slash commands. Send them as a **task** (messages need the inbox fix in the note above):
 
@@ -277,7 +325,7 @@ It's driven by slash commands. Send them as a **task** (messages need the inbox 
 Plain text with no leading `/` is treated as a `/build`. Bring crew-forge online like any crew:
 
 ```bash
-npx aimeat@latest connect add --agent crew-forge --mode task-runner --url https://aimeat.io --owner <you>
+npx aimeat@latest connect --url https://aimeat.io --owner <you> --agent crew-forge
 # approve it in the dashboard, then:
 uv run python crews/crew_forge_crew.py        # or: ./scripts/watchdog.ps1 crews/crew_forge_crew.py
 ```
@@ -295,6 +343,78 @@ That handles everything except the first link: after a reboot, something has to 
 ```
 
 Then on every boot, crew-forge starts under the watchdog and brings the rest of the fleet back up on its own. (Remove with `Unregister-ScheduledTask -TaskName crewaimeat-forge -Confirm:$false`.) To start crew-forge **manually** instead (or right now), use `./scripts/start_fleet.ps1` — see below.
+
+## Keeping the fleet honest: doctor, retire, costs
+
+A fleet drifts. Not dramatically — an agent gets added and is missing from a registry, a crew's code is
+deleted but its registration is not, a routing decision is never written down. Each one is invisible on
+its own, and together they are how an agent with no code became the node's largest traffic source.
+
+Three commands answer the three questions that drift produces.
+
+### `crewaimeat doctor` — is everything still in agreement?
+
+```bash
+uv run crewaimeat doctor              # offline, ~1s
+uv run crewaimeat doctor --live       # also ask the node (needs the fleet running)
+uv run crewaimeat doctor --strict     # warnings fail too — what CI runs
+```
+
+Three lenses, deliberately different in kind, because the failures are different in kind:
+
+| Lens | Question | Catches |
+|---|---|---|
+| **registries** | Do the crew files, `serve.json` and the node agree about which agents exist? | an agent registered with no code · a live crew registered nowhere · a crew that declares no identity, offer or model |
+| **conformance** | Does the code reach the outside world by the sanctioned route? | a node call that skips the shared dispatcher (and so its auth + retries) · a crew building its own `LLM` and escaping routing · a swallowed failure on the deliverable path · a connector version stated in a second place |
+| **liveness** (`--live`) | What does the NODE believe? | agents it has never seen · schedules firing at agents that no longer exist · agents with no tags, invisible to discovery |
+
+The conformance lens is a **call-graph check, not a linter**. A linter reads one file and asks whether
+a statement is well formed; these are statements about an *edge* — "does this function reach the node
+without passing through `_aimeat_call`" — which no per-file rule can express.
+
+The liveness lens never reports "fine" when it could not look. Connector tools answer *empty, not
+error*, off-fleet, which is exactly the shape of a false green, so an unreachable node is a finding.
+
+**`doctor-baseline.json` is a ratchet.** Existing findings are recorded and stop failing the build; a
+*new* violation of the same rule still fails, and a recorded finding that stops firing is reported as
+`baseline.stale` so the file only ever shrinks. That is what makes a strict check adoptable on a live
+codebase instead of a two-week freeze. It runs in a pre-commit hook, in CI, and at fleet start (where
+it warns and never blocks — a drifted registry is a reason to look, not a reason to be offline).
+
+### `crewaimeat retire <agent>` — the opposite of forging one
+
+```bash
+uv run crewaimeat retire old-agent            # show the plan, change nothing
+uv run crewaimeat retire old-agent --apply    # do it
+```
+
+`crew-forge` can create an agent with one command. Until there was a one-command removal, every
+experiment became permanent by default — which is how 12 registered agents ended up with no code at
+all. Retiring parks the crew file, drops the registration (with a dated backup, because `serve.json`
+holds every agent's token), stashes the token, and cleans the routing entry. It is deliberately
+conservative: it never deletes the crew file and **never touches memory** — a retired agent's
+deliverables are still the owner's data.
+
+### `crewaimeat costs` — who spends, and does anything come out?
+
+```bash
+uv run crewaimeat costs               # last 30 days
+uv run crewaimeat costs --days 7 --all
+```
+
+Every model call is metered to the node's ledger with per-agent attribution. This reads it back and
+crosses it with what the repo knows, to answer one question: *which agents cost money without
+producing anything anyone reads?*
+
+```
+  agent                             cost    calls   verdict
+  ai-news-archivist              $  0.47       35   <-- NO CODE — spends, but no crew file exists here
+  ...
+  $1.51 (15%) went to 8 agent(s) that produce nothing here
+```
+
+An agent that spends and delivers is fine at any price. An agent that spends and delivers nothing is a
+bug with a monthly invoice.
 
 ## Running the fleet (scripts)
 

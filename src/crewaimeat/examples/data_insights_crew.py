@@ -2,7 +2,7 @@
 
 Generated example crew on the AIMEAT scaffold. Edit build_domain to taste;
 the scaffold provides the AIMEAT wiring (see SCAFFOLD_CANON.md). Register first:
-  aimeat connect add --agent data-insights-crew --mode task-runner --url https://aimeat.io --owner <owner>
+  aimeat connect --url https://aimeat.io --owner <owner> --agent data-insights-crew
 
 Run: python -m crewaimeat.examples.data_insights_crew
 """

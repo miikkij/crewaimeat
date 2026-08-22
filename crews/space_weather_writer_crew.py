@@ -10,7 +10,7 @@ holes / daily sun) are hotlinked live in the app itself — this crew writes the
 public-domain (NOAA) / freely readable (spaceweather.com); we reproduce facts, not text.
 
 Register + approve before running:
-  npx aimeat@latest connect add --agent space-weather-writer --mode task-runner --url https://aimeat.io --owner <your-aimeat-account>
+  npx aimeat@latest connect --url https://aimeat.io --owner <your-aimeat-account> --agent space-weather-writer
 Run: uv run python crews/space_weather_writer_crew.py
 """
 

@@ -9,7 +9,7 @@ the agent names — never a real identity.
 DRY-RUN by default; set MROOM_REQUESTS_PUBLISH=1 in the fleet env to actually write + publish.
 
 Register + run:
-  npx aimeat@latest connect add --agent mroom-archivist --mode task-runner --url https://aimeat.io --owner <you>
+  npx aimeat@latest connect --url https://aimeat.io --owner <you> --agent mroom-archivist
   uv run python crews/mroom_archivist_crew.py
 """
 

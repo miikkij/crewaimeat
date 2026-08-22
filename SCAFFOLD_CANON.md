@@ -15,7 +15,7 @@ Validated 2026-05-30 against: aimeat-crewai **0.3.4**, aimeat CLI **1.14.3**, cr
 ## 2. Lifecycle
 
 ```
-aimeat connect add (+ approve in dashboard)
+aimeat connect
         │
         ▼
 Hello Integration (onboarding, once)         ← deterministic gate; LLM only if needed

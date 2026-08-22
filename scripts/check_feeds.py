@@ -3,6 +3,7 @@ periodically and prune/replace the dead ones in src/crewaimeat/feed_sources.py.
 
     uv run python scripts/check_feeds.py
 """
+
 from crewaimeat.feed_sources import FEED_REGISTRY, _parse_feed
 
 dead = []

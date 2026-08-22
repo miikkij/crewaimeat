@@ -9,7 +9,7 @@ scorer. Cold machine voice; every claim is cited; the guest is only ever `EXC_VI
 DRY-RUN by default; set MROOM_REQUESTS_PUBLISH=1 in the fleet env to actually write + advance the chain.
 
 Register + run:
-  npx aimeat@latest connect add --agent mroom-digger --mode task-runner --url https://aimeat.io --owner <you>
+  npx aimeat@latest connect --url https://aimeat.io --owner <you> --agent mroom-digger
   uv run python crews/mroom_digger_crew.py
 """
 

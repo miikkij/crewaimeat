@@ -89,7 +89,7 @@ Every AIMEAT agent is **registered once** and **approved by the owner**. Registe
 wants live (start with one, or with `crew-forge`):
 
 ```
-npx aimeat@latest connect add --agent <name> --mode task-runner --url <NODE_URL> --owner <OWNER>
+npx aimeat@latest connect --url <NODE_URL> --owner <OWNER> --agent <name>
 ```
 
 The command prints a **verification code + URL**. Tell the user to open the URL (also reachable from

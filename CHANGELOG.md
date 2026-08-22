@@ -73,6 +73,11 @@ Dates are the working dates; entries are **uncommitted and take effect on the ne
   Runs from the CLI, from CI (`--strict`), from a pre-commit hook, and at fleet start (warn, never
   block). `doctor-baseline.json` is a RATCHET: today's findings stop failing the build, nothing new may
   be added, and an entry that no longer fires is reported as `baseline.stale` so the file only shrinks.
+  Findings are keyed by `rule::file::function`, never by LINE — a line number breaks the moment anyone
+  inserts a line above it, so every refactor would churn the baseline and the ratchet would be switched
+  off within a month. Rules that came out of using it: `registry.skill.missing` (a declared skill that
+  is not on disk — the crew fails at start), `registry.routing.note_contradicts_order` (a profile whose
+  `_note` claims a lead its provider array does not have), and `guard.removed_connect_command`.
 - **`crewaimeat retire <agent>` — the missing half of an agent's lifecycle.** crew-forge could create an
   agent with one command and nothing could remove one, which is the direct cause of 12 ghost
   registrations, ~20 near-duplicate experiments on the node and 6 schedules nobody dares delete. Parks
@@ -86,7 +91,7 @@ Dates are the working dates; entries are **uncommitted and take effect on the ne
   live crews had no `build_domain` test at all. It is now derived from disk using the same parking rule
   as the fleet host, so a new crew is contract-tested the day it lands. A crew that is not driven by the
   task prompt declares `PROMPT_INDEPENDENT = "<reason>"` — a written reason, not a boolean, so the
-  opt-out cannot be used to silence a real regression. **846 tests / 21 red → 945 tests / 0 red.**
+  opt-out cannot be used to silence a real regression. **846 tests / 21 red → 993 tests / 0 red.**
 - **Malformed capabilities were reported to the node on every start, and accepted.** `datapkg-analyst`
   declared `technical` as bare strings where the contract is `{name, type}` objects; the node takes it
   without complaint and the agent silently stops matching in discovery. Fixed, and `run_crew` now
@@ -111,6 +116,24 @@ Dates are the working dates; entries are **uncommitted and take effect on the ne
 - Four tests were pinned to a machine's own `llm_providers.json` / `AIMEAT_HOME` and to behaviour that
   had deliberately changed (task-runner default, the OpenRouter embedder tier, the connector pin). They
   now assert the RULE against a fixture, not one developer's model choices.
+- **The editorial voice lived in two places, and only one of them ran.**
+  `skills/sanomat-editorial-style/SKILL.md` — a versioned, shareable, registry-publishable pack — was a
+  parallel copy of two prompt strings in `editorial_pipeline`, and nothing read it. The prompts now
+  load the skill (new `skills.skill_body()`, for a prompt built in CODE rather than on a CrewAI Agent —
+  the deterministic pipelines never build one, so `Agent(skills=...)` never reached them). Editing the
+  house voice is now editing one file, and it travels through the skills registry. Loaded lazily, so a
+  missing skill fails the editorial STEP loudly instead of taking the fleet down at import.
+- **Every onboarding path taught a command the connector had removed.** `connect add` and its `--mode`
+  flag went away in connector v1.33; 142 places still used them — including the first command in the
+  README's Quickstart and the one `startup.prompt.md` hands to an AI assistant, so onboarding's very
+  first step could not work. All rewritten to `aimeat connect --url <node> --owner <owner> --agent
+  <name>`; the agent's MODE is set by the scaffold at start (`aimeat_agent_mode_set`), which is why the
+  flag could be dropped. A doctor rule (`guard.removed_connect_command`) now fails on the old form —
+  documentation had no test, which is exactly why this rotted for months.
+- **doctor printed "PASS" above a non-zero exit.** A stale baseline entry fails under `--strict`, but
+  the verdict line counted only errors and warnings. Found by the pre-commit hook itself, on a real
+  event: retiring an agent made its finding stop firing. A gate that says one thing and does another is
+  how people learn to ignore the gate.
 - `embedder_cascade`'s module docstring contradicted its own function: "privacy" drops the free cloud
   tier but keeps OpenRouter as the universal last-resort fallback, i.e. it means "no FREE cloud", not
   "no cloud". Documented where the distinction is actually made.

@@ -14,7 +14,7 @@ Two surfaces (same idempotent engine, crewaimeat.feedback_wisdom_contract):
     numbers. The idle poll keeps producing advisories from any fresh stats with no task or chat needed.
 
 Register + approve before running:
-  npx aimeat@latest connect add --agent feedback-wisdom --mode task-runner --url https://aimeat.io --owner <your-aimeat-account>
+  npx aimeat@latest connect --url https://aimeat.io --owner <your-aimeat-account> --agent feedback-wisdom
 
 Run: uv run python crews/feedback_wisdom_crew.py
 """

@@ -6,7 +6,7 @@ Publisher rewrite), and the public index is rebuilt with index_frontpage_auto (p
 This crew is a thin wrapper: the agent resolves the target date+edition and calls the tool ONCE.
 
 Register + approve, then run:
-  npx aimeat@latest connect add --agent editorial-writer --mode task-runner --url https://aimeat.io --owner <you>
+  npx aimeat@latest connect --url https://aimeat.io --owner <you> --agent editorial-writer
   uv run python crews/editorial_writer_crew.py
 """
 

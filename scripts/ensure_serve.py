@@ -13,6 +13,12 @@ the "(L)AIMEAT Sanomat just didn't update, no error" failure."""
 from crewaimeat.serve_guard import ensure_single_serve
 
 d = ensure_single_serve()
-print("[start_fleet] serve daemon: port", d.get("port"), "pid", d.get("pid"),
-      "agents", len(d.get("agents") or []),
-      ("(reaped %d duplicate(s))" % d["_reaped_duplicates"]) if d.get("_reaped_duplicates") else "")
+print(
+    "[start_fleet] serve daemon: port",
+    d.get("port"),
+    "pid",
+    d.get("pid"),
+    "agents",
+    len(d.get("agents") or []),
+    f"(reaped {d['_reaped_duplicates']} duplicate(s))" if d.get("_reaped_duplicates") else "",
+)

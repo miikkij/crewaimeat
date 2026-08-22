@@ -13,7 +13,7 @@ Three flows, one agent (deterministic routing; LLMs only where judgement lives):
      correction is published into the next edition's article.oikaisut.
 
 Register + approve (needs messages:send + messages:read at device-auth), then restart the fleet:
-  npx aimeat@latest connect add --agent sanomat-desk --mode task-runner --url https://aimeat.io --owner <you>
+  npx aimeat@latest connect --url https://aimeat.io --owner <you> --agent sanomat-desk
 """
 
 from __future__ import annotations

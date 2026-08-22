@@ -8,7 +8,7 @@ completed-answers document you can submit or paste in. Works on flat/scanned for
   4. It returns the completed form.
 
 Register + approve before running:
-  npx aimeat@latest connect add --agent form-filler --mode task-runner --url https://aimeat.io --owner <your-aimeat-account>
+  npx aimeat@latest connect --url https://aimeat.io --owner <your-aimeat-account> --agent form-filler
 Run: uv run python crews/form_filler_crew.py
 """
 

@@ -52,6 +52,15 @@ SINK_RE = re.compile(
 
 CONNECTOR_LITERAL = re.compile(r"aimeat@\d+\.\d+\.\d+")
 
+# ── Route 4: the docs must teach a command the connector still has ───────────────────────────────
+# `connect add` and its `--mode` flag were removed in connector v1.33. 142 places in this repo went
+# on teaching the removed form for months — including the first command in the README's Quickstart
+# and the one startup.prompt.md hands to an AI assistant, so onboarding's very first step could not
+# work. Nothing noticed, because documentation has no test. This is that test.
+REMOVED_CONNECT = re.compile(
+    r"aimeat(?:@[\w.\-]+)?\s+connect\s+add\b|connect\s+add\s+--agent\b|--mode[=\s]+task-runner\b"
+)
+
 
 def _scope_map(tree: ast.Module) -> dict[int, str]:
     """line -> the dotted name of the function/class that owns it.
@@ -194,6 +203,7 @@ def check(root: Path, report: Report) -> None:
             elif isinstance(node, ast.Try):
                 _check_silent_guard(node, rel, scopes, report)
         _check_version_literal(text, lines, rel, scopes, report)
+        _check_removed_connect_command(lines, rel, scopes, report)
     report.note(f"route conformance: {scanned} files scanned, {len(files) - scanned} unparsable")
 
 
@@ -280,5 +290,32 @@ def _check_version_literal(text: str, lines: list[str], rel: str, scopes: dict[i
                 _where(rel, scopes, i),
                 f"line {i}: hardcodes a connector version, creating a second source of truth that drifts silently",
                 "read forge.AIMEAT_CONNECTOR instead",
+            )
+        )
+
+
+def _check_removed_connect_command(lines: list[str], rel: str, scopes: dict[int, str], report: Report) -> None:
+    """No file may teach `connect add` / `--mode task-runner` — the connector removed both in v1.33.
+
+    A command that no longer exists is worse than a missing instruction: the reader runs it, gets a
+    usage error, and concludes the project is broken. The correct form is
+    `aimeat connect --url <node> --owner <owner> --agent <name>`, and the agent's MODE is set by the
+    scaffold on every start via `aimeat_agent_mode_set` — which is why the flag could be dropped.
+    """
+    for i, line in enumerate(lines, start=1):
+        m = REMOVED_CONNECT.search(line)
+        if not m:
+            continue
+        if "removed" in line.lower() or "v1.33" in line:
+            continue  # a comment recording the removal, not an instruction to run it
+        report.add(
+            Finding(
+                "guard.removed_connect_command",
+                ERROR,
+                _where(rel, scopes, i),
+                f"line {i}: teaches `{m.group(0)}`, which the connector removed in v1.33 — a reader who "
+                f"runs it gets a usage error and concludes the project is broken",
+                "use `aimeat connect --url <node> --owner <owner> --agent <name>`; the mode is set by "
+                "the scaffold at start, not at registration",
             )
         )

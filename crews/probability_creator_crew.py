@@ -17,7 +17,7 @@ daemon, liaison publish/complete, live progress, date injection — is provided 
 crewaimeat.aimeat_crew.run_crew (background: SCAFFOLD_CANON.md).
 
 Register first, then approve in the dashboard (Profile -> Agents):
-  npx aimeat@latest connect add --agent probability-creator --mode task-runner --url https://aimeat.io --owner <your-aimeat-account>
+  npx aimeat@latest connect --url https://aimeat.io --owner <your-aimeat-account> --agent probability-creator
 
 Run:
   uv run python crews/probability_creator_crew.py
@@ -31,7 +31,7 @@ from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 from crewaimeat.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is set, else []
 
 # === CUSTOMIZE 1: your AIMEAT agent identity =============================== #
-AGENT_NAME = "probability-creator"  # must match `aimeat connect add --agent ...`
+AGENT_NAME = "probability-creator"  # must match `aimeat connect --agent ...`
 
 # ── This agent's own declaration ─────────────────────────────────────────────────────────────
 # The single source for what this agent is: its model routing, how it is discovered, and what it

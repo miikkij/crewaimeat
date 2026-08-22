@@ -8,7 +8,7 @@ invokes this agent on a failed step signal; until then its idle hook checks the 
 after the evening deadline and acts. Deterministic check; LLM only for an `llm` signal leaf.
 
 Register + run:
-  npx aimeat@latest connect add --agent workflow-inspector --mode task-runner --url https://aimeat.io --owner <you>
+  npx aimeat@latest connect --url https://aimeat.io --owner <you> --agent workflow-inspector
   uv run python crews/workflow_inspector_crew.py
 """
 

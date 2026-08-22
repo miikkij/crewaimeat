@@ -7,7 +7,7 @@ request to `processing` for mroom-digger. Cold machine voice; the guest is only 
 DRY-RUN by default; set MROOM_REQUESTS_PUBLISH=1 in the fleet env to actually write + advance the chain.
 
 Register + run (owner = the MACHINE ROOM owner so same-owner writes pass):
-  npx aimeat@latest connect add --agent mroom-sniffer --mode task-runner --url https://aimeat.io --owner <you>
+  npx aimeat@latest connect --url https://aimeat.io --owner <you> --agent mroom-sniffer
   uv run python crews/mroom_sniffer_crew.py
 """
 

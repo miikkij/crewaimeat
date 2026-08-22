@@ -2,7 +2,7 @@
 
 Queue it a plain-language request ("make me an agent that drafts release notes") and it
 designs a new task-runner crew, writes + validates its build_domain on the locked AIMEAT
-scaffold, registers the new agent (aimeat connect add), and launches it under the
+scaffold, registers the new agent (device auth), and launches it under the
 watchdog. You approve the new agent once in the dashboard; then it is live — the new crew
 waits patiently for that approval, so nothing crash-loops while you get to it.
 
@@ -20,7 +20,7 @@ when a crew goes offline, message crew-forge "/restart <agent>" to bring it back
 
 Generated work lands in crews/<new-agent>_crew.py. crew-forge edits nothing in the
 scaffold — every crew it makes reuses crewaimeat.aimeat_crew.run_crew. Register first:
-  npx aimeat@latest connect add --agent crew-forge --mode task-runner --url https://aimeat.io --owner <your-aimeat-account>
+  npx aimeat@latest connect --url https://aimeat.io --owner <your-aimeat-account> --agent crew-forge
 
 Run: uv run python crews/crew_forge_crew.py
 Needs AIMEAT_OWNER in .env so it can register the agents it builds under your account.

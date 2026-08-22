@@ -37,7 +37,7 @@ status cells, append decisions), so the two sides stay synced without drifting p
   projects' fleets (no global `~/.aimeat` collision). Resolve it via `crewaimeat._home.aimeat_home()`,
   never re-derive the path. `.aimeat/` is gitignored (it holds tokens).
 - One crew = `crews/<name>_crew.py`; `build_domain(ctx) -> ([agents], [tasks])`; `AGENT_NAME` matches
-  the name used in `aimeat connect add --agent`.
+  the name used in `aimeat connect
 - **Skills** = portable SKILL.md expertise packs in `skills/<name>/` (see `skills/README.md`; contract
   shared with the AIMEAT registry, spec doc-sdie0se). `CrewSpec.skills=["name"]` loads them FAIL-LOUD at
   daemon start (`crewaimeat.skills.load_skills`); agents take them like ctx.llm: `Agent(skills=ctx.skills)`
@@ -75,7 +75,7 @@ status cells, append decisions), so the two sides stay synced without drifting p
   A leading underscore parks a crew: `crews/_foo_crew.py` is skipped (`forge._crew_files`, why the
   `_aimeat_*` crews are dormant). So "add a crew file" ≠ "agent is live".
 - Two things make it live, not just present: (1) **register once** —
-  `npx aimeat@latest connect add --agent <name> --mode task-runner --url https://aimeat.io --owner <owner>`
+  `npx aimeat@latest connect --url https://aimeat.io --owner <owner>` --agent <name>
   — and approve the one-time device flow (its token lands in the shared `serve.json`); (2) **restart the
   fleet** (`scripts/start_fleet.ps1` → `fleet_host`) so it attaches as a THREAD to the ONE shared loopback
   serve daemon (all agents in one process, crewai imported once). Only APPROVED agents come online; an

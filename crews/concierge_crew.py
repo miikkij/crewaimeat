@@ -15,7 +15,7 @@ responder runs the crew -> dm_reply with the collected attachments. The first-co
 carry them.
 
 Register + approve before running:
-  npx aimeat@latest connect add --agent concierge --mode task-runner --url https://aimeat.io --owner <your-aimeat-account>
+  npx aimeat@latest connect --url https://aimeat.io --owner <your-aimeat-account> --agent concierge
 Run: uv run python crews/concierge_crew.py
 """
 

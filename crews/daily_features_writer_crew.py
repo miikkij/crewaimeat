@@ -6,7 +6,7 @@ tasks (koodaus/matikka came up empty); here the loop is code, so nothing is drop
 resolves the target date+edition and calls the tool ONCE.
 
 Register + approve, then run:
-  npx aimeat@latest connect add --agent daily-features-writer --mode task-runner --url https://aimeat.io --owner <you>
+  npx aimeat@latest connect --url https://aimeat.io --owner <you> --agent daily-features-writer
   uv run python crews/daily_features_writer_crew.py
 """
 

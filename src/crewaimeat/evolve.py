@@ -686,7 +686,7 @@ def _launch_evolve_run(agent: str, ctx: str) -> bool:
 
 
 def _promote_candidate(agent: str, vname: str, ctx: str, mode: str, owner: str | None) -> None:
-    """Promote a staged candidate to a live agent: move into crews/, register (connect add) + launch.
+    """Promote a staged candidate to a live agent: move into crews/, register (device auth) + launch.
     The new agent waits for the owner's one-time approval, then comes online. Records the lineage."""
     from crewaimeat.forge import _fname, launch_crew, register_agent
 
@@ -700,7 +700,7 @@ def _promote_candidate(agent: str, vname: str, ctx: str, mode: str, owner: str |
     reg_note = ""
     if owner:
         try:
-            register_agent(vname, owner)  # connect add (background; prints a verification code/url)
+            register_agent(vname, owner)  # device auth (background; prints a verification code/url)
         except Exception as exc:  # noqa: BLE001
             reg_note = f" (registration hiccup: {exc})"
     pid, _log = launch_crew(f"crews/{_fname(vname)}")

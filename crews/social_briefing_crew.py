@@ -10,7 +10,7 @@ Set-up + control happen over DM (or the inbox command chips): 'track topics: a, 
 now', 'brief me daily at 7am', 'stop my daily briefing'. It only ever talks to its OWNER.
 
 Register + approve before running:
-  npx aimeat@latest connect add --agent social-briefing --mode task-runner --url https://aimeat.io --owner <your-aimeat-account>
+  npx aimeat@latest connect --url https://aimeat.io --owner <your-aimeat-account> --agent social-briefing
 Run: uv run python crews/social_briefing_crew.py
 """
 

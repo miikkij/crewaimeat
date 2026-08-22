@@ -7,7 +7,7 @@ docs/librarian-design.md. It is also the home of the contribute_to_library scaff
 (later) the aggregator/janitor.
 
 Register first, then approve:
-  npx aimeat@latest connect add --agent librarian --mode task-runner --url https://aimeat.io --owner <your-aimeat-account>
+  npx aimeat@latest connect --url https://aimeat.io --owner <your-aimeat-account> --agent librarian
 
 Run: uv run python crews/librarian_crew.py
 """

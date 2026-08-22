@@ -1,7 +1,7 @@
 """TEMPLATE — copy this file and mold it into your own AIMEAT crew.
 
 Edit only these spots:
-  1. Set AGENT_NAME to the name you registered with `aimeat connect add`.
+  1. Set AGENT_NAME to the name you registered with `aimeat connect`.
   2. In build_domain(), define your domain agents and their tasks.
   3. (Optional) choose poll_seconds / memory_key_prefix in CrewSpec.
 
@@ -11,7 +11,7 @@ progress — all verified end-to-end. Keep your edits to build_domain and let th
 scaffold do the rest (background: SCAFFOLD_CANON.md).
 
 Prerequisites (see the project README / setup guide):
-  - `aimeat connect add --agent <AGENT_NAME> --mode task-runner --url https://aimeat.io --owner <you>`
+  - `aimeat connect --url https://aimeat.io --owner <you>` --agent <AGENT_NAME>
     then approve it in the dashboard.
   - An OPENROUTER_API_KEY in .env. Model via OPENROUTER_MODEL:
       * testing / free:  openrouter/owl-alpha  (the scaffold tolerates its hiccups)
@@ -31,7 +31,7 @@ from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 from crewaimeat.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is set, else []
 
 # === CUSTOMIZE 1: your AIMEAT agent identity =============================== #
-AGENT_NAME = "my-crew"  # must match `aimeat connect add --agent ...`
+AGENT_NAME = "my-crew"  # must match `aimeat connect --agent ...`
 
 
 # === CUSTOMIZE 2: your domain agents + tasks ============================== #

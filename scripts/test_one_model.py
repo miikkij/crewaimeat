@@ -16,7 +16,6 @@ Defaults to OpenRouter (OPENROUTER_API_KEY). Cloaked models (owl-alpha etc.) liv
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 import time
@@ -29,15 +28,20 @@ load_dotenv()
 BASE = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
 KEY = os.environ.get("OPENROUTER_API_KEY", "")
 HEAD = {"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"}
-_MUL_TOOL = [{
-    "type": "function",
-    "function": {
-        "name": "multiply",
-        "description": "Multiply two integers and return the product.",
-        "parameters": {"type": "object", "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
-                       "required": ["a", "b"]},
-    },
-}]
+_MUL_TOOL = [
+    {
+        "type": "function",
+        "function": {
+            "name": "multiply",
+            "description": "Multiply two integers and return the product.",
+            "parameters": {
+                "type": "object",
+                "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+                "required": ["a", "b"],
+            },
+        },
+    }
+]
 
 
 def list_models(needle: str) -> None:
@@ -47,8 +51,10 @@ def list_models(needle: str) -> None:
         if needle.lower() in mid.lower():
             p = m.get("pricing", {})
             st = m.get("supported_parameters", []) or []
-            print(f"  {mid:40s} ctx={m.get('context_length')} tools={'tools' in st or 'tool_choice' in st} "
-                  f"in={p.get('prompt')} out={p.get('completion')}")
+            print(
+                f"  {mid:40s} ctx={m.get('context_length')} tools={'tools' in st or 'tool_choice' in st} "
+                f"in={p.get('prompt')} out={p.get('completion')}"
+            )
 
 
 def _chat(model: str, messages: list, tools=None, timeout=60) -> tuple[int, dict, float]:
@@ -100,7 +106,9 @@ def main() -> None:
     print(f"  respond : {'PASS' if content.strip() else 'EMPTY'} ({dt:.1f}s)  sample: {content.strip()[:80]!r}")
 
     # probe 2: tools (function-calling)
-    sc2, body2, dt2 = _chat(model, [{"role": "user", "content": "Use the multiply tool to compute 12 * 7."}], tools=_MUL_TOOL)
+    sc2, body2, dt2 = _chat(
+        model, [{"role": "user", "content": "Use the multiply tool to compute 12 * 7."}], tools=_MUL_TOOL
+    )
     if sc2 != 200:
         err = (body2.get("error") or {}).get("message") or body2.get("_raw") or body2
         print(f"  tools   : FAIL (HTTP {sc2}) {str(err)[:160]}")
@@ -108,10 +116,12 @@ def main() -> None:
         msg = ((body2.get("choices") or [{}])[0].get("message")) or {}
         tcs = msg.get("tool_calls") or []
         if tcs:
-            fn = (tcs[0].get("function") or {})
+            fn = tcs[0].get("function") or {}
             print(f"  tools   : PASS ({dt2:.1f}s)  called {fn.get('name')}({fn.get('arguments')})")
         else:
-            print(f"  tools   : NO TOOL CALL ({dt2:.1f}s)  model answered in text instead: {str(msg.get('content'))[:60]!r}")
+            print(
+                f"  tools   : NO TOOL CALL ({dt2:.1f}s)  model answered in text instead: {str(msg.get('content'))[:60]!r}"
+            )
 
     responds = bool(content.strip())
     has_tools = sc2 == 200 and bool((((body2.get("choices") or [{}])[0].get("message")) or {}).get("tool_calls"))

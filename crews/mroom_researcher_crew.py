@@ -18,7 +18,7 @@ Writing to the live room is gated: DRY-RUN by default. Set MROOM_RESEARCHER_PUBL
 actually write + advance the lifecycle.
 
 Register + run (owner = the MACHINE ROOM owner, so cross-organism writes pass):
-  npx aimeat@latest connect add --agent mroom-researcher --mode task-runner --url https://aimeat.io --owner <aimeat-account>
+  npx aimeat@latest connect --url https://aimeat.io --owner <aimeat-account> --agent mroom-researcher
   uv run python crews/mroom_researcher_crew.py
 """
 

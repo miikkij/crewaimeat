@@ -9,7 +9,7 @@ Writing to the live room is gated: DRY-RUN by default (fetch + judge + build rec
 writes). Set MROOM_CURATOR_PUBLISH=1 in the fleet env to actually write + publish.
 
 Register + run (owner = the MACHINE ROOM owner, so cross-organism writes pass):
-  npx aimeat@latest connect add --agent mroom-curator --mode task-runner --url https://aimeat.io --owner <aimeat-account>
+  npx aimeat@latest connect --url https://aimeat.io --owner <aimeat-account> --agent mroom-curator
   uv run python crews/mroom_curator_crew.py
 
 Set up the recurring pass once (server-run schedule, fires an agent_task at this agent):

@@ -8,7 +8,7 @@ This is the agent-driven coordinator (its OWN AIMEAT identity + memory, not a bo
 
 Uses only existing primitives — no platform changes. The subtasks run on the OTHER crews, so this
 agent never re-runs its own work. Register first, then approve in the dashboard:
-  npx aimeat@latest connect add --agent workflow-manager --mode task-runner --url https://aimeat.io --owner <your-aimeat-account>
+  npx aimeat@latest connect --url https://aimeat.io --owner <your-aimeat-account> --agent workflow-manager
 
 Run: uv run python crews/workflow_manager_crew.py
 """

@@ -6,7 +6,7 @@ so dev and prod stay fully isolated (own AIMEAT_HOME, own serve daemon, own logs
     # in the dev clone (E:\\dev\\GitHub\\crewfive-dev):
     uv run python scripts/register_fleet.py --owner <dev-owner> --url http://localhost:40050
 
-It pins AIMEAT_HOME to this clone's .aimeat (unless already set), then launches `connect add` for each
+It pins AIMEAT_HOME to this clone's .aimeat (unless already set), then launches device auth for each
 agent and prints its device-approval code/URL. Approve them in that node's dashboard (Profile -> Agents);
 each registers automatically once approved. Restrict to a subset with --agents a,b,c.
 """

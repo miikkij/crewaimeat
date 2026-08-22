@@ -1,8 +1,9 @@
 """Smoke-test the AIMEAT starter template end-to-end with the DEPLOYED libs.
 Publishes a tiny app built from read_app_template() and verifies it renders (login bar +
 await-login + session.fetch). Proves the template before agents are told to rely on it."""
-import os
+
 import re
+
 from crewaimeat.author_tool import make_author_tools
 
 AGENT = "aimeat-app-builder"  # onboarded; has a token
@@ -44,8 +45,16 @@ html = html.replace("<title>App Name</title>", "<title>Template Smoke Test</titl
 
 # 4) publish it
 print("=== publish_app ===")
-print(run("publish_app", filename="template-smoketest.html", html=html,
-          name="Template Smoke Test", description="starter-template smoke test"), "\n")
+print(
+    run(
+        "publish_app",
+        filename="template-smoketest.html",
+        html=html,
+        name="Template Smoke Test",
+        description="starter-template smoke test",
+    ),
+    "\n",
+)
 
 # 5) verify render
 print("=== verify_render ===")

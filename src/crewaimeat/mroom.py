@@ -23,7 +23,7 @@ Hard invariants: no emails / real identities anywhere; cold machine voice, Engli
 you can eyeball them; set MROOM_CURATOR_PUBLISH=1 to actually write + publish.
 
 Register + run:
-  npx aimeat@latest connect add --agent mroom-curator --mode task-runner --url https://aimeat.io --owner <aimeat-account>
+  npx aimeat@latest connect --url https://aimeat.io --owner <aimeat-account> --agent mroom-curator
   uv run python -m crewaimeat.mroom        # one DRY-RUN pass, prints the summary + would-write records
 """
 

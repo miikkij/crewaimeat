@@ -11,7 +11,7 @@ caught here too — the fixer iterates until the artifact is genuinely clean (or
 never re-shipping broken code.
 
 Prerequisites (human-gated, one time):
-  - `npx aimeat@latest connect add --agent aimeat-cortex-fixer --mode task-runner --url <node> --owner <you>`
+  - `npx aimeat@latest connect --url <node> --owner <you>` --agent aimeat-cortex-fixer
     then approve in the dashboard.
   - Assign the shared tag "workflow" so the conductor can delegate to it.
   - Cortex install needs the owner's agent-write grant deployed (app publish works for agents already).

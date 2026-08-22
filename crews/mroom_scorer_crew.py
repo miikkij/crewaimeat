@@ -9,7 +9,7 @@ produced no signal", never an insult. The guest is only ever `EXC_VIP_NN`.
 DRY-RUN by default; set MROOM_REQUESTS_PUBLISH=1 in the fleet env to actually write + advance the chain.
 
 Register + run:
-  npx aimeat@latest connect add --agent mroom-scorer --mode task-runner --url https://aimeat.io --owner <you>
+  npx aimeat@latest connect --url https://aimeat.io --owner <you> --agent mroom-scorer
   uv run python crews/mroom_scorer_crew.py
 """
 

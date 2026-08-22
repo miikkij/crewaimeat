@@ -4,7 +4,7 @@ Give it a task describing an image; it crafts a vivid prompt, generates the imag
 Seedream 4.5 (via OpenRouter, ~$0.04/image), stores it in public AIMEAT storage, and returns a
 public URL. Only build_domain is crew-specific; crewaimeat.aimeat_crew.run_crew provides the AIMEAT
 wiring. Register + approve before running:
-  npx aimeat@latest connect add --agent image-maker --mode task-runner --url https://aimeat.io --owner <your-aimeat-account>
+  npx aimeat@latest connect --url https://aimeat.io --owner <your-aimeat-account> --agent image-maker
 
 Run: uv run python crews/image_maker_crew.py
 """

@@ -10,7 +10,7 @@ It mirrors the public pattern (workflow-manager → crew-forge → new agents) b
 AIMEAT-prefixed family and reuses crew-forge's proven machinery (forge.write_and_validate_crew +
 register_and_launch_crew). Only the Architect's brief is AIMEAT-SDLC-specific.
 
-Prereqs (one time): npx aimeat@latest connect add --agent aimeat-crew-forge --mode task-runner
+Prereqs (one time): npx aimeat@latest connect --agent aimeat-crew-forge
   --url https://aimeat.io --owner <you>  then approve it + assign the shared tag "workflow" so the
   conductor can delegate to it. AIMEAT_OWNER in .env so it can register the agents it forges.
 Run: uv run python crews/aimeat_crew_forge_crew.py

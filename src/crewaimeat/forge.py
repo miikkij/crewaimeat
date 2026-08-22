@@ -7,7 +7,7 @@ A builder agent calls the two tools from `make_forge_tools()`:
      -> writes crews/<name>_crew.py on the locked scaffold and validates it in a
         subprocess; returns VALID or the error to fix (call again until VALID).
   2. register_and_launch_crew(agent_name)
-     -> `aimeat connect add` for the new agent, then launches it under the watchdog
+     -> `aimeat connect` for the new agent, then launches it under the watchdog
         as a detached background process; returns the report (incl. the approve step).
 
 The generated crew reuses crewaimeat.aimeat_crew.run_crew, so only build_domain is ever
@@ -298,9 +298,9 @@ _REAL_POPEN = subprocess.Popen
 
 
 def register_agent(agent_name: str, owner: str, url: str = "https://aimeat.io") -> tuple[bool, str]:
-    """Start `connect add` for a new task-runner agent and SURFACE its device verification code + URL.
+    """Start device auth for a new task-runner agent and SURFACE its verification code + URL.
 
-    `connect add` is an OAuth device flow: it prints a verification code + URL and then polls until
+    Device auth is an OAuth device flow: it prints a verification code + URL and then polls until
     the owner approves. Capturing that output silently (the old behaviour) hid the code and made the
     call hang. Instead we launch it in the BACKGROUND (it keeps polling and registers once approved),
     read the code + URL it prints within a few seconds, and return them so the owner can approve.

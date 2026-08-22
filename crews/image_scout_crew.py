@@ -12,7 +12,7 @@ Quick test (after registering):
   uv run python -c "from crewaimeat.image_contract import process_moodboards; print(process_moodboards())"
 
 Run as a crew:
-  npx aimeat@latest connect add --agent image-scout --mode task-runner --url https://aimeat.io --owner <you>
+  npx aimeat@latest connect --url https://aimeat.io --owner <you> --agent image-scout
   uv run python crews/image_scout_crew.py
 """
 

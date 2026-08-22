@@ -8,7 +8,7 @@ only, auto=write+publish). The loop is deterministic (crewaimeat.cadence_contrac
 contacts anyone, sends anything, or moves a deal; it only creates CRM task records for the owner.
 
 Run as a crew:
-  npx aimeat@latest connect add --agent cadence-followup --mode task-runner --url https://aimeat.io --owner <you>
+  npx aimeat@latest connect --url https://aimeat.io --owner <you> --agent cadence-followup
   uv run python crews/cadence_followup_crew.py
 
 Quick test (after registering + adopting the contract on a CRM workspace):
