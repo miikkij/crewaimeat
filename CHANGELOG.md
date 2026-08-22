@@ -39,6 +39,20 @@ Dates are the working dates; entries are **uncommitted and take effect on the ne
   in the tags the picker hands a generation request to the crew that only searches the web.
 
 ### Added
+- **`crewaimeat costs` — model spend per agent, and who spends without producing.** The fleet has
+  metered every model call to the node's ledger since aimeat-crewai 0.16.1, with per-agent
+  attribution. Nobody read it back, which is why `crypto-weekly-reporter` — an agent whose code had
+  been deleted — went on burning calls until it became the node's largest traffic source and had to be
+  found by hand. The report is built around one question, not around totals: *which agents cost money
+  without producing anything anyone reads?* It crosses the ledger against what the repo knows (is
+  there a crew file, is it registered, is it parked) and names the answer. First run on the live
+  fleet: **$1.51 of $10.19 over 30 days — 15% — went to 8 agents with no crew file at all.**
+  - Reads `GET /v1/ledger/usage?group_by=agent`, NOT the MCP tool: `aimeat_usage_report` is on the MCP
+    surface but not in the connector's shell-callable set, so `_aimeat_call` answers "Unknown
+    shell-callable tool". The REST route works off-fleet too, so the question is answerable without
+    the fleet running.
+  - The owner's own GHII appears in the ledger beside the agents; it is a person, not a broken agent,
+    and is never accused of having no code.
 - **`crewaimeat doctor` — continuous reconciliation of what this repo DECLARES against what it DOES.**
   The August audit took hours and almost every finding was a mechanical disagreement between six
   hand-kept lists. That is a program, not an afternoon. Three lenses, deliberately different in kind:

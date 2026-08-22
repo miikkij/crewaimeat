@@ -118,6 +118,10 @@ def main(argv: list[str] | None = None) -> int:
         from crewaimeat.doctor.cli import main as doctor_main
 
         return doctor_main(argv[1:])
+    if argv and argv[0] == "costs":
+        from crewaimeat.fleet_economics import main as costs_main
+
+        return costs_main(argv[1:])
     if argv and argv[0] == "retire":
         from crewaimeat.retire import main as retire_main
 
