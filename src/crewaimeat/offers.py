@@ -433,10 +433,13 @@ def crew_offer_agents() -> tuple[str, ...]:
 
 
 def _crew_offers_map() -> dict[str, list[dict]]:
+    """LIVE crews only. A parked crew (leading `_`) is one the fleet does not run, so it must not go on
+    advertising work nothing will pick up — an offer is a promise, and a parked agent cannot keep it.
+    Missing this let `daily-brief` keep its offer after being parked, which the offers floor caught."""
     try:
         from crewaimeat.agent_manifest import all_manifests
 
-        return {m.agent: list(m.offers) for m in all_manifests() if m.agent and m.offers}
+        return {m.agent: list(m.offers) for m in all_manifests() if m.agent and m.offers and m.live}
     except Exception:  # noqa: BLE001 — no crews/ reachable simply means no authored offers
         return {}
 

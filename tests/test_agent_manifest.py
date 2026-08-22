@@ -142,6 +142,17 @@ def test_every_live_crew_declares_a_model_profile():
     assert not missing, f"live crews with no LLM_PROFILE: {missing}"
 
 
+def test_a_parked_crew_advertises_nothing():
+    """An offer is a promise, and a parked crew is one the fleet does not run — so it cannot keep one.
+    `daily-brief` kept advertising after being parked until the offers floor caught it."""
+    from crewaimeat.offers import crew_offer_agents
+
+    root = Path(__file__).resolve().parent.parent
+    parked = {m.agent for m in agent_manifest.all_manifests(root, refresh=True) if m.parked and m.agent}
+    still_offering = sorted(parked & set(crew_offer_agents()))
+    assert not still_offering, f"parked crews still advertising: {still_offering}"
+
+
 def test_no_two_crews_claim_the_same_agent():
     root = Path(__file__).resolve().parent.parent
     seen: dict[str, str] = {}

@@ -46,25 +46,29 @@ def _tools(ctx):
     }
 
 
-_TAGS = ["role.task-runner", "web-search", "memory-io", "founder-strategy", "service-adaptation"]
-_CAPABILITIES = {
+TAGS = ["role.task-runner", "web-search", "memory-io", "founder-strategy", "service-adaptation"]
+CAPABILITIES = {
     "technical": [{"name": "web-research", "type": "skill"}],
     "domain": ["founder-strategy", "service-adaptation"],
     "languages": ["en"],
 }
 
-_OFFER = {
-    "id": "founder-lens",
-    "title": "Founder-Perspective Strategic Assessment",
-    "ask": "Send this agent a description of your service or product and it returns a founder-perspective strategic assessment of its development trajectory and adaptation needs; it does NOT execute code changes, build apps, or manage day-to-day operations.",
-    "example": '"Analysoi SaaS-laskutustuotteemme nykytila ja ehdota adaptaatioita founder-näkökulmasta kilpailijoiden ja markkinatrendien valossa."',
-    "cost": "expensive",
-    "latency": "long-running",
-    "repeatability": "idempotent",
-    "verification": "ungated",
-    "consequences": [],
-    "sample": None,
-}
+OFFERS = [
+    {
+        "id": "founder-lens",
+        "title": "Founder-Perspective Strategic Assessment",
+        "ask": "Send this agent a description of your service or product and it returns a founder-perspective strategic assessment of its development trajectory and adaptation needs; it does NOT execute code changes, build apps, or manage day-to-day operations.",
+        "example": '"Analysoi SaaS-laskutustuotteemme nykytila ja ehdota adaptaatioita founder-näkökulmasta kilpailijoiden ja markkinatrendien valossa."',
+        "cost": "expensive",
+        "latency": "long-running",
+        "repeatability": "idempotent",
+        "verification": "ungated",
+        "consequences": [],
+        "sample": (
+            "# Founder's Strategic Roadmap: Small AI-Agent SaaS\n## July 2026 — Quarter-By-Quarter Through Year-End\n\n---\n\n## 1. Founder's Overview\n\nYour AI-agent SaaS sits at the validation-to-growth inflection — the most dangerous moment in a company's life. The \"LLM wrapper\" gold rush of 2024–25 is over. The survivors are those who embedded agents into real, multi-step workflows with measurable outcomes. The market is now bifurcating hard: horizontal platforms (OpenAI, Google, Anthropic) are commoditizing the agent runtime layer, while vertical, workflow-specific agent SaaS companies are carving out defensible niches. You are either building a moat in a specific workflow nobody else wants to own, or you\n\n…"
+        ),
+    }
+]
 
 
 def build_domain(ctx):
@@ -182,9 +186,9 @@ def run() -> None:
             temperature=0.5,
             discover=True,
             memory=True,
-            tags=_TAGS,
-            capabilities=_CAPABILITIES,
-            offer=_OFFER,
+            tags=TAGS,
+            capabilities=CAPABILITIES,
+            offer=OFFERS[0],
         )
     )
 

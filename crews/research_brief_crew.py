@@ -42,25 +42,29 @@ def _tools(ctx):
     }
 
 
-_TAGS = ["role.task-runner", "web-search", "research", "summarization", "fact-checking"]
-_CAPABILITIES = {
+TAGS = ["role.task-runner", "web-search", "research", "summarization", "fact-checking"]
+CAPABILITIES = {
     "technical": [{"name": "web-research", "type": "skill"}],
     "domain": ["research", "summarization", "fact-checking"],
     "languages": ["en"],
 }
 
-_OFFER = {
-    "id": "research-brief",
-    "title": "Research Brief",
-    "ask": "Send a question or topic and get back a concise, cited research brief with independently verified claims; does not produce creative content, make decisions for you, or generate images.",
-    "example": "What are the latest developments in solid-state battery technology as of 2026?",
-    "cost": "expensive",
-    "latency": "long-running",
-    "repeatability": "idempotent",
-    "verification": "ungated",
-    "consequences": [],
-    "sample": None,
-}
+OFFERS = [
+    {
+        "id": "research-brief",
+        "title": "Research Brief",
+        "ask": "Send a question or topic and get back a concise, cited research brief with independently verified claims; does not produce creative content, make decisions for you, or generate images.",
+        "example": "What are the latest developments in solid-state battery technology as of 2026?",
+        "cost": "expensive",
+        "latency": "long-running",
+        "repeatability": "idempotent",
+        "verification": "ungated",
+        "consequences": [],
+        "sample": (
+            '# Research Brief: "Hello Integration" Test Task — Propose, Approve, Execute, Complete\n\nThe "Hello Integration" test task follows a four-stage lifecycle — propose, approve, execute, complete — that mirrors established approval workflow and integration testing best practices. Verified research across 16 sources confirms that effective task workflows function as roadmaps with clearly assigned roles, routing rules, and exception paths, while integration testing ensures system components work together as intended. Two items from the underlying research are flagged: an unverified anecdote about Azure load balancer configuration and a misspelled source name ("Kelpoy" should be "Keploy"). The overal\n\n…'
+        ),
+    }
+]
 
 
 def build_domain(ctx):
@@ -150,9 +154,9 @@ def run() -> None:
             build_domain=build_domain,
             readme_md=README,
             temperature=0.25,
-            tags=_TAGS,
-            capabilities=_CAPABILITIES,
-            offer=_OFFER,
+            tags=TAGS,
+            capabilities=CAPABILITIES,
+            offer=OFFERS[0],
         )
     )
 

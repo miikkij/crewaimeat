@@ -35,25 +35,27 @@ def _tools(ctx):
     }
 
 
-_TAGS = ["role.task-runner", "web-search", "memory-io", "daily-briefing", "news-summary", "schedule"]
-_CAPABILITIES = {
+TAGS = ["role.task-runner", "web-search", "memory-io", "daily-briefing", "news-summary", "schedule"]
+CAPABILITIES = {
     "technical": [{"name": "web-research", "type": "skill"}],
     "domain": ["daily-briefing", "news-summary", "schedule"],
     "languages": ["en"],
 }
 
-_OFFER = {
-    "id": "daily-brief",
-    "title": "Daily Brief",
-    "ask": "Send a date or topic focus and receive a concise daily briefing with top news, calendar items, and action reminders; does not do deep investigative research or produce long-form reports.",
-    "example": "Give me today's briefing with focus on AI industry news.",
-    "cost": "expensive",
-    "latency": "long-running",
-    "repeatability": "idempotent",
-    "verification": "ungated",
-    "consequences": [],
-    "sample": None,
-}
+OFFERS = [
+    {
+        "id": "daily-brief",
+        "title": "Daily Brief",
+        "ask": "Send a date or topic focus and receive a concise daily briefing with top news, calendar items, and action reminders; does not do deep investigative research or produce long-form reports.",
+        "example": "Give me today's briefing with focus on AI industry news.",
+        "cost": "expensive",
+        "latency": "long-running",
+        "repeatability": "idempotent",
+        "verification": "ungated",
+        "consequences": [],
+        "sample": None,
+    }
+]
 
 
 def build_domain(ctx):
@@ -134,9 +136,9 @@ def run() -> None:
             build_domain=build_domain,
             readme_md=README,
             temperature=0.25,
-            tags=_TAGS,
-            capabilities=_CAPABILITIES,
-            offer=_OFFER,
+            tags=TAGS,
+            capabilities=CAPABILITIES,
+            offer=OFFERS[0],
         )
     )
 

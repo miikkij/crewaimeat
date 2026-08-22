@@ -13,6 +13,19 @@ AGENT_NAME = "news-watcher"
 # all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
 LLM_PROFILE = "content-free"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is — crewaimeat.agent_manifest reads it statically.
+TAGS = ["news-watch", "brain-stub", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [{"name": "news-watch", "type": "skill"}],
+    "domain": [
+        "watches news sources and reports what changed",
+        "behaviour lives in its JSON brain (crewaimeat.brains), edited in the agency cockpit",
+        "pinned to a local Ollama model by a per-agent override, so it costs nothing to run",
+    ],
+    "languages": ["fi", "en"],
+}
+
 
 def run() -> None:
     run_brain(AGENT_NAME)

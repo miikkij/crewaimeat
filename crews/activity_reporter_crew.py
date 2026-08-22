@@ -34,6 +34,22 @@ AGENT_NAME = "activity-reporter"
 # all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
 LLM_PROFILE = "coding"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is — crewaimeat.agent_manifest reads it statically.
+TAGS = ["activity-digest", "changelog", "attribution", "workspace-contract", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [{"name": "activity-report", "type": "skill"}, {"name": "aimeat_workspace_read", "type": "tool"}],
+    "domain": [
+        "turns a workspace/organism activity feed into a per-period digest",
+        "who did what and when, narrated by a chosen character",
+        "changelog / release notes / standup / build-in-public / a running project log",
+        "deterministic gathering; the LLM writes only the report prose",
+        "posts nothing external",
+        "consumes:activity-tracking",
+    ],
+    "languages": ["en", "fi"],
+}
+
 
 README = """[[FIGLET:slant]["Activity Reporter"]]
 

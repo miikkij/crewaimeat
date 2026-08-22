@@ -165,12 +165,13 @@ def _registry_reminder(root: Path, agent: str) -> Step:
 
     inv = inventory.gather(root)
     left = []
-    if agent in inv.identity:
+    # `fallback_identity` is the (normally empty) central dict. Since 2026-08-22 an agent's identity and
+    # offers live in its own crew file, so parking the crew already takes them out of circulation and
+    # there is usually nothing central left to remove. An entry here means someone added one back.
+    if agent in inv.fallback_identity:
         left.append("src/crewaimeat/fleet_identity.py")
-    if agent in inv.offer_agents:
-        left.append("src/crewaimeat/offers.py")
     if not left:
-        return Step("registries", True, "no source entries to remove")
+        return Step("registries", True, "nothing central to remove — the crew file carried its own")
     return Step("registries", True, "remove by hand: " + ", ".join(left) + "  (doctor will keep reporting them)")
 
 

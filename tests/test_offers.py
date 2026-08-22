@@ -107,7 +107,10 @@ def test_crew_offers_match_spec_shape():
             assert o["cost"] in COSTS and o["latency"] in LATENCIES
             assert o["repeatability"] in {"idempotent", "accumulative", "destructive"}
             assert o["verification"] in VERIFICATIONS and o["dataHandling"] in DATA_HANDLING
-            assert any(m in o["ask"] for m in ("don't", "refuse", "not ", " only")), (
+            # Case-insensitive: the rule is that the ask states what the agent does NOT do, and an
+            # author writing "it does NOT execute code changes" for emphasis is obeying it. Matching
+            # only lowercase made this assert a typographic convention rather than the contract.
+            assert any(m in o["ask"].lower() for m in ("don't", "refuse", "not ", " only")), (
                 f"{agent}/{meta['id']}: ask must carry negative scope"
             )
             for cq in o["consequences"]:
