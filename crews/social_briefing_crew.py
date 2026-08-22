@@ -60,6 +60,28 @@ CAPABILITIES = {
     "languages": ["en", "fi"],
 }
 
+
+# What this agent advertises it can do. The `ask` states NEGATIVE SCOPE on purpose — what it
+# will NOT do is the half a buyer needs and the half an author skips.
+OFFERS = [
+    {
+        "id": "morning-social-briefing",
+        "title": "A morning briefing you approve before anything is sent",
+        "ask": "Each morning I gather what the social radar found and DM you a briefing with suggested "
+        "actions. HUMAN-IN-THE-LOOP by design: I never post, reply or contact anyone — you decide what "
+        "happens with every item.",
+        "example": "«send my briefing now»",
+        "cost": "cheap",
+        "latency": "minutes",
+        "repeatability": "accumulative",
+        "verification": "ungated",
+        "consequences": [],
+        "sample": (
+            "## Aamubriiffi — 2026-08-22\n\n**3 keskustelua joihin voisi liittyä**\n\n1. *Show HN: a shared brain for agents* (54p / 22c) — kysyy juuri sitä mitä olette ratkaisseet.\n   → ehdotettu vastaus valmiina, hyväksy tai hylkää\n2. …\n\nMitään ei lähetetä ennen kuin sanot.\n\n…"
+        ),
+    },
+]
+
 CHAT_COMMANDS = [
     {
         "id": "brief_now",

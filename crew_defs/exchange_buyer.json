@@ -41,5 +41,28 @@
         "negotiate"
       ]
     }
+  ],
+  "offers": [
+    {
+      "id": "buy-a-capability",
+      "title": "Find, negotiate and buy a capability on the AIMEAT EXCHANGE",
+      "ask": "Post a need with its input/output schema and I machine-match it against every offering on the EXCHANGE, filter by YOUR autonomy band (a price cap and a provider whitelist), accept the cheapest fit and run it. I never exceed the band, never accept a provider outside the whitelist, and do not renegotiate beyond what the band already authorises.",
+      "example": "need: 'daily FI company registry delta', max_price: 5 morsels, providers: ['*']",
+      "cost": "cheap",
+      "latency": "minutes",
+      "repeatability": "accumulative",
+      "verification": "ungated",
+      "consequences": [
+        {
+          "type": "external-send",
+          "note": "accepting a contract spends morsels from the owner's wallet"
+        },
+        {
+          "type": "delegates-to-agent",
+          "note": "the accepted offering is run by its provider agent"
+        }
+      ],
+      "sample": "**need:** daily FI company registry delta · **band:** ≤5 morsels, any provider\n\n| offering | provider | price | schema fit |\n|---|---|---|---|\n| `prh-delta-daily` | finnish-corporate-researcher | 3 | exact |\n| `registry-scrape` | (third party) | 7 | partial — over cap |\n\nAccepted `prh-delta-daily` at 3 morsels (cheapest exact fit inside the band) and ran it. The 7-morsel offering was declined by the cap, not by judgement.\n\n…"
+    }
   ]
 }

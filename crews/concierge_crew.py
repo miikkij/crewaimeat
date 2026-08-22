@@ -137,6 +137,28 @@ CAPABILITIES = {
     "languages": ["en", "fi"],
 }
 
+
+# What this agent advertises it can do. The `ask` states NEGATIVE SCOPE on purpose — what it
+# will NOT do is the half a buyer needs and the half an author skips.
+OFFERS = [
+    {
+        "id": "concierge-chat",
+        "title": "A conversational assistant you DM",
+        "ask": "DM me anything: I search the live web and return links, build a moodboard, read a file you "
+        "attach, generate an image, or describe one you send. I am a conversation, NOT a task-runner — "
+        "I do not run scheduled jobs, and I do not act on the node without being asked.",
+        "example": "«etsi kolme lähdettä EU:n AI-asetuksen läpinäkyvyysvelvoitteista ja tiivistä ne»",
+        "cost": "cheap",
+        "latency": "seconds",
+        "repeatability": "accumulative",
+        "verification": "ungated",
+        "consequences": [{"type": "publishes-public", "note": "a generated image is stored at a public storage URL"}],
+        "sample": (
+            '**«etsi kolme lähdettä EU:n AI-asetuksen läpinäkyvyysvelvoitteista»**\n\n1. [EUR-Lex 2024/1689, Art. 50](https://eur-lex.europa.eu/eli/reg/2024/1689) — merkintä- ja ilmoitusvelvoitteet, sovelletaan 2.8.2026\n2. [Komission AI Act -FAQ](https://digital-strategy.ec.europa.eu) — mitä "limited risk" käytännössä tarkoittaa\n3. …\n\nHaluatko että syvennyn johonkin näistä?\n\n…'
+        ),
+    },
+]
+
 # Guards for the file-fetch tool.
 _FETCH_MAX_BYTES = 25 * 1024 * 1024  # 25 MB cap
 _MAX_IMAGES = 8

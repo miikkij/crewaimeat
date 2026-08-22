@@ -107,11 +107,14 @@ def test_crew_offers_match_spec_shape():
             assert o["cost"] in COSTS and o["latency"] in LATENCIES
             assert o["repeatability"] in {"idempotent", "accumulative", "destructive"}
             assert o["verification"] in VERIFICATIONS and o["dataHandling"] in DATA_HANDLING
-            # Case-insensitive: the rule is that the ask states what the agent does NOT do, and an
-            # author writing "it does NOT execute code changes" for emphasis is obeying it. Matching
-            # only lowercase made this assert a typographic convention rather than the contract.
-            assert any(m in o["ask"].lower() for m in ("don't", "refuse", "not ", " only")), (
-                f"{agent}/{meta['id']}: ask must carry negative scope"
+            # The rule is that the ask says what the agent will NOT do. Matched case-insensitively —
+            # "it does NOT execute code changes" is an author obeying the rule with emphasis — and
+            # across the ways the boundary is actually written. "I never post" is the clearest form of
+            # negative scope there is; leaving it out made this assert a word list rather than the
+            # contract.
+            NEGATIVE = ("don't", "do not", "does not", "never", "refuse", "not ", " only", "scan only", "drafts only")
+            assert any(m in o["ask"].lower() for m in NEGATIVE), (
+                f"{agent}/{meta['id']}: ask must carry negative scope (say what it will NOT do)"
             )
             for cq in o["consequences"]:
                 assert cq["type"] in CONSEQUENCE_TYPES

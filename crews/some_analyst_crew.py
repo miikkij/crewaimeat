@@ -47,6 +47,28 @@ CAPABILITIES = {
 }
 
 
+# What this agent advertises it can do. The `ask` states NEGATIVE SCOPE on purpose — what it
+# will NOT do is the half a buyer needs and the half an author skips.
+OFFERS = [
+    {
+        "id": "draft-social-replies",
+        "title": "Draft value-first replies for social-radar opportunities",
+        "ask": "I take the day's social-radar hits and draft a reply for each one — leading with something "
+        "useful, not a pitch. DRAFTS ONLY: I never post, never contact anyone, and never claim a "
+        "capability the fleet does not have.",
+        "example": "runs on the morning radar automatically; the drafts land in your review queue",
+        "cost": "cheap",
+        "latency": "minutes",
+        "repeatability": "accumulative",
+        "verification": "ungated",
+        "consequences": [],
+        "sample": (
+            "## Draft Opportunities Report — 2026-07-02\n\n**Action taken:** Called `draft_opportunities(limit=5)` once to read fresh Social Radar opportunities and draft value-first reply-drafts for each worth-it one.\n\n**Result:**\n- **Reply-drafts written:** 5\n- **Failed:** 0\n- **Candidates evaluated:** 5\n\nAll 5 fresh opportunities met the criteria (status=new, fit≥3, not hostile, not already drafted) and each received a value-first reply-draft (status=draft). The drafts follow the playbook: value first, builder disclosed, AIMEAT mentioned only where it truly fits, no astroturfing.\n\n…"
+        ),
+    },
+]
+
+
 README = """[[FIGLET:slant]["Some Analyst"]]
 
 Drafts **value-first reply suggestions** for Social Radar opportunities. Reads the `opportunity` records

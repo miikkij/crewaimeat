@@ -47,6 +47,28 @@ CAPABILITIES = {
 }
 
 
+# What this agent advertises it can do. The `ask` states NEGATIVE SCOPE on purpose — what it
+# will NOT do is the half a buyer needs and the half an author skips.
+OFFERS = [
+    {
+        "id": "datapkg-question",
+        "title": "Answer a question about a published data package",
+        "ask": "Name a published AIMEAT data package and ask a question; I answer from its Frictionless TABLE "
+        "SCHEMA — fields, types, constraints, row counts — not from prose about it. I do NOT download "
+        "or re-analyse the raw rows, and I do not guess at a field the schema does not declare.",
+        "example": "package: 'prh-yritykset', question: 'which fields identify a company, and which are nullable?'",
+        "cost": "cheap",
+        "latency": "minutes",
+        "repeatability": "idempotent",
+        "verification": "ungated",
+        "consequences": [],
+        "sample": (
+            "**Vastaus**\n\n- **Käynnissä olevien saatavuushäiriöiden määrä:** **710** kpl  \n- **Käynnissä olevien häiriöiden keskimääräinen kesto:** **163,33\u202fpäivää**  \n\n**Mihin sarakkeisiin vastaus perustuu**  \n- `stillRunning` (boolean) – käytettiin suodattamaan rivit, joissa häiriö on yhä käynnissä.  \n- `elapsedDays` (integer) – käytettiin keskiarvon laskemiseen näiden käynnissä olevien häiriöiden kestolle.\n\n**Paketti**  \n`https://aimeat.io/v1/datapackages/happydude500001/laake-saatavuus`\n\n**Miten tiedot saatiin**  \n1. Laskettu `stillRunning == True` -rivien määrä (`count`).  \n2. Laskettu näiden rivien `elapsedDays`‑arvojen keskiarvo (`mean`).\n\n…"
+        ),
+    },
+]
+
+
 README = """Reads published AIMEAT data packages and answers questions about them from their
 Frictionless Table Schema — column names and types — rather than from documentation. Types come
 from the schema, never from inference, so zero-padded identifiers and dates survive. Can publish a

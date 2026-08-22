@@ -57,6 +57,28 @@ CAPABILITIES = {
     "languages": ["en", "fi"],
 }
 
+
+# What this agent advertises it can do. The `ask` states NEGATIVE SCOPE on purpose — what it
+# will NOT do is the half a buyer needs and the half an author skips.
+OFFERS = [
+    {
+        "id": "fill-a-form",
+        "title": "Read a PDF form, ask you the values, return it completed",
+        "ask": "DM me a PDF form. I read the fields it actually asks for, ask you each value, and return the "
+        "completed file. I do NOT sign anything, do not submit it anywhere, and do not invent a value "
+        "you did not give me.",
+        "example": "attach a PDF application form and answer the questions I ask",
+        "cost": "cheap",
+        "latency": "minutes",
+        "repeatability": "idempotent",
+        "verification": "ungated",
+        "consequences": [{"type": "publishes-public", "note": "the completed PDF is returned to you by DM"}],
+        "sample": (
+            "**Read: `hakemus-2026.pdf` — 11 fillable fields.**\n\nI need these from you:\n1. Hakijan nimi\n2. Henkilötunnus\n3. Osoite\n4. Haettava summa (€)\n…\n\nAnswer them in one message and I return the completed PDF. Nothing is submitted anywhere, and a field you do not answer is left blank rather than guessed.\n\n…"
+        ),
+    },
+]
+
 CHAT_COMMANDS = [
     {
         "id": "fill_form",

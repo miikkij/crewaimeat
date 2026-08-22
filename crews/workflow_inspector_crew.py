@@ -41,6 +41,37 @@ CAPABILITIES = {
     "languages": ["en"],
 }
 
+
+# What this agent advertises it can do. The `ask` states NEGATIVE SCOPE on purpose — what it
+# will NOT do is the half a buyer needs and the half an author skips.
+OFFERS = [
+    {
+        "id": "inspect-workflow-run",
+        "title": "Diagnose a broken workflow run and repair what is safely repairable",
+        "ask": "Point me at a workflow run and I inspect it step by step against its declared signals, re-run "
+        "the steps that are deterministically repairable, and report the rest with a recommendation. I "
+        "do NOT change workflow rules, do not fabricate a step's output, and escalate anything that "
+        "needs a decision.",
+        "example": "workflow: 'laimeat-sanomat-evening', date: '2026-08-22'",
+        "cost": "cheap",
+        "latency": "minutes",
+        "repeatability": "idempotent",
+        "verification": "ungated",
+        "consequences": [
+            {
+                "type": "publishes-public",
+                # `modifies-data` is not in the shared enum, and inventing a type would break the
+                # node's validation. Re-running a repaired step makes that step re-publish its own
+                # output — for the newspaper steps that output is public, so this is the accurate one.
+                "note": "a repaired step re-runs and re-publishes its own output key",
+            }
+        ],
+        "sample": (
+            "**Workflow Inspection Report**  \n*Workflow ID:* `laimeat-sanomat-evening.26675fe6-084b-4985-aa18-028d9bbfda4e`  \n*Owner Memory Key:* `workflows.run.laimeat-sanomat-evening.26675fe6-084b-4985-aa18-028d9bbfda4e`  \n*Inspection Timestamp:* 2026‑08‑18\u202f00:30\u202fEEST (2026‑08‑17\u202f21:30\u202fUTC)  \n\n---\n\n### 1. Summary of Step States (as recorded in the run snapshot)\n\n| Step Name | Agent | Recorded State | Observed Condition (expected\u202fvs\u202fobserved) |\n|-----------|-------|----------------|------------------------------------------|\n| **fetch‑news‑feed** | news‑fetcher | ✅\u202fgreen | expected: key exists, observed: key exists |\n\n…"
+        ),
+    },
+]
+
 _TZ = ZoneInfo("Europe/Helsinki")
 
 README = """[[FIGLET:slant]["Workflow Inspector"]]

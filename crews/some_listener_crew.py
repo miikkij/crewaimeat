@@ -46,6 +46,28 @@ CAPABILITIES = {
 }
 
 
+# What this agent advertises it can do. The `ask` states NEGATIVE SCOPE on purpose — what it
+# will NOT do is the half a buyer needs and the half an author skips.
+OFFERS = [
+    {
+        "id": "social-radar-scan",
+        "title": "Scan Hacker News for conversations worth joining",
+        "ask": "Every morning I scan Hacker News for posts matching the fleet's topics and score them by "
+        "engagement opportunity. Deterministic — the ranking is code, not judgement. SCAN ONLY: I do "
+        "not reply, do not post, and a human decides what to do with every hit.",
+        "example": "runs at 08:00 Europe/Helsinki; the scan lands as a public radar record",
+        "cost": "cheap",
+        "latency": "minutes",
+        "repeatability": "accumulative",
+        "verification": "ungated",
+        "consequences": [{"type": "publishes-public", "note": "the day's radar is published as a public memory key"}],
+        "sample": (
+            '```json\n[\n  {\n    "id": "49139845",\n    "url": "https://news.ycombinator.com/item?id=49139845",\n    "title": "Ask HN: I still don\'t understand why AI agents need \\"skills\\"",\n    "kind": "story",\n    "points": 14,\n    "comments": 13,\n    "author": "skeptic_ai",\n    "created": "2026-08-02T00:09:02Z",\n    "score": 6,\n    "why": "question / help-seeking",\n    "snippet": "I’ve asked AI a few times and I still don’t get it.Why do frameworks like Claude Code or Codex have the concept of “skills” instead of just using well-organized Markdown docs?Couldn’t I just have an AGENTS.md that points",\n    "matched": [\n      "agent framework"\n    ]\n  },\n  {\n    "id": "49148163",\n\n…'
+        ),
+    },
+]
+
+
 README = """[[FIGLET:slant]["Some Listener"]]
 
 Deterministic **social radar**: scans Hacker News (free Algolia API) for AIMEAT-relevant discussions
