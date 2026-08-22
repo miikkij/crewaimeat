@@ -31,6 +31,11 @@ from crewaimeat.aimeat_crew import BuildContext, CrewSpec, record_event_targets,
 from crewaimeat.mroom import ROOM_ORG, ROOM_WS
 
 AGENT_NAME = "mroom-researcher"
+
+# Declared opt-out from the ctx.prompt-injection floor (tests/test_build_domain.py).
+PROMPT_INDEPENDENT = (
+    "record-driven: the brief is built from the stored POI research-brief record; ctx.prompt carries no target."
+)
 RESEARCH_REQUEST_NS = "shared.research_requests"  # the room's research-request publish namespace (mroom.NS)
 
 README = """[[FIGLET:slant]["M-ROOM Researcher"]]

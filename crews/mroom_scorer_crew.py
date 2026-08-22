@@ -21,6 +21,11 @@ from crewaimeat.mroom import ROOM_ORG, ROOM_WS
 
 AGENT_NAME = mr.SCORER
 
+# Declared opt-out from the ctx.prompt-injection floor (tests/test_build_domain.py).
+PROMPT_INDEPENDENT = (
+    "record-driven: the scoring pass reads the researched request from the room; ctx.prompt carries no target."
+)
+
 README = """[[FIGLET:slant]["M-ROOM Scorer"]]
 
 The machine room's **cold evaluator**. It reads what the research produced and states a single

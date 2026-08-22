@@ -28,6 +28,12 @@ from crewaimeat.scheduler import make_schedule_tools
 
 AGENT_NAME = "social-briefing"
 
+# Declared opt-out from the ctx.prompt-injection floor (tests/test_build_domain.py).
+PROMPT_INDEPENDENT = (
+    "marker-driven: ctx.prompt is read for the scheduled KICKOFF_MARKER only; the briefing itself is "
+    "sent deterministically, not authored from the ask."
+)
+
 README = """[[FIGLET:slant]["Social Briefing"]]
 
 A scheduled, **human-in-the-loop** morning briefing. Each morning it DMs you ready-to-paste Grok(X) and

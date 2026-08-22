@@ -31,3 +31,14 @@ jobs:
       # The deterministic test floor: no LLM, no network (see [tool.pytest.ini_options]).
       - name: Pytest
         run: uv run pytest
+
+      # The reconciliation gate — the check ruff structurally cannot perform. Ruff reads one file and
+      # asks whether the statement is well formed; doctor reads the whole repo and asks whether the
+      # six agent registries agree and whether every call reaches the node / a model through the
+      # sanctioned route. Offline and ~1s; the node lens (--live) is deliberately NOT run here,
+      # because CI has no fleet and a check that cannot look must never report "fine".
+      #
+      # --strict makes warnings fail too. Pre-existing findings live in doctor-baseline.json, which
+      # may only SHRINK: a new violation of a baselined rule still fails the build.
+      - name: Doctor (registries + route conformance)
+        run: uv run crewaimeat doctor --strict

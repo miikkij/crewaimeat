@@ -20,6 +20,13 @@ def _skill(name: str) -> dict:
     return {"name": name, "type": "skill"}
 
 
+def _tool(name: str) -> dict:
+    """A concrete tool the agent can call. `technical` entries are OBJECTS ({name, type}) — the node's
+    matcher reads the pair, and a bare string is not a capability it can match on. Descriptive phrases
+    ("pandas", "frictionless table schema") belong in `domain`, which IS a list of strings."""
+    return {"name": name, "type": "tool"}
+
+
 FLEET_IDENTITY: dict[str, dict] = {
     # ── estimation / judgement / critique ──
     "probability-creator": {
@@ -118,11 +125,17 @@ FLEET_IDENTITY: dict[str, dict] = {
     "datapkg-analyst": {
         "tags": ["data-packages", "frictionless", "tabular-analysis", "role.task-runner"],
         "capabilities": {
-            "technical": ["aimeat data packages", "frictionless table schema", "pandas", "parquet"],
+            "technical": [
+                _skill("datapkg-analyst"),
+                _tool("aimeat_datapackage_publish"),
+                _tool("aimeat_datapackage_export"),
+            ],
             "domain": [
                 "answering questions about a published dataset from its schema",
                 "publishing a versioned data package with a real changes note",
                 "pinning a version by its permanent content-hash address",
+                "frictionless table schema",
+                "pandas + parquet tabular analysis",
             ],
             "languages": ["fi", "en"],
         },

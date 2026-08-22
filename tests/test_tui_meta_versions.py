@@ -2,26 +2,73 @@
 agent_meta reads the repo's real llm_providers.json + offers (deterministic). versions has all its
 network/subprocess probes monkeypatched."""
 
+import json
+
+import pytest
+
 from crewaimeat.tui import agent_meta, render, versions
+
+# A FIXTURE routing config. These three tests used to read the machine's own llm_providers.json (and
+# its <AIMEAT_HOME>/llm_overrides.json), so they asserted one developer's model choices: they were
+# permanently red on CI, where no such file exists, and went red again locally every time a routing
+# decision changed. What the TUI actually promises is the RESOLUTION RULE — mapped crew → its profile,
+# unmapped crew → the default profile, chain in declared order — and that is what is pinned here.
+_CFG = {
+    "default": "fallback-profile",
+    "profiles": {
+        "content": {
+            "providers": [
+                {"type": "openrouter", "models": [{"id": "a/lead"}]},
+                {"type": "xai", "models": [{"id": "b/backup"}]},
+            ]
+        },
+        "coding": {"providers": [{"type": "openrouter", "models": [{"id": "c/coder"}]}]},
+        "fallback-profile": {"providers": [{"type": "ollama", "models": [{"id": "d/local"}]}]},
+    },
+    "crews": {"mapped-content-crew": "content", "mapped-coding-crew": "coding"},
+}
+
+
+@pytest.fixture
+def routing(tmp_path, monkeypatch):
+    """Point BOTH resolution inputs at a temp dir: the providers file and AIMEAT_HOME (which holds
+    llm_overrides.json — a per-agent override on the dev machine would otherwise win over the file
+    and silently change what these tests measure)."""
+    cfg = tmp_path / "llm_providers.json"
+    cfg.write_text(json.dumps(_CFG), encoding="utf-8")
+    monkeypatch.setenv("LLM_PROVIDERS_FILE", str(cfg))
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    return cfg
 
 
 # ── agent_meta (B) — local, from llm_providers.json + offers ────────────────────
-def test_model_chain_routes_news_fetcher_to_content_glm_first():
-    profile, labels = agent_meta.model_chain("news-fetcher")
+def test_model_chain_uses_the_mapped_profile_in_declared_order(routing):
+    profile, labels = agent_meta.model_chain("mapped-content-crew")
     assert profile == "content"
-    assert labels and labels[0] == "openrouter:z-ai/glm-5.2"  # 2026-07-02: ALL profiles → GLM 5.2 first
-    assert any(l.startswith("xai:") for l in labels)  # grok stays as the content fallback
+    assert labels == ["openrouter:a/lead", "xai:b/backup"]  # lead first, fallback after, order preserved
 
 
-def test_model_chain_coding_profile_is_openrouter_first():
-    profile, labels = agent_meta.model_chain("crew-forge")
+def test_model_chain_reads_a_different_profile_per_crew(routing):
+    profile, labels = agent_meta.model_chain("mapped-coding-crew")
     assert profile == "coding"
-    assert labels[0].startswith("openrouter:")  # code crews → owl/gpt-oss first, not xai
+    assert labels == ["openrouter:c/coder"]
 
 
-def test_model_chain_unknown_agent_uses_default_profile():
+def test_model_chain_unknown_agent_uses_default_profile(routing):
+    """An unmapped crew resolves to the `default` profile. This is the silent fallback that put 20 of
+    46 live crews on the free meta-router without a decision — pinned so the behaviour stays visible
+    and any change to it is deliberate. `crewaimeat doctor` reports which crews land here."""
     profile, labels = agent_meta.model_chain("totally-unknown-agent")
-    assert profile == "content-free" and labels  # default profile, non-empty chain
+    assert profile == "fallback-profile"
+    assert labels == ["ollama:d/local"]
+
+
+def test_model_chain_without_a_providers_file_says_so(tmp_path, monkeypatch):
+    """No providers file must report the absence, never a made-up chain."""
+    monkeypatch.setenv("LLM_PROVIDERS_FILE", str(tmp_path / "does-not-exist.json"))
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    profile, labels = agent_meta.model_chain("mapped-content-crew")
+    assert profile == "(no llm_providers.json)" and labels == []
 
 
 def test_offer_summary_returns_counts():

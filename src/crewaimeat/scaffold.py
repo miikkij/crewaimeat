@@ -22,10 +22,14 @@ _TEMPLATE_FILE = "example_crew.py"
 def _usage() -> str:
     return (
         "Usage:\n"
-        "  crewaimeat new-crew <agent-name>\n\n"
-        "Example:\n"
+        "  crewaimeat new-crew <agent-name>     scaffold a new crew from the template\n"
+        "  crewaimeat doctor [--live] [--strict]  reconcile registries + routes (and the node)\n"
+        "  crewaimeat retire <agent> [--apply]    stop an agent participating (the opposite of forging one)\n\n"
+        "Examples:\n"
         "  crewaimeat new-crew support-bot\n"
-        "  -> creates ./support_bot_crew.py for the AIMEAT agent 'support-bot'."
+        "  -> creates ./support_bot_crew.py for the AIMEAT agent 'support-bot'.\n"
+        "  crewaimeat doctor --strict\n"
+        "  -> what CI runs: every registry must agree and every route must be sanctioned."
     )
 
 
@@ -34,13 +38,15 @@ def _read_template() -> str:
 
 
 def _next_steps(name: str, rel: str) -> str:
+    from crewaimeat.forge import AIMEAT_CONNECTOR as connector  # ONE source for the pinned version
+
     return f"""\
 Created {rel}  (AIMEAT agent: '{name}')
 
 Next steps
 ──────────
 1. Register the agent on AIMEAT, then approve it in the dashboard (Profile → Agents):
-     npx aimeat@2.0.0 connect --url https://aimeat.io --owner <your-aimeat-account> --agent {name}
+     npx {connector} connect --url https://aimeat.io --owner <your-aimeat-account> --agent {name}
    (<your-aimeat-account> is the AIMEAT username you sign in with — the agent's owner.)
 
 2. Create .env from the template and add your keys:
@@ -108,6 +114,14 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if len(argv) >= 2 and argv[0] == "new-crew":
         return _new_crew(argv[1])
+    if argv and argv[0] == "doctor":
+        from crewaimeat.doctor.cli import main as doctor_main
+
+        return doctor_main(argv[1:])
+    if argv and argv[0] == "retire":
+        from crewaimeat.retire import main as retire_main
+
+        return retire_main(argv[1:])
     print(_usage())
     return 0 if (argv and argv[0] in ("-h", "--help", "help")) else 1
 

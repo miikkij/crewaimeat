@@ -18,3 +18,17 @@ repos:
       - id: check-merge-conflict
       - id: check-yaml
       - id: check-toml
+
+  # The reconciliation gate. Ruff sees ONE FILE at a time and cannot know that a new crew is missing
+  # from three registries, or that a call reaches the node without passing through the dispatcher —
+  # those are statements about the whole repo, so they need a whole-repo check. Offline (~1s), no
+  # network: the node lens is opt-in (`--strict --live`) and CI does not run it.
+  # `pass_filenames: false` because the check is about the repo, not the staged files.
+  - repo: local
+    hooks:
+      - id: crewaimeat-doctor
+        name: crewaimeat doctor (registries + route conformance)
+        entry: uv run crewaimeat doctor --strict
+        language: system
+        pass_filenames: false
+        always_run: true

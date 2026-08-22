@@ -15,9 +15,16 @@ from crewaimeat import embedder_cascade as ec
 # --- bias / cascade ordering ------------------------------------------------
 def test_privacy_bias_drops_the_free_cloud_nvidia_tier():
     # privacy keeps local ollama first, allows the paid-private qwen, and DROPS the free-but-cloud nvidia.
-    assert ec._ordered_tiers("privacy") == ["ollama", "qwen"]
+    # openrouter is the UNIVERSAL last-resort cloud fallback in both biases (added 2026-07-26, 51f9164)
+    # so memory works out of the box with only OPENROUTER_API_KEY — i.e. "privacy" means "no FREE cloud
+    # tier", NOT "no cloud". Pinned here because the name alone no longer carries that distinction.
+    assert ec._ordered_tiers("privacy") == ["ollama", "qwen", "openrouter"]
     # cost promotes the FREE nvidia tier ahead of paid qwen (money over privacy).
-    assert ec._ordered_tiers("cost") == ["ollama", "nvidia", "qwen"]
+    assert ec._ordered_tiers("cost") == ["ollama", "nvidia", "qwen", "openrouter"]
+    # The one invariant the bias exists for: nvidia (free + cloud) never appears under privacy.
+    assert "nvidia" not in ec._ordered_tiers("privacy")
+    # ...and local-first holds in both.
+    assert ec._ordered_tiers("privacy")[0] == ec._ordered_tiers("cost")[0] == "ollama"
 
 
 def test_resolve_bias_defaults_and_validates(monkeypatch):

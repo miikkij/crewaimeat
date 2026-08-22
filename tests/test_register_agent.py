@@ -8,6 +8,8 @@ code + verify URL.
 
 from __future__ import annotations
 
+import re
+
 
 def test_register_agent_uses_current_connect_command_and_parses_code(tmp_path, monkeypatch):
     monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
@@ -39,7 +41,15 @@ def test_register_agent_uses_current_connect_command_and_parses_code(tmp_path, m
     assert "add" not in cmd, "the removed 'connect add' subcommand must not come back"
     assert "--mode" not in cmd and "task-runner" not in cmd, "the removed --mode flag must not come back"
     assert "connect" in cmd
-    assert "aimeat@1.34.0" in cmd and "aimeat@latest" not in cmd, "the connector version is pinned, not @latest"
+    # The pin is read from the ONE constant, never restated here — a hardcoded version made this test
+    # go red every time the pin moved, which is drift-generating noise rather than a contract. What IS
+    # a contract: the command carries a PINNED version and never `@latest` (an unpinned connector can
+    # silently drop the provenance block; see the aimeat-crewai floor note in pyproject.toml).
+    assert forge.AIMEAT_CONNECTOR in cmd, f"the pinned connector {forge.AIMEAT_CONNECTOR} is not in {cmd}"
+    assert "aimeat@latest" not in cmd, "the connector version is pinned, not @latest"
+    assert re.fullmatch(r"aimeat@\d+\.\d+\.\d+", forge.AIMEAT_CONNECTOR), (
+        f"AIMEAT_CONNECTOR must be an exact pin, got {forge.AIMEAT_CONNECTOR!r}"
+    )
     for need in ("--url", "https://aimeat.io", "--owner", "happydude500001", "--agent", "Mapmaker"):
         assert need in cmd, f"missing {need} in {cmd}"
     assert ok and "ABCD-1234" in msg and "verify" in msg  # the output was parsed into a code + verify URL

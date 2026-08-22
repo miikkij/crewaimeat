@@ -96,9 +96,15 @@ def test_effective_mode_defaults_task_runner():
     assert ac._effective_mode(_spec()) == "task-runner"
 
 
-def test_effective_mode_dm_or_self_monitor_stays_interactive():
-    assert ac._effective_mode(_spec(dm_serviceable=True)) == "interactive"
-    assert ac._effective_mode(_spec(self_monitor=True)) == "interactive"
+def test_dm_and_self_monitor_no_longer_force_interactive():
+    """Until 2026-07-26 (82c198f) `dm_serviceable` / `self_monitor` forced `interactive`, which
+    SILENTLY broke those crews: only a task-runner's task auto-activates, so an interactive crew's
+    task sat in `queued` forever and `aimeat_task_complete` answered "Only active tasks can be
+    completed". Both flags now keep the task-runner default; the DM/message surfaces are opened by
+    `listen_for`, not by the mode. Pinned so the coupling cannot come back by accident."""
+    assert ac._effective_mode(_spec(dm_serviceable=True)) == "task-runner"
+    assert ac._effective_mode(_spec(self_monitor=True)) == "task-runner"
+    assert ac._effective_mode(_spec(dm_serviceable=True, self_monitor=True)) == "task-runner"
 
 
 def test_effective_mode_explicit_override_wins():

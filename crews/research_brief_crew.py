@@ -3,7 +3,7 @@
 Only build_domain below is crew-specific; crewaimeat.aimeat_crew.run_crew provides the
 AIMEAT wiring (onboarding, daemon, liaison publish/complete, live progress, date
 injection). See SCAFFOLD_CANON.md. Register + approve before running:
-  npx aimeat@1.34.0 connect --url https://aimeat.io --owner <your-aimeat-account> --agent research-brief
+  npx aimeat@<pinned: crewaimeat.forge.AIMEAT_CONNECTOR> connect --url https://aimeat.io --owner <your-aimeat-account> --agent research-brief
 
 Run: uv run python crews/research_brief_crew.py
 """

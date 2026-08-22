@@ -7,34 +7,36 @@ passes CrewAI's Agent validation, but it is never called by these deterministic 
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 from crewai import LLM
 
-# All 27 crews under crews/ (module names, imported as ``crews.<name>``).
-CREW_MODULES = [
-    "aimeat_cortex_fixer_crew",
-    "aimeat_crew_forge_crew",
-    "aimeat_extension_builder_crew",
-    "aimeat_realtime_builder_crew",
-    "crew_forge_crew",
-    "daily_briefing_crew_crew",
-    "editorial_writer_crew",
-    "finnish_corporate_researcher_crew",
-    "idea_feasibility_rater_crew",
-    "jingle_writer_crew",
-    "joker_crew",
-    "joker_v2_crew",
-    "librarian_crew",
-    "news_fetcher_crew",
-    "news_writer_crew",
-    "probability_creator_crew",
-    "sanity_checker_crew",
-    "tagline_translator_crew",
-    "web_researcher_crew",
-    "web_tester_crew",
-    "workflow_manager_crew",
-]
+CREWS_DIR = Path(__file__).resolve().parent.parent / "crews"
+
+# EVERY live crew under crews/ (module names, imported as ``crews.<name>``), DERIVED FROM DISK so a
+# new crew is contract-tested the day it lands and a parked one leaves the list by itself. A leading
+# underscore parks a crew — the SAME rule the fleet host uses (crewaimeat.forge._crew_files), so the
+# test floor and the fleet can never disagree about what "a live crew" is. The hand-kept list this
+# replaced went stale twice over: it named 21 of 46 live crews and still listed four crews that had
+# been parked (their modules no longer exist under those names), which failed 16 tests permanently
+# and hid every real regression behind the standing red.
+LIVE_CREW_MODULES = sorted(p.stem for p in CREWS_DIR.glob("*_crew.py") if not p.name.startswith("_"))
+
+
+def _has_build_domain(stem: str) -> bool:
+    """True when the crew authors its own (agents, tasks). A brain stub does not — its behavior lives
+    in the JSON brain (crewaimeat.brains), edited in the agency cockpit, and the stub only calls
+    run_brain. Read from SOURCE, not by importing, so collecting the parametrization never executes
+    crew module code."""
+    return "\ndef build_domain(" in (CREWS_DIR / f"{stem}.py").read_text(encoding="utf-8")
+
+
+# The build_domain contract floor applies to crews that HAVE a build_domain. Brain stubs are held to
+# their own (smaller) contract in test_build_domain.test_brain_stubs_are_really_brain_stubs, so a
+# crew can never leave the floor merely by not defining the function.
+CREW_MODULES = [m for m in LIVE_CREW_MODULES if _has_build_domain(m)]
+BRAIN_STUB_MODULES = [m for m in LIVE_CREW_MODULES if not _has_build_domain(m)]
 
 # A distinctive ask so we can prove ctx.prompt reaches a task description (TSK-4 / the
 # crew-builddomain-must-inject-ctx-prompt lesson).

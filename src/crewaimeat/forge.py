@@ -42,7 +42,7 @@ _FILE_TEMPLATE = '''\
 Only build_domain below is crew-specific; crewaimeat.aimeat_crew.run_crew provides the
 AIMEAT wiring (onboarding, daemon, liaison publish/complete, live progress, date
 injection). See SCAFFOLD_CANON.md. Register + approve before running:
-  npx aimeat@2.0.0 connect --url https://aimeat.io --owner <your-aimeat-account> --agent {agent_name}
+  npx {connector} connect --url https://aimeat.io --owner <your-aimeat-account> --agent {agent_name}
 
 Run: uv run python crews/{fname}
 """
@@ -162,6 +162,7 @@ def write_crew_file(
         (", discover=True" if discover else "") + (", memory=True" if remember else "") + identity_arg + offer_arg
     )
     content = _FILE_TEMPLATE.format(
+        connector=AIMEAT_CONNECTOR,
         agent_name=agent_name,
         fname=fname,
         extra_imports=extra,
@@ -243,7 +244,20 @@ _VERIFY_URL_RE = re.compile(r"(https?://\S*(?:verif|activate|device|connect|auth
 
 # PIN the connector version (not @latest). `@latest` silently auto-updated and broke us (v1.33 removed
 # `connect add`); pinning gives reproducible behavior and a deliberate bump when a new connector ships.
-AIMEAT_CONNECTOR = "aimeat@2.0.0"
+#
+# THE SINGLE SOURCE OF TRUTH for the connector version. Never restate a version literal elsewhere —
+# docstrings, error messages and tests all read this constant, because the previous spread (2.0.0 here,
+# ">=2.6.1" documented in pyproject.toml, 1.34.0 asserted in a test, 3.3.2 actually installed) meant no
+# one place told the truth. `crewaimeat doctor` compares this pin against the installed CLI and the npm
+# registry and reports a mismatch.
+#
+# FLOOR 2.6.1 IS LOAD-BEARING, not cosmetic: an older connector DROPS the ai_provenance block SILENTLY
+# in both directions, so a declaration of human authorship disappears with no error (verified against
+# aimeat.io 2026-08-01 — see the aimeat-crewai note in pyproject.toml). Bumped 2026-08-22 from 2.0.0,
+# which sat BELOW that documented floor: every agent crew-forge registered went through a connector
+# that could not carry provenance.
+AIMEAT_CONNECTOR = "aimeat@3.5.0"
+AIMEAT_CONNECTOR_FLOOR = "2.6.1"  # below this the provenance block is dropped silently
 
 
 def register_fleet(owner: str, url: str = "https://aimeat.io", agents: list[str] | None = None) -> str:
@@ -818,7 +832,7 @@ def register_and_launch(agent_name: str) -> str:
         _ok, reg_line = register_agent(agent_name, owner)
     else:
         reg_line = (
-            "AIMEAT_OWNER is not set — register manually: npx aimeat@2.0.0 connect "
+            f"AIMEAT_OWNER is not set — register manually: npx {AIMEAT_CONNECTOR} connect "
             f"--url https://aimeat.io --owner <your-aimeat-account> --agent {agent_name}"
         )
 
@@ -1022,7 +1036,7 @@ def reauth(agent_name: str) -> str:
     if not owner:
         return (
             "AIMEAT_OWNER is not set, so I cannot re-auth. Set it in .env, then run:\n"
-            f"  npx aimeat@2.0.0 connect --url https://aimeat.io --owner <your-aimeat-account> "
+            f"  npx {AIMEAT_CONNECTOR} connect --url https://aimeat.io --owner <your-aimeat-account> "
             f"--agent {agent_name}"
         )
     ok, out = register_agent(agent_name, owner)

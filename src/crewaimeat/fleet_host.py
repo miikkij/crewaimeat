@@ -170,6 +170,46 @@ def _supervise(path: Path, agent: str, stop: threading.Event) -> None:
             stop.wait(_RESTART_DELAY_S)
 
 
+def _report_health() -> None:
+    """Print the doctor's verdict at fleet start — WARN, never block.
+
+    The fleet coming up is the moment someone is actually watching the terminal, and it is the moment
+    the divergence matters: an unregistered crew is about to idle silently, a ghost is about to open a
+    tunnel with nothing behind it, an unrouted crew is about to pick a model nobody chose. Printing the
+    count here turns all of that from "discovered in an audit months later" into "seen at every start".
+
+    It never blocks the fleet: a drifted registry is a reason to look, not a reason to be offline. A
+    failure inside the check itself is reported and ignored for the same reason.
+    """
+    try:
+        from crewaimeat.doctor.cli import run as doctor_run
+
+        report = doctor_run(Path.cwd())
+    except Exception as exc:  # noqa: BLE001 — the health report must never keep the fleet down
+        print(f"[host] doctor check skipped ({exc!r}) — starting anyway", file=sys.stderr)
+        return
+    n_err, n_warn = len(report.errors), len(report.warnings)
+    if not n_err and not n_warn:
+        print("[host] doctor: every registry agrees and every route is sanctioned.", file=sys.stderr)
+        return
+    print(f"[host] doctor: {n_err} error(s), {n_warn} warning(s) — run `crewaimeat doctor` for detail", file=sys.stderr)
+    grouped = report.by_rule()
+    for rule in sorted(grouped, key=lambda r: (grouped[r][0].severity != "error", r))[:6]:
+        subjects = ", ".join(f.subject for f in grouped[rule][:4])
+        more = f" (+{len(grouped[rule]) - 4})" if len(grouped[rule]) > 4 else ""
+        print(f"[host]   {rule}: {subjects}{more}", file=sys.stderr)
+    # The routing fallback is called out by NAME, because it is the one that changes behaviour without
+    # any visible symptom: an unmapped crew silently resolves to the default profile, and that is how
+    # 20 of 46 crews ended up on a free meta-router that picks a different model per call.
+    unrouted = [f.subject for f in report.findings if f.rule == "registry.routing.unmapped"]
+    if unrouted:
+        print(
+            f"[host]   {len(unrouted)} crew(s) have NO routing entry and will use the default profile: "
+            f"{', '.join(sorted(unrouted))}",
+            file=sys.stderr,
+        )
+
+
 def run_host(agents: list[str] | None = None) -> int:
     """Start every selected agent as a supervised thread in THIS process and block until Ctrl+C."""
     # Timestamp every log line (ours + the package's [daemon:*] lines) by wrapping stdout/stderr once,
@@ -190,6 +230,8 @@ def run_host(agents: list[str] | None = None) -> int:
     if not crews:
         print("[host] no matching crews to run.", file=sys.stderr)
         return 1
+
+    _report_health()
 
     # Bring up the ONE shared loopback serve daemon first, so every agent's liaison multiplexes over it
     # (serve_params) instead of each spawning its own stdio MCP subprocess — which would defeat the

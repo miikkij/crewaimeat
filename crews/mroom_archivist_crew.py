@@ -21,6 +21,11 @@ from crewaimeat.mroom import ROOM_ORG, ROOM_WS
 
 AGENT_NAME = mr.ARCHIVIST
 
+# Declared opt-out from the ctx.prompt-injection floor (tests/test_build_domain.py).
+PROMPT_INDEPENDENT = (
+    "record-driven: the archive pass runs deterministically in code on a scored request; ctx.prompt carries no target."
+)
+
 README = """[[FIGLET:slant]["M-ROOM Archivist"]]
 
 The machine room's **archivist**. A RETAINED request becomes a published, bilingual `archive-entry` —

@@ -37,6 +37,7 @@ agency = ["fastapi>=0.110", "uvicorn>=0.27", "uv>=0.7"]  # the aimeat-agency coc
 [project.scripts]
 crewaimeat = "crewaimeat.scaffold:main"
 crewaimeat-tui = "crewaimeat.tui.app:main"
+crewaimeat-doctor = "crewaimeat.doctor.cli:main"   # also `crewaimeat doctor`; CI runs it with --strict
 research-crew = "crewaimeat.research_crew:run"
 
 [build-system]

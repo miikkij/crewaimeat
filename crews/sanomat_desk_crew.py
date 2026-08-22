@@ -29,6 +29,12 @@ from crewaimeat.scheduler import make_schedule_tools
 
 AGENT_NAME = "sanomat-desk"
 
+# Declared opt-out from the ctx.prompt-injection floor (tests/test_build_domain.py).
+PROMPT_INDEPENDENT = (
+    "marker-driven: ctx.prompt is read for the scheduled KICKOFF_MARKER only; the desk's real work is "
+    "the DM loop, so the ask is never a task description."
+)
+
 README = """[[FIGLET:slant]["Sanomat Desk"]]
 
 (L)AIMEAT Sanomien **lukijoilta-deski ja oikaisukanava**. Kolme palvelua DM:llä:

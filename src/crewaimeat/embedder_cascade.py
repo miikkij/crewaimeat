@@ -12,7 +12,10 @@ Tiers (default order), cost-vs-privacy tunable:
   3. **qwen**    — paid, private cloud (DashScope, OpenAI-compatible). Reachable = DASHSCOPE_API_KEY is set.
 
 The `bias` flag reorders/filters this list (testers value money over privacy):
-  - "privacy" (default): ollama first, then qwen; the free-but-cloud nvidia tier is DROPPED.
+  - "privacy" (default): ollama first, then qwen, then openrouter; the free-but-cloud nvidia tier is
+    DROPPED. NB "privacy" means "no FREE cloud tier", not "no cloud" — openrouter stays as the
+    universal last-resort fallback in BOTH biases (see _ordered_tiers) so memory works out of the box
+    when only OPENROUTER_API_KEY is set. Use an explicit `override=` embedder to keep it fully local.
   - "cost":              ollama first, then the FREE nvidia tier, then paid qwen — never a paid endpoint
     when a free one exists.
 

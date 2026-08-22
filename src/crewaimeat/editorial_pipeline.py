@@ -23,28 +23,50 @@ from crewaimeat.prose_style import FINNISH_NATIVE_STYLE
 
 _EXCL = {"koodaus", "prompt-niksi", "matikka", "editorial"}
 
-# STEP 1 — compose the gonzo column in ENGLISH (grok's strongest register; no Finnish word-hallucination).
-_PROMPT_EN = (
-    "You are SPIDER JERUSALEM — the savage gonzo journalist of Transmetropolitan. Write a VICIOUS, "
-    "PROVOCATIVE editorial column about tonight's news. LENGTH: ~600-750 words, 6-9 paragraphs — let it "
-    "breathe, don't compress to a rant. But DON'T pad or repeat yourself: PICK the 3-4 strongest threads and "
-    "DEVELOP them concretely — dig into specifics, build the argument, connect the threads. This is an "
-    "ATTACK, not a polite column: rip hypocrisy open, swear when it lands (fuck/shit/hell), black humour, a "
-    "strong first-person voice, no false balance. Open with a hook that grabs the throat; end on a line that "
-    "keeps cutting. Finish on its own line: — S.J.\n\nTONIGHT'S NEWS:\n"
+# THE VOICE LIVES IN THE SKILL, NOT HERE. `skills/sanomat-editorial-style/SKILL.md` is the house
+# editorial craft — voice, structure, the two-step language rule, the hard rules. It used to be a
+# parallel copy of the two prompt strings below, which is the worst of both worlds: a versioned,
+# shareable, registry-publishable pack that nothing read, sitting beside the prompts that actually
+# ran and slowly diverging from them. Now the skill IS the instruction and these prompts only frame
+# the concrete step. Editing the voice means editing the skill — one place, and it travels.
+#
+# Loaded lazily (not at import) so a missing skill fails the EDITORIAL STEP loudly, marked failed on
+# the edition's status record, instead of taking the whole fleet down at import time.
+EDITORIAL_SKILL = "sanomat-editorial-style"
+
+# STEP 1 — compose the gonzo column in ENGLISH (the model's strongest register; no Finnish
+# word-hallucination). The skill's "two-step language rule" is why this step exists at all.
+_TASK_EN = (
+    "\n\nYOUR TASK NOW — STEP 1 of the two-step language rule: write TONIGHT'S column in ENGLISH, "
+    "applying everything above. Output the column only, nothing else."
+    "\n\nTONIGHT'S NEWS:\n"
 )
 
-# STEP 2 — localise that English column into NATIVE Finnish gonzo. Anchored to the English (meaning + barbs
-# survive), rewritten idiomatically (NOT translated word-for-word), gonzo voice + profanity fully preserved.
-_PROMPT_LOCALIZE = (
-    "Olet suomalainen gonzo-toimittaja — Spider Jerusalem suomeksi. Alla on englanninkielinen gonzo-"
-    "pääkirjoitus. KIRJOITA SE UUDELLEEN raivokkaaksi, syntyperäiseksi suomeksi. TÄRKEÄÄ: älä käännä sanasta "
-    "sanaan — kirjoita kuin suomalainen gonzo-kirjoittaja kirjoittaisi tämän kolumnin alusta asti. SÄILYTÄ "
-    "JOKAINEN piikki, koko satiiri ja musta huumori, rant-rytmi, vahva minä-ääni JA kiroilu "
-    "(saatana/paska/helvetti) — älä pehmennä äläkä siistitä. ÄLÄ keksi sanoja: jos et tiedä suomenkielistä "
-    "ilmaisua, käytä luontevaa arkisuomea, älä englannin idiomin sananmukaista käännöstä. Pidä sama pituus ja "
-    "kappalejako. Lopuksi omalle rivilleen: — S.J." + FINNISH_NATIVE_STYLE + "\n\nENGLANNINKIELINEN PÄÄKIRJOITUS:\n"
+# STEP 2 — localise that English column into NATIVE Finnish gonzo. Anchored to the English (meaning +
+# barbs survive), rewritten idiomatically (NOT translated word-for-word), voice + profanity preserved.
+_TASK_LOCALIZE = (
+    "\n\nTEHTÄVÄSI NYT — kaksivaiheisen kielisäännön VAIHE 2: kirjoita alla oleva englanninkielinen "
+    "kolumni uudelleen syntyperäiseksi suomalaiseksi gonzoksi. Älä käännä sanasta sanaan — kirjoita "
+    "kuin suomalainen gonzo-kirjoittaja kirjoittaisi sen alusta asti. Sama pituus ja kappalejako, "
+    "JOKAINEN piikki, satiiri, musta huumori ja kiroilu säilytettynä. Tulosta pelkkä kolumni."
+    + FINNISH_NATIVE_STYLE
+    + "\n\nENGLANNINKIELINEN PÄÄKIRJOITUS:\n"
 )
+
+
+def _voice() -> str:
+    """The house editorial craft, from the skill pack. Raises loudly if it cannot be loaded."""
+    from crewaimeat.skills import skill_body
+
+    return skill_body(EDITORIAL_SKILL)
+
+
+def prompt_en() -> str:
+    return _voice() + _TASK_EN
+
+
+def prompt_localize() -> str:
+    return _voice() + _TASK_LOCALIZE
 
 
 def build_editorial_and_index(agent_name: str, date: str, edition: str) -> str:
@@ -93,7 +115,7 @@ def _build_editorial_and_index(agent_name: str, date: str, edition: str) -> str:
         )
 
     # STEP 1: English gonzo draft (high temperature for voice).
-    en_prompt = _PROMPT_EN + "\n".join(heads) + prior
+    en_prompt = prompt_en() + "\n".join(heads) + prior
     llm_en = get_llm(for_tool_use=False, temperature=0.95, agent_name=agent_name)
     en = llm_en.call([{"role": "user", "content": en_prompt}])
     en = en if isinstance(en, str) else str(en)
@@ -111,10 +133,10 @@ def _build_editorial_and_index(agent_name: str, date: str, edition: str) -> str:
     # routing like every other step. The two-step itself stays — the English draft is what carries the
     # gonzo voice, and anchoring the Finnish to it is why the column reads as written rather than translated.
     llm_fi = get_llm(for_tool_use=False, temperature=0.65, agent_name=agent_name)
-    ed = llm_fi.call([{"role": "user", "content": _PROMPT_LOCALIZE + en.strip()}])
+    ed = llm_fi.call([{"role": "user", "content": prompt_localize() + en.strip()}])
     ed = ed if isinstance(ed, str) else str(ed)
     if len(ed.strip()) < 400:  # localise hiccup → one retry
-        ed = llm_fi.call([{"role": "user", "content": _PROMPT_LOCALIZE + en.strip()}])
+        ed = llm_fi.call([{"role": "user", "content": prompt_localize() + en.strip()}])
         ed = ed if isinstance(ed, str) else str(ed)
 
     # PROVENANCE: two models wrote this — one drafted the English column from the day's own articles,

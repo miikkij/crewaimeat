@@ -11,7 +11,14 @@ from __future__ import annotations
 import importlib
 
 import pytest
-from crew_fixtures import CREW_MODULES, SENTINEL, make_ctx
+from crew_fixtures import (
+    BRAIN_STUB_MODULES,
+    CREW_MODULES,
+    CREWS_DIR,
+    LIVE_CREW_MODULES,
+    SENTINEL,
+    make_ctx,
+)
 
 
 def _build(module_name, prompt=None):
@@ -58,11 +65,24 @@ def test_build_domain_structural(module_name):
 @pytest.mark.parametrize("module_name", CREW_MODULES)
 def test_ctx_prompt_is_injected(module_name):
     """The user's ask (ctx.prompt) must reach at least one task description, or the agent never
-    sees the task (the crew-builddomain-must-inject-ctx-prompt failure)."""
-    _mod, _agents, tasks = _build(module_name)
+    sees the task (the crew-builddomain-must-inject-ctx-prompt failure).
+
+    A crew whose real work is NOT driven by the task prompt — a deterministic pipeline woken by a
+    record, a DM loop, a scheduled marker — opts out by declaring `PROMPT_INDEPENDENT = "<reason>"`
+    at module level. The opt-out is a written reason, not a boolean, precisely so it cannot be used
+    to silence a real regression: absent means the strict rule applies, so a NEW crew is held to it
+    by default and has to say out loud why it is different."""
+    mod, _agents, tasks = _build(module_name)
+    reason = getattr(mod, "PROMPT_INDEPENDENT", None)
+    if reason is not None:
+        assert isinstance(reason, str) and len(reason.strip()) >= 20, (
+            f"{module_name}: PROMPT_INDEPENDENT must state WHY the prompt is not injected (a sentence, not {reason!r})"
+        )
+        return
     joined = "\n".join((t.description or "") for t in tasks)
     assert SENTINEL in joined or "koi-pond" in joined, (
-        f"{module_name}: ctx.prompt was not injected into any task description"
+        f"{module_name}: ctx.prompt was not injected into any task description "
+        f"(if that is by design, declare PROMPT_INDEPENDENT = '<reason>' in the crew)"
     )
 
 
@@ -86,6 +106,32 @@ def test_max_iter_is_a_sane_backstop(module_name):
         assert (a.max_iter or 0) <= MAX_ITER_SANITY_CEILING, (
             f"{module_name}: '{a.role}' max_iter={a.max_iter} looks like a typo (> {MAX_ITER_SANITY_CEILING})"
         )
+
+
+def test_every_live_crew_is_on_a_contract_floor():
+    """No crew may sit outside BOTH floors. CREW_MODULES and BRAIN_STUB_MODULES are derived from the
+    same disk listing, so this can only fail if the derivation itself breaks — which is exactly the
+    failure that let a hand-kept list cover 21 of 46 crews for two months."""
+    covered = set(CREW_MODULES) | set(BRAIN_STUB_MODULES)
+    missing = sorted(set(LIVE_CREW_MODULES) - covered)
+    assert not missing, f"live crews on no contract floor: {missing}"
+    assert len(LIVE_CREW_MODULES) >= 40, (
+        f"only {len(LIVE_CREW_MODULES)} live crews found — the disk derivation is probably broken"
+    )
+
+
+@pytest.mark.parametrize("module_name", BRAIN_STUB_MODULES)
+def test_brain_stubs_are_really_brain_stubs(module_name):
+    """A crew without build_domain must be a genuine brain stub — its behavior lives in the JSON brain
+    and it launches via run_brain. This closes the only way out of the build_domain floor: deleting
+    the function no longer removes a crew from testing, it moves it to this (stricter) claim."""
+    mod = importlib.import_module(f"crews.{module_name}")
+    assert hasattr(mod, "run"), f"{module_name}: no run() — it is neither a crew nor a brain stub"
+    assert getattr(mod, "AGENT_NAME", "").strip(), f"{module_name}: AGENT_NAME is missing or empty"
+    src = (CREWS_DIR / f"{module_name}.py").read_text(encoding="utf-8")
+    assert "run_brain" in src, (
+        f"{module_name}: no build_domain AND no run_brain — this crew builds nothing and is unreachable"
+    )
 
 
 # ---- Regression tests for the two live bugs fixed in this change ----

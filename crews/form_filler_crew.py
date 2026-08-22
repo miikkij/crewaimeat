@@ -26,6 +26,12 @@ from crewaimeat.llm import get_llm
 
 AGENT_NAME = "form-filler"
 
+# Declared opt-out from the ctx.prompt-injection floor (tests/test_build_domain.py).
+PROMPT_INDEPENDENT = (
+    "DM-driven: the real work is the PDF form loop over DMs; the task path only states how to reach "
+    "it, so ctx.prompt names no target."
+)
+
 README = """[[FIGLET:slant]["Form Filler"]]
 
 Send me a **form (PDF)** and I'll read what it asks for, ask you the values, and hand back the **completed

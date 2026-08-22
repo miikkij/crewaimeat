@@ -37,7 +37,7 @@ from crewai.skills.loader import activate_skill
 from crewai.skills.models import Skill
 from crewai.skills.parser import SKILL_FILENAME, load_skill_metadata
 
-__all__ = ["SkillLoadError", "load_skills", "skills_root"]
+__all__ = ["SkillLoadError", "load_skills", "skill_body", "skills_root"]
 
 _BODY_SOFT_LIMIT = 50_000  # contract guideline: keep the body focused (<~50k chars)
 
@@ -104,3 +104,18 @@ def load_skills(items: Iterable[str | Path], root: str | Path | None = None) -> 
             )
         loaded.append(skill)
     return loaded
+
+
+def skill_body(name: str | Path, root: str | Path | None = None) -> str:
+    """One skill's markdown body, for a prompt built in CODE rather than on a CrewAI Agent.
+
+    `load_skills` returns crewai `Skill` objects for `Agent(skills=[...])`. The deterministic
+    pipelines never build an Agent — they call the model directly with a prompt string — so without
+    this they had to keep their own copy of the craft, and the skill pack sat unused beside a prompt
+    that slowly diverged from it. That is how `skills/sanomat-editorial-style/` ended up describing
+    the newspaper's voice while nothing in the newspaper read it.
+
+    Fail-loud like `load_skills`: a missing or malformed skill raises, naming the skill. A pipeline
+    step that cannot load its own craft must stop, not quietly produce voiceless prose.
+    """
+    return load_skills([name], root)[0].instructions or ""

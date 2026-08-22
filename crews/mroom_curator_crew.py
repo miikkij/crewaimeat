@@ -27,6 +27,11 @@ from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 
 AGENT_NAME = "mroom-curator"
 
+# Declared opt-out from the ctx.prompt-injection floor (tests/test_build_domain.py).
+PROMPT_INDEPENDENT = (
+    "record-driven: the curation pass runs deterministically in code over the raw feed; ctx.prompt carries no target."
+)
+
 README = """[[FIGLET:slant]["M-ROOM Curator"]]
 
 The machine-room research curator. On a schedule it reads the raw HN / arXiv / MCP-release / EU-AI-Act

@@ -2038,6 +2038,72 @@ def _publish_readme(agent_name: str, readme_md: str, commands: list[dict] | None
     print(f"[{agent_name}] published README to agents.{agent_name}.readme: {bool(res)}", file=sys.stderr)
 
 
+_CAPABILITY_TYPES = {"mcp", "skill", "tool"}
+
+
+def _validate_capabilities(agent_name: str, payload: dict) -> None:
+    """Reject a malformed capabilities payload BEFORE it reaches the node. Raises ValueError.
+
+    The contract (fleet_identity.py, CrewSpec.capabilities):
+      technical  list of {"name": str, "type": "mcp"|"skill"|"tool"}
+      domain     list of str   (free phrases; ':' and '@' allowed, e.g. "consumes:ledger-request")
+      languages  list of str
+
+    Why this raises instead of warning: `aimeat_agent_capabilities_report` OVERWRITES the agent's whole
+    capability set, and the node accepts a wrong-shaped payload without complaint — so a typo does not
+    fail, it quietly makes the agent unmatchable in discovery. That is the worst kind of bug this repo
+    has: a green run with a broken result. Fail at the boundary, name the agent and the offending entry.
+    """
+    bad: list[str] = []
+    for entry in payload.get("technical") or []:
+        if not isinstance(entry, dict):
+            bad.append(f"technical entry {entry!r} is a {type(entry).__name__}, expected {{name, type}}")
+        elif not str(entry.get("name") or "").strip():
+            bad.append(f"technical entry {entry!r} has no name")
+        elif entry.get("type") not in _CAPABILITY_TYPES:
+            bad.append(
+                f"technical entry {entry!r} has type {entry.get('type')!r}, expected one of {sorted(_CAPABILITY_TYPES)}"
+            )
+    for field in ("domain", "languages"):
+        for entry in payload.get(field) or []:
+            if not isinstance(entry, str) or not entry.strip():
+                bad.append(f"{field} entry {entry!r} is not a non-empty string")
+    if bad:
+        raise ValueError(
+            f"[{agent_name}] capabilities payload is malformed and would be reported to the node as-is "
+            f"(the node accepts it and the agent silently stops matching in discovery):\n  - "
+            + "\n  - ".join(bad)
+            + "\nFix the entry in src/crewaimeat/fleet_identity.py or the crew's CrewSpec.capabilities."
+        )
+
+
+def _chain(agent_name: str, previous, step: str, *, critical: bool = False):
+    """Call an already-attached callback, then this step's own work — LOUDLY.
+
+    CrewAI gives a Task ONE callback slot, so every optional feature (publish, library, verify-score,
+    self-monitor) wraps the previous one. Each wrapper used to swallow its predecessor's failure with a
+    bare `except: pass`, which quietly inverted the guarantee the chain exists for: with two features
+    enabled, a FAILED deliverable publish became a run that reported success.
+
+    `critical=True` marks a link nobody may lose — the publish itself. It is logged AND re-raised, so a
+    failed deliverable fails the task instead of vanishing. Non-critical links are logged and stepped
+    over: a missed library index must not cost the owner their result. Either way the failure is SEEN,
+    which is the whole difference from the code this replaces.
+    """
+
+    def _call(out) -> None:
+        if previous is None:
+            return
+        try:
+            previous(out)
+        except Exception as exc:  # noqa: BLE001 — re-raised below when the link is critical
+            print(f"[{agent_name}] callback chain: {step} FAILED: {exc!r}", file=sys.stderr)
+            if critical:
+                raise
+
+    return _call
+
+
 def _effective_mode(spec: CrewSpec) -> str:
     """The AIMEAT agent mode to set on start. Default is TASK-RUNNER (tasks auto-activate + process);
     a crew is interactive (every task gated behind a manual 'Start this task') ONLY when it sets
@@ -2250,6 +2316,12 @@ def run_crew(spec: CrewSpec) -> None:
     #      implied by completing Hello Integration anyway). Idempotent.
     if _caps:
         payload = {k: _caps[k] for k in ("technical", "domain", "languages") if _caps.get(k)}
+        # REJECT AT THE BOUNDARY. `technical` entries must be {name, type} objects; `domain` and
+        # `languages` are plain strings. Until 2026-08-22 the payload went out unchecked, so
+        # datapkg-analyst reported its technical capabilities as bare strings on every single start
+        # and the node's matcher could not match on them — with every call returning ok. A shape the
+        # node cannot use is a silent capability loss, which is exactly what fail-loud exists for.
+        _validate_capabilities(spec.agent_name, payload)
         res = _aimeat_call(spec.agent_name, "aimeat_agent_capabilities_report", payload)
         print(f"[{spec.agent_name}] reported capabilities {list(payload)}: {bool(res)}", file=sys.stderr)
 
@@ -2495,13 +2567,11 @@ def run_crew(spec: CrewSpec) -> None:
                 offer_id=(ctx.offer or {}).get("id"),
             )
 
-            def _last_cb(out, _pub=_publish, _prev=_author_cb):
-                _pub(out)
-                if _prev:
-                    try:
-                        _prev(out)
-                    except Exception:  # noqa: BLE001
-                        pass
+            _author_link = _chain(spec.agent_name, _author_cb, "author callback")
+
+            def _last_cb(out, _pub=_publish, _author=_author_link):
+                _pub(out)  # deliberately UNGUARDED: a failed deliverable publish must fail the task
+                _author(out)
 
             tasks[-1].callback = _last_cb
 
@@ -2510,12 +2580,10 @@ def run_crew(spec: CrewSpec) -> None:
             if spec.contribute_to_library:
                 _pub_cb = tasks[-1].callback
 
-                def _lib_cb(out, _prev=_pub_cb, _key=mem_key):
-                    if _prev:
-                        try:
-                            _prev(out)
-                        except Exception:  # noqa: BLE001
-                            pass
+                _pub_link = _chain(spec.agent_name, _pub_cb, "deliverable publish", critical=True)
+
+                def _lib_cb(out, _prev=_pub_link, _key=mem_key):
+                    _prev(out)  # critical: this link IS the publish; losing it loses the deliverable
                     try:
                         from crewaimeat.librarian import contribute_deliverable  # local: avoid import cycle
 
@@ -2533,12 +2601,10 @@ def run_crew(spec: CrewSpec) -> None:
                 _prev_cb2 = tasks[-1].callback
                 _dim = gate["nature"] if gate else "general"
 
-                def _score_cb(out, _prev=_prev_cb2, _dim=_dim):
-                    if _prev:
-                        try:
-                            _prev(out)
-                        except Exception:  # noqa: BLE001
-                            pass
+                _prev_link = _chain(spec.agent_name, _prev_cb2, "deliverable publish chain", critical=True)
+
+                def _score_cb(out, _prev=_prev_link, _dim=_dim):
+                    _prev(out)  # critical: the publish sits behind this link
                     try:
                         text = getattr(out, "raw", None) or str(out)
                         _write_verify_stat(spec.agent_name, tid, text, _dim)
@@ -2569,12 +2635,10 @@ def run_crew(spec: CrewSpec) -> None:
         if spec.self_monitor:
             _prev_fin = getattr(finalize, "callback", None)
 
-            def _monitor_cb(out, _prev=_prev_fin):
-                if _prev:
-                    try:
-                        _prev(out)
-                    except Exception:  # noqa: BLE001
-                        pass
+            _fin_link = _chain(spec.agent_name, _prev_fin, "task finalize", critical=True)
+
+            def _monitor_cb(out, _prev=_fin_link):
+                _prev(out)  # critical: this link CLOSES the task; losing it leaves it active forever
                 try:
                     from crewaimeat.evolve import self_monitor_check  # local: avoid import cycle
 

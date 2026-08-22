@@ -4,6 +4,71 @@ Notable changes to crewaimeat. Format loosely follows [Keep a Changelog](https:/
 Dates are the working dates; entries are **uncommitted and take effect on the next fleet restart**
 (the daemons import the modules at start).
 
+## [Unreleased] — 2026-08-22
+
+### Added
+- **`crewaimeat doctor` — continuous reconciliation of what this repo DECLARES against what it DOES.**
+  The August audit took hours and almost every finding was a mechanical disagreement between six
+  hand-kept lists. That is a program, not an afternoon. Three lenses, deliberately different in kind:
+  - **registries** (set reconciliation): the crew file, `fleet_identity`, `offers`,
+    `llm_providers.json`, `serve.json` and the node must agree about which agents exist. It found 12
+    agents registered with no crew file, one live crew registered nowhere, 13 with no identity, 13 with
+    no offer, and 20 resolving to a routing profile nobody chose.
+  - **conformance** (a call-graph route check, not a lint): does a call reach the NODE through the
+    shared dispatcher, does a crew get its model from routing rather than a constructor, is a failure
+    on the deliverable path visible, does the connector version exist in exactly one place. A linter
+    reads one file and asks whether the statement is well formed; these are statements about an EDGE.
+    Precision was the whole design problem — the first draft matched any `.get(` and produced 95
+    "findings" of which ~30 were real, so HTTP clients are now resolved from the imports.
+  - **liveness** (opt-in `--live`): what the node believes — stale agents, orphaned schedules, agents
+    the repo has never heard of. It NEVER reports "fine" when it could not look: connector tools answer
+    empty (not an error) off-fleet, which is the exact shape of a false green, so an unreachable node
+    is a finding and the lens is recorded as SKIPPED.
+  Runs from the CLI, from CI (`--strict`), from a pre-commit hook, and at fleet start (warn, never
+  block). `doctor-baseline.json` is a RATCHET: today's findings stop failing the build, nothing new may
+  be added, and an entry that no longer fires is reported as `baseline.stale` so the file only shrinks.
+- **`crewaimeat retire <agent>` — the missing half of an agent's lifecycle.** crew-forge could create an
+  agent with one command and nothing could remove one, which is the direct cause of 12 ghost
+  registrations, ~20 near-duplicate experiments on the node and 6 schedules nobody dares delete. Parks
+  the crew file, drops the registration (with a dated backup — serve.json holds every agent's token),
+  stashes the token, cleans the routing entry, and reports what must be removed from source by hand.
+  Deliberately conservative: it never deletes the crew file and never touches memory.
+
+### Fixed
+- **The crew contract floor covered 17 of 46 crews and had been red for two months.** `CREW_MODULES`
+  was hand-kept: it still named four crews that had been PARKED (16 permanently failing tests) while 29
+  live crews had no `build_domain` test at all. It is now derived from disk using the same parking rule
+  as the fleet host, so a new crew is contract-tested the day it lands. A crew that is not driven by the
+  task prompt declares `PROMPT_INDEPENDENT = "<reason>"` — a written reason, not a boolean, so the
+  opt-out cannot be used to silence a real regression. **846 tests / 21 red → 945 tests / 0 red.**
+- **Malformed capabilities were reported to the node on every start, and accepted.** `datapkg-analyst`
+  declared `technical` as bare strings where the contract is `{name, type}` objects; the node takes it
+  without complaint and the agent silently stops matching in discovery. Fixed, and `run_crew` now
+  REJECTS a malformed payload at the boundary instead of sending it.
+- **A failed deliverable publish could report success.** The task callback chain (publish → library →
+  verify-score → self-monitor) had each link wrapping the previous in a bare `except: pass`, so with two
+  features enabled a failed publish vanished. One shared `_chain()` helper now LOGS every link and
+  RE-RAISES the critical ones (the publish itself, and the finalize that closes the task).
+- **The connector version existed in four places at once** — pinned `2.0.0` in code, documented as
+  `>=2.6.1` in pyproject, `3.3.2` installed, `1.34.0` asserted in a test — and the registration pin sat
+  BELOW the documented floor, so every agent crew-forge registered went through a connector that drops
+  the provenance block silently. One constant now (`forge.AIMEAT_CONNECTOR`, raised to `3.5.0`), read by
+  every docstring, message and test, and enforced by a doctor rule.
+- **Two routing profiles described a chain that had not been live for weeks.** `content-free` and
+  `coding` both claimed in their `_note` that the free meta-router LEADS while their provider arrays
+  already led with the paid `openai/gpt-oss-120b`. The order was left as-is (it is the live quality
+  decision); the prose was corrected, and doctor now fails a note that contradicts its own order.
+- **20 crews had no routing entry** and resolved to `default` silently — including `sanomat-desk` (the
+  paper's editor) and `workflow-manager` (which routes work to other crews). All 20 are now mapped
+  explicitly; the fleet host names any unrouted crew at start-up, so the fallback can no longer be
+  reached by accident.
+- Four tests were pinned to a machine's own `llm_providers.json` / `AIMEAT_HOME` and to behaviour that
+  had deliberately changed (task-runner default, the OpenRouter embedder tier, the connector pin). They
+  now assert the RULE against a fixture, not one developer's model choices.
+- `embedder_cascade`'s module docstring contradicted its own function: "privacy" drops the free cloud
+  tier but keeps OpenRouter as the universal last-resort fallback, i.e. it means "no FREE cloud", not
+  "no cloud". Documented where the distinction is actually made.
+
 ## [Unreleased] — 2026-08-09
 
 ### Changed

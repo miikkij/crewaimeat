@@ -21,6 +21,11 @@ from crewaimeat.mroom import ROOM_ORG, ROOM_WS
 
 AGENT_NAME = mr.DIGGER
 
+# Declared opt-out from the ctx.prompt-injection floor (tests/test_build_domain.py).
+PROMPT_INDEPENDENT = (
+    "record-driven: the research pass executes the sniffer's stored plan; ctx.prompt carries no target."
+)
+
 README = """[[FIGLET:slant]["M-ROOM Digger"]]
 
 The machine room's **research** worker for guest REQuests (distinct from `mroom-researcher`, which
