@@ -325,6 +325,16 @@ def test_a_skill_named_through_a_module_constant_counts_as_used(tmp_path):
     assert not any("loaded by nothing" in n for n in report.notes)
 
 
+def test_a_contract_agent_is_not_accused_of_having_no_offer(tmp_path, monkeypatch):
+    """Five agents advertise through a workspace CONTRACT (`_OFFER_META`) instead of an authored
+    `OFFERS` list — web-researcher advertises three that way. Flagging them as "declares no OFFERS" is
+    a false accusation, and a check that cries wolf is a check people switch off."""
+    root = _repo(tmp_path, crews={"a_crew.py": CREW.format(agent="a")}, served=["a"])
+    monkeypatch.setattr("crewaimeat.doctor.registries._contract_offer_agents", lambda: {"a"})
+    report = run(root)
+    assert "registry.offer.missing" not in _rules(report)
+
+
 def test_a_skill_that_does_not_exist_is_an_error(tmp_path):
     root = _repo(tmp_path, crews={"a_crew.py": CREW.format(agent="a")}, served=["a"])
     (root / "crews" / "b_crew.py").write_text(

@@ -150,9 +150,26 @@ def _crews_vs_identity(inv: Inventory, report: Report) -> None:
         )
 
 
+def _contract_offer_agents() -> set[str]:
+    """Agents whose offers are DERIVED from a workspace contract, not authored in the crew.
+
+    A contract agent advertises through `_OFFER_META` — its requirements, consequences and deliverable
+    location all fall out of the CONTRACT dict, which is the whole point of that path. Reporting those
+    five as "declares no OFFERS" is a false accusation, and a check that cries wolf gets switched off:
+    the first version of this rule flagged web-researcher, which advertises three offers.
+    """
+    try:
+        from crewaimeat.offers import _OFFER_META
+
+        return {str(m.get("agent")) for m in _OFFER_META.values() if m.get("agent")}
+    except Exception:  # noqa: BLE001
+        return set()
+
+
 def _crews_vs_offers(inv: Inventory, report: Report) -> None:
+    from_contract = _contract_offer_agents()
     for agent in sorted(inv.live_agents):
-        if inv.declares_offer(agent):
+        if inv.declares_offer(agent) or agent in from_contract:
             continue
         crew = inv.crew_of(agent)
         if crew and "offer=" in crew.path.read_text(encoding="utf-8"):
