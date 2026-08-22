@@ -19,6 +19,42 @@ from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 
 AGENT_NAME = "joker-v2"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "content-free"
+TAGS = ["humor", "comedy", "variant.ab", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [{"name": "joker-v2", "type": "skill"}],
+    "domain": ["comedy writing", "draft-many-keep-best (evolved A/B variant)"],
+    "languages": ["fi", "en"],
+}
+OFFERS = [
+    {
+        "id": "tell-jokes-v2",
+        "title": "Comedians draft many, keep the best (evolved variant)",
+        "ask": "Same job as joker, evolved: each comedian drafts several jokes and only the best survive. Part of a "
+        "live A/B pair — humor only, nothing serious.",
+        "example": "aihe: tekoälyagenttien kokouskäytännöt",
+        "cost": "cheap",
+        "latency": "minutes",
+        "repeatability": "accumulative",
+        "verification": "ungated",
+        "consequences": [],
+        "sample": "**Aihe: tekoälyagenttien kokouskäytännöt**\n"
+        "\n"
+        "*(jokainen koomikko luonnosteli viisi; tässä parhaat)*\n"
+        "\n"
+        '**Riku:** "Agenttimme pitää daily standupin — paitsi ettei kukaan istu, kukaan ei seiso, ja silti '
+        'se kestää 45 minuuttia."\n'
+        "\n"
+        "…",
+    }
+]
+
+
 # --- deterministic meta-leak strip -------------------------------------------------------------
 # The editor is told to keep its KEPT/CUT reasoning private; owl-alpha obeys ~9/10 but occasionally
 # leaks it into the deliverable ("Let me work through these… Final lineup:"). The prompt can't fully

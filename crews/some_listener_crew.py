@@ -22,6 +22,20 @@ from crewaimeat.some_listener import make_listener_tools
 
 AGENT_NAME = "some-listener"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "content-free"
+TAGS = ["social-radar", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [{"name": "some-listener", "type": "skill"}],
+    "domain": ["social radar: source HN/X/Reddit engagement opportunities"],
+    "languages": ["en"],
+}
+
+
 README = """[[FIGLET:slant]["Some Listener"]]
 
 Deterministic **social radar**: scans Hacker News (free Algolia API) for AIMEAT-relevant discussions

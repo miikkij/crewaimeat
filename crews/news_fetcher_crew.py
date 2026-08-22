@@ -21,6 +21,39 @@ from crewaimeat.fetch_pipeline import make_fetch_tools
 
 AGENT_NAME = "news-fetcher"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "content-free"
+TAGS = ["news-fetch", "laimeat", "role.task-runner"]
+OFFERS = [
+    {
+        "id": "fetch-edition-raw",
+        "title": "Fetch the day's raw news per category",
+        "ask": "I pull curated feeds + search and ALWAYS run full-text extraction per category into the edition raw. "
+        "Runs on the 17:00 schedule — ask only for a re-fetch. I fetch and extract; I don't write articles.",
+        "example": "Re-fetch the evening raw for today",
+        "cost": "cheap",
+        "latency": "minutes",
+        "repeatability": "accumulative",
+        "verification": "deterministic",
+        "scheduleBorn": "daily 17:00 Europe/Helsinki — runs automatically",
+        "consequences": [],
+        "sample": "## Edition raw — 2026-06-16 evening (per category)\n"
+        "\n"
+        "- **talous:** 6 lähdettä, full-text poimittu ✓\n"
+        "- **politiikka:** 5 ✓ · **urheilu:** 7 ✓ · **tiede:** 4 ✓ … (20 kategoriaa)\n"
+        "\n"
+        "Yhteensä 112 artikkelin raakateksti tallennettu YHTEEN avaimeen `news.2026-06-16.evening.raw` "
+        "(kategoriat sen `categories`-kentässä). Ei LLM:ää — haku + ekstraktio koodissa.\n"
+        "\n"
+        "…",
+    }
+]
+
+
 README = """[[FIGLET:slant]["News Fetcher"]]
 
 Deterministic Finnish news fetch: curated RSS feeds + SearXNG search + **always-on trafilatura full-text

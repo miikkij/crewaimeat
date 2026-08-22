@@ -33,6 +33,46 @@ from crewaimeat.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is
 # === CUSTOMIZE 1: your AIMEAT agent identity =============================== #
 AGENT_NAME = "probability-creator"  # must match `aimeat connect add --agent ...`
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "content-free"
+TAGS = ["probability-estimation", "forecasting", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [{"name": "probability-creator", "type": "skill"}],
+    "domain": ["probability estimation", "forecasting", "scenario spectrums with explicit assumptions"],
+    "languages": ["en"],
+}
+OFFERS = [
+    {
+        "id": "estimate-spectrum",
+        "title": "Turn one question into an estimate spectrum",
+        "ask": "Ask one estimation question and I return a spectrum of answers with probabilities and assumptions "
+        "made explicit. Estimates, not guarantees — no financial advice.",
+        "example": "How many Finnish SMEs adopt an AI 'digital employee' service by 2028?",
+        "cost": "cheap",
+        "latency": "minutes",
+        "repeatability": "accumulative",
+        "verification": "ungated",
+        "consequences": [],
+        "json": True,
+        "sample": {
+            "question": "How many Finnish SMEs adopt an AI 'digital employee' service by 2028?",
+            "unit": "share of ~280k SMEs",
+            "spectrum": [
+                {"scenario": "low", "estimate": "2%", "p": 0.25},
+                {"scenario": "base", "estimate": "6%", "p": 0.5},
+                {"scenario": "high", "estimate": "12%", "p": 0.25},
+            ],
+            "assumptions": ["adoption tracks the cloud-tool S-curve", "no major regulatory block"],
+            "caveat": "estimates, not guarantees; no financial advice",
+        },
+    }
+]
+
+
 README = """[[FIGLET:slant]["PROBABILITY"]]
 
 # probability-creator — one question, a spectrum of answers

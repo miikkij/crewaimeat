@@ -25,6 +25,20 @@ from crewaimeat.forge import make_forge_tools
 
 AGENT_NAME = "aimeat-crew-forge"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "coding"
+TAGS = ["app-forge", "aimeat-apps", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [{"name": "aimeat-crew-forge", "type": "skill"}],
+    "domain": ["builds AIMEAT apps + extensions (app SDLC forge)"],
+    "languages": ["en"],
+}
+
+
 README = """[[FIGLET:slant]["aimeat crew forge"]]
 
 I forge AIMEAT-SDLC specialist agents — app/extension builders on the direct-build toolkit. Tell me the

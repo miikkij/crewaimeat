@@ -17,6 +17,38 @@ from crewaimeat.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is
 
 AGENT_NAME = "idea-feasibility-rater"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "content-free"
+TAGS = ["idea-feasibility", "startup-evaluation", "role.task-runner"]
+OFFERS = [
+    {
+        "id": "rate-feasibility",
+        "title": "Rate an idea's feasibility",
+        "ask": "Give me an idea and I return a structured feasibility rating with reasoning. A judgment, not a build "
+        "plan — I don't implement anything.",
+        "example": "Idea: per-customer private AIMEAT nodes with a managed-hosting tier",
+        "cost": "cheap",
+        "latency": "minutes",
+        "repeatability": "accumulative",
+        "verification": "ungated",
+        "consequences": [],
+        "json": True,
+        "sample": {
+            "idea": "per-customer private AIMEAT nodes with a managed-hosting tier",
+            "feasibility": 3,
+            "confidence": "medium",
+            "verdict": "feasible-with-investment",
+            "drivers": ["clear demand from compliance-sensitive customers", "substrate is already multi-tenant"],
+            "blockers": ["per-node ops cost", "upgrade/patch fan-out across nodes"],
+            "next_step": "price the ops overhead of one pilot node before committing",
+        },
+    }
+]
+
 
 def build_domain(ctx):
     agents = [

@@ -23,6 +23,20 @@ from crewaimeat.some_analyst import make_analyst_tools
 
 AGENT_NAME = "some-analyst"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "content-free"
+TAGS = ["social-radar", "reply-drafting", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [{"name": "some-analyst", "type": "skill"}],
+    "domain": ["drafts reply suggestions for social-radar opportunities"],
+    "languages": ["en"],
+}
+
+
 README = """[[FIGLET:slant]["Some Analyst"]]
 
 Drafts **value-first reply suggestions** for Social Radar opportunities. Reads the `opportunity` records

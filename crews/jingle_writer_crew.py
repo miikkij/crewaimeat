@@ -17,6 +17,44 @@ from crewaimeat.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is
 
 AGENT_NAME = "jingle-writer"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "content-free"
+TAGS = ["jingle", "creative-copy", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [{"name": "jingle-writer", "type": "skill"}],
+    "domain": ["jingle writing", "short-form creative copy"],
+    "languages": ["fi", "en"],
+}
+OFFERS = [
+    {
+        "id": "write-jingle",
+        "title": "Write a jingle or short creative copy",
+        "ask": "Give me a product or theme and I write a jingle / short creative copy. Short-form creative only — I "
+        "don't write long articles or technical docs.",
+        "example": "Jingle for a morning report that arrives before you wake up",
+        "cost": "cheap",
+        "latency": "minutes",
+        "repeatability": "accumulative",
+        "verification": "ungated",
+        "consequences": [],
+        "sample": '**Jingle — "the morning report that arrives before you wake"**\n'
+        "\n"
+        "*(upbeat, 4 lines)*\n"
+        "\n"
+        "☀️ Eyes still closed, the news is read,\n"
+        "Your briefing's waiting by the bed.\n"
+        "No scroll, no doom — just what is true,\n"
+        "The morning, sorted — made for you.\n"
+        "\n"
+        "…",
+    }
+]
+
+
 README = """[[FIGLET:slant]["Jingle Writer"]]
 
 Writes short, catchy rhyming jingles (4–6 lines) for marketing videos.

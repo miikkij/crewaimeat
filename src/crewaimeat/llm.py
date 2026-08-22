@@ -258,6 +258,24 @@ def available_models(cfg: dict | None = None) -> list[dict]:
     return out
 
 
+def _declared_profile(agent_name: str | None) -> str | None:
+    """The profile the CREW declares for itself (`LLM_PROFILE`, or `llm_profile` in a JSON crew).
+
+    Best-effort by design: this resolves from the crews/ directory, which is present when the fleet
+    runs from the repo but not when crewaimeat is installed as a library elsewhere. A missing crews/
+    simply means "no declaration", never an error — routing must not depend on the caller's cwd.
+    """
+    if not agent_name:
+        return None
+    try:
+        from crewaimeat.agent_manifest import manifest_for
+
+        m = manifest_for(agent_name)
+    except Exception:  # noqa: BLE001 — a routing lookup must never take the fleet down
+        return None
+    return m.llm_profile if m else None
+
+
 def _select_chain(cfg: dict, agent_name: str | None) -> tuple[list, str]:
     """Pick the provider chain for a crew.
 
@@ -284,7 +302,21 @@ def _select_chain(cfg: dict, agent_name: str | None) -> tuple[list, str]:
                 return ((prof.get("providers") or []), f"override-profile:{ov.get('profile')}")
     profiles = cfg.get("profiles")
     if isinstance(profiles, dict) and profiles:
-        name = (cfg.get("crews") or {}).get(agent_name or "") or cfg.get("default") or next(iter(profiles))
+        # PRECEDENCE, widest override first:
+        #   1. a per-agent override from the TUI/cockpit (handled above)
+        #   2. the `crews` map in llm_providers.json — the OPERATOR's override for this machine
+        #   3. the crew's own LLM_PROFILE declaration — the agent's default, versioned with its code
+        #   4. the file's `default` profile
+        # Step 3 is what stops the silent fallback: until 2026-08-22 an unmapped crew went straight to
+        # `default` with no way to express intent in the crew itself, so 20 of 46 crews ran on a
+        # profile nobody had chosen for them. A crew now carries its own answer, and llm_providers.json
+        # becomes what its name suggests — providers, plus per-machine overrides.
+        name = (
+            (cfg.get("crews") or {}).get(agent_name or "")
+            or _declared_profile(agent_name)
+            or cfg.get("default")
+            or next(iter(profiles))
+        )
         prof = profiles.get(name)
         if not isinstance(prof, dict):  # bad mapping → fall back to default, then first profile
             name = cfg.get("default") or next(iter(profiles))

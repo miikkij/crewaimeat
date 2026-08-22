@@ -28,6 +28,14 @@ from crewaimeat.scheduler import make_schedule_tools
 
 AGENT_NAME = "social-briefing"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "content-free"
+
+
 # Declared opt-out from the ctx.prompt-injection floor (tests/test_build_domain.py).
 PROMPT_INDEPENDENT = (
     "marker-driven: ctx.prompt is read for the scheduled KICKOFF_MARKER only; the briefing itself is "

@@ -21,6 +21,41 @@ from crewaimeat.mroom import ROOM_ORG, ROOM_WS
 
 AGENT_NAME = mr.SCORER
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "content-free"
+TAGS = ["mroom", "request-fleet", "scoring", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [{"name": "mroom-scorer", "type": "skill"}],
+    "domain": [
+        "M-ROOM cold evaluation: SIGNAL VALUE X.X + RETAINED/DISCARDED + one factual line",
+        "judges the CONTENT never the person; a discard states 'no signal', never an insult",
+        "hands off to the archivist (status researched -> scored)",
+    ],
+    "languages": ["en", "fi"],
+}
+OFFERS = [
+    {
+        "id": "score-guest-request",
+        "title": "Cold-score what a guest REQuest produced",
+        "ask": "I read the research trail and state one SIGNAL VALUE: X.X — RETAINED or DISCARDED plus one factual "
+        "line, then hand off to the archivist. I judge the CONTENT, never the person — a discard is 'the "
+        "request produced no signal', never an insult. Runs automatically per request — I score and hand off; "
+        "I don't decide or act on the result.",
+        "example": "Score the MCP-vs-AIMEAT messaging research",
+        "cost": "cheap",
+        "latency": "seconds",
+        "repeatability": "idempotent",
+        "verification": "gated",
+        "consequences": [{"type": "publishes-public", "note": "the scorecard is visible MACHINE ROOM outbox content"}],
+        "sample": "## Scorecard\nSIGNAL VALUE: 6.5 — RETAINED\nConfirms a real gap MCP leaves that AIMEAT fills.\n\n…",
+    }
+]
+
+
 # Declared opt-out from the ctx.prompt-injection floor (tests/test_build_domain.py).
 PROMPT_INDEPENDENT = (
     "record-driven: the scoring pass reads the researched request from the room; ctx.prompt carries no target."

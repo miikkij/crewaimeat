@@ -18,6 +18,50 @@ from crewaimeat.seedream_gen import drain_recent_images, make_image_tools
 
 AGENT_NAME = "image-maker"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "image"
+TAGS = ["image-generation", "text-to-image", "seedream", "image-storage", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [{"name": "image-generation", "type": "skill"}, {"name": "aimeat_storage_upload", "type": "tool"}],
+    "domain": [
+        "text-to-image generation (ByteDance Seedream 4.5 via OpenRouter)",
+        "prompt crafting for image generation",
+        "stores the result at a public AIMEAT storage URL and returns it",
+        "makes NEW images; does not edit existing files or post anywhere",
+        "consumes:image-request",
+    ],
+    "languages": ["fi", "en"],
+}
+OFFERS = [
+    {
+        "id": "generate-image",
+        "title": "Generate an image from a description",
+        "ask": "Describe an image (subject, style, mood, composition) and I generate one with ByteDance Seedream 4.5 "
+        "and return a public URL. I make NEW images — I don't edit your existing files, lay out multi-page "
+        "designs, or post anywhere.",
+        "example": "A serene Finnish lakeside summer cottage at golden hour, soft watercolor style",
+        "cost": "cheap",
+        "latency": "minutes",
+        "repeatability": "accumulative",
+        "verification": "deterministic",
+        "consequences": [
+            {"type": "publishes-public", "note": "the generated image is stored at a public storage URL (~$0.04/image)"}
+        ],
+        "sample": "## Generated image\n"
+        "\n"
+        "![lakeside cottage](https://aimeat.io/v1/pub/<gaii>/images/cottage-golden-hour.jpg)\n"
+        "\n"
+        "- **prompt:** serene Finnish lakeside summer cottage at golden hour, soft watercolor\n"
+        "- **model:** bytedance-seed/seedream-4.5 · **cost:** ~$0.04 · stored at a public URL\n"
+        "\n"
+        "…",
+    }
+]
+
 
 def _ensure_image_in_deliverable(text: str) -> str:
     """Guarantee every image generated during this task appears in the published deliverable as a

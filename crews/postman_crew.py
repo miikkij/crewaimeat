@@ -27,6 +27,20 @@ from crewaimeat.mail_contract import CONTRACT, idle_pass, make_mail_tools
 
 AGENT_NAME = "postman"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "content-free"
+TAGS = ["mail", "notifications", "role.workspace-contract", "contract.mail"]
+CAPABILITIES = {
+    "technical": [{"name": "workspace-contract", "type": "skill"}, {"name": "postman", "type": "skill"}],
+    "domain": ["deterministic email-out (allowlist-enforced)", "07:00 morning report", "mail-request contract"],
+    "languages": ["en"],
+}
+
+
 README = """[[FIGLET:slant]["Postman"]]
 
 Email-out as a **workspace contract**: write a `mail-request` record ({subject, body_md, image_key?})

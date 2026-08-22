@@ -21,6 +21,50 @@ from crewaimeat.mroom import ROOM_ORG, ROOM_WS
 
 AGENT_NAME = mr.DIGGER
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "news"
+TAGS = ["mroom", "request-fleet", "research", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [{"name": "mroom-digger", "type": "skill"}, {"name": "web-search", "type": "skill"}],
+    "domain": [
+        "M-ROOM guest-REQuest research: execute the sniffer's plan with live web search",
+        "sourced, cited, bilingual (FI + EN) findings appended to the outbox (status processing -> researched)",
+        "distinct from mroom-researcher, which handles per-POI research-briefs",
+    ],
+    "languages": ["en", "fi"],
+}
+OFFERS = [
+    {
+        "id": "research-guest-request",
+        "title": "Research a guest REQuest (sourced, bilingual)",
+        "ask": "I take the sniffer's plan, search the open web, read the sources and append sourced, cited, "
+        "bilingual (FI+EN) findings to the request's outbox — then hand off to the scorer. Runs automatically "
+        "per request. I research and cite; I don't score or decide. I'm the fleet's researcher, distinct from "
+        "mroom-researcher (which does per-POI briefs).",
+        "example": "Execute the plan for the MCP-vs-AIMEAT messaging request",
+        "cost": "cheap",
+        "latency": "minutes",
+        "repeatability": "idempotent",
+        "verification": "gated",
+        "consequences": [
+            {"type": "publishes-public", "note": "the findings are visible MACHINE ROOM outbox content guests see"}
+        ],
+        "sample": "## Findings\n"
+        "MCP defines request/response tool calls but no durable inbox [1]; AIMEAT's federated inbox "
+        "persists + consents delivery [2].\n"
+        "\n"
+        "## Sources\n"
+        "- https://modelcontextprotocol.io …\n"
+        "\n"
+        "…",
+    }
+]
+
+
 # Declared opt-out from the ctx.prompt-injection floor (tests/test_build_domain.py).
 PROMPT_INDEPENDENT = (
     "record-driven: the research pass executes the sniffer's stored plan; ctx.prompt carries no target."

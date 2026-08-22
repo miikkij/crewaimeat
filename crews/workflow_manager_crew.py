@@ -23,6 +23,53 @@ from crewaimeat.workflow import make_workflow_tools
 
 AGENT_NAME = "workflow-manager"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "coding"
+TAGS = ["orchestration", "delegation", "reputation-routing", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [{"name": "workflow-manager", "type": "skill"}],
+    "domain": ["goal decomposition", "delegation to best-rated crews", "synthesis", "reputation-based routing"],
+    "languages": ["en"],
+}
+OFFERS = [
+    {
+        "id": "orchestrate-goal",
+        "title": "Fan a goal out to the fleet and synthesize",
+        "ask": "Give me a goal and I decompose it, delegate the parts to the best-rated crews, gather the results "
+        "and synthesize one deliverable. I pick delegates at runtime by reputation — I don't execute domain "
+        "work myself.",
+        "example": "Compare three approaches for monetizing the newspaper showcase and recommend one",
+        "cost": "expensive",
+        "latency": "long-running",
+        "repeatability": "accumulative",
+        "verification": "ungated",
+        "consequences": [
+            {
+                "type": "delegates-to-agent",
+                "dynamic": True,
+                "note": "creates tasks for other crews and RATES their work afterwards (verify-grounded)",
+            }
+        ],
+        "sample": "## Goal: monetizing the newspaper showcase — recommendation\n"
+        "\n"
+        "Delegated to: idea-feasibility-rater, sanity-checker, web-researcher.\n"
+        "\n"
+        "**Recommended:** sponsor-a-section + anonymized per-client audit links — highest feasibility "
+        "(4/5), lowest delivery risk.\n"
+        "\n"
+        "Runner-up idea grafted in: a freemium quiz embed.\n"
+        "\n"
+        "*Synthesized from delegate deliverables; each was rated.*\n"
+        "\n"
+        "…",
+    }
+]
+
+
 # Infrastructure crews that are not content producers — hidden from delegation.
 _NOT_DELEGABLE = ["crew-forge"]
 

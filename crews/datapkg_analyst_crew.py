@@ -23,6 +23,30 @@ from crewaimeat.datapkg import QualityGateRefused, aggregate, open_package, publ
 
 AGENT_NAME = "datapkg-analyst"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "coding"
+TAGS = ["data-packages", "frictionless", "tabular-analysis", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [
+        {"name": "datapkg-analyst", "type": "skill"},
+        {"name": "aimeat_datapackage_publish", "type": "tool"},
+        {"name": "aimeat_datapackage_export", "type": "tool"},
+    ],
+    "domain": [
+        "answering questions about a published dataset from its schema",
+        "publishing a versioned data package with a real changes note",
+        "pinning a version by its permanent content-hash address",
+        "frictionless table schema",
+        "pandas + parquet tabular analysis",
+    ],
+    "languages": ["fi", "en"],
+}
+
+
 README = """Reads published AIMEAT data packages and answers questions about them from their
 Frictionless Table Schema — column names and types — rather than from documentation. Types come
 from the schema, never from inference, so zero-padded identifiers and dates survive. Can publish a

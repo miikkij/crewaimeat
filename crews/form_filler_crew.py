@@ -26,6 +26,14 @@ from crewaimeat.llm import get_llm
 
 AGENT_NAME = "form-filler"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "content-free"
+
+
 # Declared opt-out from the ctx.prompt-injection floor (tests/test_build_domain.py).
 PROMPT_INDEPENDENT = (
     "DM-driven: the real work is the PDF form loop over DMs; the task path only states how to reach "

@@ -243,8 +243,10 @@ def test_written_file_emits_identity_and_discover(tmp_path, monkeypatch):
     )
     dest = forge.write_crew_file("id-demo", bd, capabilities="web", domain="market-research", discover=True)
     text = dest.read_text(encoding="utf-8")
-    assert "_TAGS = [" in text and "_CAPABILITIES = {" in text
-    assert "discover=True" in text and "tags=_TAGS" in text and "capabilities=_CAPABILITIES" in text
+    # PUBLIC names: crewaimeat.agent_manifest reads these statically, so a forged agent's identity is
+    # visible to doctor, the routing resolver and identity_for without anyone running the crew.
+    assert "TAGS = [" in text and "CAPABILITIES = {" in text
+    assert "discover=True" in text and "tags=TAGS" in text and "capabilities=CAPABILITIES" in text
     ok, detail = forge.validate_crew_file(dest)
     assert ok, detail  # identity constants + kwargs still produce a valid crew
 
@@ -300,6 +302,6 @@ def test_written_file_emits_offer_and_validates(tmp_path, monkeypatch):
     meta = forge_catalog.build_offer_meta("svc-agent", "Send X, get Y; does NOT do Z", "an example")
     dest = forge.write_crew_file("svc-agent", bd, offer=meta)
     text = dest.read_text(encoding="utf-8")
-    assert "_OFFER = {" in text and "offer=_OFFER" in text
+    assert "OFFERS = [{" in text and "offer=OFFERS[0]" in text
     ok, detail = forge.validate_crew_file(dest)
     assert ok, detail

@@ -18,6 +18,59 @@ from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 from crewaimeat.features_pipeline import make_features_tools
 
 AGENT_NAME = "daily-features-writer"
+
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "news"
+TAGS = ["features", "news-quiz", "laimeat", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [{"name": "daily-features-writer", "type": "skill"}],
+    "domain": ["daily features + news quiz from the day's articles"],
+    "languages": ["fi", "en"],
+}
+OFFERS = [
+    {
+        "id": "evening-features",
+        "title": "Evening features + the validated news quiz",
+        "ask": "I write the koodaus/prompt/matikka features and build the news quiz from the day's articles "
+        "(validated; skipped rather than fabricated when articles are missing). Runs on the 17:45 schedule — "
+        "ask only for a re-run.",
+        "example": "Rebuild today's quiz (evening edition)",
+        "cost": "cheap",
+        "latency": "minutes",
+        "repeatability": "accumulative",
+        "verification": "gated",
+        "scheduleBorn": "daily 17:45 Europe/Helsinki — runs automatically (quiz self-heal at 18:00)",
+        "consequences": [{"type": "publishes-public", "note": "features + quiz are public newspaper content"}],
+        "json": True,
+        "sample": {
+            "edition": "2026-06-16 evening",
+            "features": ["koodaus", "prompt", "matikka"],
+            "quiz": {
+                "title": "Päivän uutisvisa",
+                "questions": [
+                    {
+                        "q": "Mikä oli Suomen Pankin korkopäätös tänään?",
+                        "options": ["Nosto", "Lasku", "Ennallaan", "Ei päätöstä"],
+                        "answer": 2,
+                        "source": "news.2026-06-16.evening.article.talous",
+                    },
+                    {
+                        "q": "Mikä teema hallitsi tekoälyuutisia?",
+                        "options": ["Sääntely", "Agenttiparvet", "Kuvageneraatio", "Robotiikka"],
+                        "answer": 1,
+                        "source": "news.2026-06-16.evening.article.tekoaly",
+                    },
+                ],
+            },
+            "note": "validated; skipped rather than fabricated when articles are missing",
+        },
+    }
+]
+
 README = """[[FIGLET:slant]["Features"]]
 
 Writes the evening special sections — **päivän koodausosio (Koodi-Kalle), prompt-niksinurkka (Prompt-Pia),

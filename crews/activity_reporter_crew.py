@@ -27,6 +27,14 @@ from crewaimeat.contract_adopt import build_adopt_domain, is_adopt_task
 
 AGENT_NAME = "activity-reporter"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "coding"
+
+
 README = """[[FIGLET:slant]["Activity Reporter"]]
 
 Turns the workspace / organism **activity feed** into per-period **reports** — a digest + changelog +

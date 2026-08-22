@@ -1,15 +1,32 @@
 {
   "agent_name": "joker",
-  "llm_profile": "content",
+  "llm_profile": "content-free",
   "process": "sequential",
   "temperature": 0.7,
-  "skills": ["comedy-set-craft"],
+  "skills": [
+    "comedy-set-craft"
+  ],
   "readme_md": "[[FIGLET:slant][\"JOKER\"]]\n\n# joker — four comedians and a host\n\nSend me a topic and I riff on it from four angles — a pun, an observational bit, a playful roast,\nand a short anecdote — then present them as one clean lineup. I match the language of your topic.\n\n## How to task me\nQueue a task with whatever you want jokes about:\n- `dad jokes about Mondays`\n- `roast my over-engineered side project`\n- `a short funny story about a cat who refuses to use the litter box`\n",
-  "tags": ["humor", "comedy", "role.task-runner"],
+  "tags": [
+    "humor",
+    "comedy",
+    "role.task-runner"
+  ],
   "capabilities": {
-    "technical": [{ "name": "joker", "type": "skill" }],
-    "domain": ["comedy writing", "multi-persona riffing"],
-    "languages": ["fi", "en"]
+    "technical": [
+      {
+        "name": "joker",
+        "type": "skill"
+      }
+    ],
+    "domain": [
+      "comedy writing",
+      "multi-persona riffing"
+    ],
+    "languages": [
+      "fi",
+      "en"
+    ]
   },
   "offers": [
     {
@@ -26,8 +43,14 @@
   ],
   "signals": {
     "required_to_function": "none",
-    "success_signal": { "kind": "deterministic", "op": "nonempty", "key_glob": "crews.joker.*.latest_output" },
-    "deliverable_location": { "key": "crews.joker" }
+    "success_signal": {
+      "kind": "deterministic",
+      "op": "nonempty",
+      "key_glob": "crews.joker.*.latest_output"
+    },
+    "deliverable_location": {
+      "key": "crews.joker"
+    }
   },
   "agents": [
     {
@@ -91,7 +114,12 @@
       "agent": "host",
       "description": "Four comedians above have each told one joke about the topic. Present them as the final answer: a one-line intro naming the topic, then each joke under a label (Punslinger, Observational, Roast, Storyteller). Keep every joke intact and in the language of the topic.",
       "expected_output": "A short intro line, then the four labeled jokes.",
-      "context": ["pun", "obs", "roast", "story"]
+      "context": [
+        "pun",
+        "obs",
+        "roast",
+        "story"
+      ]
     }
   ]
 }

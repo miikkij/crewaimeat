@@ -55,7 +55,7 @@ from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 {imports_block}
 
 AGENT_NAME = "{agent_name}"
-{readme_block}{tools_block}{identity_block}{offer_block}
+{profile_block}{readme_block}{tools_block}{identity_block}{offer_block}
 
 {build_domain_code}
 
@@ -110,6 +110,7 @@ def write_crew_file(
     discover: bool = False,
     offer: dict | None = None,
     remember: bool = False,
+    llm_profile: str = "",
 ) -> Path:
     """Assemble crews/<name>_crew.py from the scaffold template + generated build_domain.
 
@@ -142,20 +143,27 @@ def write_crew_file(
     # Real identity: derive tags + capabilities from the selected tools + the crew's DOMAIN so a forged
     # agent is discoverable by what it does (not the generic onboarding defaults). Emit only when there
     # is signal beyond the bare role tag, so a truly generic crew stays minimal.
+    # A forged crew must speak the SAME declaration language as every other crew: PUBLIC module
+    # constants that crewaimeat.agent_manifest reads statically. These were `_TAGS` / `_CAPABILITIES`
+    # / `_OFFER` — private by name and passed only through CrewSpec — so a forged agent's identity was
+    # invisible to everything that does not actually run the crew, which is every tool that needs it.
     tags, caps_dict = forge_catalog.derive_identity(capabilities, domain)
     if domain.strip() or len(tags) > 1 or caps_dict["technical"]:
-        identity_block = f"\n_TAGS = {tags!r}\n_CAPABILITIES = {caps_dict!r}\n"
-        identity_arg = ", tags=_TAGS, capabilities=_CAPABILITIES"
+        identity_block = f"\nTAGS = {tags!r}\nCAPABILITIES = {caps_dict!r}\n"
+        identity_arg = ", tags=TAGS, capabilities=CAPABILITIES"
     else:
         identity_block = ""
         identity_arg = ""
-    # Inline offer: the crew advertises its value on the node without a central offers.py entry.
+    # What this agent advertises it can do. A LIST, so it reads the same as every other crew's OFFERS.
     if offer:
-        offer_block = f"\n_OFFER = {offer!r}\n"
-        offer_arg = ", offer=_OFFER"
+        offer_block = f"\nOFFERS = {[offer]!r}\n"
+        offer_arg = ", offer=OFFERS[0]"
     else:
         offer_block = ""
         offer_arg = ""
+    # The model profile. A forged crew that declares none resolves to the providers file's `default`
+    # silently — which is exactly how 20 of 46 crews ended up on a profile nobody chose for them.
+    profile_block = f'\nLLM_PROFILE = "{llm_profile}"\n' if llm_profile else ""
     # memory=True is a CrewSpec-level toggle emitted exactly like discover (the template already renders
     # CrewSpec fields via crewspec_extra). It gives the forged crew persistent CrewAI memory across runs.
     crewspec_extra = (
@@ -163,6 +171,7 @@ def write_crew_file(
     )
     content = _FILE_TEMPLATE.format(
         connector=AIMEAT_CONNECTOR,
+        profile_block=profile_block,
         agent_name=agent_name,
         fname=fname,
         extra_imports=extra,

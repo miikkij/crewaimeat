@@ -18,6 +18,20 @@ from crewaimeat.workflow import make_workflow_tools
 
 AGENT_NAME = "aimeat-realtime-builder"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "coding"
+TAGS = ["realtime", "app-build", "aimeat-apps", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [{"name": "aimeat-realtime-builder", "type": "skill"}],
+    "domain": ["builds realtime channels / presence for AIMEAT apps"],
+    "languages": ["en"],
+}
+
+
 README = """```
  █████╗ ██╗███╗   ███╗███████╗ █████╗ ████████╗
 ██╔══██╗██║████╗ ████║██╔════╝██╔══██╗╚══██╔══╝

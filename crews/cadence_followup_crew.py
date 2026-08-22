@@ -25,6 +25,27 @@ from crewaimeat.contract_adopt import build_adopt_domain, is_adopt_task
 
 AGENT_NAME = "cadence-followup"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "content-free"
+TAGS = ["workspace-contract", "crm", "sales-followup", "role.workspace-contract", "contract.cadence-followup"]
+CAPABILITIES = {
+    "technical": [{"name": "workspace-contract", "type": "skill"}, {"name": "cadence-followup", "type": "skill"}],
+    "domain": [
+        "CADENCE CRM follow-up watch-logic (cold contacts, new leads, negative-call follow-ups, "
+        "stale/closing deals, overdue tasks) — mirrors the Tier-1 app engine so both agree",
+        "drafts or auto-creates crm-task follow-ups under an autonomy band (propose | auto)",
+        "deterministic, no LLM; never contacts anyone or moves a deal",
+        "consumes:crm-records",
+        "produces:crm-tasks",
+    ],
+    "languages": ["fi", "en"],
+}
+
+
 README = """[[FIGLET:slant]["Cadence Followup"]]
 
 Watches a **CADENCE CRM** workspace and drafts **follow-up tasks** — the Tier-2 runtime of the same

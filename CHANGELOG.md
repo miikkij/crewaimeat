@@ -6,6 +6,38 @@ Dates are the working dates; entries are **uncommitted and take effect on the ne
 
 ## [Unreleased] — 2026-08-22
 
+### Changed
+- **An agent's facts live in ONE place: its own crew file.** Until now the same agent was described in
+  four hand-kept lists — `fleet_identity.py` (what it can do), `offers.py` (what it promises),
+  `llm_providers.json` (which model it runs on), `tests/crew_fixtures.py` (whether it is tested) — and
+  nothing required an entry in any of them. An agent came online missing from all four, which is
+  exactly what happened: 13 crews had no identity, 13 no offer, 20 no routing.
+
+  A crew now declares `LLM_PROFILE`, `TAGS`, `CAPABILITIES`, `OFFERS` (and `SKILLS`) at module level;
+  a JSON crew declares the same keys in its doc, which it already had. `crewaimeat.agent_manifest`
+  reads them STATICALLY — via `ast`, never by importing, so `doctor` can run from a pre-commit hook on
+  a broken tree and the routing resolver does not pay for 46 modules of imports to learn six literals.
+  - `fleet_identity.py` 490 -> 69 lines; `FLEET_IDENTITY` is empty and stays a library fallback.
+  - `offers.py` 1479 -> 658 lines; the 858-line authored dict is derived from the crews, served
+    lazily through a module `__getattr__` so `CREW_AGENTS` / `_CREW_OFFERS` still read as attributes.
+  - `llm_providers.json`'s `crews` map went 38 entries -> 0. It is now an OVERRIDES list: the crew's
+    own `LLM_PROFILE` is the default and an entry there overrides it for one machine.
+  - `llm_profile` in a JSON crew was previously DECLARATIVE ONLY — validated, never used to route — so
+    it had quietly rotted: all three JSON crews said "content" while routing had run them "content-free"
+    for weeks. It is authoritative now, and set to what has actually been live.
+  - Proven, not assumed: every one of the 45 agents' tags, capabilities, offers and resolved model
+    profile was snapshotted before the move and compared after, THROUGH the real consumers
+    (`identity_for`, `crew_offers`, `_select_chain`). Zero differences.
+- **crew-forge emits the same declaration language.** A forged crew wrote `_TAGS` / `_CAPABILITIES` /
+  `_OFFER` — private by name, passed only through `CrewSpec` — so a forged agent's identity was
+  invisible to every tool that does not actually run the crew. It now emits the public constants plus
+  `LLM_PROFILE`, so a new agent is complete the moment it is written.
+- 12 ghost agents retired (`crewaimeat retire`), serve.json 61 -> 49. `daily-brief` was a forge output
+  that was never registered while `daily-briefing-crew` did the same job live; it is parked.
+- `image-maker` had no identity and so carried no tags on the node. Its entry is deliberately distinct
+  from `image-scout`'s: one MAKES an image, the other FINDS and curates existing ones, and without that
+  in the tags the picker hands a generation request to the crew that only searches the web.
+
 ### Added
 - **`crewaimeat doctor` — continuous reconciliation of what this repo DECLARES against what it DOES.**
   The August audit took hours and almost every finding was a mechanical disagreement between six

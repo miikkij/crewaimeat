@@ -19,6 +19,50 @@ from crewaimeat.mroom import ROOM_ORG, ROOM_WS
 
 AGENT_NAME = mr.SNIFFER
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "content-free"
+TAGS = ["mroom", "request-fleet", "intake", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [{"name": "mroom-sniffer", "type": "skill"}],
+    "domain": [
+        "M-ROOM guest-REQuest intake: classify the ask, map it to a POI, draft a research plan",
+        "writes a visible outbox plan; hands off to the researcher (status sniffing -> processing)",
+        "privacy-hard: a guest is only ever EXC_VIP_NN, never an email or a real name",
+    ],
+    "languages": ["en", "fi"],
+}
+OFFERS = [
+    {
+        "id": "sniff-guest-request",
+        "title": "Intake a guest REQuest into a research plan",
+        "ask": "When a guest leaves a REQuest in the machine room, I pick it up, classify the ask, map it to a POI "
+        "and draft a short research plan into a visible outbox document. Runs automatically on each new "
+        "request — I plan and hand off; I don't research or decide. A guest is only ever EXC_VIP_NN.",
+        "example": "A guest asks: how does AIMEAT compare to MCP for agent-to-agent messaging?",
+        "cost": "cheap",
+        "latency": "seconds",
+        "repeatability": "idempotent",
+        "verification": "gated",
+        "consequences": [
+            {"type": "publishes-public", "note": "the outbox plan is visible MACHINE ROOM progress guests see"}
+        ],
+        "sample": "## Plan\n"
+        "- Classification: comparison\n"
+        "- POI: POI_004\n"
+        "- Angle: message semantics + delivery guarantees, AIMEAT inbox vs MCP\n"
+        "- Steps:\n"
+        "  1. Read the MCP messaging spec\n"
+        "  2. Compare AIMEAT federated inbox guarantees\n"
+        "\n"
+        "…",
+    }
+]
+
+
 # Declared opt-out from the ctx.prompt-injection floor (tests/test_build_domain.py).
 PROMPT_INDEPENDENT = "record-driven: the intake pass classifies the stored guest REQuest; ctx.prompt carries no target."
 

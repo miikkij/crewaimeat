@@ -23,6 +23,20 @@ from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 from crewaimeat.workflow_inspector import inspect, publish_inspection
 
 AGENT_NAME = "workflow-inspector"
+
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "coding"
+TAGS = ["workflow-inspection", "diagnosis", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [{"name": "workflow-inspector", "type": "skill"}],
+    "domain": ["workflow run inspection: diagnose / auto-repair / escalate", "per-step signal health"],
+    "languages": ["en"],
+}
+
 _TZ = ZoneInfo("Europe/Helsinki")
 
 README = """[[FIGLET:slant]["Workflow Inspector"]]

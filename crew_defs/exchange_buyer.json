@@ -1,7 +1,7 @@
 {
   "agent_name": "exchange-buyer",
   "readme_md": "Closed negotiation agent (consumer side). Given an app-bound NEED (or a goal), it browses EXCHANGE offerings, machine-matches the need's I/O schema to each offering's output, filters by the owner's AUTONOMY BAND (per-call price cap + provider whitelist), accepts the cheapest fit within band, runs the capability, and auto-accepts/declines incoming renegotiation proposals by the same band. 'supervised' autonomy produces a human proposal instead of acting. The moat: all matching + negotiation is private to the owner's fleet; the node only enforces metering/budget/rake.",
-  "llm_profile": "content",
+  "llm_profile": "content-free",
   "tags": [
     "exchange",
     "negotiation",

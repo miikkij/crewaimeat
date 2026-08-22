@@ -29,6 +29,46 @@ from crewaimeat.contract_adopt import build_adopt_domain, ensure_routed_workspac
 
 AGENT_NAME = "feedback-wisdom"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "coding"
+OFFERS = [
+    {
+        "id": "feedback-wisdom",
+        "title": "Turn feedback stats into support guidance",
+        "ask": "I read the Feedback Desk's published statistics (`feedback-stats@1`) and write operational "
+        "advisories (`support-advisory@1`) — rising tag, slow resolution, poor tagging, slow per-tag, VIP "
+        "pressure — each citing the exact stat movement, to the AIMEAT advisory outbox for owner-gated "
+        "delivery. I reason over aggregates; I don't read raw feedback or deliver to the app directly.",
+        "example": "Produce today's support advisories from the latest published feedback stats",
+        "cost": "cheap",
+        "latency": "minutes",
+        "repeatability": "idempotent",
+        "verification": "deterministic",
+        "consequences": [
+            {
+                "type": "mutates-live-app",
+                "note": "advisories are written to the AIMEAT outbox; after OWNER-GATED AIMEAT delivery "
+                "(deliver-advisory) they appear in the app's Guidance tab — indirect, never a "
+                "direct write",
+            }
+        ],
+        "sample": "## Support advisory — 2026-06-16\n"
+        "\n"
+        "**Rising tag:** `billing` +38% WoW — staff the queue earlier.\n"
+        "**Slow resolution:** `integration` median 14h → 22h (cite: feedback-stats@1, 2026-06-15→16).\n"
+        "**VIP pressure:** 2 VIP tickets aged >24h.\n"
+        "\n"
+        "*Reasoned over aggregates; written to the advisory outbox for owner-gated delivery.*\n"
+        "\n"
+        "…",
+    }
+]
+
+
 # Capability TAGS + a SPECIFIC capability report so AIMEAT's ecosystem-app agent picker recommends this
 # agent for the feedback-desk recipe by TAG (not only by exact name). The feedback-desk manifest matches
 # on `feedback-analysis` (a charset-safe tag) and `consumes:feedback-stats@1` / `produces:support-advisory@1`

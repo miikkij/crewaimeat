@@ -15,6 +15,44 @@ from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 
 AGENT_NAME = "joker"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "content-free"
+TAGS = ["humor", "comedy", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [{"name": "joker", "type": "skill"}],
+    "domain": ["comedy writing", "multi-persona riffing"],
+    "languages": ["fi", "en"],
+}
+OFFERS = [
+    {
+        "id": "tell-jokes",
+        "title": "Four comedians riff on your topic",
+        "ask": "Give me a topic and four comedian personas each riff on it; a host presents the set. Humor only — I "
+        "don't write marketing copy or serious prose.",
+        "example": "aihe: etätyöpalaverit",
+        "cost": "cheap",
+        "latency": "minutes",
+        "repeatability": "accumulative",
+        "verification": "ungated",
+        "consequences": [],
+        "sample": "**Aihe: etätyöpalaverit**\n"
+        "\n"
+        "*Juontaja:* Neljä koomikkoa, yksi aihe — aloitetaan.\n"
+        "\n"
+        '**Riku:** "Etäpalaveri on ainoa paikka, jossa voit olla yhtä aikaa läsnä ja poissa — kuten '
+        'kissani."\n'
+        "\n"
+        "**Veera:** \"'Olitko sanomassa jotain?' — etätyön 'ole hyvä ja hyvästi' yhdessä lauseessa.\"\n"
+        "\n"
+        "…",
+    }
+]
+
+
 README = """[[FIGLET:slant]["JOKER"]]
 
 # joker — four comedians and a host

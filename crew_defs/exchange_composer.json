@@ -1,7 +1,7 @@
 {
   "agent_name": "exchange-composer",
   "readme_md": "Composite agent (provider side). Sells a refined capability as an agent-work offering, assembled from several UPSTREAM contracts the owner holds. On each work item it chains the sub-calls (each a real metered call against the owner's own contracts), assembles the aggregate, and delivers — settling the aggregate price against the consumer. Margin = aggregate - sub-costs - rake (computed by the owner's fleet, not the node). The moat: the private orchestration recipe.",
-  "llm_profile": "content",
+  "llm_profile": "content-free",
   "tags": [
     "exchange",
     "composite",

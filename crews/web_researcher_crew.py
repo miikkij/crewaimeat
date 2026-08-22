@@ -19,6 +19,33 @@ from crewaimeat.research_contract import CONTRACT
 
 AGENT_NAME = "web-researcher"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "coding"
+TAGS = [
+    "web-research",
+    "role.workspace-contract",
+    "contract.research",
+    "contract.market-scan",
+    "contract.company-research",
+]
+CAPABILITIES = {
+    "technical": [{"name": "web-researcher", "type": "skill"}, {"name": "web-search", "type": "skill"}],
+    "domain": [
+        "live web research -> sourced, cited summaries",
+        "market / competitor landscape scans",
+        "company research (Finnish + global)",
+        "consumes:research-request",
+        "consumes:market-scan-request",
+        "consumes:company-research-request",
+    ],
+    "languages": ["en", "fi"],
+}
+
+
 README = """[[FIGLET:slant]["Web Researcher"]]
 
 Performs live web searches to find recent articles, reports, and news on a given topic, producing sourced summaries with proper citations (publication name, URL, date). Claims without sources are flagged as "not verified".

@@ -21,6 +21,50 @@ from crewaimeat.mroom import ROOM_ORG, ROOM_WS
 
 AGENT_NAME = mr.ARCHIVIST
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "news"
+TAGS = ["mroom", "request-fleet", "archival", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [{"name": "mroom-archivist", "type": "skill"}],
+    "domain": [
+        "M-ROOM archival: RETAINED -> published bilingual archive-entry (path, scorecard, follow-ups, sources)",
+        "DISCARDED -> a light deterministic note; both close the request (status scored -> archived)",
+        "parties named only as EXC_VIP_NN + the agent names, never a real identity",
+    ],
+    "languages": ["en", "fi"],
+}
+OFFERS = [
+    {
+        "id": "archive-guest-request",
+        "title": "Archive a scored guest REQuest",
+        "ask": "A RETAINED request becomes a published, bilingual archive-entry — the permanent trail (path, "
+        "decision, scorecard, follow-ups, sources). A DISCARDED request gets a light note. Either way the "
+        "request is closed. Runs automatically per scored request. Parties are named only as EXC_VIP_NN + the "
+        "agent names — never a real identity.",
+        "example": "Archive the RETAINED MCP-vs-AIMEAT messaging request",
+        "cost": "cheap",
+        "latency": "seconds",
+        "repeatability": "idempotent",
+        "verification": "gated",
+        "consequences": [
+            {"type": "publishes-public", "note": "the archive-entry is public MACHINE ROOM content guests see"}
+        ],
+        "sample": "```\n"
+        "PATH:     request rq-… → outbox → scored 6.5\n"
+        "DECISION: RETAINED\n"
+        "STATUS:   ARCHIVED\n"
+        "PARTIES:  EXC_VIP_07 + agents (mroom-sniffer, mroom-digger, mroom-scorer, mroom-archivist)\n"
+        "```\n"
+        "\n"
+        "…",
+    }
+]
+
+
 # Declared opt-out from the ctx.prompt-injection floor (tests/test_build_domain.py).
 PROMPT_INDEPENDENT = (
     "record-driven: the archive pass runs deterministically in code on a scored request; ctx.prompt carries no target."

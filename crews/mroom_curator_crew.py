@@ -27,6 +27,55 @@ from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 
 AGENT_NAME = "mroom-curator"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "content-free"
+TAGS = ["research-radar", "mroom", "curation", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [{"name": "mroom-curator", "type": "skill"}],
+    "domain": [
+        "M-ROOM research curation: judge raw feed hits into ACCEPTED/REJECTED signal verdicts",
+        "AIMEAT-relevance + popularity signal scoring (competitor-compare / adopt / foundation-shift / regulation)",
+        "insight + proposal drafting (drafts only — the operator decides)",
+    ],
+    "languages": ["en", "fi"],
+}
+OFFERS = [
+    {
+        "id": "curate-mroom",
+        "title": "Curate the M-ROOM research feeds",
+        "ask": "I read the raw HN / arXiv / MCP-release / EU-AI-Act feed hits, judge each against the operator's "
+        "criteria, and write ACCEPTED/REJECTED signal verdicts into the MACHINE ROOM. Runs on a schedule — "
+        "ask only for an extra pass. I judge and record; I don't decide — the strongest accepts become drafts "
+        "the operator approves.",
+        "example": "Run an M-ROOM curation pass now",
+        "cost": "cheap",
+        "latency": "minutes",
+        "repeatability": "idempotent",
+        "verification": "gated",
+        "scheduleBorn": "every 4h — runs automatically",
+        "consequences": [
+            {
+                "type": "publishes-public",
+                "note": "signal verdicts are public MACHINE ROOM content guests see; insight/proposal stay drafts",
+            }
+        ],
+        "sample": "## M-ROOM curation — 15 scanned\n"
+        "\n"
+        "- **ACCEPTED** sig-scopewalker (POI_006 · community-pulse) — MCP ecosystem tooling with "
+        "traction.\n"
+        "- **REJECTED** sig-agentrc — packaging/ops tooling; no protocol or identity angle.\n"
+        "\n"
+        "1 strong accept drafted as insight + proposal (operator decides).\n"
+        "\n"
+        "…",
+    }
+]
+
+
 # Declared opt-out from the ctx.prompt-injection floor (tests/test_build_domain.py).
 PROMPT_INDEPENDENT = (
     "record-driven: the curation pass runs deterministically in code over the raw feed; ctx.prompt carries no target."

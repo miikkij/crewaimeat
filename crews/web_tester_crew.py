@@ -19,6 +19,57 @@ from crewaimeat.crew import _browser_tools
 
 AGENT_NAME = "web-tester"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "coding"
+TAGS = ["web-testing", "browser-automation", "vision", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [
+        {"name": "web-tester", "type": "skill"},
+        {"name": "playwright", "type": "skill"},
+        {"name": "vision", "type": "skill"},
+    ],
+    "domain": [
+        "browser-driven web-flow testing (Playwright)",
+        "evidence capture",
+        "vision over page SCREENSHOTS it captures (self-captured) — visual verification of what rendered",
+    ],
+    "languages": ["en"],
+}
+OFFERS = [
+    {
+        "id": "test-web-flow",
+        "title": "Drive a real browser through a web flow",
+        "ask": "Give me a URL and a flow (login, form, navigation) and I drive a real browser through it and report "
+        "what happened with evidence. I interact with the page — point me at test data, not "
+        "production-critical state.",
+        "example": "Test that the public newspaper page renders and the quiz accepts answers",
+        "cost": "cheap",
+        "latency": "minutes",
+        "repeatability": "accumulative",
+        "verification": "gated",
+        "consequences": [
+            {
+                "type": "mutates-live-app",
+                "note": "clicks and types against the target; interactions can change app state",
+            }
+        ],
+        "sample": "## Web flow test — public newspaper + quiz\n"
+        "\n"
+        "1. GET / → rendered (200, front-page index present) ✓\n"
+        "2. Click first quiz option → answer accepted, score updated ✓\n"
+        "3. Anonymous viewer → reads front page, cannot edit ✓\n"
+        "\n"
+        "**Result: PASS** (3/3). Evidence: screenshots + DOM assertions attached.\n"
+        "\n"
+        "…",
+    }
+]
+
+
 README = """[[FIGLET:slant]["Web Tester"]]
 
 Drives a real headless browser to test web-app flows — navigate, fill forms, click, log in, and

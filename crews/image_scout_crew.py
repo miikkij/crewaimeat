@@ -26,6 +26,28 @@ from crewaimeat.image_contract import CONTRACT, make_image_tools, process_moodbo
 
 AGENT_NAME = "image-scout"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "image"
+TAGS = ["image-scout", "moodboard", "image-curation", "image-search", "vision", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [
+        {"name": "vision", "type": "skill"},
+        {"name": "image-search", "type": "skill"},
+        {"name": "image-curation", "type": "skill"},
+    ],
+    "domain": [
+        "image moodboard curation",
+        "web image search (SearXNG)",
+        "vision over images it FINDS on the web (discovered material) — curation, not provided-image analysis",
+    ],
+    "languages": ["en"],
+}
+
+
 README = """[[FIGLET:slant]["Image Scout"]]
 
 Turns an image **brief** into a curated **moodboard**: searches the open web (SearXNG images),

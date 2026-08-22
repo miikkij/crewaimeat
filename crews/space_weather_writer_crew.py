@@ -23,6 +23,40 @@ from crewaimeat.space_weather_pipeline import make_space_weather_tools
 
 AGENT_NAME = "space-weather-writer"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "news"
+TAGS = ["space-weather", "laimeat", "role.task-runner"]
+OFFERS = [
+    {
+        "id": "space-weather",
+        "title": "Space-weather article from NOAA/NASA data",
+        "ask": "I write the day's space-weather article from official NOAA/NASA feeds. Runs on the evening schedule "
+        "by itself — ask only for an extra/edition re-run. I don't forecast beyond what the source data says.",
+        "example": "Re-run today's space weather article (evening edition)",
+        "cost": "cheap",
+        "latency": "minutes",
+        "repeatability": "accumulative",
+        "verification": "ungated",
+        "scheduleBorn": "daily 17:00 Europe/Helsinki — runs automatically",
+        "consequences": [{"type": "publishes-public", "note": "the article is public newspaper content"}],
+        "sample": "## Avaruussää — 2026-06-16 (iltapainos)\n"
+        "\n"
+        "Aurinko on rauhallinen: **Kp-indeksi 2** (NOAA SWPC), ei merkittäviä purkauksia viimeisen 24 t "
+        "aikana. Aurinkotuuli ~380 km/s.\n"
+        "\n"
+        "**Revontulet:** epätodennäköisiä Etelä-Suomessa tänä yönä.\n"
+        "\n"
+        "Lähteet: NOAA SWPC, NASA DONKI.\n"
+        "\n"
+        "…",
+    }
+]
+
+
 README = """[[FIGLET:slant]["Space Weather"]]
 
 Reads NOAA SWPC + spaceweather.com and writes one Finnish "Avaruussää tänään" article (revontulet,

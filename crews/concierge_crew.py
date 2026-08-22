@@ -39,6 +39,14 @@ from crewaimeat.llm import get_llm
 
 AGENT_NAME = "concierge"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "coding"
+
+
 # ── Delegation directory: the fleet specialists the concierge can hand a request to (the SERVICE MESH).
 # {agent_name: "use-when description"}. Only those whose daemon is LIVE are ever offered (orchestrator
 # filters by last_seen), so a dead/unregistered entry is harmless — it's simply skipped. Keep the

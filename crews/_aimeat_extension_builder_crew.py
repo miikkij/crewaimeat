@@ -18,6 +18,20 @@ from crewaimeat.workflow import make_workflow_tools
 
 AGENT_NAME = "aimeat-extension-builder"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "coding"
+TAGS = ["extension-build", "aimeat-apps", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [{"name": "aimeat-extension-builder", "type": "skill"}],
+    "domain": ["builds AIMEAT extensions"],
+    "languages": ["en"],
+}
+
+
 README = """[[FIGLET:slant]["AIMEAT Extension Builder"]]
 
 Purpose: Builds AIMEAT apps that need SERVER-SIDE logic — authors a WASM extension (ext: namespace; each action is `export default async function(ctx, input)`; optional cron schedules; ctx.memory.get/set, ctx.memory.getPublic, ctx.fetch, ctx.api.post for agent task-dispatch) PLUS a cortex that calls the extension via callExt/ext action paths PLUS an app HTML. Installs extension + cortex, publishes the app, and verify_renders until VERIFY PASS.

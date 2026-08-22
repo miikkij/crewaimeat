@@ -18,6 +18,41 @@ from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 from crewaimeat.write_pipeline import make_write_tools
 
 AGENT_NAME = "news-writer"
+
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "news"
+TAGS = ["news-writing", "laimeat", "role.task-runner"]
+OFFERS = [
+    {
+        "id": "evening-write-a",
+        "title": "Write the Desk A news articles",
+        "ask": "I write a full Finnish article for every Desk A category that has raw (talous, politiikka, urheilu, "
+        "kulttuuri, tiede, terveys, …) from the day's scraped material. Runs on the evening schedule — ask "
+        "only for a re-run. I write from the raw; I don't fetch sources or build the front page.",
+        "example": "Re-write today's Desk A articles (evening edition)",
+        "cost": "cheap",
+        "latency": "minutes",
+        "repeatability": "accumulative",
+        "verification": "deterministic",
+        "scheduleBorn": "daily ~17:25 Europe/Helsinki — runs automatically",
+        "consequences": [{"type": "publishes-public", "note": "the articles are public newspaper content"}],
+        "sample": "## Desk A — talous (2026-06-16)\n"
+        "\n"
+        "**Korot pysyvät ennallaan — mitä se tarkoittaa lainanottajalle**\n"
+        "\n"
+        "Suomen Pankin mukaan… *(täysi suomenkielinen artikkeli per kategoria: politiikka, urheilu, "
+        "kulttuuri, tiede, terveys).*\n"
+        "\n"
+        "*Kirjoitettu päivän raakamateriaalista.*\n"
+        "\n"
+        "…",
+    }
+]
+
 README = """[[FIGLET:slant]["News Writer A"]]
 
 Core-news desk (politiikka, talous, paikallinen, kulttuuri, urheilu, tiede, terveys, kevennykset,

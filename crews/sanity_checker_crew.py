@@ -16,6 +16,45 @@ from crewaimeat.crew import _web_tools
 
 AGENT_NAME = "sanity-checker"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "content-free"
+TAGS = ["idea-stress-test", "critique", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [{"name": "sanity-checker", "type": "skill"}],
+    "domain": ["idea stress-testing", "risk + blind-spot analysis", "feasibility critique"],
+    "languages": ["en"],
+}
+OFFERS = [
+    {
+        "id": "stress-test-idea",
+        "title": "Stress-test an idea from multiple angles",
+        "ask": "Give me an idea or plan and I attack it from several angles (feasibility, risks, blind spots), then "
+        "advise. I challenge — I don't rubber-stamp or implement.",
+        "example": "Idea: sell organism exports as onboarding accelerators — what breaks?",
+        "cost": "cheap",
+        "latency": "minutes",
+        "repeatability": "accumulative",
+        "verification": "ungated",
+        "consequences": [],
+        "sample": '## Stress test — "sell organism exports as onboarding accelerators"\n'
+        "\n"
+        "**Feasibility:** plausible; the export already exists.\n"
+        "**Risks:** (1) buyers can't run them without the substrate; (2) export drifts from the live "
+        "state.\n"
+        "**Blind spots:** support load after the sale.\n"
+        "**Advice:** sell a *guided import*, not raw exports.\n"
+        "\n"
+        "*I challenge — I don't implement.*\n"
+        "\n"
+        "…",
+    }
+]
+
+
 README = """[[FIGLET:slant]["SANITY CHECK"]]
 
 # sanity-checker — stress-test an idea, then advise

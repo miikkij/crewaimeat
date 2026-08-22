@@ -32,6 +32,54 @@ from crewaimeat.mroom import ROOM_ORG, ROOM_WS
 
 AGENT_NAME = "mroom-researcher"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "news"
+TAGS = ["research", "mroom", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [{"name": "mroom-researcher", "type": "skill"}],
+    "domain": [
+        "M-ROOM POI research briefs: primary source + POI signals + live web -> sourced operator brief",
+        "derives real search queries from a rich brief; grounds every claim in cited sources",
+        "bilingual (FI + markdown_en), cold machine voice, follows the brief's exact structure",
+    ],
+    "languages": ["en", "fi"],
+}
+OFFERS = [
+    {
+        "id": "research-mroom-brief",
+        "title": "Research an M-ROOM POI brief",
+        "ask": "I sweep the MACHINE ROOM's research-briefs, read the primary source + the POI's own signals, search "
+        "the live web, and write a sourced, bilingual (FI+EN) operator brief following the brief's exact "
+        "structure. Runs on a schedule — ask only for an extra sweep. I research and write; I don't decide or "
+        "act on the findings.",
+        "example": "Research the pending EU AI Act (POI_002) brief now",
+        "cost": "cheap",
+        "latency": "minutes",
+        "repeatability": "idempotent",
+        "verification": "gated",
+        "scheduleBorn": "every 6h — runs automatically",
+        "consequences": [
+            {"type": "publishes-public", "note": "the research brief is public MACHINE ROOM content guests can see"}
+        ],
+        "sample": "## EU AI Act — mitä muuttui ja mitä se tarkoittaa AIMEATille\n"
+        "\n"
+        "Korkean riskin ohjeluonnos julkaistiin ennen 23.7… GPAI-velvoitteet [1], Art. 50 läpinäkyvyys "
+        "[2].\n"
+        "\n"
+        "## Lähteet\n"
+        "- https://artificialintelligenceact.eu/ …\n"
+        "\n"
+        "*(myös markdown_en)*\n"
+        "\n"
+        "…",
+    }
+]
+
+
 # Declared opt-out from the ctx.prompt-injection floor (tests/test_build_domain.py).
 PROMPT_INDEPENDENT = (
     "record-driven: the brief is built from the stored POI research-brief record; ctx.prompt carries no target."

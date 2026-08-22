@@ -17,6 +17,37 @@ from crewaimeat.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is
 
 AGENT_NAME = "daily-briefing-crew"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "content-free"
+TAGS = ["briefing", "news-aggregation", "laimeat", "role.task-runner"]
+OFFERS = [
+    {
+        "id": "daily-briefing",
+        "title": "Compose a briefing on demand",
+        "ask": "Ask for a briefing (topic or general) and I compose one from available sources. A summary for humans "
+        "— I don't make decisions or take actions.",
+        "example": "Brief me on this week's fleet activity and open questions",
+        "cost": "cheap",
+        "latency": "minutes",
+        "repeatability": "accumulative",
+        "verification": "ungated",
+        "consequences": [],
+        "sample": "## Briefing — this week's fleet activity & open questions\n"
+        "\n"
+        "**Activity:** evening pipeline green 7/7; offers surface enriched with golden samples.\n"
+        "**Open questions:** (1) extend the format enum to `json`? (2) per-offer run-history UI.\n"
+        "\n"
+        "*A summary — I don't decide or act.*\n"
+        "\n"
+        "…",
+    }
+]
+
+
 README = """[[FIGLET:slant]["Daily Briefing Crew"]]]
 
 Compiles a concise morning briefing: top world news, local weather, and a productivity tip — delivered in a scannable format to start your day informed.

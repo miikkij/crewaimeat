@@ -15,6 +15,11 @@ from crewaimeat.aimeat_crew import run_crew
 from crewaimeat.crew_def import build_domain_from_json, crewspec_from_json, load_crew_doc
 
 AGENT_NAME = "exchange-buyer"
+
+
+# This crew's declaration (routing, tags, capabilities, offers) lives in its JSON doc below —
+# crewaimeat.agent_manifest reads it from there, so nothing is restated here.
+
 _DOC_PATH = Path(__file__).resolve().parent.parent / "crew_defs" / "exchange_buyer.json"
 
 

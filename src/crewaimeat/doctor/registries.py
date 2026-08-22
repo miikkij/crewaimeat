@@ -1,10 +1,16 @@
-"""Lens 1 — RECONCILIATION. Six registries must agree about which agents exist.
+"""Lens 1 — RECONCILIATION. What the crew DECLARES, versus everywhere that has to agree with it.
 
-An agent is "real" in six places and every one of them is maintained by hand: the crew file, the
-identity registry, the offers registry, the routing map, serve.json, and the node. Nothing required
-them to agree, so on 2026-08-22 they did not: 13 crews had no identity, 13 no offer, 20 no routing
-(silently falling to the free meta-router), 12 registered agents had no crew file at all, and one crew
-ran unregistered. Every one of those is a set difference — which is a program, not an afternoon.
+An agent used to be "real" in six hand-kept places: the crew file, the identity registry, the offers
+registry, the routing map, serve.json, and the node. Nothing required them to agree, so on 2026-08-22
+they did not: 13 crews had no identity, 13 no offer, 20 no routing, 12 registered agents had no crew
+file at all, and one crew ran unregistered. Every one of those is a set difference — which is a
+program, not an afternoon.
+
+Three of those lists are gone: the crew file now declares its own tags, capabilities, offers and model
+profile, and the rest is DERIVED. So the checks here changed shape too — they no longer ask "is this
+agent in that list", they ask "does this crew declare what an agent needs, and does the world outside
+the repo (serve.json, the node) still match it". The remaining disagreements are the ones that can
+only exist outside the repo, plus the one that can still be forgotten: a declaration left empty.
 
 Severity rule of thumb: ERROR when the divergence changes what the fleet DOES (a ghost holds a tunnel,
 an unregistered crew idles forever, a malformed capability is unmatchable); WARN when it degrades how
@@ -37,8 +43,11 @@ def check(inv: Inventory, report: Report) -> None:
     _skills_exist(inv, report)
     report.note(
         f"crews: {len(inv.live)} live, {len(inv.crews) - len(inv.live)} parked · "
-        f"serve.json: {len(inv.served)} registered · identity: {len(inv.identity)} · "
-        f"routing: {len((inv.routing or {}).get('crews') or {})} mapped"
+        f"serve.json: {len(inv.served)} registered · "
+        f"declared: {sum(1 for a in inv.live_agents if inv.declares_identity(a))} identity, "
+        f"{sum(1 for a in inv.live_agents if inv.declares_offer(a))} offers, "
+        f"{sum(1 for a in inv.live_agents if inv.declared_profile(a))} routing · "
+        f"routing overrides: {len([k for k in ((inv.routing or {}).get('crews') or {}) if not k.startswith('_')])}"
     )
 
 
@@ -100,66 +109,62 @@ def _crews_vs_identity(inv: Inventory, report: Report) -> None:
     from crewaimeat.aimeat_crew import _validate_capabilities
 
     for agent in sorted(inv.live_agents):
-        crew = inv.crew_of(agent)
-        # A crew may declare its identity inline (CrewSpec.tags/.capabilities), which overrides the
-        # registry — read the source for that before calling it missing.
-        inline = crew is not None and (
-            "_CAPABILITIES" in crew.declares or "capabilities=" in crew.path.read_text(encoding="utf-8")
-        )
-        if agent not in inv.identity and not inline:
+        if not inv.declares_identity(agent):
             report.add(
                 Finding(
                     "registry.identity.missing",
                     WARN,
                     agent,
-                    "no entry in fleet_identity and none declared inline — the agent advertises the "
-                    "liaison's generic onboarding defaults, so discovery cannot match what it does",
-                    "add tags + capabilities to src/crewaimeat/fleet_identity.py",
+                    "the crew declares no TAGS and no CAPABILITIES, so the agent advertises the "
+                    "liaison's generic onboarding defaults and discovery cannot match what it does",
+                    "add TAGS + CAPABILITIES to the crew file (tags/capabilities in a JSON crew doc)",
                 )
             )
-    for agent, ident in sorted(inv.identity.items()):
-        caps = ident.get("capabilities")
-        if not caps:
+    for crew in inv.crews:
+        if not crew.agent or crew.capabilities is None:
             continue
+        caps = crew.capabilities
         payload = {k: caps[k] for k in ("technical", "domain", "languages") if caps.get(k)}
         try:
-            _validate_capabilities(agent, payload)
+            _validate_capabilities(crew.agent, payload)
         except ValueError as exc:
             first = str(exc).splitlines()[1].strip(" -") if len(str(exc).splitlines()) > 1 else str(exc)
             report.add(
                 Finding(
                     "registry.identity.malformed",
                     ERROR,
-                    agent,
-                    f"capabilities payload is the wrong shape: {first}",
+                    crew.agent,
+                    f"capabilities are the wrong shape: {first}",
                     "technical entries are {name, type} objects; free phrases belong in domain",
                 )
             )
-    for agent in sorted(set(inv.identity) - inv.live_agents - inv.parked_agents):
+    for agent in sorted(set(inv.fallback_identity) - inv.live_agents - inv.parked_agents):
         report.add(
             Finding(
                 "registry.identity.orphan",
                 WARN,
                 agent,
-                "fleet_identity holds an entry for an agent with no crew file",
-                "remove the entry, or restore the crew",
+                "fleet_identity still holds a central entry for an agent with no crew file",
+                "remove the entry — identity belongs in the crew, and this agent has none",
             )
         )
 
 
 def _crews_vs_offers(inv: Inventory, report: Report) -> None:
-    for agent in sorted(inv.live_agents - inv.offer_agents):
+    for agent in sorted(inv.live_agents):
+        if inv.declares_offer(agent):
+            continue
         crew = inv.crew_of(agent)
-        if crew and ("_OFFER" in crew.declares or "offer=" in crew.path.read_text(encoding="utf-8")):
-            continue  # inline offer on the CrewSpec — the forged-crew path
+        if crew and "offer=" in crew.path.read_text(encoding="utf-8"):
+            continue  # an inline CrewSpec(offer=...) — the forged-crew path
         report.add(
             Finding(
                 "registry.offer.missing",
                 WARN,
                 agent,
-                "no offer — the agent does not advertise what it can do, so it is invisible on the "
-                "Tarjoama surface and to any agent shopping for a capability",
-                "add an entry to src/crewaimeat/offers.py, or CrewSpec(offer=...)",
+                "the crew declares no OFFERS — it does not advertise what it can do, so it is "
+                "invisible on the Tarjoama surface and to any agent shopping for a capability",
+                "add OFFERS = [...] to the crew file (offers in a JSON crew doc)",
             )
         )
 
@@ -179,17 +184,18 @@ def _crews_vs_routing(inv: Inventory, report: Report) -> None:
             )
         )
         return
-    for agent in sorted(inv.live_agents - set(crews_map)):
+    for agent in sorted(inv.live_agents):
+        if agent in crews_map or inv.declared_profile(agent):
+            continue
         report.add(
             Finding(
                 "registry.routing.unmapped",
                 WARN,
                 agent,
-                f"not in the routing map — it silently resolves to the '{default}' profile. A default "
-                f"is fine; an UNDECIDED default is how 20 crews ended up on a free meta-router that "
-                f"picks a different model per call",
-                f'add "{agent}": "<profile>" to llm_providers.json crews (write the default '
-                f"explicitly if that is the decision)",
+                f"declares no LLM_PROFILE and has no override entry, so it silently resolves to the "
+                f"'{default}' profile. A default is fine; an UNDECIDED default is how 20 crews ended "
+                f"up on a profile nobody chose for them",
+                'add LLM_PROFILE = "<profile>" to the crew file (write the default explicitly if that is the decision)',
             )
         )
     for agent in sorted(set(crews_map) - inv.live_agents):

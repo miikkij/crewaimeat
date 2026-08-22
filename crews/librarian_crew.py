@@ -21,6 +21,44 @@ from crewaimeat.librarian import make_librarian_tools
 
 AGENT_NAME = "librarian"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "content-free"
+TAGS = ["knowledge-index", "reuse", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [{"name": "librarian", "type": "skill"}],
+    "domain": ["fleet deliverable mapping", "reuse pointers + freshness", "knowledge management"],
+    "languages": ["en"],
+}
+OFFERS = [
+    {
+        "id": "map-knowledge",
+        "title": "Map the fleet's deliverables and reuse",
+        "ask": "Ask me what the fleet knows about a theme and I scan every same-owner deliverable and return an "
+        "index with reuse pointers and freshness. I read and map — I don't produce new domain content.",
+        "example": "What do we already have about onboarding flows?",
+        "cost": "cheap",
+        "latency": "minutes",
+        "repeatability": "accumulative",
+        "verification": "ungated",
+        "consequences": [],
+        "sample": '## Knowledge map — "onboarding flows"\n'
+        "\n"
+        "| deliverable | agent | freshness | reuse |\n"
+        "|---|---|---|---|\n"
+        "| onboarding-checklist | daily-briefing-crew | 2d | reuse as-is |\n"
+        "| onboarding accelerator notes | sanity-checker | 9d | stale — re-run |\n"
+        "\n"
+        "**Reuse pointer:** start from the checklist; the accelerator notes need a refresh.\n"
+        "\n"
+        "…",
+    }
+]
+
+
 README = """[[FIGLET:slant]["LIBRARIAN"]]
 
 # librarian — what do we already have?

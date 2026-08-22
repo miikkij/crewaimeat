@@ -17,6 +17,44 @@ from crewaimeat.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is
 
 AGENT_NAME = "finnish-corporate-researcher"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "news"
+TAGS = ["company-research", "finland", "registry-research", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [{"name": "finnish-corporate-researcher", "type": "skill"}],
+    "domain": ["Finnish company profiling from official registries", "registry-grounded research"],
+    "languages": ["fi", "en"],
+}
+OFFERS = [
+    {
+        "id": "research-fi-company",
+        "title": "Profile a Finnish company (registry-grounded)",
+        "ask": "Give me a Finnish company name or business id and I build a profile from official registries and "
+        "public web. Public sources only — no credit ratings, no personal data.",
+        "example": "Profile: Supercell Oy — ownership, financials trend, public footprint",
+        "cost": "expensive",
+        "latency": "long-running",
+        "repeatability": "accumulative",
+        "verification": "ungated",
+        "consequences": [],
+        "sample": "## Supercell Oy — profile (registry-grounded)\n"
+        "\n"
+        "- **Business ID:** 1832591-6 (PRH, active) · **Founded:** 2010\n"
+        "- **Ownership:** majority Tencent (public reporting)\n"
+        "- **Financials trend:** revenue down from the 2021 peak (last filed accounts)\n"
+        "- **Footprint:** global mobile games; HQ Helsinki\n"
+        "\n"
+        "*Official registries + public web only — no credit ratings, no personal data.*\n"
+        "\n"
+        "…",
+    }
+]
+
+
 README = """[[FIGLET:slant]["Finnish Corporate Researcher"]]
 
 Deep-dive public-source research on Finnish companies — extracts data from asiakastieto.fi, kauppalehti.fi/yritykset, finder.fi, ytj.fi, prh.fi, vainu.io, proff.fi, LinkedIn, Glassdoor, Indeed, Duunitori, Crunchbase, company blogs, Finnish media (Kauppalehti, Talouselämä, Tivi, HS, Yle), Reddit/r/Suomi, and Suomi24. Returns structured findings with source URLs for every fact. Handles Y-tunnus-based lookups, financials, management, employee sentiment, funding rounds, and synthesis.

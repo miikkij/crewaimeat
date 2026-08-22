@@ -27,6 +27,20 @@ from crewaimeat.author_tool import make_author_tools
 
 AGENT_NAME = "aimeat-cortex-fixer"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "coding"
+TAGS = ["cortex-fix", "aimeat-apps", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [{"name": "aimeat-cortex-fixer", "type": "skill"}],
+    "domain": ["fixes AIMEAT app cortex manifests"],
+    "languages": ["en"],
+}
+
+
 README = """[[FIGLET:slant]["aimeat cortex fixer"]]
 
 I repair a broken AIMEAT direct-build app. Give me the cortex name and/or app filename and the EXACT

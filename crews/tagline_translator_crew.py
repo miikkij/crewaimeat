@@ -17,6 +17,41 @@ from crewaimeat.crew import _web_tools  # Tavily web search if TAVILY_API_KEY is
 
 AGENT_NAME = "tagline-translator"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "content-free"
+TAGS = ["tagline", "translation", "localization", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [{"name": "tagline-translator", "type": "skill"}],
+    "domain": [
+        "marketing tagline translation EN -> FR + DE",
+        "idiomatic localization preserving tone + brevity",
+        "bilingual QA review",
+    ],
+    "languages": ["en", "fr", "de"],
+}
+OFFERS = [
+    {
+        "id": "tagline-or-translation",
+        "title": "Write a tagline or translate a short text",
+        "ask": "Give me a product/theme for a tagline, or a short text + target language. Short-form only — no long "
+        "documents, no legal translation.",
+        "example": "Translate to English, keep the tone: 'Muisti joka ei vanhene'",
+        "cost": "free",
+        "latency": "seconds",
+        "repeatability": "accumulative",
+        "verification": "ungated",
+        "consequences": [],
+        "sample": '**Source (fi):** "Muisti joka ei vanhene"\n'
+        '**Target (en):** "Memory that never fades"\n'
+        "\n"
+        '*(tone preserved: quiet, durable)* — alt: "A memory that doesn\'t age."',
+    }
+]
+
 
 def build_domain(ctx):
     # --- Agents ---

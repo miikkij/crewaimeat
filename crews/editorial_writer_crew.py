@@ -18,6 +18,50 @@ from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 from crewaimeat.editorial_pipeline import make_editorial_tools
 
 AGENT_NAME = "editorial-writer"
+
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "news"
+TAGS = ["editorial", "opinion-writing", "laimeat", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [{"name": "editorial-writer", "type": "skill"}],
+    "domain": [
+        "gonzo editorial / opinion writing",
+        "public front-page index",
+        "consumes the day's articles -> produces the editorial",
+    ],
+    "languages": ["fi", "en"],
+}
+OFFERS = [
+    {
+        "id": "evening-editorial",
+        "title": "The gonzo S.J. editorial + front-page index",
+        "ask": "I write the savage daily editorial from the day's articles and rebuild the public front-page index. "
+        "Runs on the 18:00 schedule with a self-heal guard — ask only to re-run a date/edition. I don't write "
+        "polite corporate prose.",
+        "example": "Re-run the editorial + index for 2026-06-11 evening",
+        "cost": "cheap",
+        "latency": "minutes",
+        "repeatability": "accumulative",
+        "verification": "deterministic",
+        "scheduleBorn": "daily 18:00 Europe/Helsinki — runs automatically (self-healing at 18:15)",
+        "consequences": [
+            {"type": "publishes-public", "note": "editorial + front-page index are public newspaper content"}
+        ],
+        "sample": "## Pääkirjoitus — 2026-06-16 (S.J.)\n"
+        "\n"
+        "Niin, taas yksi ilta jolloin algoritmit lupaavat pelastaa meidät tylsyydeltä ja onnistuvat vain "
+        "tuottamaan sitä teollisessa mittakaavassa…\n"
+        "\n"
+        "*(etusivuindeksi rakennettu uudelleen: 18 artikkelia + visa + erikoisosiot)*\n"
+        "\n"
+        "…",
+    }
+]
+
 README = """[[FIGLET:slant]["Editorial"]]
 
 Writes the daily **gonzo S.J. editorial** (savage, provocative, Spider Jerusalem) from the day's articles and

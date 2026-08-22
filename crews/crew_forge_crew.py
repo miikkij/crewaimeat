@@ -38,6 +38,75 @@ from crewaimeat.forge import forge_precedent_block, make_forge_json_tools, make_
 
 AGENT_NAME = "crew-forge"
 
+# ── This agent's own declaration ─────────────────────────────────────────────────────────────
+# The single source for what this agent is: its model routing, how it is discovered, and what it
+# promises. These used to live in three central lists (fleet_identity.py / llm_providers.json /
+# offers.py) that nothing kept in step, so an agent could — and did — come online missing from
+# all of them. crewaimeat.agent_manifest reads these statically; the lists are derived.
+LLM_PROFILE = "coding"
+TAGS = ["agent-builder", "fleet-management", "role.task-runner"]
+CAPABILITIES = {
+    "technical": [{"name": "crew-forge", "type": "skill"}],
+    "domain": [
+        "builds new CrewAI agents from a description",
+        "fleet reconcile + launch under watchdog",
+        "agent lifecycle management",
+    ],
+    "languages": ["en"],
+}
+OFFERS = [
+    {
+        "id": "build-crew",
+        "title": "Build a new agent from a description",
+        "ask": "Send '/build <description>' as a task and I design the crew, write and validate its build_domain, "
+        "register the agent and launch it under the watchdog. You approve one device code. I don't build "
+        "AIMEAT apps or extensions — that's aimeat-crew-forge.",
+        "example": "/build a crew that summarizes RSS feeds into a weekly digest",
+        "cost": "expensive",
+        "latency": "long-running",
+        "repeatability": "accumulative",
+        "verification": "gated",
+        "consequences": [
+            {
+                "type": "creates-agent",
+                "persistent": True,
+                "requiresApproval": True,
+                "note": "registers a NEW persistent agent; blocks on a device-code approval",
+            },
+            {"type": "mutates-host", "note": "launches a watchdog + daemon process on the operator machine"},
+        ],
+        "sample": "✅ Built **rss-digest** — a crew that summarizes RSS feeds into a weekly digest.\n"
+        "\n"
+        "- build_domain validated ✓ · agent registered ✓ · launched under watchdog ✓\n"
+        "- one device-code approval consumed\n"
+        "- AGENT_NAME: `rss-digest` · profile: content → grok\n"
+        "\n"
+        "Send it a task to produce the first digest.",
+    },
+    {
+        "id": "fleet-status",
+        "title": "Show which crews are running",
+        "ask": "Send '/list' (or '/status') and I report your crews and which are running. Read-only — I don't start "
+        "or stop anything for this offer.",
+        "example": "/list",
+        "cost": "free",
+        "latency": "seconds",
+        "repeatability": "idempotent",
+        "verification": "gated",
+        "consequences": [],
+        "sample": "## Your crews (12 registered, 9 running)\n"
+        "\n"
+        "| agent | running | last seen |\n"
+        "|---|---|---|\n"
+        "| editorial-writer | ● | 2m ago |\n"
+        "| news-fetcher | ● | 2m ago |\n"
+        "| joker | ○ | 3h ago |\n"
+        "\n"
+        "*Read-only snapshot.*",
+    },
+]
+
+
 # crew-forge is driven by explicit slash commands (sent as a task or an inbox message).
 # Plain text with no leading "/" is treated as a /build request, so casual asks still work.
 HELP = (
