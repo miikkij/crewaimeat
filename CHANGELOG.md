@@ -6,6 +6,32 @@ Dates are the working dates; entries are **uncommitted and take effect on the ne
 
 ## [Unreleased] — 2026-08-22
 
+### Added
+- **`crewaimeat costs --prices` — the routing is re-priced against OpenRouter on every run.**
+  On 2026-08-12 the `news` profile was pinned to `deepseek/deepseek-v4-pro-0813` for a measured
+  reason: same Finnish prose as the unpinned base, faster, and 2.7x cheaper ($0.435/$0.87 per M
+  against $1.168/$2.336). Eleven days later the prices had swapped — the pin was $1.122/$3.366 and
+  the base $0.397/$0.794, making the pin **4.2x more expensive than the model it beat**. It was 89%
+  of a month's bill ($10.10 of $11.39) and nothing anywhere went red, because nothing was wrong: the
+  code was correct and the comment was honest, and the vendor moved underneath both.
+
+  `model_prices.py` asks the catalogue what things cost today and flags two things — a chain that
+  reaches an expensive pinned snapshot **before** a materially cheaper equivalent (1.5x threshold, so
+  ordinary price drift stays quiet), and a routed model the vendor **no longer lists**. An expensive
+  model sitting *behind* a cheaper primary is a deliberate fallback and is never flagged; an
+  unreachable catalogue prints `NOT CHECKED — <reason>` rather than a clean bill. A `warn` exits
+  non-zero so it can run unattended.
+
+### Fixed
+- **The newspaper's model chain now leads with `deepseek/deepseek-v4-pro`** and keeps the `-0813`
+  pin directly behind it (proven Finnish quality, one line away if the base disappoints). Same
+  tokens, same measured grounding — **$10.10/30d becomes $4.08**. `llm_providers.json` is
+  gitignored runtime config, so this takes effect on the next fleet restart.
+- **Three retired `:free` model ids removed** from the `coding` and `content` fallback tiers
+  (`qwen/qwen3-coder:free`, `meta-llama/llama-3.3-70b-instruct:free`, `openai/gpt-oss-120b:free`).
+  OpenRouter had dropped all three; every call fell through to the next model silently, so both
+  chains had fewer real fallbacks than they appeared to.
+
 ### Changed
 - **An agent's facts live in ONE place: its own crew file.** Until now the same agent was described in
   four hand-kept lists — `fleet_identity.py` (what it can do), `offers.py` (what it promises),

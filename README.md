@@ -416,6 +416,30 @@ producing anything anyone reads?*
 An agent that spends and delivers is fine at any price. An agent that spends and delivers nothing is a
 bug with a monthly invoice.
 
+It also asks OpenRouter what the routing costs **today**, because that is the one kind of drift no
+test can catch — the code is correct and the comment is honest, and the world moved underneath both:
+
+```bash
+uv run crewaimeat costs --prices      # just this check; needs no node token
+```
+
+On 2026-08-12 the newspaper was pinned to `deepseek-v4-pro-0813` for a good, measured reason: same
+Finnish prose as the unpinned base, faster, and **2.7x cheaper**. Eleven days later OpenRouter had
+repriced it and the pin was **4.2x dearer than the model it beat** — $10.10 of an $11.39 month, 89% of
+everything, for prose the cheaper sibling writes just as well. Nothing failed and nothing logged; the
+profile's own note still argued for the pin using prices that no longer existed.
+
+So the check asks two questions on every run, and stays quiet otherwise:
+
+- does any chain reach an expensive **pinned snapshot** before a materially cheaper equivalent?
+  (A costly model sitting *behind* a cheaper one is a fallback someone chose — never flagged.)
+- is every model the routing names **still on offer**? Three `:free` ids had been retired; every call
+  to them fell through to the next model silently, so the fallback chain was shorter than it looked.
+
+It never reports a price it could not read: an unreachable catalogue prints `NOT CHECKED — <reason>`,
+never a clean bill. A `warn` sets a non-zero exit, so it can run unattended and be noticed when it
+stops being quiet.
+
 ## Running the fleet (scripts)
 
 Run one crew at a time, or manage the whole fleet with the scripts in `scripts/`. Each has a `.ps1` (Windows) and a `.sh` (macOS/Linux).

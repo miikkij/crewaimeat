@@ -25,7 +25,8 @@ def _usage() -> str:
         "  crewaimeat new-crew <agent-name>       scaffold a new crew from the template\n"
         "  crewaimeat doctor [--live] [--strict]  reconcile registries + routes (and the node)\n"
         "  crewaimeat retire <agent> [--apply]    stop an agent participating (the opposite of forging one)\n"
-        "  crewaimeat costs [--days N]            model spend per agent, and who spends without producing\n"
+        "  crewaimeat costs [--days N]            model spend per agent + is the routing still priced right\n"
+        "  crewaimeat costs --prices              only the price check (needs no node token)\n"
         "  crewaimeat quality [--days N]          published-article grounding + completeness, by MODEL\n"
         "  crewaimeat orphans [--apply]           agents the NODE holds that no crew file backs\n\n"
         "Examples:\n"
@@ -34,7 +35,10 @@ def _usage() -> str:
         "  crewaimeat doctor --strict\n"
         "  -> what CI runs: every registry must agree and every route must be sanctioned.\n"
         "  crewaimeat quality --days 21\n"
-        "  -> did the paper get better when the model changed? Attributed per article, not per date."
+        "  -> did the paper get better when the model changed? Attributed per article, not per date.\n"
+        "  crewaimeat costs --prices\n"
+        "  -> does any chain reach an expensive pinned model before a cheaper equal? A pin that was\n"
+        "     2.7x CHEAPER when it was chosen was 4.2x DEARER eleven days later, and nothing went red."
     )
 
 

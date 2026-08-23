@@ -159,15 +159,37 @@ def render(rows: list[Row], totals: dict, days: int) -> str:
     return "\n".join(out)
 
 
+def _prices_json(root: Path, skip: bool) -> dict:
+    """The price lens as data. `checked: false` is never the same as "nothing found"."""
+    if skip:
+        return {"checked": False, "reason": "--no-prices"}
+    from crewaimeat import model_prices
+
+    findings, reason, n = model_prices.audit(root)
+    if reason:
+        return {"checked": False, "reason": reason, "routed_models": n}
+    return {"checked": True, "routed_models": n, "findings": [f.__dict__ for f in findings]}
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="crewaimeat costs", description=__doc__.splitlines()[0])
     ap.add_argument("--days", type=int, default=WINDOW_DAYS, help=f"window in days (default {WINDOW_DAYS})")
     ap.add_argument("--all", action="store_true", help="include agents that spent almost nothing")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
+    ap.add_argument("--prices", action="store_true", help="only check model prices (no ledger read)")
+    ap.add_argument("--no-prices", action="store_true", help="skip the price check (no network to OpenRouter)")
     ap.add_argument("--root", default=".", help="repo root (default: cwd)")
     args = ap.parse_args(argv)
 
     root = Path(args.root).resolve()
+
+    from crewaimeat import model_prices
+
+    if args.prices:
+        findings, skip, n = model_prices.audit(root)
+        print(model_prices.render(findings, skip, n))
+        return 1 if any(f.severity == "warn" for f in findings) else 0
+
     rows, totals, skipped = collect(root, days=args.days, min_cost=0.0 if args.all else 0.01)
     if skipped:
         print(f"costs: could NOT read the node — {skipped}", file=sys.stderr)
@@ -179,13 +201,22 @@ def main(argv: list[str] | None = None) -> int:
                     "days": args.days,
                     "totals": totals,
                     "agents": [r.__dict__ | {"verdict": r.verdict, "wasted": r.wasted} for r in rows],
+                    "prices": _prices_json(root, skip=args.no_prices),
                 },
                 indent=2,
             )
         )
     else:
         print(render(rows, totals, args.days))
-    return 0
+
+    if args.no_prices:
+        return 0
+    findings, skip, n = model_prices.audit(root)
+    print()
+    print(model_prices.render(findings, skip, n))
+    # A stale pin is the one finding here that costs money every day it stands, so it decides the
+    # exit code — `costs` can then run unattended and be noticed when it stops being quiet.
+    return 1 if any(f.severity == "warn" for f in findings) else 0
 
 
 if __name__ == "__main__":
