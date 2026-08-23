@@ -65,6 +65,25 @@ def _article(state, date: str, cat: str, pid: str | None, text: str = "x" * 3000
     state["records"][f"news.{date}.evening.article.{cat}"] = (pid, text)
 
 
+def test_the_window_is_in_the_editions_own_timezone_not_utc(monkeypatch):
+    """The bug this shipped with: an evening edition dated D is written the night BEFORE D, around
+    22:00 UTC. Between midnight Helsinki and midnight UTC a UTC clock dates the newest paper
+    "tomorrow", so it fell outside every window — and those three hours are exactly when someone
+    checks what last night's run produced. `today_local` is the repo's one answer for a calendar day
+    that becomes a key."""
+    monkeypatch.setattr("crewaimeat.aimeat_crew.today_local", lambda: "2026-08-24")
+    assert quality._dates(3) == ["2026-08-24", "2026-08-23", "2026-08-22"]
+
+
+def test_todays_edition_is_inside_the_window(node, monkeypatch):
+    """The whole point of the fix: the freshest edition is the one you most want measured."""
+    monkeypatch.setattr("crewaimeat.aimeat_crew.today_local", lambda: "2026-08-24")
+    _article(node, "2026-08-24", "talous", "p1")
+    node["provenance"]["p1"] = ("m/one", 5)
+    articles, _problems = quality.collect("a", days=2)
+    assert [a.date for a in articles] == ["2026-08-24"]
+
+
 # ── the failure the first version shipped ───────────────────────────────────────────────────────
 def test_a_provenance_read_that_FAILS_is_never_counted_as_ungrounded(node):
     """The bug: a rate-limited read returned the same shape as "no sources", so 40 well-sourced

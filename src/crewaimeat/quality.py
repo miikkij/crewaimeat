@@ -140,7 +140,20 @@ class ModelStats:
 
 
 def _dates(days: int) -> list[str]:
-    today = datetime.datetime.now(datetime.timezone.utc).date()
+    """The window, in the timezone the editions are KEYED in — not UTC.
+
+    This read UTC until 2026-08-24, when it could not see the edition that had just been written.
+    An evening edition dated D is written the night before D (~22:00 UTC), so between midnight
+    Helsinki and midnight UTC the newest paper is dated "tomorrow" by a UTC clock and falls outside
+    every window. Those three hours are exactly when someone checks what last night's run produced,
+    so the measurement was blind at the one moment it was wanted.
+
+    `today_local` is the repo's answer to this, and its docstring already said so: any calendar day
+    that becomes a KEY is local; only instants stay UTC.
+    """
+    from crewaimeat.aimeat_crew import today_local
+
+    today = datetime.date.fromisoformat(today_local())
     return [str(today - datetime.timedelta(days=n)) for n in range(days)]
 
 
