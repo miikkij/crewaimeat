@@ -26,7 +26,8 @@ def _usage() -> str:
         "  crewaimeat doctor [--live] [--strict]  reconcile registries + routes (and the node)\n"
         "  crewaimeat retire <agent> [--apply]    stop an agent participating (the opposite of forging one)\n"
         "  crewaimeat costs [--days N]            model spend per agent, and who spends without producing\n"
-        "  crewaimeat quality [--days N]          published-article grounding + completeness, by MODEL\n\n"
+        "  crewaimeat quality [--days N]          published-article grounding + completeness, by MODEL\n"
+        "  crewaimeat orphans [--apply]           agents the NODE holds that no crew file backs\n\n"
         "Examples:\n"
         "  crewaimeat new-crew support-bot\n"
         "  -> creates ./support_bot_crew.py for the AIMEAT agent 'support-bot'.\n"
@@ -122,6 +123,10 @@ def main(argv: list[str] | None = None) -> int:
         from crewaimeat.doctor.cli import main as doctor_main
 
         return doctor_main(argv[1:])
+    if argv and argv[0] == "orphans":
+        from crewaimeat.node_cleanup import main as orphans_main
+
+        return orphans_main(argv[1:])
     if argv and argv[0] == "quality":
         from crewaimeat.quality import main as quality_main
 

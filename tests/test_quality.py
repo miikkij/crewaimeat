@@ -52,6 +52,15 @@ def node(monkeypatch):
     return state
 
 
+def day(n: int = 0) -> str:
+    """A date INSIDE the window, n days back from today.
+
+    These were hardcoded (day(0)) until the clock rolled past midnight mid-session and every
+    one of them fell outside a 3-day window at once. A test whose subject is a rolling window has to
+    compute its dates the same way the code does."""
+    return quality._dates(n + 1)[-1]
+
+
 def _article(state, date: str, cat: str, pid: str | None, text: str = "x" * 3000):
     state["records"][f"news.{date}.evening.article.{cat}"] = (pid, text)
 
@@ -60,7 +69,7 @@ def _article(state, date: str, cat: str, pid: str | None, text: str = "x" * 3000
 def test_a_provenance_read_that_FAILS_is_never_counted_as_ungrounded(node):
     """The bug: a rate-limited read returned the same shape as "no sources", so 40 well-sourced
     articles were reported as 100% ungrounded. Unknown is not zero."""
-    _article(node, "2026-08-20", "talous", "p1")
+    _article(node, day(0), "talous", "p1")
     node["provenance"]["p1"] = "FAIL"
     articles, problems = quality.collect("a", days=3)
     stats = quality.group(articles)
@@ -73,7 +82,7 @@ def test_a_provenance_read_that_FAILS_is_never_counted_as_ungrounded(node):
 
 def test_a_record_with_no_provenance_at_all_is_a_real_finding(node):
     """Distinct from the above: this record genuinely declares nothing, which IS worth knowing."""
-    _article(node, "2026-08-20", "talous", None)
+    _article(node, day(0), "talous", None)
     articles, _problems = quality.collect("a", days=3)
     assert articles[0].model == "(no provenance record)"
     assert articles[0].sources is None
@@ -82,8 +91,8 @@ def test_a_record_with_no_provenance_at_all_is_a_real_finding(node):
 def test_zero_sources_is_counted_as_ungrounded(node):
     """The one number that is unambiguously bad — an article citing nothing is indistinguishable
     from invention. `talous` carries sources on other days, so the gap is judged."""
-    _article(node, "2026-08-20", "talous", "p1")
-    _article(node, "2026-08-19", "talous", "p2")
+    _article(node, day(0), "talous", "p1")
+    _article(node, day(1), "talous", "p2")
     node["provenance"]["p1"] = ("m/one", 0)
     node["provenance"]["p2"] = ("m/one", 5)
     stats = quality.group(quality.collect("a", days=5)[0])
@@ -95,11 +104,11 @@ def test_a_category_that_is_never_sourced_is_generated_not_broken(node):
     """`koodaus`, `matikka` and `prompt-niksi` are generated feature sections with no news sources BY
     DESIGN — ~3 of every ~23 articles. Counting them made the first version report DeepSeek as five
     times worse at grounding than the free router, which was pure artifact."""
-    for day in ("2026-08-20", "2026-08-19", "2026-08-18"):
-        _article(node, day, "koodaus", f"k-{day}")
-        node["provenance"][f"k-{day}"] = ("m/one", 0)
-        _article(node, day, "talous", f"t-{day}")
-        node["provenance"][f"t-{day}"] = ("m/one", 5)
+    for d in (day(0), day(1), day(2)):
+        _article(node, d, "koodaus", f"k-{d}")
+        node["provenance"][f"k-{d}"] = ("m/one", 0)
+        _article(node, d, "talous", f"t-{d}")
+        node["provenance"][f"t-{d}"] = ("m/one", 5)
     articles, _ = quality.collect("a", days=5)
     assert quality.generated_categories(articles) == {"koodaus"}
     s = quality.group(articles)[0]
@@ -111,7 +120,7 @@ def test_too_little_evidence_means_JUDGED_not_excused(node):
     """The two mistakes are not symmetric. Wrongly calling a category "generated" hides a real
     failure silently; wrongly judging one produces a visible finding someone can check. So below the
     evidence floor the category is judged."""
-    _article(node, "2026-08-20", "uusi-osio", "p1")
+    _article(node, day(0), "uusi-osio", "p1")
     node["provenance"]["p1"] = ("m/one", 0)
     articles, _ = quality.collect("a", days=3)
     assert quality.generated_categories(articles) == set(), "one observation is not evidence"
@@ -122,10 +131,10 @@ def test_too_little_evidence_means_JUDGED_not_excused(node):
 def test_articles_are_attributed_to_the_model_that_wrote_them(node):
     """Not "before and after a date" — a routing change mid-week, or a fallback quietly serving a
     different model, would make a date-based split lie."""
-    _article(node, "2026-08-20", "talous", "p1")
-    _article(node, "2026-08-20", "urheilu", "p2")
-    _article(node, "2026-08-19", "talous", "p3")
-    _article(node, "2026-08-18", "urheilu", "p4")  # so `urheilu` is a SOURCED category, not generated
+    _article(node, day(0), "talous", "p1")
+    _article(node, day(0), "urheilu", "p2")
+    _article(node, day(1), "talous", "p3")
+    _article(node, day(2), "urheilu", "p4")  # so `urheilu` is a SOURCED category, not generated
     node["provenance"]["p1"] = ("deepseek/v4", 6)
     node["provenance"]["p2"] = ("free/router", 0)
     node["provenance"]["p3"] = ("deepseek/v4", 4)
@@ -142,9 +151,9 @@ def test_completeness_is_per_edition_not_per_day(node):
     """A weak model silently skips categories, so "articles per edition" is the signal — and an
     edition with no articles must not drag the average of a model that never ran that day."""
     for cat in ("a", "b", "c"):
-        _article(node, "2026-08-20", cat, f"p-{cat}")
+        _article(node, day(0), cat, f"p-{cat}")
         node["provenance"][f"p-{cat}"] = ("m/one", 3)
-    _article(node, "2026-08-19", "a", "p-x")
+    _article(node, day(1), "a", "p-x")
     node["provenance"]["p-x"] = ("m/one", 3)
     s = quality.group(quality.collect("a", days=5)[0])[0]
     assert s.editions == 2 and len(s.articles) == 4 and s.per_edition == 2.0
@@ -154,14 +163,14 @@ def test_completeness_is_per_edition_not_per_day(node):
 def test_a_failed_key_listing_is_reported_not_silently_skipped(node):
     """A day whose listing failed produces no articles — which looks exactly like a day with no
     paper. The difference has to reach the reader."""
-    node["list_fails"].add("2026-08-20")
+    node["list_fails"].add(day(0))
     articles, problems = quality.collect("a", days=3)
     assert articles == []
     assert any("could not list" in p for p in problems)
 
 
 def test_the_report_says_how_much_it_could_not_read(node):
-    _article(node, "2026-08-20", "talous", "p1")
+    _article(node, day(0), "talous", "p1")
     node["provenance"]["p1"] = "FAIL"
     articles, problems = quality.collect("a", days=3)
     text = quality.render(quality.group(articles), articles, 3, problems)
@@ -169,7 +178,7 @@ def test_the_report_says_how_much_it_could_not_read(node):
 
 
 def test_the_report_never_claims_grounding_it_could_not_measure(node):
-    _article(node, "2026-08-20", "talous", "p1")
+    _article(node, day(0), "talous", "p1")
     node["provenance"]["p1"] = "FAIL"
     articles, problems = quality.collect("a", days=3)
     text = quality.render(quality.group(articles), articles, 3, problems)
@@ -184,9 +193,9 @@ def test_an_empty_window_says_so(node):
 
 # ── the JSON surface, for a dashboard or an alert ───────────────────────────────────────────────
 def test_json_output_separates_ungrounded_from_unknown(node, capsys, tmp_path):
-    _article(node, "2026-08-20", "talous", "p1")
-    _article(node, "2026-08-19", "talous", "p3")  # keeps `talous` a sourced category
-    _article(node, "2026-08-20", "urheilu", "p2")
+    _article(node, day(0), "talous", "p1")
+    _article(node, day(1), "talous", "p3")  # keeps `talous` a sourced category
+    _article(node, day(0), "urheilu", "p2")
     node["provenance"]["p1"] = ("m/one", 0)
     node["provenance"]["p3"] = ("m/one", 4)
     node["provenance"]["p2"] = "FAIL"

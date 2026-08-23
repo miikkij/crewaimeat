@@ -33,6 +33,11 @@ DISPATCHER_MODULES = {
     "src/crewaimeat/wake_spin.py",  # reads the daemon's wake queue by design
     "src/crewaimeat/node_engine.py",
     "src/crewaimeat/tui/versions.py",  # asks npm/PyPI, not the node
+    # Deletes an agent record as the OWNER. The dispatcher authenticates as an AGENT and has no
+    # other mode, and the node's DELETE /v1/agents door needs an owner session precisely BECAUSE
+    # an agent token is not enough (requireRoleOrScope + a registeredBy match). Routing this
+    # through _aimeat_rest would send the one credential that is guaranteed to be refused.
+    "src/crewaimeat/node_cleanup.py",
 }
 HTTP_VERBS = {"get", "post", "put", "patch", "delete", "request", "head", "stream"}
 HTTP_LIBS = {"requests", "httpx", "urllib"}

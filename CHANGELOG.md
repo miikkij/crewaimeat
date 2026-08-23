@@ -39,6 +39,26 @@ Dates are the working dates; entries are **uncommitted and take effect on the ne
   in the tags the picker hands a generation request to the crew that only searches the web.
 
 ### Added
+- **`crewaimeat orphans` — the agents the node still holds that no crew file backs, and a correction.**
+  I reported that these could not be deleted from here. That was wrong in the way that matters: I had
+  called `DELETE /v1/agents/:name` with an AGENT token. Reading the node's own route
+  (`aimeat/src/routes/agents/management.ts`) gives the actual rule —
+  `requireRoleOrScope('owner', 'agent:delete')`, and then TWO callers: an owner/operator session may
+  delete any of that owner's agents, while an agent caller must ALSO be the principal named in
+  `registeredBy`.
+  - So **granting a fleet agent `agent:delete` does not unlock them**, and that is deliberate. The
+    node's comment says why: same-owner on this door "would mean every agent an owner has may kill
+    every sibling it has never seen", and the scope alone "would hand a single approved agent the
+    whole fleet". 20 of the 27 leftovers name the node's hatchery as `registeredBy`.
+  - What DOES work is an owner session — which is exactly what the dashboard's Delete button is. The
+    command takes the same thing as `AIMEAT_OWNER_TOKEN` so the sweep is one command instead of 27
+    clicks, and without it still LISTS and explains precisely why, rather than saying "no rights".
+  - It never offers the owner's 15 interactive tool sessions (Claude Desktop, goose, VS Code…) — those
+    are a person at a keyboard — and holds the hatchery back from any sweep, since it is the node
+    feature that makes agents and the only thing that can still account for the rest.
+  - Its own `requests.delete` trips `route.node.direct_http`. That is an allowance in the rule with the
+    reason written down, not a baseline entry: the dispatcher authenticates as an agent and has no
+    other mode, so routing this through it would send the one credential guaranteed to be refused.
 - **`crewaimeat quality` — did the output get better when the model changed?** That question had no
   answer: the paper's prose was routed to DeepSeek V4 Pro on 2026-08-12 because the previous chain's
   Finnish was judged unusable, and the evidence for it working was an impression. This measures the
