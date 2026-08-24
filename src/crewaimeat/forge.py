@@ -265,7 +265,7 @@ _VERIFY_URL_RE = re.compile(r"(https?://\S*(?:verif|activate|device|connect|auth
 # aimeat.io 2026-08-01 — see the aimeat-crewai note in pyproject.toml). Bumped 2026-08-22 from 2.0.0,
 # which sat BELOW that documented floor: every agent crew-forge registered went through a connector
 # that could not carry provenance.
-AIMEAT_CONNECTOR = "aimeat@3.5.0"
+AIMEAT_CONNECTOR = "aimeat@3.6.0"  # bumped 2026-08-24 (npm latest); the fleet's global install follows
 AIMEAT_CONNECTOR_FLOOR = "2.6.1"  # below this the provenance block is dropped silently
 
 
