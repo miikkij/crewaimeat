@@ -31,6 +31,89 @@ AINEISTO = {
 }
 
 
+# KANSI v3: the writers are handed the angle A PERSON chose, plus the sourced research behind it.
+ANGLE = {
+    "nro": 3,
+    "otsikko": "Määräpäivä tekee tästä pakollisen",
+    "kulma": "Yhteys ei ole enää valmis ennen kuin olet päättänyt, mitä agentti saa tehdä.",
+    "avaus": "Sinulla on yksitoista kuukautta aikaa siihen, että tämä ikkuna on pakko olla.",
+    "miksi_toimii": "Kohdeyleisö reagoi määräpäivään, ei käyttöliittymäpäivitykseen.",
+    "kenelle": "integraatioita rakentavat kehittäjät",
+    "nojaa": "Artikla 50 alkaa 2.8.2026",
+    "todennakoisyys": 74,
+    "perustelu": "Kova fakta, mutta kuiva aihe.",
+    "ohjaaja_ele": "inspired by David Fincher: yksi luku ruudulla",
+    "riski": "Kuulostaa pelottelulta jos määräpäivä on ainoa argumentti.",
+}
+VALINTA = {
+    "vastaus": "valittu",
+    "nro": 3,
+    "kulma": ANGLE,
+    "ohjaaja": {"id": "fincher", "kaytto": "inspired-by"},
+    "tyyli": "asiallinen",
+    "poimitut": [1],
+    "lisaohje": "",
+}
+TAUSTA = {
+    "loydokset": [
+        {
+            "vaite": "Artikla 50 alkaa 2.8.2026",
+            "lahde": "https://ai-act-service-desk.ec.europa.eu/en/faq",
+            "julkaistu": "2026-06-18",
+            "merkitys": "Oikeuksien kysyminen muuttuu vaatimukseksi.",
+        },
+        {
+            "vaite": "Suostumusinfrastruktuurista kirjoitetaan nyt",
+            "lahde": "https://usercentrics.com/knowledge-hub/eu-ai-act-high-risk-delay-article-50-transparency-consent/",
+            "julkaistu": "2026-08-01",
+            "merkitys": "Aihe on jo liikkeessä.",
+        },
+    ],
+    "vertailu": [
+        {
+            "kuka": "Usercentrics",
+            "mita_tekee": "Myy suostumusinfrastruktuuria.",
+            "lahde": "https://usercentrics.com/knowledge-hub/eu-ai-act-high-risk-delay-article-50-transparency-consent/",
+        }
+    ],
+    "ajankohtaisuus": "Elokuun 2026 määräpäivä on lähellä.",
+    "vastavaite": "Pieni käyttöliittymämuutos, kukaan ei vaihda palvelua sen takia.",
+    "ei_loytynyt": "En löytänyt lukua keskeytyksistä GAII-tunnisteen osalta.",
+}
+OHJAAJAT = {
+    "versio": 1,
+    "kaytto": {
+        "full": "Ohjaajan koko kieli.",
+        "inspired-by": "Vain henki ja yksi ele.",
+        "opposite-of": "Käännetään ylösalaisin.",
+        "blend": "Kaksi tai kolme yhdessä.",
+    },
+    "tyylit": [{"id": "asiallinen", "nimi": "Asiallinen", "kuvaus": "Sanoo mikä muuttui ja kenelle."}],
+    "ohjaajat": [
+        {
+            "id": "fincher",
+            "nimi": "David Fincher",
+            "kuva": "Kaikki on juuri siinä missä pitää.",
+            "rytmi": "Kylmä täsmällisyys.",
+            "vari": "Vihertävä pimeys.",
+            "aani": "Matala pohja.",
+            "sopii": "Uskottavuuteen.",
+            "ei_sovi": "Iloiseen.",
+        },
+        {
+            "id": "gondry",
+            "nimi": "Michel Gondry",
+            "kuva": "Käsin tehty.",
+            "rytmi": "Toisto joka kasvaa.",
+            "vari": "Haalistunut.",
+            "aani": "Kolisee.",
+            "sopii": "Ilahduttavaan.",
+            "ei_sovi": "Uhkaavaan.",
+        },
+    ],
+}
+
+
 # The dispatch every test run gets. RULE 2: the scope carries the run variable, so the address is
 # BUILT from it — never generated. A test that passed a bare id would be testing the old defect.
 RUN_ID = "2026-08-24"
@@ -137,39 +220,60 @@ def test_no_invented_example_id_is_shown_as_data_anywhere():
 
 
 # ── the editor's material is the input, and it is never invented ─────────────────────────────────
-def test_a_missing_aineisto_fails_loud_and_writes_nothing(monkeypatch):
+def test_a_missing_choice_fails_loud_and_writes_nothing(monkeypatch):
     writes: list = []
     monkeypatch.setattr(jp, "read_owner_key", lambda agent, key: None)
     monkeypatch.setattr(jp, "_aimeat_call", lambda a, tool, payload: writes.append(tool) or {"ok": True})
     out = jp.write_julkaisu("julkaisu-x", "x", TASK)
-    assert out.startswith("FAILED") and "julkaisu.2026-08-24.aineisto" in out
+    assert out.startswith("FAILED") and "julkaisu.2026-08-24.valinta" in out
     assert "aimeat_memory_write" not in writes
 
 
-def test_a_half_written_aineisto_is_not_a_usable_angle(monkeypatch):
-    """An aineisto with no `ennen` is the failure the editor exists to prevent. A writer must not
-    quietly fill that in — that is exactly the invention this desk was rebuilt to stop."""
-    monkeypatch.setattr(jp, "read_owner_key", lambda agent, key: {"kulma": "x", "nyt": "y"})
-    with pytest.raises(LookupError, match="ennen"):
-        jp.read_aineisto("julkaisu-x", RUN_ID)
+def test_more_angles_is_not_permission_to_choose_one(monkeypatch):
+    """The angle gate takes two answers, because the app has a "Lisaa kulmia" button. `lisaa` means
+    the person has NOT decided — a writer that treated it as a green light would be choosing on their
+    behalf, which is the exact thing v3 turned the chain around to stop."""
+    monkeypatch.setattr(jp, "read_owner_key", lambda agent, key: {"vastaus": "lisaa", "lisaohje": "lisaa persoonia"})
+    with pytest.raises(LookupError, match="lisaa"):
+        jp.read_valinta("julkaisu-x", RUN_ID)
 
 
-# ── the two writers get the same facts through a different door ──────────────────────────────────
-def test_linkedin_leads_on_the_fix_and_x_leads_on_the_before():
-    """The one structural guarantee that the Finnish post and the English thread are two pieces
-    rather than one text twice. 'Reads like a translation' is a judgement no check can make across
-    two languages, so the divergence is built into what each writer is handed FIRST."""
-    fi = jp.story_block(AINEISTO, lead="nyt")
-    en = jp.story_block(AINEISTO, lead="ennen")
-    assert fi.index("NYT") < fi.index("ENNEN"), "the LinkedIn writer sees the fix first"
-    assert en.index("ENNEN") < en.index("NYT"), "the X writer sees the frustration first"
-    assert "EI KERROTA" in fi and "GAII" in fi, "what the editor ruled out travels with the angle"
+def test_a_choice_with_no_angle_is_not_a_brief(monkeypatch):
+    monkeypatch.setattr(jp, "read_owner_key", lambda agent, key: {"vastaus": "valittu", "nro": 3})
+    with pytest.raises(LookupError, match="no chosen angle"):
+        jp.read_valinta("julkaisu-x", RUN_ID)
 
 
-def test_the_entry_title_is_not_handed_to_the_writers():
-    """`valittu` is the changelog headline. A writer given it restates the entry, which is the habit
-    the editor was added to end."""
-    assert AINEISTO["valittu"] not in jp.story_block(AINEISTO)
+# ── the two writers get the same angle through a different door ─────────────────────────
+def test_linkedin_opens_on_the_written_line_and_x_opens_on_the_tension():
+    """The structural guarantee that the Finnish post and the English thread are two pieces rather
+    than one text twice. 'Reads like a translation' is a judgement no check can make across two
+    languages, so the divergence is built into what each writer is handed FIRST."""
+    fi = jp.story_block(VALINTA, TAUSTA, OHJAAJAT, lead="avaus")
+    en = jp.story_block(VALINTA, TAUSTA, OHJAAJAT, lead="riski")
+    assert fi.index("AVAUS") < fi.index("RISKI"), "the LinkedIn writer sees the written opening first"
+    assert en.index("RISKI") < en.index("AVAUS"), "the X writer sees the tension first"
+
+
+def test_the_director_reaches_the_writing_not_only_the_video():
+    """A Fincher LinkedIn post is not the same post as a Gondry one."""
+    block = jp.story_block(VALINTA, TAUSTA, OHJAAJAT)
+    assert "David Fincher" in block and "Kylmä täsmällisyys" in block
+    assert "OHJAAJA KOSKEE MYÖS KIRJOITTAMISTA" in block
+    assert "Asiallinen" in block, "the ordered style travels with the angle"
+
+
+def test_the_research_and_its_sources_travel_with_the_angle():
+    block = jp.story_block(VALINTA, TAUSTA, OHJAAJAT)
+    assert ["https:/", "ai-act-service-desk.europa.eu"][0] in block or "ai-act-service-desk" in block
+    assert "VASTAVÄITE" in block and "EI LÖYTYNYT" in block, "the writer must not claim what was not found"
+
+
+def test_picked_angles_are_material_not_a_second_subject():
+    kulmat = [{"nro": 1, "otsikko": "Vastaväite etunenässä", "kulma": "Pieni muutos, paitsi ettei ole."}]
+    block = jp.story_block(VALINTA, TAUSTA, OHJAAJAT, kulmat)
+    assert "POIMITUT KULMAT" in block and "Vastaväite etunenässä" in block
+    assert "EIVÄT ole toinen aihe" in block
 
 
 # ── house rules, enforced in code ────────────────────────────────────────────────────────────────
@@ -291,7 +395,18 @@ def test_a_reply_that_is_not_json_is_not_stored_as_a_script():
 @pytest.fixture
 def stubbed(monkeypatch):
     writes: list[dict] = []
-    monkeypatch.setattr(jp, "read_owner_key", lambda agent, key: dict(AINEISTO))
+
+    def _read(agent, key):
+        if key.endswith(".valinta"):
+            return dict(VALINTA)
+        if key.endswith(".tausta"):
+            return dict(TAUSTA)
+        if key.endswith(".kulmat"):
+            return {"kulmat": []}
+        return None
+
+    monkeypatch.setattr(jp, "read_owner_key", _read)
+    monkeypatch.setattr("crewaimeat.julkaisu_brief.read_owner_key", lambda agent, key: dict(OHJAAJAT))
     monkeypatch.setattr(
         jp, "_aimeat_call", lambda a, tool, payload: writes.append({"tool": tool, **payload}) or {"ok": True}
     )
@@ -632,16 +747,16 @@ def test_every_desk_agent_publishes_a_workflow_compatible_offer():
         assert len(offer["ask"]) <= 500, f"{agent}: ask is {len(offer['ask'])} chars (cap is 500)"
 
 
-def test_the_writers_wait_for_the_editor():
-    """Every writer's input gate points at the editor's material — nobody starts from a summary
-    somebody else pre-wrote, which is the whole point of adding the editor."""
+def test_the_writers_wait_for_a_person():
+    """Every writer's input gate points at the CHOICE a person made. Nobody starts writing until a
+    human has picked an angle — that is what v3 turned the chain around to guarantee."""
     from crewaimeat.offers import offers_doc_any
 
     for agent in ("julkaisu-linkedin", "julkaisu-x", "julkaisu-video"):
         offer = offers_doc_any(agent, with_samples=False)["offers"][0]
-        assert offer["required_to_function"]["key"] == "julkaisu.{ref}.aineisto"
-    editor = offers_doc_any("julkaisu-toimittaja", with_samples=False)["offers"][0]
-    assert editor["required_to_function"] == "none", "the editor fetches its own input"
+        assert offer["required_to_function"]["key"] == "julkaisu.{ref}.valinta"
+    researcher = offers_doc_any("julkaisu-tutkija", with_samples=False)["offers"][0]
+    assert researcher["required_to_function"]["key"] == "julkaisu.{ref}.tilaus", "research waits for the order"
 
 
 def test_the_video_signal_counts_scenes_not_files():
@@ -672,3 +787,204 @@ def test_an_offer_that_half_declares_its_signals_is_rejected():
     }
     with pytest.raises(ValueError, match="required_to_function"):
         crew_offer("julkaisu-linkedin", half)
+
+
+# ── KANSI: the research, and the check the whole step lives or dies by ───────────────────────────
+import crewaimeat.julkaisu_brief as jb  # noqa: E402
+
+ALLOWED = {
+    "https://ai-act-service-desk.ec.europa.eu/en/faq",
+    "https://usercentrics.com/knowledge-hub/eu-ai-act-high-risk-delay-article-50-transparency-consent/",
+}
+
+
+def test_a_source_that_was_never_read_is_refused():
+    """The load-bearing check. A researcher that can invent a citation is worse than no researcher at
+    all, so a `lahde` outside the pages the search actually returned is REFUSED, not trusted."""
+    assert jb.check_tausta(dict(TAUSTA), ALLOWED) == []
+    invented = {
+        **TAUSTA,
+        "loydokset": [{**TAUSTA["loydokset"][0], "lahde": "https://example.com/made-up"}, TAUSTA["loydokset"][1]],
+    }
+    assert any("EI ole niiden sivujen joukossa" in v for v in jb.check_tausta(invented, ALLOWED))
+
+
+def test_an_empty_search_is_a_finding_and_must_be_said():
+    bad = jb.check_tausta({**TAUSTA, "ei_loytynyt": ""}, ALLOWED)
+    assert any("ei_loytynyt" in v for v in bad)
+
+
+def test_the_counter_argument_is_not_optional():
+    assert any("vastavaite" in v for v in jb.check_tausta({**TAUSTA, "vastavaite": ""}, ALLOWED))
+
+
+def test_two_findings_is_the_floor():
+    bad = jb.check_tausta({**TAUSTA, "loydokset": TAUSTA["loydokset"][:1]}, ALLOWED)
+    assert any("2" in v for v in bad)
+
+
+def test_the_researcher_writes_nothing_when_the_web_answers_nothing(monkeypatch):
+    writes: list = []
+    monkeypatch.setattr(
+        jb, "read_owner_key", lambda agent, key: {"merkinnat": [{"date": "2026-08-24", "title": "T", "body": "B"}]}
+    )
+    monkeypatch.setattr(jb, "_aimeat_call", lambda a, tool, payload: writes.append(tool) or {"ok": True})
+    monkeypatch.setattr(jb, "get_llm", lambda **k: _StubLLM(["query one\nquery two"]))
+    monkeypatch.setattr(jb, "web_search", lambda *a, **k: [])
+    out = jb.tutki_tausta("julkaisu-tutkija", task=TASK)
+    assert out.startswith("FAILED") and "open web returned nothing" in out
+    assert "aimeat_memory_write" not in writes
+
+
+# ── KANSI: the angles a person chooses from ──────────────────────────────────────────────────────
+def _angle(nro=1, prob=70, **kw):
+    a = {
+        "nro": nro,
+        "otsikko": f"Kulma {nro}",
+        "kulma": "Yksi lause.",
+        "avaus": "Ensimmainen rivi.",
+        "miksi_toimii": "Koska.",
+        "kenelle": "kehittajat",
+        "nojaa": "Artikla 50 alkaa 2.8.2026",
+        "todennakoisyys": prob,
+        "perustelu": "Siksi.",
+        "ohjaaja_ele": "inspired by David Fincher",
+        "riski": "Voi kuulostaa pelottelulta.",
+    }
+    a.update(kw)
+    return a
+
+
+def test_a_real_angle_set_passes():
+    assert jb.check_kulmat([_angle(1, 74), _angle(2, 41), _angle(3, 58)], 3, TAUSTA) == []
+
+
+def test_a_row_of_near_identical_probabilities_is_refused():
+    """A row of five 80s is a tell that nothing was judged — the spread is checked, not requested."""
+    bad = jb.check_kulmat([_angle(1, 80), _angle(2, 82), _angle(3, 79)], 3, TAUSTA)
+    assert any("hajonta" in v for v in bad)
+
+
+def test_an_angle_must_rest_on_something_real():
+    bad = jb.check_kulmat([_angle(1, 70, nojaa="jokin muu juttu"), _angle(2, 30)], 2, TAUSTA)
+    assert any("nojaa" in v for v in bad)
+    assert jb.check_kulmat([_angle(1, 70, nojaa="changelog"), _angle(2, 30)], 2, TAUSTA) == []
+
+
+def test_every_angle_field_is_required():
+    for field in ("avaus", "kenelle", "riski", "ohjaaja_ele"):
+        bad = jb.check_kulmat([_angle(1, 70, **{field: ""}), _angle(2, 30)], 2, TAUSTA)
+        assert any(field in v for v in bad), field
+
+
+def test_two_angles_may_not_share_a_name():
+    bad = jb.check_kulmat([_angle(1, 70), _angle(2, 30, otsikko="Kulma 1")], 2, TAUSTA)
+    assert any("nimisia" in v or "nimisiä" in v for v in bad)
+
+
+def test_more_angles_appends_and_numbering_continues(monkeypatch):
+    """The person is reading the first batch in the app. Replacing it would delete what they were
+    looking at, and re-using 1..n would rename the angles they already discussed."""
+    import json as _json
+
+    writes: list[dict] = []
+
+    def _read(agent, key):
+        if key.endswith(".tilaus"):
+            return {
+                "merkinnat": [{"date": "2026-08-24", "title": "T", "body": "B"}],
+                "kulmia": 2,
+                "ohjaaja": {"id": "fincher", "kaytto": "inspired-by"},
+                "tyyli": "asiallinen",
+            }
+        if key.endswith(".tausta"):
+            return dict(TAUSTA)
+        if key == jb.OHJAAJAT_KEY:
+            return dict(OHJAAJAT)
+        if key.endswith(".kulmat"):
+            return {"kulmat": [_angle(1, 74), _angle(2, 41)]}
+        if key.endswith(".valinta"):
+            return {"vastaus": "lisaa", "lisaohje": "kokeile toimitusjohtajan nakokulmaa"}
+        return None
+
+    monkeypatch.setattr(jb, "read_owner_key", _read)
+    monkeypatch.setattr(
+        jb, "_aimeat_call", lambda a, tool, payload: writes.append({"tool": tool, **payload}) or {"ok": True}
+    )
+    monkeypatch.setattr(jb, "resolved_model", lambda llm: "m")
+    monkeypatch.setattr(jb, "resolved_provider", lambda: "p")
+    monkeypatch.setattr(jb, "record_deliverable_key", lambda tid, key: None)
+    llm = _StubLLM([_json.dumps({"kulmat": [_angle(1, 88), _angle(2, 35)], "notes": "n"}, ensure_ascii=False)])
+    monkeypatch.setattr(jb, "get_llm", lambda **k: llm)
+
+    out = jb.tee_kulmat("julkaisu-ohjaaja", task=TASK)
+
+    value = next(w for w in writes if w["tool"] == "aimeat_memory_write")["value"]
+    assert [a["nro"] for a in value["kulmat"]] == [1, 2, 3, 4], "numbering continues from the highest existing"
+    assert len(value["kulmat"]) == 4, "the batch appended, it did not replace"
+    assert "toimitusjohtajan" in llm.prompts[0], "the person's new instruction reached the prompt"
+    assert "appended to 2 already offered" in out
+
+
+# ── KANSI: the director comes from the node, never from a copy in this repo ──────────────────────
+def test_the_director_block_is_rendered_from_the_nodes_list():
+    block = jb.director_block(OHJAAJAT, {"id": "fincher", "kaytto": "inspired-by"})
+    assert "David Fincher" in block and "inspired by" in block
+
+
+def test_each_kaytto_changes_the_instruction():
+    full = jb.director_block(OHJAAJAT, {"id": "fincher", "kaytto": "full"})
+    opp = jb.director_block(OHJAAJAT, {"id": "fincher", "kaytto": "opposite-of"})
+    blend = jb.director_block(OHJAAJAT, {"ids": ["fincher", "gondry"], "kaytto": "blend"})
+    assert "kauttaaltaan" in full
+    assert "rytmi]" in blend and "Michel Gondry" in blend
+    assert opp != full and "full" not in opp
+
+
+def test_an_unknown_director_is_surfaced_not_ignored():
+    """An order naming a director the node does not carry is a mistake worth seeing — quietly writing
+    in no style at all would hide it."""
+    with pytest.raises(LookupError, match="kubrick"):
+        jb.director_block(OHJAAJAT, {"id": "kubrick", "kaytto": "full"})
+
+
+def test_the_directors_list_is_not_copied_into_this_repo():
+    """The person adds directors to julkaisu.ohjaajat. A hardcoded list here would be stale the first
+    time they did, so no director's name may appear as data in the module."""
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parent.parent / "src" / "crewaimeat" / "julkaisu_brief.py").read_text(
+        encoding="utf-8"
+    )
+    for name in ("Cunningham", "Villeneuve", "Hype Williams", "Sigismondi"):
+        assert name not in src, f"{name} is hardcoded — read julkaisu.ohjaajat instead"
+
+
+def test_the_new_agents_carry_the_key_rule_too():
+    from pathlib import Path
+
+    crews = Path(__file__).resolve().parent.parent / "crews"
+    for name in ("tutkija", "ohjaaja"):
+        src = (crews / f"julkaisu_{name}_crew.py").read_text(encoding="utf-8")
+        assert "KEY_RULE" in src and "THIS RUN: you read" in src
+
+
+def test_the_kansi_chain_wires_end_to_end():
+    """Every step's input gate is the previous step's output key. A break here is a workflow that
+    saves and then never advances."""
+    from crewaimeat.offers import offers_doc_any
+
+    chain = [
+        ("julkaisu-tutkija", "julkaisu.{ref}.tilaus", "julkaisu.{ref}.tausta"),
+        ("julkaisu-ohjaaja", "julkaisu.{ref}.tausta", "julkaisu.{ref}.kulmat"),
+        ("julkaisu-linkedin", "julkaisu.{ref}.valinta", "julkaisu.{ref}.linkedin"),
+        ("julkaisu-x", "julkaisu.{ref}.valinta", "julkaisu.{ref}.x"),
+        ("julkaisu-video", "julkaisu.{ref}.valinta", "julkaisu.{ref}.video"),
+        ("julkaisu-kuva", "julkaisu.{ref}.video", "julkaisu.{ref}.kuvat"),
+    ]
+    for agent, want_in, want_out in chain:
+        offer = offers_doc_any(agent, with_samples=False)["offers"][0]
+        req = offer["required_to_function"]
+        assert req["key"] == want_in, f"{agent} reads {req.get('key')}, expected {want_in}"
+        assert offer["deliverable"]["location"]["key"] == want_out
+        assert len(offer["ask"]) <= 500

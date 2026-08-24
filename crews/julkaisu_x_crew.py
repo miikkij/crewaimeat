@@ -1,10 +1,12 @@
-"""julkaisu-x: one English X thread from the editor's angle. A step of the `julkaisupoyta` workflow.
+"""julkaisu-x: one English X thread from the angle A PERSON chose. A step of KANSI.
 
-Reads `julkaisu.{ref}.aineisto` and writes `julkaisu.{ref}.x` as `{text, notes}` — the posts
-separated by a blank line.
+Reads `julkaisu.{ref}.valinta` (the chosen angle, the director, the style) plus
+`julkaisu.{ref}.tausta`, and writes `julkaisu.{ref}.x` as `{text, notes}` — the posts separated by a
+blank line. It refuses a gate that answered "lisaa": more angles is not a choice.
 
-**This one leads with the before-state.** The Finnish LinkedIn post opens on the fix; this thread
-opens on what people were stuck with, and lets the fix arrive as the turn. If the two read as
+**This one leads with the TENSION.** The Finnish LinkedIn post opens on the angle's written first
+line; this thread opens on the counter-argument or the angle's own risk, and lets the claim arrive as
+the turn. If the two read as
 translations of each other the run failed, even though both keys are non-empty. That divergence is
 built into the prompt structurally — the two writers are handed the same facts through a different
 door (`story_block(lead=...)`) — because "reads like a translation" is a judgement no check can make
@@ -34,17 +36,17 @@ LLM_PROFILE = "content"  # English prose — grok's one strength, and this threa
 TAGS = ["julkaisupoyta", "x-thread", "somekirjoitus", "role.task-runner"]
 CAPABILITIES = {
     "technical": [{"name": "julkaisu-x", "type": "skill"}],
-    "domain": ["X threads", "release storytelling", "consumes:julkaisu-aineisto@1"],
+    "domain": ["X threads", "release storytelling", "consumes:julkaisu-valinta@1"],
     "languages": ["en"],
 }
 OFFERS = [
     {
         "id": "kirjoita-x",
         "title": "Kirjoita X-ketju englanniksi",
-        "ask": "Kirjoitan toimittajan aineistosta yhden X-ketjun englanniksi (3–6 postausta, kukin alle "
-        "280 merkkiä). Avaan siitä mikä oli ennen rikki, en korjauksesta — se on suomenkielisen "
-        "postauksen kulma. En ilmoittele ketjua, en pyydä seuraamaan, enkä kirjoita asioista "
-        "jotka aineisto rajasi ulos. En julkaise mitään mihinkään.",
+        "ask": "Kirjoitan valitusta kulmasta yhden X-ketjun englanniksi (3–6 postausta, kukin alle 280 "
+        "merkkiä) tilatun ohjaajan rytmissä. Avaan jännitteestä, en korjauksesta — korjaus on "
+        "suomenkielisen postauksen ovi. En ilmoittele ketjua, en pyydä seuraamaan, en valitse "
+        "kulmaa itse enkä julkaise mitään mihinkään.",
         "example": "Kirjoita tämän ajon X-ketju",
         "cost": "cheap",
         "latency": "minutes",
@@ -54,7 +56,7 @@ OFFERS = [
         "dataHandling": "llm-provider",
         "json": True,
         "consequences": [],
-        "required_to_function": {"kind": "deterministic", "op": "nonempty", "key": "julkaisu.{ref}.aineisto"},
+        "required_to_function": {"kind": "deterministic", "op": "nonempty", "key": "julkaisu.{ref}.valinta"},
         "success_signal": {"kind": "deterministic", "op": "nonempty", "key": "julkaisu.{ref}.x"},
         "deliverable_location": {"key": "julkaisu.{ref}.x"},
         "sample": {
@@ -73,14 +75,14 @@ OFFERS = [
 
 README = """[[FIGLET:slant]["Julkaisu X"]]
 
-Kirjoitan toimittajan aineistosta yhden englanninkielisen X-ketjun: 3–6 postausta, kukin alle 280
-merkkiä, tyhjä rivi väliin.
+Kirjoitan SINUN valitsemastasi kulmasta yhden englanninkielisen X-ketjun: 3–6 postausta, kukin alle
+280 merkkiä, tyhjä rivi väliin.
 
-**Kulmani on ENNEN-tila.** Aloitan siitä mikä oli rikki, ja korjaus tulee käänteenä. Suomenkielinen
-LinkedIn-postaus samasta aiheesta aloittaa korjauksesta — jos nämä kaksi lukevat kuin sama teksti
-kahdella kielellä, ajo epäonnistui vaikka molemmat tiedostot ovat olemassa.
+**Oveni on JÄNNITE.** Aloitan vastaväitteestä tai kulman omasta riskistä, ja väite tulee käänteenä.
+Suomenkielinen LinkedIn-postaus samasta kulmasta aloittaa kulman avausrivillä — jos nämä kaksi
+lukevat kuin sama teksti kahdella kielellä, ajo epäonnistui vaikka molemmat tiedostot ovat olemassa.
 
-**Mistä luen:** `julkaisu.<ref>.aineisto`. **Mihin kirjoitan:** `julkaisu.<ref>.x` (`text` =
+**Mistä luen:** `julkaisu.<ref>.valinta` ja `julkaisu.<ref>.tausta`. **Mihin kirjoitan:** `julkaisu.<ref>.x` (`text` =
 postaukset tyhjällä rivillä erotettuina, + `notes`).
 
 Ensimmäinen postaus seisoo yksin väitteenä. Ei "🧵"-ilmoitusta, ei emoji-luetteloita, ei
@@ -105,7 +107,7 @@ def build_domain(ctx: BuildContext):
         description=(
             f"Today is {ctx.today}. Request: '{ctx.prompt}'\n\n"
             + KEY_RULE
-            + "THIS RUN: you read julkaisu.<id>.aineisto, and you write julkaisu.<id>.x.\n\n"
+            + "THIS RUN: you read julkaisu.<id>.valinta (the angle a person chose), and you write julkaisu.<id>.x.\n\n"
             "1. Call write_julkaisu() EXACTLY ONCE. It takes no arguments: it reads the editor's material "
             "for this run, writes the English thread against the house rules — opening on the before-state, "
             "not the fix — and stores it under this run's own key. You do NOT write the posts yourself.\n"

@@ -38,20 +38,34 @@ from zoneinfo import ZoneInfo
 from aimeat_crewai.provenance import HumanInvolvement, Level, Method, declare
 
 from crewaimeat.aimeat_crew import _aimeat_call, record_deliverable_key, reset_deliverable_key
-from crewaimeat.julkaisu_desk import AINEISTO_KEY
 from crewaimeat.llm import get_llm, resolved_model, resolved_provider
 from crewaimeat.memory_tools import read_owner_key
 from crewaimeat.prose_style import FINNISH_NATIVE_STYLE
 
-# The workflow variable. Every key this pipeline touches is julkaisu.<ref>.<something>; `{ref}` stays
+# The workflow variable. Every key this chain touches is julkaisu.<ref>.<something>; `{ref}` stays
 # LITERAL in the published offers (the engine substitutes it per run) and concrete here.
+#
+# THE CANONICAL KEY TEMPLATES live here, in the lowest module of the chain, and everything else
+# imports them. `julkaisu_brief` reads from this module (run_address, KEY_RULE), so defining a
+# second copy of a key template over there is how the two halves would quietly disagree about where
+# a run lives.
 _REF_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 PIECE_KEY = "julkaisu.{ref}.{channel}"
 KUVAT_KEY = "julkaisu.{ref}.kuvat"
+TILAUS_KEY = "julkaisu.{ref}.tilaus"
+TAUSTA_KEY = "julkaisu.{ref}.tausta"
+KULMAT_KEY = "julkaisu.{ref}.kulmat"
+VALINTA_KEY = "julkaisu.{ref}.valinta"
+OHJAAJAT_KEY = "julkaisu.ohjaajat"
 
-# The aineisto fields a writer works from. `valittu` is the entry title — deliberately NOT in this
-# list: a writer that leans on the title restates the changelog, which is the habit this replaced.
-STORY_FIELDS = ("kulma", "ennen", "nyt", "kenelle", "todiste")
+# The chosen angle's fields a writer works from.
+STORY_FIELDS = ("kulma", "avaus", "miksi_toimii", "kenelle", "nojaa", "ohjaaja_ele", "riski")
+
+# The two answers the angle gate can carry. The app has a "Lisää kulmia" button, so `lisaa` is a
+# normal answer meaning "another batch, I have not chosen yet" — and a writer must REFUSE it rather
+# than pick an angle on the person's behalf. That refusal is the whole point of turning the chain
+# around: the person directs.
+VALITTU, LISAA = "valittu", "lisaa"
 
 # THE RULE, in every julkaisu agent's prompt, word for word. The code already resolves the address
 # (`run_address`) and the tools take no key, so the model cannot mistype one — but it is stated here
@@ -192,55 +206,128 @@ def run_address(task: dict | None, channel: str) -> tuple[str, str, str]:
     return PIECE_KEY.format(ref=run_id, channel=channel), run_id, rule
 
 
-def read_aineisto(agent_name: str, ref: str) -> dict:
-    """The editor's aineisto for this run. Raises when it is not there or is not usable.
-
-    A missing aineisto is a STOP: this pipeline writes from an angle that was dug out of sources, and
-    without one there is nothing to write from that is not invention.
-    """
-    key = AINEISTO_KEY.format(ref=ref)
+def _read_json_key(agent_name: str, key: str) -> dict | None:
     value = read_owner_key(agent_name, key)
     if isinstance(value, str):
         try:
             value = json.loads(value)
         except ValueError:
-            value = None
-    if not isinstance(value, dict):
-        raise LookupError(f"aineisto '{key}' is missing — the editor step has not run. Nothing was written.")
-    missing = [f for f in ("kulma", "ennen", "nyt") if not str(value.get(f) or "").strip()]
-    if missing:
+            return None
+    return value if isinstance(value, dict) else None
+
+
+def read_valinta(agent_name: str, ref: str) -> dict:
+    """The angle THE PERSON chose. Raises when nobody has chosen yet.
+
+    Two answers can sit at this gate, because the app has a "Lisää kulmia" button: `valittu` (here
+    is the angle) and `lisaa` (offer me another batch, I have not decided). A writer that treated
+    `lisaa` as permission to pick would be choosing on the person's behalf — which is the exact thing
+    v3 turned the chain around to stop. So it refuses, loudly, and says what the gate actually says.
+    """
+    key = VALINTA_KEY.format(ref=ref)
+    value = _read_json_key(agent_name, key)
+    if value is None:
         raise LookupError(
-            f"aineisto '{key}' has no {', '.join(missing)} — it is not a usable angle, and this agent "
-            "does not fill those in for the editor. Nothing was written."
+            f"choice '{key}' is missing — nobody has picked an angle yet. Nothing was written; this "
+            "agent does not choose the angle."
+        )
+    answer = str(value.get("vastaus") or "").strip().casefold()
+    if answer == LISAA:
+        raise LookupError(
+            f"the gate at '{key}' answered '{LISAA}' — the person asked for more angles instead of "
+            "choosing one. Nothing was written; the angle director runs again and a person picks."
+        )
+    angle = value.get("kulma")
+    if not isinstance(angle, dict) or not str(angle.get("kulma") or "").strip():
+        raise LookupError(
+            f"choice '{key}' carries no chosen angle (vastaus={answer or 'missing'!r}) — it is not a "
+            "usable brief, and this agent does not fill one in. Nothing was written."
         )
     return value
 
 
-def story_block(a: dict, *, lead: str = "nyt") -> str:
-    """The angle rendered for a prompt, with the LEAD field first.
+def read_tausta(agent_name: str, ref: str) -> dict:
+    """This run's research. Missing research is survivable — a chosen angle is still a brief — but it
+    is reported, because a piece written without the sourced background is a weaker piece."""
+    return _read_json_key(agent_name, TAUSTA_KEY.format(ref=ref)) or {}
 
-    The lead is what makes the Finnish post and the English thread two pieces rather than one text
-    twice: LinkedIn leads on `nyt` (the fix and what it is worth), X leads on `ennen` (the
-    frustration). Same facts, different door in.
+
+def _picked_block(valinta: dict, kulmat: list[dict]) -> str:
+    """The other angles the person ticked (`poimitut`) — MATERIAL, never a second subject."""
+    wanted = {int(n) for n in (valinta.get("poimitut") or []) if str(n).strip().isdigit()}
+    rows = [
+        f"  #{a.get('nro')} {a.get('otsikko')}: {a.get('kulma')}"
+        for a in kulmat
+        if isinstance(a, dict) and int(a.get("nro") or 0) in wanted
+    ]
+    if not rows:
+        return ""
+    return (
+        "\n\nPOIMITUT KULMAT — tilaaja haluaa näistä paloja MUKAAN. Käytä niitä aineistona: yksi "
+        "lause, yksi kuva, yksi luku. Ne EIVÄT ole toinen aihe; valittu kulma on yhä tarina.\n" + "\n".join(rows)
+    )
+
+
+def story_block(
+    valinta: dict, tausta: dict, ohjaajat: dict, kulmat: list[dict] | None = None, *, lead: str = "avaus"
+) -> str:
+    """The brief a writer works from: the chosen angle, the research behind it, and the director.
+
+    `lead` keeps the Finnish post and the English thread two pieces rather than one text twice —
+    LinkedIn opens on the angle's written first line, X opens on the tension (the counter-argument
+    and the angle's own risk) and lands on the same claim. Same story, different door in.
     """
+    angle = valinta.get("kulma") or {}
     labels = {
-        "kulma": "KULMA (yksi lause, jonka lukija toistaisi)",
-        "ennen": "ENNEN (mitä tehtiin ennen tätä)",
-        "nyt": "NYT (mitä tehdään sen sijaan)",
+        "kulma": "KULMA (se yksi lause jonka lukija toistaisi)",
+        "avaus": "AVAUS (ohjaajan kirjoittama ensimmäinen rivi — käytä sitä tai sen henkeä)",
+        "miksi_toimii": "MIKSI TOIMII",
         "kenelle": "KENELLE (kuka tarkalleen)",
-        "todiste": "TODISTE (mikä tekee siitä todellisen)",
-        "varmuus": "VARMUUS (mitä ei varmistettu — älä väitä näitä)",
+        "nojaa": "NOJAA (mihin tämä nojaa)",
+        "ohjaaja_ele": "OHJAAJAN ELE (tämä näkyy tekstissä)",
+        "riski": "RISKI (mitä tässä voi mennä pieleen)",
     }
-    order = ["kulma", lead, *[f for f in ("ennen", "nyt") if f != lead], "kenelle", "todiste", "varmuus"]
-    rows = []
-    for field in dict.fromkeys(order):
-        v = str(a.get(field) or "").strip()
-        if v:
-            rows.append(f"{labels.get(field, field.upper())}: {v}")
-    skip = [str(x).strip() for x in (a.get("ei_kerrota") or []) if str(x).strip()]
-    if skip:
-        rows.append("EI KERROTA (nämä eivät ole tämä tarina — jätä pois):\n" + "\n".join(f"  - {s}" for s in skip))
-    return "\n".join(rows)
+    order = ["kulma", lead, *[f for f in STORY_FIELDS if f not in ("kulma", lead)]]
+    rows = [
+        f"{labels.get(f, f.upper())}: {str(angle.get(f)).strip()}"
+        for f in dict.fromkeys(order)
+        if str(angle.get(f) or "").strip()
+    ]
+
+    findings = [f for f in (tausta.get("loydokset") or []) if isinstance(f, dict)]
+    if findings:
+        rows.append(
+            "\nTAUSTA — käytä näitä, ja jos siteeraat lukua tai väitettä, se on näistä:\n"
+            + "\n".join(f"  - {f.get('vaite')} [{f.get('lahde')}]" for f in findings)
+        )
+    comps = [v for v in (tausta.get("vertailu") or []) if isinstance(v, dict)]
+    if comps:
+        rows.append("VERTAILU: " + "; ".join(f"{v.get('kuka')} — {v.get('mita_tekee')}" for v in comps))
+    for field, label in (
+        ("ajankohtaisuus", "AJANKOHTAISUUS"),
+        ("vastavaite", "VASTAVÄITE (älä ohita tätä)"),
+        ("ei_loytynyt", "EI LÖYTYNYT (älä väitä näitä)"),
+    ):
+        if str(tausta.get(field) or "").strip():
+            rows.append(f"{label}: {tausta[field]}")
+    if not findings:
+        rows.append("TAUSTA: tutkimusta ei ollut saatavilla — pysy siinä mitä kulma sanoo, älä keksi lukuja.")
+
+    block = "\n".join(rows) + _picked_block(valinta, kulmat or [])
+    # The director shapes the WRITING too, not only the video. A Fincher LinkedIn post is not the
+    # same post as a Gondry one: rhythm, sentence length and what is left unsaid all carry.
+    from crewaimeat.julkaisu_brief import director_block, style_block
+
+    block += (
+        "\n\n" + director_block(ohjaajat, valinta.get("ohjaaja")) + "\n\n" + style_block(ohjaajat, valinta.get("tyyli"))
+    )
+    block += (
+        "\n\nOHJAAJA KOSKEE MYÖS KIRJOITTAMISTA: rytmi, lauseen pituus, mitä jätetään sanomatta. "
+        "Älä kuvaile ohjaajaa — kirjoita hänen rytmissään."
+    )
+    if str(valinta.get("lisaohje") or "").strip():
+        block += f"\n\nLISÄOHJE TILAAJALTA (tämä voittaa talon oletukset): {valinta['lisaohje']}"
+    return block
 
 
 # ── house rules, checked in code ─────────────────────────────────────────────────────────────────
@@ -255,7 +342,7 @@ _EMOJI_BULLET = re.compile(
 _NAMED = re.compile(r"\b[A-ZÅÄÖ][\wåäö/-]{3,}\b|\b\d[\d.,]*\s*(?:%|€|kk|min|s|h)?\b")
 
 
-def excluded_leak(text: str, aineisto: dict) -> list[str]:
+def excluded_leak(text: str, brief: dict) -> list[str]:
     """Violations for material the editor put in `ei_kerrota` that turned up in the piece anyway.
 
     Deliberately NARROW. It compares only NAMEABLE things — capitalised names and numbers — and only
@@ -267,9 +354,9 @@ def excluded_leak(text: str, aineisto: dict) -> list[str]:
     """
     allowed = set()
     for field in (*STORY_FIELDS, "varmuus"):
-        allowed |= set(_NAMED.findall(str(aineisto.get(field) or "")))
+        allowed |= set(_NAMED.findall(str(brief.get(field) or "")))
     out = []
-    for item in aineisto.get("ei_kerrota") or []:
+    for item in brief.get("ei_kerrota") or []:
         tokens = {t.strip() for t in _NAMED.findall(str(item)) if t.strip()} - allowed
         hits = sorted(t for t in tokens if t and t in text)
         named = [h for h in hits if h[:1].isalpha()]
@@ -278,7 +365,7 @@ def excluded_leak(text: str, aineisto: dict) -> list[str]:
     return out
 
 
-def check_linkedin(text: str, aineisto: dict | None = None) -> list[str]:
+def check_linkedin(text: str, brief: dict | None = None) -> list[str]:
     """House rules for the Finnish LinkedIn post. Violations in Finnish — they are fed straight back
     into a Finnish prompt, where an English instruction would invite translationese."""
     bad: list[str] = []
@@ -297,8 +384,8 @@ def check_linkedin(text: str, aineisto: dict | None = None) -> list[str]:
         bad.append("teksti sisältää 'tässä muutama ajatus' — poista se.")
     if first.endswith("?"):
         bad.append("ensimmäinen rivi on kysymys — ensimmäisen kappaleen pitää kertoa lukijan konkreettinen hyöty.")
-    if aineisto:
-        bad += excluded_leak(body, aineisto)
+    if brief:
+        bad += excluded_leak(body, brief)
     return bad
 
 
@@ -321,7 +408,7 @@ def x_posts(text: str) -> list[str]:
     return [p.strip() for p in re.split(r"\n\s*\n", (text or "").strip()) if p.strip()]
 
 
-def check_x(text: str, aineisto: dict | None = None) -> list[str]:
+def check_x(text: str, brief: dict | None = None) -> list[str]:
     """House rules for the English X thread. Violations in English — the prompt is English."""
     bad: list[str] = []
     posts = x_posts(text)
@@ -341,8 +428,8 @@ def check_x(text: str, aineisto: dict | None = None) -> list[str]:
                 break
     if _EMOJI_BULLET.search(text or ""):
         bad.append("a line starts with an emoji/bullet glyph — no emoji bullets anywhere in the thread.")
-    if aineisto:
-        bad += excluded_leak(text, aineisto)
+    if brief:
+        bad += excluded_leak(text, brief)
     return bad
 
 
@@ -448,42 +535,43 @@ def check_video(doc: dict) -> list[str]:
 
 
 # ── prompts ──────────────────────────────────────────────────────────────────────────────────────
-def _linkedin_prompt(a: dict) -> str:
+def _linkedin_prompt(b: dict) -> str:
     return (
-        "Olet suomalainen kirjoittaja AIMEATin julkaisupöydässä. Toimittaja on jo päättänyt mistä "
-        "kerrotaan ja kaivanut esiin miksi. Sinä valitset sanat.\n\n"
+        "Olet suomalainen kirjoittaja AIMEATin julkaisupöydässä. IHMINEN on jo valinnut kulman ja "
+        "ohjaajan. Sinä kirjoitat sen kulman — et valitse toista.\n\n"
         "TALON SÄÄNNÖT:\n"
-        "- Kirjoita KULMASTA, ENNEN- ja NYT-tiloista ja TODISTEESTA. Älä referoi muutosmerkintää.\n"
+        "- Kirjoita VALITUSTA KULMASTA. Avaus on jo kirjoitettu sinulle: käytä sitä tai sen henkeä.\n"
         "- Pituus 600–1200 merkkiä.\n"
         "- Lukijan konkreettinen hyöty ensimmäisessä kappaleessa, ei kolmannessa.\n"
         "- Ei aihetunnistekasaa: korkeintaan kaksi, mieluiten ei yhtään.\n"
         "- Ei aloitusta 'olen innoissani', ei fraasia 'tässä muutama ajatus', ei retorista kysymystä "
         "ensimmäiseksi riviksi.\n"
-        "- Älä väitä mitään mitä aineistossa ei ole. VARMUUS kertoo mitä ei varmistettu — älä esitä "
-        "sitä varmana. EI KERROTA -listan asiat jätetään pois.\n\n"
-        "AINEISTO:\n" + story_block(a, lead="nyt") + FINNISH_NATIVE_STYLE + _OUTPUT_CONTRACT
+        "- Väitä vain sitä mitä kulma tai tausta sanoo. Jos siteeraat lukua, se on taustan lähteistä. "
+        "EI LÖYTYNYT kertoo mitä ei varmistettu — älä esitä sitä varmana.\n\n"
+        "BRIIFFI:\n" + b["block"] + FINNISH_NATIVE_STYLE + _OUTPUT_CONTRACT
     )
 
 
-def _x_prompt(a: dict) -> str:
+def _x_prompt(b: dict) -> str:
     return (
-        "You write X threads for AIMEAT. The editor has already chosen the story and dug out why it "
-        "matters; you choose the words.\n\n"
-        "YOUR ANGLE IS THE BEFORE STATE. Open on what people were stuck with (ENNEN) and let the fix "
-        "arrive as the turn. The Finnish LinkedIn post for this same story opens on the fix — if your "
-        "thread reads like that post translated, the run failed even though both files exist.\n\n"
+        "You write X threads for AIMEAT. A PERSON has already chosen the angle and the director; you "
+        "write that angle, you do not pick another.\n\n"
+        "YOUR DOOR IN IS THE TENSION. Open on what is uncomfortable — the counter-argument, or the "
+        "risk the angle itself names — and let the chosen claim arrive as the turn. The Finnish "
+        "LinkedIn post for this same angle opens on its written first line; if your thread reads like "
+        "that post translated, the run failed even though both files exist.\n\n"
         "HOUSE RULES:\n"
         "- 3 to 6 posts. Separate every post with a BLANK LINE. Each post under 280 characters.\n"
         "- Post 1 has to stand alone as a claim worth reading — no '🧵', no 'a thread:', no announcement.\n"
         "- No emoji bullets anywhere.\n"
         "- The last post says what a reader can do next. Do not ask for a follow, a like or a retweet.\n"
-        "- Claim only what the material says. VARMUUS is what could NOT be verified — do not state it "
-        "as fact. Leave out everything under EI KERROTA.\n\n"
-        "MATERIAL (in Finnish — the thread is in English):\n" + story_block(a, lead="ennen") + _OUTPUT_CONTRACT
+        "- Claim only what the angle or the research says. A number you quote comes from a source in "
+        "the research. EI LÖYTYNYT is what could NOT be verified — do not state it as fact.\n\n"
+        "BRIEF (in Finnish — the thread is in English):\n" + b["block"] + _OUTPUT_CONTRACT
     )
 
 
-def _video_prompt(a: dict) -> str:
+def _video_prompt(b: dict) -> str:
     return (
         "Olet käsikirjoittaja AIMEATin julkaisupöydässä. Kirjoita YKSI pystyvideon (9:16, 45–75 s) "
         "KUVALUETTELO. Et kirjoita proosaa: kirjoitat kohtauksia, jotka joku voi kuvata.\n\n"
@@ -497,8 +585,9 @@ def _video_prompt(a: dict) -> str:
         "- 'kuvapyynnot' VAIN niille kohtauksille joita ei voi kuvata ruutukaappauksena. Kirjoita niiden "
         "prompt englanniksi ja kuvaile mitä kuvassa on, älä tuotenimiä.\n"
         "- Lopeta siihen minkä katsoja toistaisi kollegalleen.\n"
-        "- Älä väitä mitään mitä aineistossa ei ole; EI KERROTA -listan asiat jätetään pois.\n\n"
-        "AINEISTO:\n" + story_block(a, lead="nyt") + FINNISH_NATIVE_STYLE + "\n\n"
+        "- Väitä vain sitä mitä kulma tai tausta sanoo; EI LÖYTYNYT -asioita ei esitetä varmana.\n"
+        "- OHJAAJA koskee kuvaa, rytmiä, väriä ja ääntä. Tämä on se kohta jossa hän näkyy eniten.\n\n"
+        "BRIIFFI:\n" + b["block"] + FINNISH_NATIVE_STYLE + "\n\n"
         "VASTAUKSEN MUOTO — pelkkä JSON-olio, ei mitään sen ympärille:\n"
         "{\n"
         '  "kesto_s": 58,\n'
@@ -519,6 +608,7 @@ def _video_prompt(a: dict) -> str:
 CHANNELS: dict[str, dict] = {
     "linkedin": {
         "agent": "julkaisu-linkedin",
+        "lead": "avaus",
         "what": "LinkedIn-postaus (suomi, 600–1200 merkkiä)",
         "prompt": _linkedin_prompt,
         "check": check_linkedin,
@@ -528,6 +618,7 @@ CHANNELS: dict[str, dict] = {
     },
     "x": {
         "agent": "julkaisu-x",
+        "lead": "riski",
         "what": "X thread (English, 3–6 posts)",
         "prompt": _x_prompt,
         "check": check_x,
@@ -537,6 +628,7 @@ CHANNELS: dict[str, dict] = {
     },
     "video": {
         "agent": "julkaisu-video",
+        "lead": "avaus",
         "what": "pystyvideon kuvaluettelo (suomi, 9:16, 45–75 s)",
         "prompt": _video_prompt,
         "check": check_video,
@@ -560,15 +652,16 @@ def parse_piece(raw: str) -> tuple[str, str]:
 
 # ── the run ──────────────────────────────────────────────────────────────────────────────────────
 def write_julkaisu(agent_name: str, channel: str, task: dict | None = None, task_id: str | None = None) -> str:
-    """Read julkaisu.<id>.aineisto, write ONE checked piece to the key this run was GIVEN. Returns a report.
+    """Write ONE checked piece, from the angle A PERSON chose, to the key this run was GIVEN.
 
     The address comes from `run_address` — the dispatch's `deliverable_key`, else its variables, else
     today's date. Never a generated id: that is the defect this whole path was rewritten around.
 
-    Nothing is posted and nobody is contacted — the piece lands in owner memory for the workflow's
-    human-input gate. A missing aineisto, a model that will not meet the house rules, or a failed
-    write all return a FAILED report and write nothing, so the step's success_signal reads the same
-    absence.
+    The brief is `julkaisu.<id>.valinta` (the chosen angle, the director, the style, the picked
+    extras) plus `julkaisu.<id>.tausta` (the sourced research). Nothing is posted and nobody is
+    contacted — the piece lands in owner memory for the approval gate. A gate that has not chosen, a
+    model that will not meet the house rules, or a failed write all return a FAILED report and write
+    nothing, so the step's success_signal reads the same absence.
     """
     spec = CHANNELS.get(channel)
     if spec is None:
@@ -577,13 +670,28 @@ def write_julkaisu(agent_name: str, channel: str, task: dict | None = None, task
     inferred = f" Address: {rule}."
     print(f"[{agent_name}] {channel} -> {key} ({rule})", file=sys.stderr)
     try:
-        aineisto = read_aineisto(agent_name, run_id)
+        from crewaimeat.julkaisu_brief import read_ohjaajat
+
+        valinta = read_valinta(agent_name, run_id)
+        tausta = read_tausta(agent_name, run_id)
+        ohjaajat = read_ohjaajat(agent_name)
+        kulmat = (_read_json_key(agent_name, KULMAT_KEY.format(ref=run_id)) or {}).get("kulmat") or []
+        block = story_block(valinta, tausta, ohjaajat, kulmat, lead=spec["lead"])
     except LookupError as exc:
         print(f"[{agent_name}] {exc}", file=sys.stderr)
         return f"FAILED: {exc}{inferred}"
+    if not tausta:
+        print(f"[{agent_name}] {channel}: no research for this run — writing from the angle alone", file=sys.stderr)
 
+    # What the leak check treats as off-limits: the research's own "could not find". A writer that
+    # states a named thing the researcher explicitly failed to verify has invented it.
+    brief = {
+        "kulma": str((valinta.get("kulma") or {}).get("kulma") or ""),
+        "ei_kerrota": [tausta.get("ei_loytynyt")] if tausta.get("ei_loytynyt") else [],
+        "block": block,
+    }
     llm = get_llm(for_tool_use=False, temperature=spec["temperature"], agent_name=agent_name)
-    base = spec["prompt"](aineisto)
+    base = spec["prompt"](brief)
     structured = spec["structured"]
     prompt, value, previous, violations = base, None, "", ["(no attempt ran)"]
     for attempt in range(1, _MAX_ATTEMPTS + 1):
@@ -607,7 +715,7 @@ def write_julkaisu(agent_name: str, channel: str, task: dict | None = None, task
             else:
                 value = {"text": text, "notes": notes}
                 previous = text
-                violations = spec["check"](text, aineisto)
+                violations = spec["check"](text, brief)
         print(
             f"[{agent_name}] {channel} attempt {attempt}/{_MAX_ATTEMPTS}: "
             + ("OK" if not violations else "; ".join(violations)),
@@ -648,7 +756,7 @@ def write_julkaisu(agent_name: str, channel: str, task: dict | None = None, task
                 human_involvement=HumanInvolvement.NONE,
                 model=resolved_model(llm),
                 provider=resolved_provider(),
-                notes=f"julkaisupöytä {channel} from {AINEISTO_KEY.format(ref=run_id)}; not published anywhere.",
+                notes=f"KANSI {channel} from the angle a person chose ({VALINTA_KEY.format(ref=run_id)}); not published anywhere.",
             ),
         },
     )

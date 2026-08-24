@@ -4,6 +4,57 @@ Notable changes to crewaimeat. Format loosely follows [Keep a Changelog](https:/
 Dates are the working dates; entries are **uncommitted and take effect on the next fleet restart**
 (the daemons import the modules at start).
 
+## [Unreleased] — 2026-08-25 — KANSI v3: the person directs
+
+### Changed
+- **The chain turns around. The desk no longer chooses the story.** v2 had an editor
+  (`julkaisu-toimittaja`) that picked the changelog entry and dug out the angle. It chose well, and
+  that was the problem: the owner wants to direct, not delegate. Now a person picks the entries, the
+  director and the style in the app (`julkaisu.{ref}.tilaus`), and the agents work for them:
+
+  ```
+  person → tilaus → tutkija → tausta → ohjaaja → kulmat → PERSON PICKS → valinta
+        → linkedin / x / video → kuva → PERSON APPROVES → portti
+  ```
+
+### Added
+- **`julkaisu-tutkija`** searches the OPEN WEB — not the changelog, which the person has already
+  read — for what others have said about the problem, what comparable products do by name, why this
+  week, and the strongest case that none of it is interesting. Writes `julkaisu.{ref}.tausta`.
+
+  **The check this step lives or dies by:** every finding's `lahde` must be one of the pages the
+  search actually returned, verified against an allowlist built from the results. A researcher that
+  can invent a citation is worse than no researcher at all. `ei_loytynyt` is not optional either —
+  an empty search is a finding, and hiding it is what would make the step worse than useless.
+
+  Web access is real and has no single point of failure: SearXNG when it is up (`localhost:21333`),
+  keyless DuckDuckGo otherwise, both driven from code so the URLs stay data rather than becoming
+  text for a model to read. If neither answers, the run writes NOTHING and says so.
+- **`julkaisu-ohjaaja`** offers 1–5 genuinely different ways into the same material — not five
+  wordings of one idea — each with its first line actually written and a probability of landing,
+  with the reason for that number. The spread is checked: three or more angles within 15 points of
+  each other is a tell that nothing was judged, and it is handed back. Writes `julkaisu.{ref}.kulmat`.
+
+  **"Lisää kulmia" appends.** The angle gate takes two answers, `valittu` and `lisaa`; on `lisaa`
+  the director runs again with the person's new instruction and numbers on from the highest existing
+  angle, because the person is looking at the first batch in the app and replacing it would delete
+  what they were reading.
+- **The directors list is READ from the node** (`julkaisu.ohjaajat`), never copied into this repo —
+  a test fails if a director's name appears here as data. `full` / `inspired-by` / `opposite-of` /
+  `blend` each render a different instruction, and an order naming a director the node does not
+  carry is surfaced rather than quietly written in no style at all.
+
+### Changed (the four writers)
+- They read `julkaisu.{ref}.valinta` (the chosen angle, director, style, picked extras) plus
+  `julkaisu.{ref}.tausta`, and no longer an `aineisto`. Output keys are unchanged.
+- **A writer refuses a gate that answered `lisaa`.** Asking for more angles is not permission to
+  pick one; a writer that treated it as a green light would be choosing on the person's behalf,
+  which is the exact thing v3 turned the chain around to stop.
+- **The director shapes the writing, not only the video** — rhythm, sentence length, what is left
+  unsaid. A Fincher LinkedIn post is not the same post as a Gondry one.
+- The LinkedIn/X divergence survives the rewrite in its new form: LinkedIn opens on the angle's
+  written first line, X opens on the tension (the counter-argument, or the angle's own risk).
+
 ## [Unreleased] — 2026-08-24 (fix)
 
 ### Fixed

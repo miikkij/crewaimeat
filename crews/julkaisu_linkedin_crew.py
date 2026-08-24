@@ -1,16 +1,18 @@
-"""julkaisu-linkedin: one Finnish LinkedIn post from the editor's angle. A step of `julkaisupoyta`.
+"""julkaisu-linkedin: one Finnish LinkedIn post from the angle A PERSON chose. A step of KANSI.
 
-Reads `julkaisu.{ref}.aineisto` — the editor's kulma / ennen / nyt / kenelle / todiste — and writes
-`julkaisu.{ref}.linkedin` as `{text, notes}`. It writes FROM the angle; it does not restate the
-changelog entry, and it never touches anything the editor listed under `ei_kerrota`.
+Reads `julkaisu.{ref}.valinta` (the chosen angle, the director, the style, the picked extras) plus
+`julkaisu.{ref}.tausta` (the sourced research), and writes `julkaisu.{ref}.linkedin` as
+`{text, notes}`. It writes THAT angle; it does not pick another, and it refuses a gate that answered
+"lisaa" — asking for more angles is not permission to choose one.
 
-This post leads with the FIX and what it is worth to the reader. The English X thread for the same
-story leads with the before-state, so the two are two pieces rather than one text in two languages.
+This post opens on the angle's written first line. The English X thread for the same angle opens on
+the tension, so the two are two pieces rather than one text in two languages. The DIRECTOR shapes the
+writing too, not only the video: rhythm, sentence length, what is left unsaid.
 
 It posts nothing anywhere and contacts nobody: the workflow's human-input gate is where a person
 picks approve / rewrite / discard.
 
-The run's `ref` is resolved in code, the aineisto is required, and the house rules (600–1200 chars,
+The run's `ref` is resolved in code, the choice is required, and the house rules (600–1200 chars,
 benefit first, at most two hashtags, no "olen innoissani", no rhetorical opener, nothing excluded)
 are checked before anything is stored. See `crewaimeat.julkaisu_pipeline`.
 
@@ -35,17 +37,17 @@ LLM_PROFILE = "news"  # Finnish prose — the news profile, not grok (weak in Fi
 TAGS = ["julkaisupoyta", "linkedin", "somekirjoitus", "role.task-runner"]
 CAPABILITIES = {
     "technical": [{"name": "julkaisu-linkedin", "type": "skill"}],
-    "domain": ["LinkedIn posts", "release storytelling", "consumes:julkaisu-aineisto@1"],
+    "domain": ["LinkedIn posts", "release storytelling", "consumes:julkaisu-valinta@1"],
     "languages": ["fi"],
 }
 OFFERS = [
     {
         "id": "kirjoita-linkedin",
         "title": "Kirjoita LinkedIn-postaus suomeksi",
-        "ask": "Kirjoitan toimittajan aineistosta yhden LinkedIn-postauksen suomeksi: hyöty ensimmäiseen "
-        "kappaleeseen, 600–1200 merkkiä, korkeintaan kaksi aihetunnistetta. En referoi "
-        "muutosmerkintää enkä kirjoita asioista jotka aineisto on rajannut ulos. En julkaise "
-        "postausta mihinkään enkä ota yhteyttä kehenkään — ihminen päättää mitä sille tehdään.",
+        "ask": "Kirjoitan valitusta kulmasta yhden LinkedIn-postauksen suomeksi tilatun ohjaajan rytmissä: "
+        "hyöty ensimmäiseen kappaleeseen, 600–1200 merkkiä, korkeintaan kaksi aihetunnistetta. "
+        "En valitse kulmaa itse enkä väitä sitä mitä tausta ei vahvista. En julkaise postausta "
+        "mihinkään enkä ota yhteyttä kehenkään — ihminen päättää mitä sille tehdään.",
         "example": "Kirjoita tämän ajon LinkedIn-postaus",
         "cost": "cheap",
         "latency": "minutes",
@@ -55,7 +57,7 @@ OFFERS = [
         "dataHandling": "llm-provider",
         "json": True,
         "consequences": [],
-        "required_to_function": {"kind": "deterministic", "op": "nonempty", "key": "julkaisu.{ref}.aineisto"},
+        "required_to_function": {"kind": "deterministic", "op": "nonempty", "key": "julkaisu.{ref}.valinta"},
         "success_signal": {"kind": "deterministic", "op": "nonempty", "key": "julkaisu.{ref}.linkedin"},
         "deliverable_location": {"key": "julkaisu.{ref}.linkedin"},
         "sample": {
@@ -73,16 +75,17 @@ OFFERS = [
 
 README = """[[FIGLET:slant]["Julkaisu LinkedIn"]]
 
-Kirjoitan toimittajan aineistosta yhden suomenkielisen LinkedIn-postauksen (600–1200 merkkiä).
+Kirjoitan SINUN valitsemastasi kulmasta yhden suomenkielisen LinkedIn-postauksen (600–1200 merkkiä).
 
-**Mistä luen:** `julkaisu.<ref>.aineisto` — kulma, ennen, nyt, kenelle, todiste. Kirjoitan NIISTÄ,
-en referoi muutosmerkintää. **Mihin kirjoitan:** `julkaisu.<ref>.linkedin` (`text` + `notes`).
+**Mistä luen:** `julkaisu.<ref>.valinta` (valittu kulma, ohjaaja, tyyli, poimitut) ja
+`julkaisu.<ref>.tausta` (lähteistetty tausta). **Mihin kirjoitan:** `julkaisu.<ref>.linkedin`.
 
 Lukijan hyöty ensimmäiseen kappaleeseen. Korkeintaan kaksi aihetunnistetta. Ei "olen innoissani"
 -aloitusta, ei retorista kysymystä ensimmäisenä rivinä. Suomi kirjoitetaan suomeksi, ei käännetä.
-Aineiston `ei_kerrota`-listan asiat jäävät pois, ja `varmuus`-kentän epävarmuuksia en esitä varmana.
+Taustan `ei_loytynyt` kertoo mitä ei varmistettu — en esitä sitä varmana.
 
-Tämä postaus avaa **korjauksesta**; saman tarinan englanninkielinen X-ketju avaa turhautumisesta.
+Tämä postaus avaa **kulman omalla avausrivillä**; saman kulman X-ketju avaa jännitteestä.
+**Ohjaaja koskee myös kirjoittamista** — Fincher-postaus ei ole sama kuin Gondry-postaus.
 **En julkaise mitään mihinkään** — ihminen hyväksyy, korjauttaa tai hylkää.
 """
 
@@ -103,10 +106,11 @@ def build_domain(ctx: BuildContext):
         description=(
             f"Today is {ctx.today}. Request: '{ctx.prompt}'\n\n"
             + KEY_RULE
-            + "THIS RUN: you read julkaisu.<id>.aineisto, and you write julkaisu.<id>.linkedin.\n\n"
-            "1. Call write_julkaisu() EXACTLY ONCE. It takes no arguments: it reads the editor's material "
-            "for this run, writes the Finnish LinkedIn post against the house rules, and stores it under "
-            "this run's own key. You do NOT write the post yourself.\n"
+            + "THIS RUN: you read julkaisu.<id>.valinta (the angle a person chose), and you write julkaisu.<id>.linkedin.\n\n"
+            "1. Call write_julkaisu() EXACTLY ONCE. It takes no arguments: it reads the angle this run's "
+            "person chose plus the research behind it, writes the Finnish LinkedIn post against the house "
+            "rules and the ordered director, and stores it under this run's own key. You do NOT write the "
+            "post yourself and you do NOT choose a different angle.\n"
             "2. Return its report verbatim — the key it wrote and the length, or the FAILED line and "
             "its reason."
         ),

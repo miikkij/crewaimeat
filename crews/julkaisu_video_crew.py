@@ -1,4 +1,4 @@
-"""julkaisu-video: a vertical-video SHOT LIST from the editor's angle. A step of `julkaisupoyta`.
+"""julkaisu-video: a vertical-video SHOT LIST from the angle A PERSON chose. A step of KANSI.
 
 The previous version wrote prose with `[ruutu: …]` glued on the end of each line. That is not a
 script — nobody can shoot from it. This one writes `julkaisu.{ref}.video` as a structured shot list:
@@ -41,14 +41,15 @@ LLM_PROFILE = "news"  # Finnish spoken lines — the news profile, not grok (wea
 TAGS = ["julkaisupoyta", "video-kasikirjoitus", "pystyvideo", "role.task-runner"]
 CAPABILITIES = {
     "technical": [{"name": "julkaisu-video", "type": "skill"}],
-    "domain": ["vertical video scripts", "shot lists", "consumes:julkaisu-aineisto@1", "produces:julkaisu-video@1"],
+    "domain": ["vertical video scripts", "shot lists", "consumes:julkaisu-valinta@1", "produces:julkaisu-video@1"],
     "languages": ["fi"],
 }
 OFFERS = [
     {
         "id": "kirjoita-video",
         "title": "Kirjoita pystyvideon kuvaluettelo",
-        "ask": "Kirjoitan toimittajan aineistosta pystyvideon (9:16, 45–75 s) kuvaluettelon: jokainen "
+        "ask": "Kirjoitan valitusta kulmasta pystyvideon (9:16, 45–75 s) kuvaluettelon tilatun ohjaajan "
+        "kuvakielellä: jokainen "
         "kohtaus kuvakokona, liikkeenä, repliikkinä, ruututekstinä ja äänenä. Ruudussa näkyy vain "
         "sitä mikä on olemassa — en kirjoita kuvituskuvaohjeita, enkä pyydä generoitua kuvaa "
         "kohtaukseen joka on ruutukaappaus. En tee videota enkä julkaise mitään mihinkään.",
@@ -61,7 +62,7 @@ OFFERS = [
         "dataHandling": "llm-provider",
         "json": True,
         "consequences": [],
-        "required_to_function": {"kind": "deterministic", "op": "nonempty", "key": "julkaisu.{ref}.aineisto"},
+        "required_to_function": {"kind": "deterministic", "op": "nonempty", "key": "julkaisu.{ref}.valinta"},
         "success_signal": {
             "kind": "deterministic",
             "op": "count_nonempty",
@@ -112,10 +113,10 @@ OFFERS = [
 
 README = """[[FIGLET:slant]["Julkaisu Video"]]
 
-Kirjoitan toimittajan aineistosta pystyvideon (9:16, 45–75 s) **kuvaluettelon** — en proosaa, josta
-kukaan ei pysty kuvaamaan.
+Kirjoitan SINUN valitsemastasi kulmasta pystyvideon (9:16, 45–75 s) **kuvaluettelon** — en proosaa,
+josta kukaan ei pysty kuvaamaan. Tilattu **ohjaaja** näkyy tässä eniten: kuva, rytmi, väri, ääni.
 
-**Mistä luen:** `julkaisu.<ref>.aineisto`. **Mihin kirjoitan:** `julkaisu.<ref>.video`: `kohtaukset`
+**Mistä luen:** `julkaisu.<ref>.valinta` ja `julkaisu.<ref>.tausta`. **Mihin kirjoitan:** `julkaisu.<ref>.video`: `kohtaukset`
 (nro, kesto, kuvakoko, kuvassa, liike, puhe, ruututeksti, ääni), `kuvapyynnot`, `text` ja `notes`.
 
 Kolme ensimmäistä sekuntia kantavat väitteen, eivät logoa. Yksikään kuva ei ole yli 6 sekuntia.
@@ -144,7 +145,7 @@ def build_domain(ctx: BuildContext):
         description=(
             f"Today is {ctx.today}. Request: '{ctx.prompt}'\n\n"
             + KEY_RULE
-            + "THIS RUN: you read julkaisu.<id>.aineisto, and you write julkaisu.<id>.video.\n\n"
+            + "THIS RUN: you read julkaisu.<id>.valinta (the angle a person chose), and you write julkaisu.<id>.video.\n\n"
             "1. Call write_julkaisu() EXACTLY ONCE. It takes no arguments: it reads the editor's material "
             "for this run, writes the 9:16 shot list against the house rules, and stores it under this "
             "run's own key. You do NOT write the script yourself.\n"
