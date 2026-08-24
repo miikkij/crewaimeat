@@ -24,7 +24,6 @@ Nothing here posts anything or contacts anyone.
 from __future__ import annotations
 
 import datetime
-import hashlib
 import json
 import re
 import sys
@@ -96,14 +95,12 @@ def entry_title(entry: dict) -> str:
     return entry_text(entry, "title", "en")
 
 
-def entry_ref(entry: dict) -> str:
-    """A stable short ref minted from the entry itself, for a run that was dispatched without one.
-
-    Same entry -> same ref, always: the id is a hash of (date, title), so a re-run of the same story
-    writes the same keys instead of scattering half-finished runs across the namespace.
-    """
-    seed = f"{entry.get('date')}|{entry_title(entry)}".encode()
-    return "p" + hashlib.sha256(seed).hexdigest()[:7]
+# There is deliberately NO function here that mints an id from an entry. There was one — a hash of
+# (date, title) that produced p69c3e53, p6605be9, p55ff4e1 on three prod runs. Each run then wrote a
+# perfectly good aineisto to an address nobody else could derive, the engine looked at the key IT
+# knew, found nothing, and recorded the step as having produced nothing. The work was done and thrown
+# away, three times. "Stable" was not the property that mattered: DERIVABLE BY THE OTHER SIDE was.
+# The address now comes from the dispatch (crewaimeat.julkaisu_pipeline.run_address).
 
 
 # ── the running memory: what has been told, and how it did ───────────────────────────────────────
@@ -310,13 +307,19 @@ def _dig_prompt(entry: dict, neighbours: list[dict], llms_txt: str) -> str:
     )
 
 
-def valitse_aihe(agent_name: str, ref: str | None = None, task_id: str | None = None) -> str:
-    """Fetch the changelog, pick the entry worth telling, dig, and write julkaisu.<ref>.aineisto.
+def valitse_aihe(agent_name: str, task: dict | None = None, task_id: str | None = None) -> str:
+    """Fetch the changelog, pick the entry worth telling, dig, and write this run's aineisto key.
+
+    The address comes from the DISPATCH (`run_address`): the named `deliverable_key`, else the run's
+    variables, else today's date. It is never derived from the entry — an id only this agent can
+    compute is an id the engine cannot find, which is how three good runs were thrown away.
 
     Returns a report. Every failure writes NOTHING and says why: an unread changelog, nothing left
     untold, or a dig that will not meet the contract. The workflow's success_signal reads the same
     absence, so a silent bad pick cannot look like a good run.
     """
+    from crewaimeat.julkaisu_pipeline import run_address
+
     try:
         entries = fetch_changelog()
     except Exception as exc:  # noqa: BLE001 — the fetch IS the input; a failure is the whole story
@@ -334,8 +337,7 @@ def valitse_aihe(agent_name: str, ref: str | None = None, task_id: str | None = 
     llm = get_llm(for_tool_use=False, temperature=0.4, agent_name=agent_name)
     idx, why = _pick_entry(llm, candidates, told)
     entry = candidates[idx]
-    ref = (ref or "").strip() or entry_ref(entry)
-    key = AINEISTO_KEY.format(ref=ref)
+    key, ref, rule = run_address(task, "aineisto")
     pos = entries.index(entry)
     neighbours = [e for e in entries[max(0, pos - _NEIGHBOURS) : pos + _NEIGHBOURS + 1] if e is not entry]
     llms_txt = fetch_llms_txt()
@@ -403,7 +405,7 @@ def valitse_aihe(agent_name: str, ref: str | None = None, task_id: str | None = 
     remembered = remember_told(agent_name, ref, entry)
     return (
         f"OK: '{entry_title(entry)}' ({entry.get('date')}) -> {key}. Angle: {value['kulma'][:120]}"
-        + (f" | ref '{ref}' was minted from the entry (no ref in the dispatch)." if not (task_id and ref) else "")
+        + f" Address: {rule}."
         + ("" if remembered else f" WARNING: {KERROTTU_KEY} was NOT updated — the next run may repeat this entry.")
     )
 
@@ -615,17 +617,15 @@ def make_toimittaja_tools(agent_name: str, task: dict | None = None, prompt: str
     """The editor's ONE tool. The ref is resolved (or minted) in code; the model never types a key."""
     from crewai.tools import tool
 
-    from crewaimeat.julkaisu_pipeline import resolve_ref
-
-    ref = resolve_ref(task, prompt)
     task_id = (task or {}).get("id")
 
     @tool("valitse_ja_kaiva")
     def valitse_ja_kaiva_tool() -> str:
         """Fetch the public changelog, pick the ONE entry worth telling (skipping everything already
-        told), dig out what it replaced and who was stuck, and store the aineisto for this run. Takes
-        no arguments. Call it EXACTLY ONCE and report what it returns, including any FAILED line."""
-        return valitse_aihe(agent_name, ref=ref, task_id=task_id)
+        told), dig out what it replaced and who was stuck, and store the aineisto at the key THIS RUN
+        WAS GIVEN. Takes no arguments — the key comes from the task, never from you. Call it EXACTLY
+        ONCE and report what it returns, including any FAILED line."""
+        return valitse_aihe(agent_name, task=task, task_id=task_id)
 
     valitse_ja_kaiva_tool.cache_function = lambda *_a, **_k: False
     return [valitse_ja_kaiva_tool]

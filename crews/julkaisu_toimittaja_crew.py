@@ -28,6 +28,7 @@ from crewai import Agent, Task
 
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 from crewaimeat.julkaisu_desk import make_toimittaja_tools
+from crewaimeat.julkaisu_pipeline import KEY_RULE, KEY_RULE_BACKSTORY
 
 AGENT_NAME = "julkaisu-toimittaja"
 
@@ -106,7 +107,8 @@ def build_domain(ctx: BuildContext):
     editor = Agent(
         role="Julkaisupöydän toimittaja",
         goal="Trigger the deterministic pick-and-dig for this run and report what it chose and why.",
-        backstory="You do not browse, summarise or write by hand. The changelog fetch, the already-told "
+        backstory=KEY_RULE_BACKSTORY
+        + "You do not browse, summarise or write by hand. The changelog fetch, the already-told "
         "filter, the choice prompt and the dig are one tool call; you call it ONCE and report its "
         "result. If it reports FAILED — the changelog was unreadable, everything is already told, "
         "or the dig would not meet the contract — you report that failure exactly as it is. You "
@@ -117,6 +119,9 @@ def build_domain(ctx: BuildContext):
     task = Task(
         description=(
             f"Today is {ctx.today}. Request: '{ctx.prompt}'\n\n"
+            + KEY_RULE
+            + "THIS RUN: you read the changelog (web) + julkaisu.kerrottu, and you write "
+            "julkaisu.<id>.aineisto.\n\n"
             "1. Call valitse_ja_kaiva() EXACTLY ONCE. It takes no arguments: it fetches the public "
             "changelog, skips everything already told, picks the entry worth telling, digs out what it "
             "replaced, and stores this run's aineisto. You do NOT choose or write it yourself.\n"

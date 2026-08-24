@@ -4,6 +4,33 @@ Notable changes to crewaimeat. Format loosely follows [Keep a Changelog](https:/
 Dates are the working dates; entries are **uncommitted and take effect on the next fleet restart**
 (the daemons import the modules at start).
 
+## [Unreleased] — 2026-08-24 (fix)
+
+### Fixed
+- **The five julkaisu agents no longer invent the id in their output key — they are told it, and
+  they read it.** Measured on prod: with no key in the dispatch each agent generated one
+  (`p69c3e53`, `p6605be9`, `p55ff4e1` across three runs), wrote a perfectly good result there, and
+  the engine — checking the key IT knows — recorded the step as having produced nothing. The work
+  was done and thrown away, three times. The editor picked the right entry, dug out the before and
+  after correctly, named its audience and listed what it was leaving out. Only the address was wrong.
+
+  `crewaimeat.julkaisu_pipeline.run_address` is now the ONE place any of them learns where to write:
+  1. the task scope's `deliverable_key`, used verbatim — never prefixed, extended or "improved", and
+     the run id is read back OUT of it so the input key belongs to the same run;
+  2. else the run's variables (`var.<name>`, or a `vars`/`params` object), built through the template;
+  3. else today's date, `YYYY-MM-DD`, Europe/Helsinki.
+
+  The same three rules decide the key each agent READS from, and the rule is stated in all five
+  prompts (`KEY_RULE`) as well as enforced in code — the tools take no key argument at all, so the
+  model cannot type one.
+- **The two id-minting paths are deleted, not deprecated.** `julkaisu_desk.entry_ref` hashed
+  (date, title) into `p…`, and `julkaisu_pipeline.newest_aineisto_ref` guessed the run from the most
+  recent record. Both were *stable*; neither was **derivable by the other side**, which is the
+  property that actually mattered. A test asserts they are gone.
+- **The example id is gone from the published sample.** `julkaisu-mittari`'s offer showed
+  `"ref": "p1a2b3c"` — an invented shape in a sample is a specification, and it is what taught five
+  agents to make one up. It now shows a date, and a test fails if that shape reappears as data.
+
 ## [Unreleased] — 2026-08-24 (later)
 
 ### Added

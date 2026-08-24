@@ -22,7 +22,7 @@ from __future__ import annotations
 from crewai import Agent, Task
 
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
-from crewaimeat.julkaisu_pipeline import make_kuva_tools
+from crewaimeat.julkaisu_pipeline import KEY_RULE, KEY_RULE_BACKSTORY, make_kuva_tools
 
 AGENT_NAME = "julkaisu-kuva"
 
@@ -103,7 +103,8 @@ def build_domain(ctx: BuildContext):
     imager = Agent(
         role="Kuvatuottaja",
         goal="Trigger the deterministic image run for this script and report exactly what landed.",
-        backstory="You do not write image prompts and you do not decide which shots need a picture — the "
+        backstory=KEY_RULE_BACKSTORY
+        + "You do not write image prompts and you do not decide which shots need a picture — the "
         "script already did both. You call tee_kuvat ONCE and report its result. Images cost real "
         "money, so you never call it twice to 'try again'. If it reports a partial or FAILED "
         "result you report that, naming the requests that failed.",
@@ -113,6 +114,8 @@ def build_domain(ctx: BuildContext):
     task = Task(
         description=(
             f"Today is {ctx.today}. Request: '{ctx.prompt}'\n\n"
+            + KEY_RULE
+            + "THIS RUN: you read julkaisu.<id>.video, and you write julkaisu.<id>.kuvat.\n\n"
             "1. Call tee_kuvat() EXACTLY ONCE. It takes no arguments: it reads this run's video script, "
             "generates one image per kuvapyynto, uploads them public and records each with its URL and "
             "storage key. You do NOT write prompts yourself, and you do NOT call it a second time.\n"

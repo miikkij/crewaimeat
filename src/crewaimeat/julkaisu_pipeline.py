@@ -28,10 +28,12 @@ with a reason instead of shipping something weaker than the brief.
 
 from __future__ import annotations
 
+import datetime
 import json
 import re
 import sys
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from aimeat_crewai.provenance import HumanInvolvement, Level, Method, declare
 
@@ -50,6 +52,34 @@ KUVAT_KEY = "julkaisu.{ref}.kuvat"
 # The aineisto fields a writer works from. `valittu` is the entry title — deliberately NOT in this
 # list: a writer that leans on the title restates the changelog, which is the habit this replaced.
 STORY_FIELDS = ("kulma", "ennen", "nyt", "kenelle", "todiste")
+
+# THE RULE, in every julkaisu agent's prompt, word for word. The code already resolves the address
+# (`run_address`) and the tools take no key, so the model cannot mistype one — but it is stated here
+# too because the failure it prevents is one a model talks itself into: with no key in sight it
+# generates a plausible id (p69c3e53, p6605be9, p55ff4e1 on three prod runs), writes good work there,
+# and the engine records the step as having produced nothing.
+KEY_RULE = (
+    "KEY RULE — NEVER generate, invent or randomise the id in a memory key. You are told the key. "
+    "Read it.\n"
+    "  1. FIRST look in the task's scope for a field named `deliverable_key`. If it is there, that "
+    "is your output key, complete and final. Write there, character for character. Do not add to "
+    "it, do not prefix it, do not 'improve' it.\n"
+    "  2. If `deliverable_key` is absent, the scope also carries the run's variables as `var.<name>` "
+    "(e.g. var.date = 2026-08-24). Build the key from those, using the template in your work "
+    "description.\n"
+    "  3. If neither is present, the id is TODAY'S DATE in YYYY-MM-DD form — nothing else.\n"
+    "The same three rules apply to the key you READ your input from. If you cannot determine the "
+    "key by these rules, FAIL the task and say so. Do not write to a key you made up: that looks "
+    "like success to you and like a dead step to everyone else.\n\n"
+)
+
+# One line of the same rule for an agent's backstory, where the standing habits live.
+KEY_RULE_BACKSTORY = (
+    "You never invent the id in a memory key: it comes from the task's scope (`deliverable_key`, "
+    "else its `var.<name>` variables, else today's date in YYYY-MM-DD), and the tool has already "
+    "resolved it. If you ever find yourself composing an id, stop and fail instead — an invented "
+    "key looks like success to you and like a dead step to everyone else. "
+)
 
 _MAX_ATTEMPTS = 3  # first write + two rewrites against the violations we hand back
 
@@ -75,57 +105,91 @@ def _walk(value: Any):
             yield from _walk(v)
 
 
-def resolve_ref(task: dict | None, prompt: str | None) -> str | None:
-    """The run's `ref`, resolved DETERMINISTICALLY from the dispatched task — never by the model.
+def scope_deliverable_key(task: dict | None) -> str | None:
+    """The output key the dispatch NAMED, or None.
 
-    Three places, most explicit first: a `ref` field anywhere in the task record (the workflow's own
-    run params travel there), a `julkaisu.<ref>.<something>` key named in the task text, and a bare
-    `ref: <value>`. Returns None when the task carries no ref at all; what the caller does then
-    differs by role — the editor MINTS one from the entry it picked, a writer looks for the newest
-    aineisto — and neither of them guesses.
+    RULE 1, and it outranks everything else: if the task's scope carries `deliverable_key`, that is
+    the address, complete and final — written character for character, never prefixed, extended or
+    "improved". The engine checks the key IT knows; anything else is a dead step.
     """
     for k, v in _walk(task or {}):
-        if str(k).lower() in ("ref", "julkaisu_ref") and isinstance(v, str) and _REF_RE.match(v.strip()):
+        if str(k).lower() in ("deliverable_key", "deliverablekey") and isinstance(v, str) and v.strip():
             return v.strip()
-    blob = f"{json.dumps(task or {}, ensure_ascii=False, default=str)}\n{prompt or ''}"
-    m = re.search(r"julkaisu\.([a-z0-9][a-z0-9._-]*?)\.(?:aineisto|linkedin|x|video|kuvat|portti)\b", blob, re.I)
-    if m:
-        return m.group(1).lower()
-    m = re.search(r"\bref\s*[:=]\s*[\"']?([a-z0-9][a-z0-9._-]*)", prompt or "", re.I)
-    if m:
-        return m.group(1).lower()
     return None
 
 
-def newest_aineisto_ref(agent_name: str) -> tuple[str | None, str]:
-    """Last resort when the dispatch named no ref: the run this step must belong to. (ref, why).
+def scope_vars(task: dict | None) -> dict[str, str]:
+    """The run's variables, as the scope carries them: `var.<name>` fields (RULE 2).
 
-    A workflow step can arrive with the WORKFLOW's description and no run vars — measured on the
-    Sanomat pipeline, whose agents receive "Evening edition pipeline: fetch raw → write …" and
-    nothing else. The step only dispatches once its input gate saw `julkaisu.{ref}.aineisto`, and the
-    editor wrote that moments earlier in the same run, so the NEWEST aineisto is this run's. Applied
-    only when UNAMBIGUOUS, announced in the report, and unable to hide a mistake: the step's signal
-    is keyed on the real ref, so a wrong pick reads as output-RED with the chosen ref beside it.
+    Also accepts a `vars` / `params` object, because the same values reach a task both ways depending
+    on how the run was started, and a variable the engine did send is not worth losing to a shape.
     """
-    r = _aimeat_call(agent_name, "aimeat_memory_list", {"owner_scope": True, "prefix": "julkaisu.", "limit": 200}) or {}
-    found = []
-    for it in r.get("items") or []:
-        m = re.match(r"^julkaisu\.(.+)\.aineisto$", str((it or {}).get("key") or ""))
-        if m and _REF_RE.match(m.group(1)):
-            found.append((str(it.get("updated_at") or it.get("updatedAt") or ""), m.group(1)))
-    if not found:
-        return None, "no julkaisu.*.aineisto exists — the editor has not run"
-    if len(found) == 1:
-        return found[0][1], f"it is the only aineisto on the node ({AINEISTO_KEY.format(ref=found[0][1])})"
-    found.sort()
-    newest, runner_up = found[-1], found[-2]
-    if newest[0] and newest[0] > runner_up[0]:
-        return newest[1], f"it is the most recently written aineisto ({newest[0]})"
-    tied = ", ".join(sorted(f[1] for f in found if f[0] == newest[0]))
-    return (
-        None,
-        f"several aineisto records share the newest timestamp ({tied}) — which run this is cannot be told apart",
-    )
+    out: dict[str, str] = {}
+    for k, v in _walk(task or {}):
+        key = str(k)
+        if key.lower().startswith("var.") and isinstance(v, (str, int, float)) and str(v).strip():
+            out.setdefault(key[4:].lower(), str(v).strip())
+        elif key.lower() in ("vars", "params", "variables") and isinstance(v, dict):
+            for name, value in v.items():
+                if isinstance(value, (str, int, float)) and str(value).strip():
+                    out.setdefault(str(name).lower().removeprefix("var."), str(value).strip())
+    return out
+
+
+def today_id() -> str:
+    """RULE 3: today's date, YYYY-MM-DD, Europe/Helsinki — the fleet's editorial day.
+
+    Not a random id, not a hash of anything: a value the engine, the app and a person all compute
+    the same way without being told. That is the whole point — an id nobody else can derive is an id
+    nobody else can find.
+    """
+    return datetime.datetime.now(ZoneInfo("Europe/Helsinki")).strftime("%Y-%m-%d")
+
+
+# The variable names that carry the run's id, most specific first. `ref` is what the offers template;
+# `date` is what the engine sends for a dated run, and rule 3 lands on the same shape.
+_ID_VARS = ("ref", "id", "date", "paiva", "edition_date")
+
+
+def resolve_id(task: dict | None) -> tuple[str, str]:
+    """The run's id by RULES 2 and 3 — (id, which rule). Never generated, never randomised.
+
+    A single unnamed variable is taken as the id too: a run that sent exactly one value cannot have
+    meant a different one, and refusing it would fall to the date and write to the wrong address.
+    """
+    variables = scope_vars(task)
+    for name in _ID_VARS:
+        if variables.get(name):
+            return variables[name], f"rule 2: the run's var.{name}"
+    if len(variables) == 1:
+        name, value = next(iter(variables.items()))
+        return value, f"rule 2: the run's only variable, var.{name}"
+    return today_id(), "rule 3: no key and no variables in the dispatch, so the id is today's date"
+
+
+def _id_of_key(key: str) -> str | None:
+    """The id inside a `julkaisu.<id>.<channel>` key, or None when it is shaped differently."""
+    m = re.match(r"^julkaisu\.(.+)\.(?:aineisto|linkedin|x|video|kuvat|portti|mittaus)$", key or "", re.I)
+    return m.group(1) if m else None
+
+
+def run_address(task: dict | None, channel: str) -> tuple[str, str, str]:
+    """(output key, run id, which rule) — the ONE place any julkaisu agent learns where to write.
+
+    The defect this replaces: with no key in the dispatch the agents generated one (p69c3e53,
+    p6605be9, p55ff4e1 on three prod runs), wrote a perfectly good result there, and the engine —
+    looking at the key it knows — recorded the step as having produced nothing. The work was done
+    and thrown away, three times. An invented id looks like success from the inside and like a dead
+    step from everywhere else, which is exactly why it must never be invented.
+
+    Rule 1 wins outright: a named `deliverable_key` is used verbatim, and the run id is read back
+    OUT of it so the input key belongs to the same run.
+    """
+    named = scope_deliverable_key(task)
+    if named:
+        return named, (_id_of_key(named) or resolve_id(task)[0]), "rule 1: the dispatch named deliverable_key"
+    run_id, rule = resolve_id(task)
+    return PIECE_KEY.format(ref=run_id, channel=channel), run_id, rule
 
 
 def read_aineisto(agent_name: str, ref: str) -> dict:
@@ -495,26 +559,11 @@ def parse_piece(raw: str) -> tuple[str, str]:
 
 
 # ── the run ──────────────────────────────────────────────────────────────────────────────────────
-def _resolve_or_infer(agent_name: str, channel: str, ref: str | None) -> tuple[str | None, str, str]:
-    """(ref, note-for-the-report, failure-text). Exactly one of ref / failure-text is set."""
-    if ref and _REF_RE.match(str(ref).strip()):
-        return str(ref).strip(), "", ""
-    found, why = newest_aineisto_ref(agent_name)
-    if not found:
-        return (
-            None,
-            "",
-            f"FAILED: this run named no ref and none could be resolved — {why}. Nothing was written; "
-            "a guessed ref would write over another run's piece. Name the ref in the workflow step "
-            "(a `ref` param, or the key julkaisu.<ref>.aineisto in its text).",
-        )
-    note = f" ref '{found}' was not in the dispatch — took it because {why}."
-    print(f"[{agent_name}] {channel}:{note.strip()}", file=sys.stderr)
-    return found, note, ""
+def write_julkaisu(agent_name: str, channel: str, task: dict | None = None, task_id: str | None = None) -> str:
+    """Read julkaisu.<id>.aineisto, write ONE checked piece to the key this run was GIVEN. Returns a report.
 
-
-def write_julkaisu(agent_name: str, channel: str, ref: str | None, task_id: str | None = None) -> str:
-    """Read julkaisu.<ref>.aineisto, write ONE checked piece to julkaisu.<ref>.<channel>. Returns a report.
+    The address comes from `run_address` — the dispatch's `deliverable_key`, else its variables, else
+    today's date. Never a generated id: that is the defect this whole path was rewritten around.
 
     Nothing is posted and nobody is contacted — the piece lands in owner memory for the workflow's
     human-input gate. A missing aineisto, a model that will not meet the house rules, or a failed
@@ -524,15 +573,14 @@ def write_julkaisu(agent_name: str, channel: str, ref: str | None, task_id: str 
     spec = CHANNELS.get(channel)
     if spec is None:
         raise KeyError(f"unknown channel {channel!r} (known: {', '.join(sorted(CHANNELS))})")
-    ref, inferred, failure = _resolve_or_infer(agent_name, channel, ref)
-    if failure:
-        return failure
-    key = PIECE_KEY.format(ref=ref, channel=channel)
+    key, run_id, rule = run_address(task, channel)
+    inferred = f" Address: {rule}."
+    print(f"[{agent_name}] {channel} -> {key} ({rule})", file=sys.stderr)
     try:
-        aineisto = read_aineisto(agent_name, ref)
+        aineisto = read_aineisto(agent_name, run_id)
     except LookupError as exc:
         print(f"[{agent_name}] {exc}", file=sys.stderr)
-        return f"FAILED: {exc}"
+        return f"FAILED: {exc}{inferred}"
 
     llm = get_llm(for_tool_use=False, temperature=spec["temperature"], agent_name=agent_name)
     base = spec["prompt"](aineisto)
@@ -590,7 +638,7 @@ def write_julkaisu(agent_name: str, channel: str, ref: str | None, task_id: str 
             "key": key,
             "value": value,
             "visibility": "owner",
-            "tags": ["julkaisupoyta", channel, f"ref:{ref}"],
+            "tags": ["julkaisupoyta", channel, f"ref:{run_id}"],
             # A model wrote this from the editor's dug-out angle, at the owner's direction, and a
             # person reads it at the workflow's gate BEFORE anything happens to it — but that gate is
             # after this write, so at write time human involvement is honestly NONE.
@@ -600,7 +648,7 @@ def write_julkaisu(agent_name: str, channel: str, ref: str | None, task_id: str 
                 human_involvement=HumanInvolvement.NONE,
                 model=resolved_model(llm),
                 provider=resolved_provider(),
-                notes=f"julkaisupöytä {channel} from {AINEISTO_KEY.format(ref=ref)}; not published anywhere.",
+                notes=f"julkaisupöytä {channel} from {AINEISTO_KEY.format(ref=run_id)}; not published anywhere.",
             ),
         },
     )
@@ -636,8 +684,11 @@ def read_kuvapyynnot(agent_name: str, ref: str) -> list[dict]:
     return reqs
 
 
-def tee_kuvat(agent_name: str, ref: str | None, task_id: str | None = None) -> str:
-    """Generate one image per `kuvapyynto`, upload each public, write julkaisu.<ref>.kuvat.
+def tee_kuvat(agent_name: str, task: dict | None = None, task_id: str | None = None) -> str:
+    """Generate one image per `kuvapyynto`, upload each public, write the run's kuvat key.
+
+    The address comes from `run_address` — the dispatch's `deliverable_key`, else its variables, else
+    today's date — and the script is read from the SAME run's id, never a generated one.
 
     No model runs here: the prompts were written by the script. Both the public URL and the STORAGE
     KEY are recorded, because the app attaches the image to a published post by key and a URL alone
@@ -646,12 +697,11 @@ def tee_kuvat(agent_name: str, ref: str | None, task_id: str | None = None) -> s
     """
     from crewaimeat.seedream_gen import generate_image
 
-    ref, inferred, failure = _resolve_or_infer(agent_name, "kuva", ref)
-    if failure:
-        return failure
-    key = KUVAT_KEY.format(ref=ref)
+    key, run_id, rule = run_address(task, "kuvat")
+    inferred = f" Address: {rule}."
+    print(f"[{agent_name}] kuvat -> {key} ({rule})", file=sys.stderr)
     try:
-        reqs = read_kuvapyynnot(agent_name, ref)
+        reqs = read_kuvapyynnot(agent_name, run_id)
     except LookupError as exc:
         print(f"[{agent_name}] {exc}", file=sys.stderr)
         return f"FAILED: {exc}{inferred}"
@@ -680,14 +730,14 @@ def tee_kuvat(agent_name: str, ref: str | None, task_id: str | None = None) -> s
             "key": key,
             "value": {"kuvat": kuvat},
             "visibility": "owner",
-            "tags": ["julkaisupoyta", "kuvat", f"ref:{ref}"],
+            "tags": ["julkaisupoyta", "kuvat", f"ref:{run_id}"],
             "ai_provenance": declare(
                 Level.SYNTHESIZED,
                 method=Method.SYNTHESIZED,
                 human_involvement=HumanInvolvement.NONE,
                 model="bytedance/seedream-4-5",
                 provider="openrouter",
-                notes=f"julkaisupöytä images for {PIECE_KEY.format(ref=ref, channel='video')}; not published anywhere.",
+                notes=f"julkaisupöytä images for {PIECE_KEY.format(ref=run_id, channel='video')}; not published anywhere.",
             ),
         },
     )
@@ -700,24 +750,22 @@ def tee_kuvat(agent_name: str, ref: str | None, task_id: str | None = None) -> s
 
 # ── crew tools ───────────────────────────────────────────────────────────────────────────────────
 def make_julkaisu_tools(agent_name: str, channel: str, task: dict | None = None, prompt: str | None = None) -> list:
-    """The crew's ONE tool, with the run's ref already resolved and bound.
+    """The crew's ONE tool, with this run's ADDRESS already resolved from the dispatch.
 
-    The tool takes no key and no ref: the model cannot mistype the one thing that decides where the
-    run lands. If the dispatch carried no ref the tool resolves it from the newest aineisto, or says
-    it could not.
+    The tool takes no key and no id. The model cannot type the one thing that decides where the run
+    lands, and so cannot make one up — which is exactly what it did on three prod runs before this.
     """
     from crewai.tools import tool
 
-    ref = resolve_ref(task, prompt)
     task_id = (task or {}).get("id")
     reset_deliverable_key(task_id)
 
     @tool("write_julkaisu")
     def write_julkaisu_tool() -> str:
         """Write this run's piece: read the editor's material for this run and produce the finished
-        text + notes into the run's own memory key. Takes no arguments — the run's ref and key are
-        already resolved. Call it EXACTLY ONCE, then report what it returns. It posts nothing."""
-        return write_julkaisu(agent_name, channel, ref, task_id=task_id)
+        text + notes into the key THIS RUN WAS GIVEN. Takes no arguments — the key comes from the
+        task, never from you. Call it EXACTLY ONCE, then report what it returns. It posts nothing."""
+        return write_julkaisu(agent_name, channel, task, task_id=task_id)
 
     write_julkaisu_tool.cache_function = lambda *_a, **_k: False
     return [write_julkaisu_tool]
@@ -727,16 +775,15 @@ def make_kuva_tools(agent_name: str, task: dict | None = None, prompt: str | Non
     """The image agent's ONE tool. Fully deterministic — the prompts come from the script."""
     from crewai.tools import tool
 
-    ref = resolve_ref(task, prompt)
     task_id = (task or {}).get("id")
     reset_deliverable_key(task_id)
 
     @tool("tee_kuvat")
     def tee_kuvat_tool() -> str:
         """Generate the images this run's video script asked for, upload each to public storage, and
-        record every one with BOTH its public URL and its storage key. Takes no arguments. Call it
-        EXACTLY ONCE and report what it returns, including any request that failed."""
-        return tee_kuvat(agent_name, ref, task_id=task_id)
+        record every one with BOTH its public URL and its storage key, at the key THIS RUN WAS GIVEN.
+        Takes no arguments. Call it EXACTLY ONCE and report what it returns, including any failure."""
+        return tee_kuvat(agent_name, task, task_id=task_id)
 
     tee_kuvat_tool.cache_function = lambda *_a, **_k: False
     return [tee_kuvat_tool]

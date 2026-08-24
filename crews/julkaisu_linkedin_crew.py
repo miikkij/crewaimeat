@@ -24,7 +24,7 @@ from __future__ import annotations
 from crewai import Agent, Task
 
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
-from crewaimeat.julkaisu_pipeline import make_julkaisu_tools
+from crewaimeat.julkaisu_pipeline import KEY_RULE, KEY_RULE_BACKSTORY, make_julkaisu_tools
 
 AGENT_NAME = "julkaisu-linkedin"
 CHANNEL = "linkedin"
@@ -91,7 +91,8 @@ def build_domain(ctx: BuildContext):
     writer = Agent(
         role="LinkedIn Write Runner",
         goal="Trigger the deterministic LinkedIn write for this run and report what it wrote.",
-        backstory="You do not write the post by hand and you do not choose where it goes. The run's key is "
+        backstory=KEY_RULE_BACKSTORY
+        + "You do not write the post by hand and you do not choose where it goes. The run's key is "
         "already resolved in code; you call write_julkaisu ONCE and report its result. If it "
         "reports FAILED, you report that failure as it is — you never write a post yourself to "
         "cover for it, and you never claim something was written when it was not.",
@@ -101,6 +102,8 @@ def build_domain(ctx: BuildContext):
     task = Task(
         description=(
             f"Today is {ctx.today}. Request: '{ctx.prompt}'\n\n"
+            + KEY_RULE
+            + "THIS RUN: you read julkaisu.<id>.aineisto, and you write julkaisu.<id>.linkedin.\n\n"
             "1. Call write_julkaisu() EXACTLY ONCE. It takes no arguments: it reads the editor's material "
             "for this run, writes the Finnish LinkedIn post against the house rules, and stores it under "
             "this run's own key. You do NOT write the post yourself.\n"

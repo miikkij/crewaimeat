@@ -8,6 +8,8 @@ pipeline's decisions rather than a model's prose.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 import crewaimeat.julkaisu_desk as jd
@@ -29,6 +31,12 @@ AINEISTO = {
 }
 
 
+# The dispatch every test run gets. RULE 2: the scope carries the run variable, so the address is
+# BUILT from it — never generated. A test that passed a bare id would be testing the old defect.
+RUN_ID = "2026-08-24"
+TASK = {"id": "t-9", "scope": {"var.date": RUN_ID}}
+
+
 class _StubLLM:
     def __init__(self, replies):
         self.replies = list(replies)
@@ -45,58 +53,87 @@ def _piece(text: str, notes: str = "jätin pois päivämäärän") -> str:
     return f"<TEKSTI>\n{text}\n</TEKSTI>\n<HUOMIOT>\n{notes}\n</HUOMIOT>"
 
 
-# ── the run's ref: resolved in code, never guessed ───────────────────────────────────────────────
-def test_ref_comes_from_the_task_params():
-    task = {"id": "t-1", "description": "kirjoita postaus", "params": {"ref": "viikko34"}}
-    assert jp.resolve_ref(task, task["description"]) == "viikko34"
+# ── the address: read from the dispatch, NEVER generated ─────────────────────────────────────────
+# The defect these pin: with no key in the dispatch the agents generated one (p69c3e53, p6605be9,
+# p55ff4e1 on three prod runs), wrote good work there, and the engine — looking at the key it knows —
+# recorded the step as having produced nothing. Three runs done and thrown away.
+def test_rule_1_the_named_key_wins_and_is_used_character_for_character():
+    task = {
+        "id": "t-1",
+        "scope": {"deliverable_key": "julkaisu.2026-08-24.linkedin", "var.date": "2026-08-01"},
+    }
+    key, run_id, rule = jp.run_address(task, "linkedin")
+    assert key == "julkaisu.2026-08-24.linkedin", "the named key is final — not rebuilt from a variable"
+    assert run_id == "2026-08-24", "the run id is read back OUT of the named key, so the input matches"
+    assert rule.startswith("rule 1")
 
 
-def test_ref_comes_from_the_aineisto_key_named_in_the_prompt():
-    prompt = "Kirjoita LinkedIn-postaus avaimesta julkaisu.p1a2b3c.aineisto"
-    assert jp.resolve_ref({"id": "t-1", "description": prompt}, prompt) == "p1a2b3c"
+def test_rule_1_takes_a_named_key_even_in_a_shape_we_do_not_recognise():
+    """Not our template, not our business: the engine named it, so it is written there verbatim."""
+    key, run_id, rule = jp.run_address({"scope": {"deliverable_key": "kansi/2026-W34/li"}}, "linkedin")
+    assert key == "kansi/2026-W34/li" and rule.startswith("rule 1")
+    assert run_id == jp.today_id(), "an unparseable key still needs an id for the INPUT side"
 
 
-def test_no_ref_is_no_ref():
-    """A run with no ref must NOT fall back to a default: writing julkaisu.<something>.linkedin on a
-    guess would overwrite another run's piece. The absence has to travel to the caller."""
-    assert jp.resolve_ref({"id": "t-1", "description": "kirjoita jotain"}, "kirjoita jotain") is None
+def test_rule_2_builds_the_key_from_the_runs_variables():
+    for field, value in (("var.ref", "viikko34"), ("var.date", "2026-08-24")):
+        key, run_id, rule = jp.run_address({"scope": {field: value}}, "x")
+        assert key == f"julkaisu.{value}.x" and run_id == value
+        assert rule.startswith("rule 2")
 
 
-def _listing(rows):
-    return lambda a, tool, payload: {"items": [{"key": k, "updated_at": t} for k, t in rows]}
+def test_rule_2_also_reads_a_vars_object():
+    key, _id, rule = jp.run_address({"scope": {"vars": {"date": "2026-08-24"}}}, "video")
+    assert key == "julkaisu.2026-08-24.video" and rule.startswith("rule 2")
 
 
-def test_the_fallback_takes_the_newest_aineisto(monkeypatch):
-    monkeypatch.setattr(
-        jp,
-        "_aimeat_call",
-        _listing(
-            [
-                ("julkaisu.vanha.aineisto", "2026-08-20T10:00:00Z"),
-                ("julkaisu.uusi.aineisto", "2026-08-24T16:44:40Z"),
-                ("julkaisu.uusi.linkedin", "2026-08-24T16:45:00Z"),  # not an aineisto — not a candidate
-            ]
-        ),
+def test_rule_3_is_todays_date_and_nothing_else():
+    key, run_id, rule = jp.run_address({"id": "t-1", "description": "kirjoita jotain"}, "aineisto")
+    assert run_id == jp.today_id() and key == f"julkaisu.{jp.today_id()}.aineisto"
+    assert rule.startswith("rule 3")
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", run_id), "the id is a date, never a generated token"
+
+
+def test_no_id_is_ever_generated():
+    """The whole defect in one assertion: whatever the dispatch looks like, the id is either given or
+    it is today's date. Nothing in this module may produce anything else."""
+    for task in ({}, {"id": "t-1"}, {"scope": {}}, {"scope": {"unrelated": "x"}}, None):
+        _key, run_id, _rule = jp.run_address(task, "linkedin")
+        assert run_id == jp.today_id()
+    assert not hasattr(jp, "resolve_ref"), "the old ref-sniffing resolver must be gone, not deprecated"
+    assert not hasattr(jp, "newest_aineisto_ref"), "guessing the newest aineisto is a guess"
+    assert not hasattr(jd, "entry_ref"), "minting an id from the changelog entry is what broke prod"
+
+
+def test_the_key_rule_is_in_the_prompt_of_every_writing_agent():
+    """The code already makes an invented key impossible, but the rule is stated to the model too —
+    the failure it prevents is one a model talks itself into when it cannot see a key."""
+    from pathlib import Path
+
+    crews = Path(__file__).resolve().parent.parent / "crews"
+    for name in ("toimittaja", "linkedin", "x", "video", "kuva"):
+        src = (crews / f"julkaisu_{name}_crew.py").read_text(encoding="utf-8")
+        assert "KEY_RULE" in src and "KEY_RULE_BACKSTORY" in src, f"julkaisu-{name} does not carry the key rule"
+        assert "THIS RUN: you read" in src, f"julkaisu-{name} does not name its own two keys"
+    assert "deliverable_key" in jp.KEY_RULE and "TODAY'S DATE" in jp.KEY_RULE
+
+
+def test_no_invented_example_id_is_shown_as_data_anywhere():
+    """An example id is a specification. A published sample reading "ref": "p1a2b3c" is what taught
+    five agents to make one up, so that shape must not appear as DATA — as a field value or inside a
+    key. Prose naming the three ids from the incident is the opposite of the problem, and stays."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    as_data = re.compile(
+        r"""["'](?:ref|id|deliverable_key)["']\s*:\s*["']p[0-9a-f]{6,}["']|julkaisu\.p[0-9a-f]{6,}\."""
     )
-    ref, why = jp.newest_aineisto_ref("julkaisu-linkedin")
-    assert ref == "uusi" and "most recently written" in why
-
-
-def test_the_fallback_refuses_a_tie(monkeypatch):
-    """Two runs prepared in the same instant cannot be told apart, and picking one would overwrite
-    the other run's piece. The step stops and says which ones collided."""
-    same = "2026-08-24T16:44:40Z"
-    monkeypatch.setattr(jp, "_aimeat_call", _listing([("julkaisu.a.aineisto", same), ("julkaisu.b.aineisto", same)]))
-    ref, why = jp.newest_aineisto_ref("julkaisu-linkedin")
-    assert ref is None and "a, b" in why
-
-
-def test_a_run_with_no_ref_and_no_aineisto_writes_nothing(monkeypatch):
-    calls: list = []
-    monkeypatch.setattr(jp, "_aimeat_call", lambda a, tool, payload: calls.append(tool) or {"items": []})
-    out = jp.write_julkaisu("julkaisu-linkedin", "linkedin", None)
-    assert out.startswith("FAILED") and "editor has not run" in out
-    assert "aimeat_memory_write" not in calls
+    offenders = []
+    for path in [*(root / "crews").glob("julkaisu_*.py"), *(root / "src" / "crewaimeat").glob("julkaisu_*.py")]:
+        for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if as_data.search(line):
+                offenders.append(f"{path.name}:{i}: {line.strip()[:70]}")
+    assert not offenders, f"invented example ids present as data: {offenders}"
 
 
 # ── the editor's material is the input, and it is never invented ─────────────────────────────────
@@ -104,8 +141,8 @@ def test_a_missing_aineisto_fails_loud_and_writes_nothing(monkeypatch):
     writes: list = []
     monkeypatch.setattr(jp, "read_owner_key", lambda agent, key: None)
     monkeypatch.setattr(jp, "_aimeat_call", lambda a, tool, payload: writes.append(tool) or {"ok": True})
-    out = jp.write_julkaisu("julkaisu-x", "x", "demo1")
-    assert out.startswith("FAILED") and "julkaisu.demo1.aineisto" in out
+    out = jp.write_julkaisu("julkaisu-x", "x", TASK)
+    assert out.startswith("FAILED") and "julkaisu.2026-08-24.aineisto" in out
     assert "aimeat_memory_write" not in writes
 
 
@@ -114,7 +151,7 @@ def test_a_half_written_aineisto_is_not_a_usable_angle(monkeypatch):
     quietly fill that in — that is exactly the invention this desk was rebuilt to stop."""
     monkeypatch.setattr(jp, "read_owner_key", lambda agent, key: {"kulma": "x", "nyt": "y"})
     with pytest.raises(LookupError, match="ennen"):
-        jp.read_aineisto("julkaisu-x", "demo1")
+        jp.read_aineisto("julkaisu-x", RUN_ID)
 
 
 # ── the two writers get the same facts through a different door ──────────────────────────────────
@@ -269,14 +306,14 @@ def test_the_piece_lands_at_the_runs_own_key(stubbed, monkeypatch):
     recorded: list = []
     monkeypatch.setattr(jp, "record_deliverable_key", lambda tid, key: recorded.append((tid, key)))
 
-    out = jp.write_julkaisu("julkaisu-linkedin", "linkedin", "demo1", task_id="t-9")
+    out = jp.write_julkaisu("julkaisu-linkedin", "linkedin", TASK, task_id="t-9")
 
     write = next(w for w in stubbed if w["tool"] == "aimeat_memory_write")
-    assert write["key"] == "julkaisu.demo1.linkedin"
+    assert write["key"] == "julkaisu.2026-08-24.linkedin"
     assert write["visibility"] == "owner"
     assert set(write["value"]) == {"text", "notes"} and write["value"]["text"].startswith("Yhteys")
-    assert recorded == [("t-9", "julkaisu.demo1.linkedin")], "the task must point at the piece, not the report"
-    assert out.startswith("OK:") and "julkaisu.demo1.linkedin" in out
+    assert recorded == [("t-9", "julkaisu.2026-08-24.linkedin")], "the task must point at the piece, not the report"
+    assert out.startswith("OK:") and "julkaisu.2026-08-24.linkedin" in out
 
 
 def test_the_script_lands_as_a_structured_shot_list(stubbed, monkeypatch):
@@ -286,10 +323,10 @@ def test_the_script_lands_as_a_structured_shot_list(stubbed, monkeypatch):
     monkeypatch.setattr(jp, "get_llm", lambda **k: llm)
     monkeypatch.setattr(jp, "record_deliverable_key", lambda tid, key: None)
 
-    out = jp.write_julkaisu("julkaisu-video", "video", "demo1")
+    out = jp.write_julkaisu("julkaisu-video", "video", TASK)
 
     write = next(w for w in stubbed if w["tool"] == "aimeat_memory_write")
-    assert write["key"] == "julkaisu.demo1.video"
+    assert write["key"] == "julkaisu.2026-08-24.video"
     assert len(write["value"]["kohtaukset"]) == 11 and write["value"]["muoto"] == "9:16"
     assert "kohtausta" in out
 
@@ -299,7 +336,7 @@ def test_a_violation_is_handed_back_and_the_rewrite_is_what_lands(stubbed, monke
     monkeypatch.setattr(jp, "get_llm", lambda **k: llm)
     monkeypatch.setattr(jp, "record_deliverable_key", lambda tid, key: None)
 
-    jp.write_julkaisu("julkaisu-linkedin", "linkedin", "demo1")
+    jp.write_julkaisu("julkaisu-linkedin", "linkedin", TASK)
 
     assert "innoissani" in llm.prompts[1], "the violation must be fed back into the rewrite"
     write = next(w for w in stubbed if w["tool"] == "aimeat_memory_write")
@@ -310,7 +347,7 @@ def test_a_piece_that_never_meets_the_rules_is_not_written(stubbed, monkeypatch)
     llm = _StubLLM([_piece("liian lyhyt")] * jp._MAX_ATTEMPTS)
     monkeypatch.setattr(jp, "get_llm", lambda **k: llm)
 
-    out = jp.write_julkaisu("julkaisu-linkedin", "linkedin", "demo1")
+    out = jp.write_julkaisu("julkaisu-linkedin", "linkedin", TASK)
 
     assert out.startswith("FAILED") and "merkkiä" in out
     assert not [w for w in stubbed if w["tool"] == "aimeat_memory_write"], (
@@ -338,10 +375,10 @@ def test_images_are_recorded_with_their_storage_key(monkeypatch):
         },
     )
 
-    out = jp.tee_kuvat("julkaisu-kuva", "demo1")
+    out = jp.tee_kuvat("julkaisu-kuva", TASK)
 
     write = next(w for w in writes if w["tool"] == "aimeat_memory_write")
-    assert write["key"] == "julkaisu.demo1.kuvat"
+    assert write["key"] == "julkaisu.2026-08-24.kuvat"
     kuva = write["value"]["kuvat"][0]
     assert kuva["storage_key"] == "images/a.png" and kuva["url"].startswith("https://")
     assert kuva["nro"] == 4 and out.startswith("OK:")
@@ -359,14 +396,14 @@ def test_an_image_without_a_storage_key_is_not_usable(monkeypatch):
         "crewaimeat.seedream_gen.generate_image",
         lambda agent, prompt, **kw: {"ok": True, "url": "https://aimeat.io/v1/pub/g/images/a.png"},
     )
-    out = jp.tee_kuvat("julkaisu-kuva", "demo1")
+    out = jp.tee_kuvat("julkaisu-kuva", TASK)
     assert out.startswith("FAILED") and "storage key" in out
 
 
 def test_a_script_that_asks_for_no_images_is_not_a_failure_to_carry_out(monkeypatch):
     monkeypatch.setattr(jp, "read_owner_key", lambda agent, key: _script())
     monkeypatch.setattr(jp, "_aimeat_call", lambda a, tool, payload: {"ok": True})
-    out = jp.tee_kuvat("julkaisu-kuva", "demo1")
+    out = jp.tee_kuvat("julkaisu-kuva", TASK)
     assert "asks for no images" in out and "script's decision" in out
 
 
@@ -412,14 +449,6 @@ def test_an_already_told_entry_is_not_offered_again():
     assert [e["date"] for e in left] == ["2026-08-20"], "matched case-folded and whitespace-collapsed"
 
 
-def test_a_minted_ref_is_stable_for_the_same_entry():
-    """Same entry -> same ref, so a re-run rewrites its own keys instead of scattering half-finished
-    runs across the namespace."""
-    assert jd.entry_ref(ENTRIES[0]) == jd.entry_ref(dict(ENTRIES[0]))
-    assert jd.entry_ref(ENTRIES[0]) != jd.entry_ref(ENTRIES[1])
-    assert jd.entry_ref(ENTRIES[0]).startswith("p") and len(jd.entry_ref(ENTRIES[0])) == 8
-
-
 def test_the_dig_contract_is_checked():
     ok = {k: AINEISTO[k] for k in ("kulma", "ennen", "nyt", "kenelle", "todiste", "varmuus")}
     ok["ei_kerrota"] = ["jotain muuta"]
@@ -459,14 +488,14 @@ def test_the_editor_writes_the_angle_and_remembers_the_entry(monkeypatch):
         jd, "get_llm", lambda **k: _StubLLM(["<VALINTA>0</VALINTA><PERUSTELU>siksi</PERUSTELU>", _dig_reply()])
     )
 
-    out = jd.valitse_aihe("julkaisu-toimittaja", ref="demo1")
+    out = jd.valitse_aihe("julkaisu-toimittaja", task=TASK)
 
-    aineisto = next(w for w in writes if w["key"] == "julkaisu.demo1.aineisto")["value"]
+    aineisto = next(w for w in writes if w["key"] == "julkaisu.2026-08-24.aineisto")["value"]
     assert aineisto["valittu"] == "Decide what your AI may do", "the title is copied from the FEED, not retyped"
     assert aineisto["paiva"] == "2026-08-24" and aineisto["lahde"].endswith("#2026-08-24")
     assert aineisto["kulma"] == AINEISTO["kulma"] and aineisto["ei_kerrota"] == ["agentin nimi identiteettinä"]
     ledger = next(w for w in writes if w["key"] == jd.KERROTTU_KEY)["value"]["kerrottu"]
-    assert ledger[0]["ref"] == "demo1" and ledger[0]["aihe"] == "Decide what your AI may do"
+    assert ledger[0]["ref"] == RUN_ID and ledger[0]["aihe"] == "Decide what your AI may do"
     assert out.startswith("OK:")
 
 
@@ -479,7 +508,7 @@ def test_the_editor_stops_when_everything_is_already_told(monkeypatch):
         lambda agent, key: {"kerrottu": [{"paiva": e["date"], "aihe": e["title"]["en"]} for e in ENTRIES]},
     )
     monkeypatch.setattr(jd, "_aimeat_call", lambda a, tool, payload: writes.append(tool) or {"ok": True})
-    out = jd.valitse_aihe("julkaisu-toimittaja", ref="demo1")
+    out = jd.valitse_aihe("julkaisu-toimittaja", task=TASK)
     assert out.startswith("FAILED") and "nothing left to tell" in out
     assert "aimeat_memory_write" not in writes
 
@@ -495,7 +524,7 @@ def test_a_dig_that_will_not_meet_the_contract_writes_nothing(monkeypatch):
         "get_llm",
         lambda **k: _StubLLM(["<VALINTA>0</VALINTA>", *[_dig_reply(ENNEN="") for _ in range(jd._MAX_ATTEMPTS)]]),
     )
-    out = jd.valitse_aihe("julkaisu-toimittaja", ref="demo1")
+    out = jd.valitse_aihe("julkaisu-toimittaja", task=TASK)
     assert out.startswith("FAILED") and "'ennen'" in out
     assert "aimeat_memory_write" not in writes
 

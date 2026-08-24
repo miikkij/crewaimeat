@@ -67,8 +67,12 @@ OFFERS = [
         "required_to_function": {"kind": "deterministic", "op": "exists", "key_glob": "julkaisu.*.portti"},
         "success_signal": {"kind": "deterministic", "op": "nonempty", "key": "julkaisu.kerrottu"},
         "deliverable_location": {"key": "julkaisu.kerrottu"},
+        # The `ref` here is a DATE, and it is not decoration. This sample used to read "p1a2b3c",
+        # and that invented shape is what taught five agents to generate their own ids — three prod
+        # runs wrote good work to p69c3e53 / p6605be9 / p55ff4e1, addresses nobody else could derive.
+        # An example id is a specification: only ever show the shape the rules actually produce.
         "sample": {
-            "ref": "p1a2b3c",
+            "ref": "2026-08-24",
             "aihe": "Decide what your AI may do the moment you connect it",
             "julkaistu": ["linkedin", "x"],
             "mittaus": {

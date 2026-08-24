@@ -28,7 +28,7 @@ from __future__ import annotations
 from crewai import Agent, Task
 
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
-from crewaimeat.julkaisu_pipeline import make_julkaisu_tools
+from crewaimeat.julkaisu_pipeline import KEY_RULE, KEY_RULE_BACKSTORY, make_julkaisu_tools
 
 AGENT_NAME = "julkaisu-video"
 CHANNEL = "video"
@@ -131,7 +131,8 @@ def build_domain(ctx: BuildContext):
     writer = Agent(
         role="Vertical Video Shot-List Runner",
         goal="Trigger the deterministic shot-list write for this run and report what it wrote.",
-        backstory="You do not write the script by hand and you do not choose where it goes. The run's key is "
+        backstory=KEY_RULE_BACKSTORY
+        + "You do not write the script by hand and you do not choose where it goes. The run's key is "
         "already resolved in code; you call write_julkaisu ONCE and report its result. If it "
         "reports FAILED — a shot over six seconds, a stock-footage direction, a total that does "
         "not add up — you report that failure as it is, and you never write a script yourself to "
@@ -142,6 +143,8 @@ def build_domain(ctx: BuildContext):
     task = Task(
         description=(
             f"Today is {ctx.today}. Request: '{ctx.prompt}'\n\n"
+            + KEY_RULE
+            + "THIS RUN: you read julkaisu.<id>.aineisto, and you write julkaisu.<id>.video.\n\n"
             "1. Call write_julkaisu() EXACTLY ONCE. It takes no arguments: it reads the editor's material "
             "for this run, writes the 9:16 shot list against the house rules, and stores it under this "
             "run's own key. You do NOT write the script yourself.\n"
