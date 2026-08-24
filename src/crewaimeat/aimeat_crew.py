@@ -507,7 +507,12 @@ def _token_exists(agent_name: str, owner: str | None) -> bool:
     import glob
 
     from crewaimeat._home import aimeat_home
+    from crewaimeat.brains import is_safe_agent_name
 
+    # agent_name is interpolated into a path under the token store. A crew whose name is not a legal
+    # agent id has no token by definition, so refuse rather than glob a name that could climb out.
+    if not is_safe_agent_name(agent_name):
+        return False
     tokens = aimeat_home() / "tokens"
     if owner:
         return (tokens / f"{agent_name}@{owner}.token").is_file()
@@ -878,6 +883,12 @@ def _aimeat_call_subprocess(agent_name: str, tool: str, payload: dict) -> dict |
     """Legacy one-shot `aimeat connect call` subprocess (Windows: cmd /c). Kept as the fallback
     for environments without the loopback daemon."""
     if shutil.which("aimeat") is None:
+        return None
+    # agent_name lands in argv, and on Windows that argv goes through `cmd /c` — validate before it does.
+    from crewaimeat.brains import is_safe_agent_name
+
+    if not is_safe_agent_name(agent_name):
+        print(f"[{agent_name}] {tool} refused: unusable agent name for a connector call", file=sys.stderr)
         return None
     base = ["aimeat", "connect", "call", tool, "--agent", agent_name, "--stdin"]
     cmd = ["cmd", "/c", *base] if os.name == "nt" else base

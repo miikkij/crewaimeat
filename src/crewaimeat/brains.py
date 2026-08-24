@@ -70,6 +70,25 @@ def slug_agent_name(name: str) -> str:
     return s[:64]
 
 
+_AGENT_SAFE_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def is_safe_agent_name(name: str) -> bool:
+    """True if `name` can be interpolated into a path or an argv element without changing their meaning.
+
+    The same agent name becomes a filesystem path (`logs/<agent>.log`, `tokens/<agent>@<owner>.token`)
+    AND a subprocess argument (`aimeat connect --agent <agent>`, which goes through `cmd /c` on
+    Windows). This is the safety floor for both: no path separator, no bare `..`, and none of the shell
+    metacharacters cmd would act on.
+
+    Deliberately WIDER than slug_agent_name's identity rule — it admits an un-slugged `Mapmaker` and a
+    short internal `w`, because neither can escape a path, and refusing them here would swallow the
+    connector's own (better) error about what a legal agent id is. Safety belongs here; identity is the
+    connector's call.
+    """
+    return bool(_AGENT_SAFE_RE.match(name or "")) and (name or "").strip(".") != ""
+
+
 def save_brain(
     agent_name: str,
     template_id: str,

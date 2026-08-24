@@ -310,6 +310,13 @@ def register_agent(agent_name: str, owner: str, url: str = "https://aimeat.io") 
     # tests mock subprocess.Popen (module-wide), so gate only when the spawn would be the real one.
     if os.environ.get("PYTEST_CURRENT_TEST") and subprocess.Popen is _REAL_POPEN:
         return False, "device-auth skipped under pytest (mock subprocess.Popen in the test)"
+    # `agent_name` becomes an argv element below — and on Windows that argv runs through `cmd /c`, where
+    # a metacharacter would be the shell's, not ours. Check it at the sink too: the cockpit already
+    # validates its URL segment, but this function is public and every caller lands on the same argv.
+    from crewaimeat.brains import is_safe_agent_name
+
+    if not is_safe_agent_name(agent_name):
+        return False, f"unusable agent name {agent_name!r} — letters, digits, dot, hyphen and underscore only"
     # v1.33+ connector: device-auth is `connect --url --owner --agent`. The old `connect add … --mode
     # task-runner` form is gone — the connector tolerated the extra args but the node rejected the request,
     # so NO code was ever issued and our fallback misreported it as "already registered".

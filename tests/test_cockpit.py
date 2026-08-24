@@ -705,3 +705,30 @@ def test_brain_gen_create_rejects_bad_template(client, monkeypatch):
     r = client.post("/api/brain-gen/create", json={"template": bad, "agent_name": "bad-agent"})
     assert r.status_code == 400
     assert client.get("/api/brains/bad-agent").status_code == 404
+
+
+def test_agent_url_segment_is_validated_before_it_reaches_the_disk(client):
+    """`/{agent}` reaches the filesystem (logs/<agent>.log, tokens/<agent>@*.token) and the connector
+    argv (`aimeat connect --agent <agent>`). A segment that is not a legal agent id must be refused at
+    the boundary, so a traversal or a shell metacharacter can never get as far as building the path."""
+    for bad in ("..", "../../etc/passwd", "a b", "x;whoami", "a|b", "a&b", "$(id)", "a\\b"):
+        for url in (f"/api/fleet/{bad}/logs", f"/api/fleet/{bad}/start", f"/api/agents/{bad}/register"):
+            r = client.request("POST" if "/logs" not in url else "GET", url)
+            # 400 = our guard. 404 = the router never matched (a slash-bearing segment) — also refused.
+            assert r.status_code in (400, 404), f"{url} answered {r.status_code}"
+
+
+def test_traversal_segment_cannot_read_a_file_outside_logs(client, tmp_path):
+    """The concrete escape the path-expression alert describes: an encoded `..` walking out of logs/."""
+    secret = tmp_path / "secret.log"
+    secret.write_text("TOP-SECRET", encoding="utf-8")
+    r = client.get("/api/fleet/..%2F..%2F..%2Fsecret/logs")
+    assert r.status_code in (400, 404)
+    assert "TOP-SECRET" not in r.text
+
+
+def test_valid_agent_segment_still_works(client):
+    """The guard must not cost a legitimate name its route — an agent with no log yet answers empty."""
+    r = client.get("/api/fleet/web-researcher/logs")
+    assert r.status_code == 200
+    assert r.json()["lines"] == [] or isinstance(r.json()["lines"], list)

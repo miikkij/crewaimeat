@@ -92,11 +92,38 @@ def _verify_fail_hint(console_errors: Any, failed_resources: Any) -> str:
 
 
 def _extract_inline_js(html: str) -> str:
-    """Concatenate the contents of every <script>…</script> with no src, for a syntax check."""
-    import re
+    """Concatenate the contents of every <script>…</script> with no src, for a syntax check.
 
-    blocks = re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", html or "", re.S | re.I)
-    return "\n;\n".join(blocks)
+    Parsed rather than regexed. `<script(?![^>]*\\bsrc=)[^>]*>(.*?)</script>` got this wrong twice: an
+    attribute value containing `>` ended the tag early (so real inline JS went unchecked), and the two
+    nested `[^>]*`/`.*?` scans backtrack quadratically on a long unclosed `<script` — the app HTML here
+    comes back off the node, so that input is not ours to trust. HTMLParser already switches to raw-text
+    mode inside <script>, which is exactly the content we are after.
+    """
+    from html.parser import HTMLParser
+
+    class _InlineScripts(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__(convert_charrefs=False)
+            self.blocks: list[str] = []
+            self._inline = False
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            if tag == "script":
+                self._inline = not any(k.lower() == "src" for k, _ in attrs)
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag == "script":
+                self._inline = False
+
+        def handle_data(self, data: str) -> None:
+            if self._inline:
+                self.blocks.append(data)
+
+    parser = _InlineScripts()
+    parser.feed(html or "")
+    parser.close()
+    return "\n;\n".join(parser.blocks)
 
 
 def _utf8_text(r) -> str:

@@ -564,6 +564,21 @@ def create_app(token: str | None = None) -> FastAPI:
         print(f"[cockpit] JSON template load skipped: {exc}")
     require_token = Depends(_require_token_dependency(app))
 
+    def _safe_agent(agent: str) -> str:
+        """Validate an `{agent}` URL segment before it becomes a file path or a subprocess argument.
+
+        FastAPI hands the segment through raw, and the routes below turn it into `logs/<agent>.log`, a
+        token glob, or `aimeat connect --agent <agent>`. brains.is_safe_agent_name keeps a `../..` or a
+        shell metacharacter from ever reaching either. Reject rather than slug: silently repairing the
+        segment would point the request at a DIFFERENT agent's files. Whether the name is a LEGAL agent
+        id is not decided here — the connector answers that, and better than we could.
+        """
+        if not brains.is_safe_agent_name(agent):
+            raise HTTPException(
+                status_code=400, detail="agent name may hold letters, digits, dot, hyphen and underscore only"
+            )
+        return agent
+
     @app.get("/healthz")
     def healthz() -> dict:  # open: liveness only, no secrets — the shell polls this for readiness
         return {"ok": True, "service": "aimeat-agency-cockpit", "version": COCKPIT_VERSION}
@@ -888,6 +903,7 @@ def create_app(token: str | None = None) -> FastAPI:
         verification CODE + URL the owner enters in their aimeat.io dashboard (Profile → Agents). The
         agent registers automatically once approved — poll auth-status to detect it. Nothing runs against
         the account until that approval, so the app can never act without the owner's explicit consent."""
+        agent = _safe_agent(agent)  # goes into `aimeat connect --agent <agent>` argv below
         import re as _re
 
         from crewaimeat import forge, node_engine
@@ -1002,6 +1018,7 @@ def create_app(token: str | None = None) -> FastAPI:
 
     @app.delete("/api/brains/{agent}", dependencies=[require_token])
     def delete_brain(agent: str) -> dict:
+        agent = _safe_agent(agent)  # globs + os.remove()s token files below
         # Stop the crew first so we don't orphan a running daemon, then drop the brain + its model override.
         from crewaimeat import llm
         from crewaimeat.tui import actions
@@ -1134,6 +1151,7 @@ def create_app(token: str | None = None) -> FastAPI:
         """Server-Sent Events: push the agent's run-status + task-queue to the browser whenever they
         CHANGE — so the Manage page updates live with no browser polling. (The cockpit watches state
         server-side; the browser only receives pushes.)"""
+        agent = _safe_agent(agent)  # _agent_live_state reads this agent's log + lock files
         import json as _json
         import time as _time
 
@@ -1272,6 +1290,7 @@ def create_app(token: str | None = None) -> FastAPI:
     def fleet_logs(agent: str, n: int = 80) -> dict:
         """Tail the agent's log so its activity (dry-run, runs, errors) is visible on its own page —
         same files the TUI reads. Returns the last `n` lines, or empty when the agent hasn't run yet."""
+        agent = _safe_agent(agent)  # builds Path("logs") / f"{agent}.log" below
         candidates = [
             f"{agent}.watchdog.log",
             f"{agent.replace('-', '_')}_crew.watchdog.log",
@@ -1314,6 +1333,7 @@ def create_app(token: str | None = None) -> FastAPI:
 
     @app.post("/api/fleet/{agent}/{action}", dependencies=[require_token])
     def fleet_action(agent: str, action: str) -> dict:
+        agent = _safe_agent(agent)  # writes crews/<agent>_crew.py and drives the connector below
         from crewaimeat.agency import fleet_ops
         from crewaimeat.tui import actions
 
