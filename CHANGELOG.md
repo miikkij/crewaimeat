@@ -4,6 +4,53 @@ Notable changes to crewaimeat. Format loosely follows [Keep a Changelog](https:/
 Dates are the working dates; entries are **uncommitted and take effect on the next fleet restart**
 (the daemons import the modules at start).
 
+## [Unreleased] — 2026-08-24 (later)
+
+### Added
+- **The julkaisupöytä now has an editor, images and a memory — six agents, not three.** The three
+  writers shipped earlier were handed a pre-written brief, which made the desk a rephrasing machine.
+  Three agents close that:
+  - **`julkaisu-toimittaja`** fetches `https://aimeat.io/changelog.json` ITSELF (verified public:
+    200, `{_format, entries[]}` — a server-side fetch, which is the point, because the browser is
+    blocked cross-origin and the agent is not), reads `julkaisu.kerrottu` to skip what has been told,
+    picks the ONE entry after which a reader's own work changes — not the newest by default — and
+    DIGS: what did this replace, who was stuck, what is possible now. Writes
+    `julkaisu.{ref}.aineisto` (kulma / ennen / nyt / kenelle / todiste / ei_kerrota / varmuus). What
+    it cannot verify goes in `varmuus`; it is never invented. The entry title is copied VERBATIM from
+    the feed rather than retyped by a model.
+  - **`julkaisu-kuva`** takes the script's `kuvapyynnot`, generates one image each and uploads them
+    public, recording BOTH the URL and the `storage_key` — the app attaches by key, and a URL alone
+    cannot be attached. No model runs in its work at all: the prompts came from the script.
+  - **`julkaisu-mittari`** runs on its own daily schedule (07:00 Europe/Helsinki), reads
+    `GET /v1/connections/attempts` + `/attempts/:id/metrics` (verified agent-readable: 200 with an
+    agent token, so not an owner-only route), and folds the numbers plus one learned sentence into
+    `julkaisu.kerrottu` — the record the editor reads when it picks the next story. Without it the
+    desk is a text generator; with it the third run is better than the first and the reason is
+    readable. It never records a zero it did not read: an attempt it cannot place on a run, or a
+    metrics route that does not answer, is reported as unmeasured.
+
+### Changed
+- **The three writers now read the editor's angle, not a brief.** Their `required_to_function` points
+  at `julkaisu.{ref}.aineisto`; they write from kulma / ennen / nyt / todiste and never restate the
+  changelog entry (the entry title is deliberately not handed to them). A narrow leak check catches
+  material the editor put under `ei_kerrota` reaching a piece anyway — one excluded NAME that the
+  angle never mentions is the tell.
+- **The Finnish post and the English thread are two pieces, by construction.** LinkedIn is handed the
+  angle led by `nyt` (the fix); X is handed it led by `ennen` (the frustration). "Reads like a
+  translation" is a judgement no check can make across two languages, so the divergence is structural
+  rather than gated — `story_block(lead=…)` is the guarantee, and the test pins it.
+- **`julkaisu-video` writes a SHOT LIST, not prose with `[ruutu: …]` glued on.** `kohtaukset` with
+  framing / movement / spoken line / burned-in text / sound from fixed vocabularies, no shot over 6 s,
+  a total of 45–75 s that must match `kesto_s`, `kuvassa` naming something that exists, and
+  `kuvapyynnot` only where a shot cannot be a screen recording. Its success signal counts SCENES
+  inside the record (`count_nonempty`, path `kohtaukset`, min 6) — a record that merely exists is not
+  a script, and an existence check would have called a two-shot stub done.
+- **`seedream_gen.generate_image` returns the storage key it uploaded under** (`key` + `gaii`). It
+  computed both and threw them away, so every caller had to re-derive them or give up.
+- **The offers floor asserts the 500-char `ask` cap** for crew offers, not just contract ones. The
+  real instruction belongs in the agent's prompt; an ask that grows past the cap is an offer trying
+  to be a brief.
+
 ## [Unreleased] — 2026-08-24
 
 ### Added

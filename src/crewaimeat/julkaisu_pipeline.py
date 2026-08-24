@@ -1,27 +1,29 @@
-"""JULKAISUPÖYTÄ — one brief in, one channel piece out. The loop is code; the model writes prose.
+"""JULKAISUPÖYTÄ — the four agents that turn one angle into publishable material.
 
-Three task-runner agents (`julkaisu-linkedin`, `julkaisu-x`, `julkaisu-video`) are steps of the
-`julkaisupoyta` workflow. Each reads the SAME input — the owner-visible brief at
-``julkaisu.<ref>.brief`` — and writes ONE output of its own: ``julkaisu.<ref>.<channel>``, an object
-with ``text`` (the finished piece) and ``notes`` (what it left out and why). Nothing is posted
-anywhere and nobody is contacted: a person reads the pieces at the workflow's human-input gate and
-decides what happens to them.
+The editor (`crewaimeat.julkaisu_desk`) decides what is worth telling and digs out why, and writes
+``julkaisu.{ref}.aineisto``. Everything here reads THAT — never a pre-written summary, and never the
+changelog entry itself:
 
-Everything except the prose is deterministic, for the reason the space-weather crew exists: an LLM
-that resolves its own output key guesses, and a guessed key writes the run into the wrong place (or
-into the same place every run). So:
+  * **julkaisu-linkedin** → ``julkaisu.{ref}.linkedin`` = ``{text, notes}``. Finnish, 600–1200
+    chars, leads with the FIX (nyt) and what it is worth to the reader.
+  * **julkaisu-x** → ``julkaisu.{ref}.x`` = ``{text, notes}``. English, 3–6 posts, and it leads with
+    the BEFORE state (ennen) — the frustration — so the two never read as one text in two languages.
+  * **julkaisu-video** → ``julkaisu.{ref}.video``, a real shot list: ``kohtaukset`` with framing,
+    movement, spoken line, burned-in text and sound, plus ``kuvapyynnot`` for the shots that cannot
+    be a screen recording.
+  * **julkaisu-kuva** → ``julkaisu.{ref}.kuvat``. Takes the script's ``kuvapyynnot``, generates one
+    image each, uploads them public, and records BOTH the URL and the storage key — the app attaches
+    by key, and a URL alone cannot be attached. No model runs here at all: the prompts were already
+    written by the script.
 
-  * ``<ref>`` is RESOLVED IN CODE from the dispatched task (``resolve_ref``) and bound into the tool
-    — the model never types a key. A workflow step can arrive with no run vars at all (the node sends
-    the WORKFLOW's description; measured on the Sanomat pipeline), so there is one last resort —
-    ``_newest_brief_ref`` — and it is announced in the report rather than applied quietly.
-  * the brief is read and REQUIRED (``read_brief``); a missing brief fails loud, it is never invented.
-  * the piece is CHECKED against the channel's house rules (``check_linkedin`` / ``check_x`` /
-    ``check_video``) — length, post count, hashtag pile, banned openers, stock-footage directions.
-    A violation is fed back and the model rewrites; after ``_MAX_ATTEMPTS`` tries nothing is written
-    and the run reports which rule failed, so the workflow step goes output-RED with a reason.
-  * the write names the exact key, and records it as the task's ``deliverable_key`` so the task
-    points at the piece rather than at the wrapper's report.
+None of them posts anything or contacts anyone. The pieces land in owner memory and a person decides
+at the workflow's gate.
+
+The loop is code, the model only chooses words: the run's `ref` is resolved in code (never typed by
+a model), the aineisto is required, and every piece is CHECKED against its channel's house rules
+before it is stored. A violation is handed back for a rewrite; after `_MAX_ATTEMPTS` nothing is
+written and the run names the rule that failed, so a step that cannot meet the angle goes output-RED
+with a reason instead of shipping something weaker than the brief.
 """
 
 from __future__ import annotations
@@ -34,20 +36,20 @@ from typing import Any
 from aimeat_crewai.provenance import HumanInvolvement, Level, Method, declare
 
 from crewaimeat.aimeat_crew import _aimeat_call, record_deliverable_key, reset_deliverable_key
+from crewaimeat.julkaisu_desk import AINEISTO_KEY
 from crewaimeat.llm import get_llm, resolved_model, resolved_provider
 from crewaimeat.memory_tools import read_owner_key
 from crewaimeat.prose_style import FINNISH_NATIVE_STYLE
 
 # The workflow variable. Every key this pipeline touches is julkaisu.<ref>.<something>; `{ref}` stays
-# LITERAL in the published offers (the engine substitutes it per run) and concrete here (the run has
-# resolved it). Charset kept to what a memory key segment safely carries.
+# LITERAL in the published offers (the engine substitutes it per run) and concrete here.
 _REF_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
-BRIEF_KEY = "julkaisu.{ref}.brief"
 PIECE_KEY = "julkaisu.{ref}.{channel}"
+KUVAT_KEY = "julkaisu.{ref}.kuvat"
 
-# The brief fields the crews were specified around. `aihe` is the one that cannot be missing — a
-# piece with no subject is not a piece.
-BRIEF_FIELDS = ("aihe", "mika_valmistui", "miksi_kiinnostaa", "kohdeyleiso")
+# The aineisto fields a writer works from. `valittu` is the entry title — deliberately NOT in this
+# list: a writer that leans on the title restates the changelog, which is the habit this replaced.
+STORY_FIELDS = ("kulma", "ennen", "nyt", "kenelle", "todiste")
 
 _MAX_ATTEMPTS = 3  # first write + two rewrites against the violations we hand back
 
@@ -57,7 +59,7 @@ _NOTES_TAG = re.compile(r"<HUOMIOT>(.*?)</HUOMIOT>", re.S | re.I)
 _OUTPUT_CONTRACT = (
     "\n\nVASTAUKSEN MUOTO — täsmälleen nämä kaksi lohkoa, ei mitään muuta:\n"
     "<TEKSTI>\n(valmis teksti sellaisenaan, ei otsikkoa 'teksti', ei lainausmerkkejä ympärillä)\n</TEKSTI>\n"
-    "<HUOMIOT>\n(1–4 lyhyttä riviä: mitä jätit pois briiffistä ja miksi)\n</HUOMIOT>"
+    "<HUOMIOT>\n(1–4 lyhyttä riviä: mitä jätit pois aineistosta ja miksi)\n</HUOMIOT>"
 )
 
 
@@ -77,15 +79,16 @@ def resolve_ref(task: dict | None, prompt: str | None) -> str | None:
     """The run's `ref`, resolved DETERMINISTICALLY from the dispatched task — never by the model.
 
     Three places, most explicit first: a `ref` field anywhere in the task record (the workflow's own
-    run params travel there), a `julkaisu.<ref>.brief` key named in the task text, and a bare
-    `ref: <value>` / `ref=<value>`. Returns None when the task carries no ref at all — the caller
-    fails loud rather than picking one, because a guessed ref writes over another run's piece.
+    run params travel there), a `julkaisu.<ref>.<something>` key named in the task text, and a bare
+    `ref: <value>`. Returns None when the task carries no ref at all; what the caller does then
+    differs by role — the editor MINTS one from the entry it picked, a writer looks for the newest
+    aineisto — and neither of them guesses.
     """
     for k, v in _walk(task or {}):
         if str(k).lower() in ("ref", "julkaisu_ref") and isinstance(v, str) and _REF_RE.match(v.strip()):
             return v.strip()
     blob = f"{json.dumps(task or {}, ensure_ascii=False, default=str)}\n{prompt or ''}"
-    m = re.search(r"julkaisu\.([a-z0-9][a-z0-9._-]*?)\.(?:brief|linkedin|x|video)\b", blob, re.I)
+    m = re.search(r"julkaisu\.([a-z0-9][a-z0-9._-]*?)\.(?:aineisto|linkedin|x|video|kuvat|portti)\b", blob, re.I)
     if m:
         return m.group(1).lower()
     m = re.search(r"\bref\s*[:=]\s*[\"']?([a-z0-9][a-z0-9._-]*)", prompt or "", re.I)
@@ -94,93 +97,126 @@ def resolve_ref(task: dict | None, prompt: str | None) -> str | None:
     return None
 
 
-def _newest_brief_ref(agent_name: str) -> tuple[str | None, str]:
-    """Last resort when the dispatch named no ref: the brief this run must be about. (ref, why).
+def newest_aineisto_ref(agent_name: str) -> tuple[str | None, str]:
+    """Last resort when the dispatch named no ref: the run this step must belong to. (ref, why).
 
-    A workflow step arrives with the WORKFLOW's description, not the step's — measured on the Sanomat
-    pipeline, whose agents receive "Evening edition pipeline: fetch raw → write …" and no run vars at
-    all. So a step may genuinely have no ref to read, and the choice is between an unrunnable agent
-    and a rule.
-
-    The rule is not a guess about which run: the step only dispatches once its input gate saw
-    `julkaisu.{ref}.brief`, and the app writes that brief seconds before starting the run — so the
-    NEWEST brief is this run's brief. It is applied only when it is UNAMBIGUOUS (one brief, or one
-    strictly newest), it is announced in the report and on stderr, and it cannot hide a mistake: the
-    step's success_signal is keyed on the real `{ref}`, so a wrong pick lands the piece somewhere the
-    workflow then reads as output-RED, with the chosen ref written down next to it.
+    A workflow step can arrive with the WORKFLOW's description and no run vars — measured on the
+    Sanomat pipeline, whose agents receive "Evening edition pipeline: fetch raw → write …" and
+    nothing else. The step only dispatches once its input gate saw `julkaisu.{ref}.aineisto`, and the
+    editor wrote that moments earlier in the same run, so the NEWEST aineisto is this run's. Applied
+    only when UNAMBIGUOUS, announced in the report, and unable to hide a mistake: the step's signal
+    is keyed on the real ref, so a wrong pick reads as output-RED with the chosen ref beside it.
     """
     r = _aimeat_call(agent_name, "aimeat_memory_list", {"owner_scope": True, "prefix": "julkaisu.", "limit": 200}) or {}
-    briefs = []
+    found = []
     for it in r.get("items") or []:
-        m = re.match(r"^julkaisu\.(.+)\.brief$", str((it or {}).get("key") or ""))
+        m = re.match(r"^julkaisu\.(.+)\.aineisto$", str((it or {}).get("key") or ""))
         if m and _REF_RE.match(m.group(1)):
-            briefs.append((str(it.get("updated_at") or it.get("updatedAt") or ""), m.group(1)))
-    if not briefs:
-        return None, "no julkaisu.*.brief exists on this node at all"
-    if len(briefs) == 1:
-        return briefs[0][1], f"it is the only brief on the node ({BRIEF_KEY.format(ref=briefs[0][1])})"
-    briefs.sort()
-    newest, runner_up = briefs[-1], briefs[-2]
+            found.append((str(it.get("updated_at") or it.get("updatedAt") or ""), m.group(1)))
+    if not found:
+        return None, "no julkaisu.*.aineisto exists — the editor has not run"
+    if len(found) == 1:
+        return found[0][1], f"it is the only aineisto on the node ({AINEISTO_KEY.format(ref=found[0][1])})"
+    found.sort()
+    newest, runner_up = found[-1], found[-2]
     if newest[0] and newest[0] > runner_up[0]:
-        return newest[1], f"it is the most recently written brief ({newest[0]})"
-    tied = ", ".join(sorted(b[1] for b in briefs if b[0] == newest[0]))
-    return None, f"several briefs share the newest timestamp ({tied}) — which run this is cannot be told apart"
+        return newest[1], f"it is the most recently written aineisto ({newest[0]})"
+    tied = ", ".join(sorted(f[1] for f in found if f[0] == newest[0]))
+    return (
+        None,
+        f"several aineisto records share the newest timestamp ({tied}) — which run this is cannot be told apart",
+    )
 
 
-def read_brief(agent_name: str, ref: str) -> dict:
-    """The owner-visible brief at julkaisu.<ref>.brief, as a dict. Raises when it is not there.
+def read_aineisto(agent_name: str, ref: str) -> dict:
+    """The editor's aineisto for this run. Raises when it is not there or is not usable.
 
-    The brief is written by a person (or the KANSI app) before the run and read across agents, so the
-    lookup is owner-scope. A missing or empty brief is a stop, never a prompt to invent a subject.
+    A missing aineisto is a STOP: this pipeline writes from an angle that was dug out of sources, and
+    without one there is nothing to write from that is not invention.
     """
-    key = BRIEF_KEY.format(ref=ref)
+    key = AINEISTO_KEY.format(ref=ref)
     value = read_owner_key(agent_name, key)
     if isinstance(value, str):
         try:
             value = json.loads(value)
         except ValueError:
-            value = {"aihe": value}
-    if not isinstance(value, dict) or not str(value.get("aihe") or "").strip():
+            value = None
+    if not isinstance(value, dict):
+        raise LookupError(f"aineisto '{key}' is missing — the editor step has not run. Nothing was written.")
+    missing = [f for f in ("kulma", "ennen", "nyt") if not str(value.get(f) or "").strip()]
+    if missing:
         raise LookupError(
-            f"brief '{key}' is missing or has no 'aihe' — the upstream step has not written it. "
-            "Nothing was written; the brief is the input, and it is not invented here."
+            f"aineisto '{key}' has no {', '.join(missing)} — it is not a usable angle, and this agent "
+            "does not fill those in for the editor. Nothing was written."
         )
     return value
 
 
-def brief_block(brief: dict) -> str:
-    """The brief rendered for a prompt — the specified fields, plus anything else the writer added."""
+def story_block(a: dict, *, lead: str = "nyt") -> str:
+    """The angle rendered for a prompt, with the LEAD field first.
+
+    The lead is what makes the Finnish post and the English thread two pieces rather than one text
+    twice: LinkedIn leads on `nyt` (the fix and what it is worth), X leads on `ennen` (the
+    frustration). Same facts, different door in.
+    """
     labels = {
-        "aihe": "AIHE",
-        "mika_valmistui": "MIKÄ VALMISTUI",
-        "miksi_kiinnostaa": "MIKSI KIINNOSTAA",
-        "kohdeyleiso": "KOHDEYLEISÖ",
-        "lahde": "LÄHDE",
+        "kulma": "KULMA (yksi lause, jonka lukija toistaisi)",
+        "ennen": "ENNEN (mitä tehtiin ennen tätä)",
+        "nyt": "NYT (mitä tehdään sen sijaan)",
+        "kenelle": "KENELLE (kuka tarkalleen)",
+        "todiste": "TODISTE (mikä tekee siitä todellisen)",
+        "varmuus": "VARMUUS (mitä ei varmistettu — älä väitä näitä)",
     }
+    order = ["kulma", lead, *[f for f in ("ennen", "nyt") if f != lead], "kenelle", "todiste", "varmuus"]
     rows = []
-    for field, label in labels.items():
-        v = str(brief.get(field) or "").strip()
+    for field in dict.fromkeys(order):
+        v = str(a.get(field) or "").strip()
         if v:
-            rows.append(f"{label}: {v}")
-    for k, v in brief.items():
-        if k not in labels and k != "ref" and isinstance(v, (str, int, float)) and str(v).strip():
-            rows.append(f"{k.upper()}: {v}")
+            rows.append(f"{labels.get(field, field.upper())}: {v}")
+    skip = [str(x).strip() for x in (a.get("ei_kerrota") or []) if str(x).strip()]
+    if skip:
+        rows.append("EI KERROTA (nämä eivät ole tämä tarina — jätä pois):\n" + "\n".join(f"  - {s}" for s in skip))
     return "\n".join(rows)
 
 
 # ── house rules, checked in code ─────────────────────────────────────────────────────────────────
 _HASHTAG = re.compile(r"(?<![\w#])#[\wåäöÅÄÖ][\wåäöÅÄÖ-]*")
-_BRACKET = re.compile(r"\[[^\]]+\]")
 # Leading pictographs / bullet glyphs — an emoji bullet list, which the X thread must not use.
 _EMOJI_BULLET = re.compile(
     r"^[ \t]*[•▪▶►\u2190-\u21FF\u2300-\u23FF\u25A0-\u27BF\u2B00-\u2BFF\uFE0F\U0001F000-\U0001FAFF]",
     re.M,
 )
+# A NAMEABLE thing: a capitalised word or a number. Used only to catch an excluded specific leaking
+# into a piece — never to judge prose.
+_NAMED = re.compile(r"\b[A-ZÅÄÖ][\wåäö/-]{3,}\b|\b\d[\d.,]*\s*(?:%|€|kk|min|s|h)?\b")
 
 
-def check_linkedin(text: str) -> list[str]:
-    """House rules for the Finnish LinkedIn post. Returns the violations, in Finnish (they are fed
-    straight back into a Finnish prompt, where an English instruction would invite translationese)."""
+def excluded_leak(text: str, aineisto: dict) -> list[str]:
+    """Violations for material the editor put in `ei_kerrota` that turned up in the piece anyway.
+
+    Deliberately NARROW. It compares only NAMEABLE things — capitalised names and numbers — and only
+    ones that appear in an excluded item and NOT anywhere in the angle itself. One such NAME is
+    already the tell: a word the editor ruled out, that the angle never mentions, cannot have reached
+    the piece any other way. Bare numbers are weaker (a date or a version can coincide), so those
+    need two. A looser rule would block good prose for sharing an ordinary word with an excluded
+    sentence, and a check that cries wolf gets switched off.
+    """
+    allowed = set()
+    for field in (*STORY_FIELDS, "varmuus"):
+        allowed |= set(_NAMED.findall(str(aineisto.get(field) or "")))
+    out = []
+    for item in aineisto.get("ei_kerrota") or []:
+        tokens = {t.strip() for t in _NAMED.findall(str(item)) if t.strip()} - allowed
+        hits = sorted(t for t in tokens if t and t in text)
+        named = [h for h in hits if h[:1].isalpha()]
+        if named or len(hits) >= 2:
+            out.append(f"teksti käyttää poissuljettua aihetta ({', '.join(hits[:3])}) — se on ei_kerrota-listalla.")
+    return out
+
+
+def check_linkedin(text: str, aineisto: dict | None = None) -> list[str]:
+    """House rules for the Finnish LinkedIn post. Violations in Finnish — they are fed straight back
+    into a Finnish prompt, where an English instruction would invite translationese."""
     bad: list[str] = []
     body = text.strip()
     n = len(body)
@@ -197,6 +233,8 @@ def check_linkedin(text: str) -> list[str]:
         bad.append("teksti sisältää 'tässä muutama ajatus' — poista se.")
     if first.endswith("?"):
         bad.append("ensimmäinen rivi on kysymys — ensimmäisen kappaleen pitää kertoa lukijan konkreettinen hyöty.")
+    if aineisto:
+        bad += excluded_leak(body, aineisto)
     return bad
 
 
@@ -219,7 +257,7 @@ def x_posts(text: str) -> list[str]:
     return [p.strip() for p in re.split(r"\n\s*\n", (text or "").strip()) if p.strip()]
 
 
-def check_x(text: str) -> list[str]:
+def check_x(text: str, aineisto: dict | None = None) -> list[str]:
     """House rules for the English X thread. Violations in English — the prompt is English."""
     bad: list[str] = []
     posts = x_posts(text)
@@ -239,94 +277,178 @@ def check_x(text: str) -> list[str]:
                 break
     if _EMOJI_BULLET.search(text or ""):
         bad.append("a line starts with an emoji/bullet glyph — no emoji bullets anywhere in the thread.")
+    if aineisto:
+        bad += excluded_leak(text, aineisto)
     return bad
 
 
-_VIDEO_STOCK = ("stock", "arkistokuv", "kuvituskuv", "geneerinen", "b-roll", "kuvapankki")
-# Finnish narration runs ~2.2–2.7 words/second, so a 45–75 s script is ~100–190 words. The envelope
-# is deliberately wider than the target: it catches a script that is nowhere near the length, not a
-# script that is five words long.
-_VIDEO_WORDS = (85, 210)
+# ── the video script: a shot list, not prose with brackets glued on ──────────────────────────────
+KUVAKOKO = ("ruutukaappaus", "lahikuva", "puolikuva", "laaja")
+LIIKE = ("still", "hidas zoom sisaan", "pan oikealle", "leikkaus")
+AANI = ("puhe", "vaimennettu tausta", "isku leikkauksessa")
+_SHOT_MAX_S = 6
+_TOTAL_S = (45, 75)
+_SHOTS_MIN = 6  # the offer's success_signal floor; the duration rule pushes a real script to ~8–12
+_RUUTUTEKSTI_MAX_WORDS = 6
+_STOCK = ("stock", "arkistokuv", "kuvituskuv", "geneerinen", "b-roll", "kuvapankki")
 
 
-def video_shots(text: str) -> list[str]:
-    return [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+def parse_json_object(raw: str) -> dict | None:
+    """The first JSON object in a model reply, fences and preamble tolerated. None when there is none
+    — the caller retries rather than storing something that is really an apology."""
+    text = raw if isinstance(raw, str) else str(raw)
+    text = re.sub(r"^\s*```(?:json)?|```\s*$", "", text.strip(), flags=re.M)
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        out = json.loads(text[start : end + 1])
+    except ValueError:
+        return None
+    return out if isinstance(out, dict) else None
 
 
-def check_video(text: str) -> list[str]:
-    """House rules for the Finnish 9:16 script: shots, a real thing on screen, the claim up front."""
+def check_video(doc: dict) -> list[str]:
+    """The shot list's contract, checked field by field. Violations in Finnish."""
     bad: list[str] = []
-    shots = video_shots(text)
-    if len(shots) < 3:
-        bad.append(f"kuvia on {len(shots)} — kirjoita vähintään kolme, yksi rivi per kuva.")
-    missing = [i for i, s in enumerate(shots, 1) if not _BRACKET.search(s)]
-    if missing:
+    shots = doc.get("kohtaukset")
+    if not isinstance(shots, list) or len(shots) < _SHOTS_MIN:
         bad.append(
-            f"kuvista {', '.join(map(str, missing[:5]))} puuttuu hakasulkeissa oleva kuvaustieto — "
-            "jokainen rivi on puhuttu repliikki + [mitä ruudussa näkyy]."
+            f"kohtauksia on {len(shots) if isinstance(shots, list) else 0} — niitä pitää olla vähintään {_SHOTS_MIN} (45–75 s enintään {_SHOT_MAX_S} s kuvina tarkoittaa noin 8–12)."
         )
-    narration = _BRACKET.sub(" ", text or "")
-    words = len(narration.split())
-    if not _VIDEO_WORDS[0] <= words <= _VIDEO_WORDS[1]:
-        bad.append(
-            f"puhetta on {words} sanaa — 45–75 sekunnin käsikirjoitus on noin "
-            f"{_VIDEO_WORDS[0]}–{_VIDEO_WORDS[1]} sanaa."
-        )
-    for shot in shots:
-        note = " ".join(_BRACKET.findall(shot)).lower()
-        for token in _VIDEO_STOCK:
-            if token in note:
-                bad.append(f"kuvaustieto '{note[:60]}' on kuvituskuvaohje ('{token}') — näytä jotain mikä on olemassa.")
+        shots = shots if isinstance(shots, list) else []
+    if str(doc.get("muoto") or "").strip() != "9:16":
+        bad.append("muoto ei ole '9:16' — tämä on pystyvideo.")
+    total = 0
+    for i, s in enumerate(shots, 1):
+        if not isinstance(s, dict):
+            bad.append(f"kohtaus {i} ei ole olio.")
+            continue
+        where = f"kohtaus {i}"
+        if s.get("nro") != i:
+            bad.append(f"{where}: 'nro' on {s.get('nro')!r} — kohtaukset numeroidaan 1..n järjestyksessä.")
+        kesto = s.get("kesto_s")
+        if not isinstance(kesto, (int, float)) or kesto <= 0:
+            bad.append(f"{where}: 'kesto_s' puuttuu tai ei ole luku.")
+        elif kesto > _SHOT_MAX_S:
+            bad.append(f"{where}: kesto {kesto} s — yksikään kuva ei saa olla yli {_SHOT_MAX_S} s.")
+        else:
+            total += kesto
+        if s.get("kuvakoko") not in KUVAKOKO:
+            bad.append(f"{where}: 'kuvakoko' on {s.get('kuvakoko')!r} — valitse {' | '.join(KUVAKOKO)}.")
+        if s.get("liike") not in LIIKE:
+            bad.append(f"{where}: 'liike' on {s.get('liike')!r} — valitse {' | '.join(LIIKE)}.")
+        if s.get("aani") not in AANI:
+            bad.append(f"{where}: 'aani' on {s.get('aani')!r} — valitse {' | '.join(AANI)}.")
+        kuvassa = str(s.get("kuvassa") or "").strip()
+        if not kuvassa:
+            bad.append(f"{where}: 'kuvassa' on tyhjä — nimeä tarkalleen mitä ruudussa näkyy.")
+        for token in _STOCK:
+            if token in kuvassa.casefold():
+                bad.append(f"{where}: 'kuvassa' on kuvituskuvaohje ('{token}') — näytä jotain mikä on olemassa.")
                 break
-    if shots and "logo" in " ".join(_BRACKET.findall(shots[0])).lower():
-        bad.append("ensimmäisessä kuvassa on logo — kolme ensimmäistä sekuntia kuuluvat väitteelle.")
+        if not str(s.get("puhe") or "").strip():
+            bad.append(f"{where}: 'puhe' on tyhjä.")
+        rt = str(s.get("ruututeksti") or "").strip()
+        if len(rt.split()) > _RUUTUTEKSTI_MAX_WORDS:
+            bad.append(f"{where}: ruututeksti on {len(rt.split())} sanaa — enintään {_RUUTUTEKSTI_MAX_WORDS}.")
+    if shots and not _TOTAL_S[0] <= total <= _TOTAL_S[1]:
+        bad.append(f"kokonaiskesto on {total} s — sen pitää olla {_TOTAL_S[0]}–{_TOTAL_S[1]} s.")
+    kesto_s = doc.get("kesto_s")
+    if shots and isinstance(kesto_s, (int, float)) and abs(kesto_s - total) > 1:
+        bad.append(f"'kesto_s' on {kesto_s} mutta kohtausten summa on {total} — niiden pitää täsmätä.")
+    if shots:
+        first = shots[0] if isinstance(shots[0], dict) else {}
+        opening = f"{first.get('kuvassa', '')} {first.get('ruututeksti', '')}".casefold()
+        if "logo" in opening:
+            bad.append("ensimmäisessä kohtauksessa on logo — kolme ensimmäistä sekuntia kuuluvat väitteelle.")
+    reqs = doc.get("kuvapyynnot")
+    if not isinstance(reqs, list):
+        bad.append("'kuvapyynnot' puuttuu — anna lista (tyhjä lista jos jokainen kuva on ruutukaappaus).")
+    else:
+        by_nro = {s.get("nro"): s for s in shots if isinstance(s, dict)}
+        for r in reqs:
+            if not isinstance(r, dict) or not str(r.get("prompt") or "").strip():
+                bad.append("kuvapyynnössä ei ole 'prompt'-tekstiä.")
+                continue
+            shot = by_nro.get(r.get("nro"))
+            if shot is None:
+                bad.append(f"kuvapyyntö viittaa kohtaukseen {r.get('nro')!r}, jota ei ole.")
+            elif shot.get("kuvakoko") == "ruutukaappaus":
+                bad.append(f"kohtaus {r.get('nro')} on ruutukaappaus — sille ei pyydetä generoitua kuvaa.")
+    if not str(doc.get("text") or "").strip():
+        bad.append("'text' on tyhjä — sama käsikirjoitus luettavana tekstinä puuttuu.")
+    if not str(doc.get("notes") or "").strip():
+        bad.append("'notes' on tyhjä — kerro mitä jätit pois ja miksi.")
     return bad
 
 
-# ── the three channels ───────────────────────────────────────────────────────────────────────────
-def _linkedin_prompt(brief: dict) -> str:
+# ── prompts ──────────────────────────────────────────────────────────────────────────────────────
+def _linkedin_prompt(a: dict) -> str:
     return (
-        "Olet suomalainen kirjoittaja, joka tekee tuotejulkaisuista LinkedIn-postauksia. Kirjoita YKSI "
-        "postaus suomeksi tästä briiffistä.\n\n"
+        "Olet suomalainen kirjoittaja AIMEATin julkaisupöydässä. Toimittaja on jo päättänyt mistä "
+        "kerrotaan ja kaivanut esiin miksi. Sinä valitset sanat.\n\n"
         "TALON SÄÄNNÖT:\n"
+        "- Kirjoita KULMASTA, ENNEN- ja NYT-tiloista ja TODISTEESTA. Älä referoi muutosmerkintää.\n"
         "- Pituus 600–1200 merkkiä.\n"
         "- Lukijan konkreettinen hyöty ensimmäisessä kappaleessa, ei kolmannessa.\n"
-        "- Ei aihetunnistekasaa lopussa: korkeintaan kaksi, mieluiten ei yhtään.\n"
+        "- Ei aihetunnistekasaa: korkeintaan kaksi, mieluiten ei yhtään.\n"
         "- Ei aloitusta 'olen innoissani', ei fraasia 'tässä muutama ajatus', ei retorista kysymystä "
         "ensimmäiseksi riviksi.\n"
-        "- Kirjoita vain siitä mitä briiffissä on. Älä keksi lukuja, asiakkaita tai lupauksia.\n\n"
-        "BRIIFFI:\n" + brief_block(brief) + FINNISH_NATIVE_STYLE + _OUTPUT_CONTRACT
+        "- Älä väitä mitään mitä aineistossa ei ole. VARMUUS kertoo mitä ei varmistettu — älä esitä "
+        "sitä varmana. EI KERROTA -listan asiat jätetään pois.\n\n"
+        "AINEISTO:\n" + story_block(a, lead="nyt") + FINNISH_NATIVE_STYLE + _OUTPUT_CONTRACT
     )
 
 
-def _x_prompt(brief: dict) -> str:
+def _x_prompt(a: dict) -> str:
     return (
-        "You write X threads for a software product. Write ONE thread in ENGLISH from this brief.\n\n"
+        "You write X threads for AIMEAT. The editor has already chosen the story and dug out why it "
+        "matters; you choose the words.\n\n"
+        "YOUR ANGLE IS THE BEFORE STATE. Open on what people were stuck with (ENNEN) and let the fix "
+        "arrive as the turn. The Finnish LinkedIn post for this same story opens on the fix — if your "
+        "thread reads like that post translated, the run failed even though both files exist.\n\n"
         "HOUSE RULES:\n"
         "- 3 to 6 posts. Separate every post with a BLANK LINE. Each post under 280 characters.\n"
         "- Post 1 has to stand alone as a claim worth reading — no '🧵', no 'a thread:', no announcement.\n"
         "- No emoji bullets anywhere.\n"
         "- The last post says what a reader can do next. Do not ask for a follow, a like or a retweet.\n"
-        "- Only what the brief says. Invent no numbers, customers or promises.\n\n"
-        "BRIEF (in Finnish — the thread is in English):\n" + brief_block(brief) + _OUTPUT_CONTRACT
+        "- Claim only what the material says. VARMUUS is what could NOT be verified — do not state it "
+        "as fact. Leave out everything under EI KERROTA.\n\n"
+        "MATERIAL (in Finnish — the thread is in English):\n" + story_block(a, lead="ennen") + _OUTPUT_CONTRACT
     )
 
 
-def _video_prompt(brief: dict) -> str:
+def _video_prompt(a: dict) -> str:
     return (
-        "Olet käsikirjoittaja, joka tekee pystyvideoita (9:16, 45–75 sekuntia). Kirjoita YKSI käsikirjoitus "
-        "suomeksi tästä briiffistä.\n\n"
-        "TALON SÄÄNNÖT:\n"
-        "- Kirjoita kuvina: yksi rivi per kuva = puhuttu repliikki + hakasulkeissa mitä ruudussa näkyy.\n"
+        "Olet käsikirjoittaja AIMEATin julkaisupöydässä. Kirjoita YKSI pystyvideon (9:16, 45–75 s) "
+        "KUVALUETTELO. Et kirjoita proosaa: kirjoitat kohtauksia, jotka joku voi kuvata.\n\n"
+        "SÄÄNNÖT:\n"
+        f"- {_SHOTS_MIN}–14 kohtausta, yksikään ei yli {_SHOT_MAX_S} sekuntia. Yhteiskesto {_TOTAL_S[0]}–{_TOTAL_S[1]} s, "
+        "ja 'kesto_s' on kohtausten summa.\n"
         "- Kolme ensimmäistä sekuntia kantavat väitteen, eivät logoa.\n"
-        "- Ruudussa näkyy jotain mikä on olemassa: oikea näkymä tuotteesta, oikea luku. Ei kuvituskuvaa, "
-        "ei arkistokuvaohjeita.\n"
-        "- Lopeta siihen mitä katsoja toistaisi kollegalleen.\n"
-        "- Puhetta noin 100–190 sanaa. Vain se mitä briiffissä on — älä keksi lukuja.\n\n"
-        "ESIMERKKI YHDESTÄ RIVISTÄ:\n"
-        "Yhteys valmistuu vasta kun olet päättänyt mitä agentti saa tehdä. [ruutu: hyväksymisikkuna, "
-        "oikeusvalinnat näkyvissä]\n\n"
-        "BRIIFFI:\n" + brief_block(brief) + FINNISH_NATIVE_STYLE + _OUTPUT_CONTRACT
+        "- 'kuvassa' nimeää jotain mikä ON OLEMASSA: oikea näkymä tuotteesta, oikea luku, oikea "
+        "valikko. Ei kuvituskuvaa, ei arkistokuvaohjeita.\n"
+        f"- 'ruututeksti' enintään {_RUUTUTEKSTI_MAX_WORDS} sanaa.\n"
+        "- 'kuvapyynnot' VAIN niille kohtauksille joita ei voi kuvata ruutukaappauksena. Kirjoita niiden "
+        "prompt englanniksi ja kuvaile mitä kuvassa on, älä tuotenimiä.\n"
+        "- Lopeta siihen minkä katsoja toistaisi kollegalleen.\n"
+        "- Älä väitä mitään mitä aineistossa ei ole; EI KERROTA -listan asiat jätetään pois.\n\n"
+        "AINEISTO:\n" + story_block(a, lead="nyt") + FINNISH_NATIVE_STYLE + "\n\n"
+        "VASTAUKSEN MUOTO — pelkkä JSON-olio, ei mitään sen ympärille:\n"
+        "{\n"
+        '  "kesto_s": 58,\n'
+        '  "muoto": "9:16",\n'
+        '  "kohtaukset": [\n'
+        '    {"nro": 1, "kesto_s": 3, "kuvakoko": "' + KUVAKOKO[0] + '", "kuvassa": "tarkalleen mitä ruudussa on",\n'
+        '     "liike": "' + LIIKE[0] + '", "puhe": "puhuttu repliikki", "ruututeksti": "enintään kuusi sanaa",\n'
+        '     "aani": "' + AANI[0] + '"}\n'
+        "  ],\n"
+        '  "kuvapyynnot": [{"nro": 4, "prompt": "image prompt in English"}],\n'
+        '  "text": "sama käsikirjoitus luettavana tekstinä",\n'
+        '  "notes": "mitä jätit pois ja miksi"\n'
+        "}\n"
+        f"kuvakoko: {' | '.join(KUVAKOKO)}   liike: {' | '.join(LIIKE)}   aani: {' | '.join(AANI)}"
     )
 
 
@@ -338,6 +460,7 @@ CHANNELS: dict[str, dict] = {
         "check": check_linkedin,
         "temperature": 0.6,
         "retry_lead": "Korjaa nämä ja kirjoita postaus uudestaan kokonaan:",
+        "structured": False,
     },
     "x": {
         "agent": "julkaisu-x",
@@ -346,14 +469,16 @@ CHANNELS: dict[str, dict] = {
         "check": check_x,
         "temperature": 0.7,
         "retry_lead": "Fix these and write the whole thread again:",
+        "structured": False,
     },
     "video": {
         "agent": "julkaisu-video",
-        "what": "pystyvideon käsikirjoitus (suomi, 9:16, 45–75 s)",
+        "what": "pystyvideon kuvaluettelo (suomi, 9:16, 45–75 s)",
         "prompt": _video_prompt,
         "check": check_video,
-        "temperature": 0.7,
-        "retry_lead": "Korjaa nämä ja kirjoita käsikirjoitus uudestaan kokonaan:",
+        "temperature": 0.6,
+        "retry_lead": "Korjaa nämä ja kirjoita koko JSON uudestaan:",
+        "structured": True,
     },
 }
 
@@ -370,45 +495,71 @@ def parse_piece(raw: str) -> tuple[str, str]:
 
 
 # ── the run ──────────────────────────────────────────────────────────────────────────────────────
-def write_julkaisu(agent_name: str, channel: str, ref: str, task_id: str | None = None) -> str:
-    """Read julkaisu.<ref>.brief, write ONE checked piece to julkaisu.<ref>.<channel>. Returns a report.
+def _resolve_or_infer(agent_name: str, channel: str, ref: str | None) -> tuple[str | None, str, str]:
+    """(ref, note-for-the-report, failure-text). Exactly one of ref / failure-text is set."""
+    if ref and _REF_RE.match(str(ref).strip()):
+        return str(ref).strip(), "", ""
+    found, why = newest_aineisto_ref(agent_name)
+    if not found:
+        return (
+            None,
+            "",
+            f"FAILED: this run named no ref and none could be resolved — {why}. Nothing was written; "
+            "a guessed ref would write over another run's piece. Name the ref in the workflow step "
+            "(a `ref` param, or the key julkaisu.<ref>.aineisto in its text).",
+        )
+    note = f" ref '{found}' was not in the dispatch — took it because {why}."
+    print(f"[{agent_name}] {channel}:{note.strip()}", file=sys.stderr)
+    return found, note, ""
+
+
+def write_julkaisu(agent_name: str, channel: str, ref: str | None, task_id: str | None = None) -> str:
+    """Read julkaisu.<ref>.aineisto, write ONE checked piece to julkaisu.<ref>.<channel>. Returns a report.
 
     Nothing is posted and nobody is contacted — the piece lands in owner memory for the workflow's
-    human-input gate. A missing brief, a model that will not meet the house rules, or a failed write
-    all return a FAILED report and write nothing, so the step's success_signal reads the same absence.
+    human-input gate. A missing aineisto, a model that will not meet the house rules, or a failed
+    write all return a FAILED report and write nothing, so the step's success_signal reads the same
+    absence.
     """
     spec = CHANNELS.get(channel)
     if spec is None:
         raise KeyError(f"unknown channel {channel!r} (known: {', '.join(sorted(CHANNELS))})")
-    inferred = ""
-    if not (ref and _REF_RE.match(str(ref).strip())):
-        ref, why = _newest_brief_ref(agent_name)
-        if not ref:
-            return (
-                f"FAILED: this run named no ref and none could be resolved — {why}. Nothing was "
-                "written; a guessed ref would write over another run's piece. Name the ref in the "
-                "workflow step (a `ref` param, or the key julkaisu.<ref>.brief in its text)."
-            )
-        inferred = f" ref '{ref}' was not in the dispatch — took it because {why}."
-        print(f"[{agent_name}] {channel}:{inferred.strip()}", file=sys.stderr)
-    ref = str(ref).strip()
+    ref, inferred, failure = _resolve_or_infer(agent_name, channel, ref)
+    if failure:
+        return failure
     key = PIECE_KEY.format(ref=ref, channel=channel)
     try:
-        brief = read_brief(agent_name, ref)
+        aineisto = read_aineisto(agent_name, ref)
     except LookupError as exc:
         print(f"[{agent_name}] {exc}", file=sys.stderr)
         return f"FAILED: {exc}"
 
     llm = get_llm(for_tool_use=False, temperature=spec["temperature"], agent_name=agent_name)
-    base = spec["prompt"](brief)
-    prompt, text, notes, violations = base, "", "", ["(no attempt ran)"]
+    base = spec["prompt"](aineisto)
+    structured = spec["structured"]
+    prompt, value, previous, violations = base, None, "", ["(no attempt ran)"]
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         out = llm.call([{"role": "user", "content": prompt}])
-        text, notes = parse_piece(out)
-        if not text:
-            violations = ["vastauksesta puuttui <TEKSTI>-lohko / the reply had no <TEKSTI> block."]
+        if structured:
+            doc = parse_json_object(out)
+            if doc is None:
+                value, previous, violations = None, str(out)[:1500], ["vastaus ei ollut JSON-olio."]
+            else:
+                value = doc
+                previous = json.dumps(doc, ensure_ascii=False)[:2000]
+                violations = spec["check"](doc)
         else:
-            violations = spec["check"](text)
+            text, notes = parse_piece(out)
+            if not text:
+                value, previous, violations = (
+                    None,
+                    str(out)[:1000],
+                    ["vastauksesta puuttui <TEKSTI>-lohko / the reply had no <TEKSTI> block."],
+                )
+            else:
+                value = {"text": text, "notes": notes}
+                previous = text
+                violations = spec["check"](text, aineisto)
         print(
             f"[{agent_name}] {channel} attempt {attempt}/{_MAX_ATTEMPTS}: "
             + ("OK" if not violations else "; ".join(violations)),
@@ -423,13 +574,13 @@ def write_julkaisu(agent_name: str, channel: str, ref: str, task_id: str | None 
             + "\n"
             + "\n".join(f"- {v}" for v in violations)
             + "\n\nEDELLINEN VERSIO / PREVIOUS VERSION:\n"
-            + (text or "(tyhjä)")
+            + (previous or "(tyhjä)")
         )
-    if violations:
+    if violations or value is None:
         return (
             f"FAILED: {channel} did not meet the house rules after {_MAX_ATTEMPTS} attempts — "
             + "; ".join(violations)
-            + f". Nothing was written to {key}."
+            + f". Nothing was written to {key}.{inferred}"
         )
 
     written = _aimeat_call(
@@ -437,34 +588,123 @@ def write_julkaisu(agent_name: str, channel: str, ref: str, task_id: str | None 
         "aimeat_memory_write",
         {
             "key": key,
-            "value": {"text": text, "notes": notes},
+            "value": value,
             "visibility": "owner",
             "tags": ["julkaisupoyta", channel, f"ref:{ref}"],
-            # A model wrote this from the owner's own brief, at the owner's direction, and a person
-            # reads it at the workflow's gate BEFORE anything happens to it — but that gate is after
-            # this write, so at write time human involvement is honestly NONE.
+            # A model wrote this from the editor's dug-out angle, at the owner's direction, and a
+            # person reads it at the workflow's gate BEFORE anything happens to it — but that gate is
+            # after this write, so at write time human involvement is honestly NONE.
             "ai_provenance": declare(
                 Level.SYNTHESIZED,
                 method=Method.SYNTHESIZED,
                 human_involvement=HumanInvolvement.NONE,
                 model=resolved_model(llm),
                 provider=resolved_provider(),
-                notes=f"julkaisupöytä {channel} from {BRIEF_KEY.format(ref=ref)}; not published anywhere.",
+                notes=f"julkaisupöytä {channel} from {AINEISTO_KEY.format(ref=ref)}; not published anywhere.",
             ),
         },
     )
     if written is None:
-        return f"FAILED to write '{key}' (tunnel/transport) — the piece did not land."
-    # The task must point at the PIECE, not at this wrapper's report.
+        return f"FAILED to write '{key}' (tunnel/transport) — the piece did not land.{inferred}"
     record_deliverable_key(task_id, key)
-    return f"OK: {spec['what']} -> {key} ({len(text)} chars, notes {len(notes)} chars). Not posted anywhere.{inferred}"
+    if structured:
+        size = f"{len(value.get('kohtaukset') or [])} kohtausta, {len(value.get('kuvapyynnot') or [])} kuvapyyntöä"
+    else:
+        size = f"{len(value['text'])} chars, notes {len(value['notes'])} chars"
+    return f"OK: {spec['what']} -> {key} ({size}). Not posted anywhere.{inferred}"
 
 
+# ── the images ───────────────────────────────────────────────────────────────────────────────────
+def read_kuvapyynnot(agent_name: str, ref: str) -> list[dict]:
+    """The script's image requests. Raises when the script is missing — this agent generates only
+    what the script asked for, and invents no prompts of its own."""
+    key = PIECE_KEY.format(ref=ref, channel="video")
+    value = read_owner_key(agent_name, key)
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            value = None
+    if not isinstance(value, dict):
+        raise LookupError(f"script '{key}' is missing — the video step has not run. Nothing was generated.")
+    reqs = [r for r in (value.get("kuvapyynnot") or []) if isinstance(r, dict) and str(r.get("prompt") or "").strip()]
+    if not reqs:
+        raise LookupError(
+            f"script '{key}' asks for no images (every shot is a screen recording). Nothing was "
+            "generated — that is the script's decision, not a failure to carry out."
+        )
+    return reqs
+
+
+def tee_kuvat(agent_name: str, ref: str | None, task_id: str | None = None) -> str:
+    """Generate one image per `kuvapyynto`, upload each public, write julkaisu.<ref>.kuvat.
+
+    No model runs here: the prompts were written by the script. Both the public URL and the STORAGE
+    KEY are recorded, because the app attaches the image to a published post by key and a URL alone
+    cannot be attached. A partial run is reported as partial and still stores what succeeded — an
+    image that cost real money is not thrown away because a later one failed.
+    """
+    from crewaimeat.seedream_gen import generate_image
+
+    ref, inferred, failure = _resolve_or_infer(agent_name, "kuva", ref)
+    if failure:
+        return failure
+    key = KUVAT_KEY.format(ref=ref)
+    try:
+        reqs = read_kuvapyynnot(agent_name, ref)
+    except LookupError as exc:
+        print(f"[{agent_name}] {exc}", file=sys.stderr)
+        return f"FAILED: {exc}{inferred}"
+
+    kuvat, failed = [], []
+    for r in reqs:
+        prompt = str(r.get("prompt") or "").strip()
+        res = generate_image(agent_name, prompt, size="2K", aspect_ratio="9:16")
+        if not res.get("ok"):
+            failed.append(f"nro {r.get('nro')}: {res.get('error')}")
+            print(f"[{agent_name}] image for shot {r.get('nro')} FAILED: {res.get('error')}", file=sys.stderr)
+            continue
+        if not res.get("key"):
+            failed.append(f"nro {r.get('nro')}: uploaded but returned no storage key — it cannot be attached")
+            continue
+        kuvat.append({"nro": r.get("nro"), "url": res["url"], "storage_key": res["key"], "prompt": prompt})
+    if not kuvat:
+        return (
+            f"FAILED: no image was generated for {key} — " + "; ".join(failed or ["no requests succeeded"]) + inferred
+        )
+
+    written = _aimeat_call(
+        agent_name,
+        "aimeat_memory_write",
+        {
+            "key": key,
+            "value": {"kuvat": kuvat},
+            "visibility": "owner",
+            "tags": ["julkaisupoyta", "kuvat", f"ref:{ref}"],
+            "ai_provenance": declare(
+                Level.SYNTHESIZED,
+                method=Method.SYNTHESIZED,
+                human_involvement=HumanInvolvement.NONE,
+                model="bytedance/seedream-4-5",
+                provider="openrouter",
+                notes=f"julkaisupöytä images for {PIECE_KEY.format(ref=ref, channel='video')}; not published anywhere.",
+            ),
+        },
+    )
+    if written is None:
+        return f"FAILED to write '{key}' (tunnel/transport) — {len(kuvat)} image(s) were uploaded but not recorded.{inferred}"
+    record_deliverable_key(task_id, key)
+    note = f" {len(failed)} request(s) failed: {'; '.join(failed)}." if failed else ""
+    return f"OK: {len(kuvat)}/{len(reqs)} image(s) -> {key}, each with its public URL and storage key.{note}{inferred}"
+
+
+# ── crew tools ───────────────────────────────────────────────────────────────────────────────────
 def make_julkaisu_tools(agent_name: str, channel: str, task: dict | None = None, prompt: str | None = None) -> list:
     """The crew's ONE tool, with the run's ref already resolved and bound.
 
     The tool takes no key and no ref: the model cannot mistype the one thing that decides where the
-    run lands. If the dispatch carried no ref the tool says so and writes nothing.
+    run lands. If the dispatch carried no ref the tool resolves it from the newest aineisto, or says
+    it could not.
     """
     from crewai.tools import tool
 
@@ -474,10 +714,29 @@ def make_julkaisu_tools(agent_name: str, channel: str, task: dict | None = None,
 
     @tool("write_julkaisu")
     def write_julkaisu_tool() -> str:
-        """Write this run's piece: read the brief for this run and produce the finished text + notes
-        into the run's own memory key. Takes no arguments — the run's ref and key are already resolved.
-        Call it EXACTLY ONCE, then report what it returns. It does not post anything anywhere."""
-        return write_julkaisu(agent_name, channel, ref or "", task_id=task_id)
+        """Write this run's piece: read the editor's material for this run and produce the finished
+        text + notes into the run's own memory key. Takes no arguments — the run's ref and key are
+        already resolved. Call it EXACTLY ONCE, then report what it returns. It posts nothing."""
+        return write_julkaisu(agent_name, channel, ref, task_id=task_id)
 
     write_julkaisu_tool.cache_function = lambda *_a, **_k: False
     return [write_julkaisu_tool]
+
+
+def make_kuva_tools(agent_name: str, task: dict | None = None, prompt: str | None = None) -> list:
+    """The image agent's ONE tool. Fully deterministic — the prompts come from the script."""
+    from crewai.tools import tool
+
+    ref = resolve_ref(task, prompt)
+    task_id = (task or {}).get("id")
+    reset_deliverable_key(task_id)
+
+    @tool("tee_kuvat")
+    def tee_kuvat_tool() -> str:
+        """Generate the images this run's video script asked for, upload each to public storage, and
+        record every one with BOTH its public URL and its storage key. Takes no arguments. Call it
+        EXACTLY ONCE and report what it returns, including any request that failed."""
+        return tee_kuvat(agent_name, ref, task_id=task_id)
+
+    tee_kuvat_tool.cache_function = lambda *_a, **_k: False
+    return [tee_kuvat_tool]

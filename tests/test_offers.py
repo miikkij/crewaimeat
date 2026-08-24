@@ -112,6 +112,9 @@ def test_crew_offers_match_spec_shape():
             # across the ways the boundary is actually written. "I never post" is the clearest form of
             # negative scope there is; leaving it out made this assert a word list rather than the
             # contract.
+            # The node caps `ask` at 500 chars. The real instruction belongs in the agent's own
+            # prompt / build_domain; an ask that grows past the cap is an offer trying to be a brief.
+            assert len(o["ask"]) <= 500, f"{agent}/{meta['id']}: ask is {len(o['ask'])} chars (cap is 500)"
             from crewaimeat.forge_catalog import has_negative_scope
 
             assert has_negative_scope(o["ask"]), (

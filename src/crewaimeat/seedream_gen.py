@@ -165,7 +165,10 @@ def generate_image(agent_name: str, prompt: str, *, size: str = "2K", aspect_rat
     )
     # Remember it so clean_deliverable can guarantee the URL reaches the published deliverable text.
     _RECENT_IMAGES.append({"url": pub, "prompt": prompt, "mime": mime})
-    return {"ok": True, "url": pub, "mime": mime, "bytes": len(data)}
+    # `key` + `gaii` travel with the URL: a consumer that ATTACHES the image (the julkaisupöytä app
+    # attaches by storage key, and a URL alone cannot be attached) needs the address, not just the
+    # link. They were computed here and thrown away, which made every caller re-derive or give up.
+    return {"ok": True, "url": pub, "key": key, "gaii": gaii, "mime": mime, "bytes": len(data)}
 
 
 def make_image_tools(agent_name: str) -> list:

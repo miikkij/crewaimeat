@@ -504,19 +504,16 @@ def _token_exists(agent_name: str, owner: str | None) -> bool:
     the owner approves a freshly-registered agent there is no token, so the daemon's
     _read_token would raise at startup — we use this to wait for registration/approval first.
     """
-    import glob
-
     from crewaimeat._home import aimeat_home
-    from crewaimeat.brains import is_safe_agent_name
 
-    # agent_name is interpolated into a path under the token store. A crew whose name is not a legal
-    # agent id has no token by definition, so refuse rather than glob a name that could climb out.
-    if not is_safe_agent_name(agent_name):
-        return False
-    tokens = aimeat_home() / "tokens"
-    if owner:
-        return (tokens / f"{agent_name}@{owner}.token").is_file()
-    return bool(glob.glob(str(tokens / f"{agent_name}@*.token")))
+    # Read the token store's real filenames and compare, rather than interpolating agent_name into a
+    # path or a glob pattern. Same answer as before for every legal name, and a crafted one now has no
+    # path to steer — it simply matches nothing.
+    for tokf in (aimeat_home() / "tokens").glob("*.token"):
+        tok_agent, _, tok_owner = tokf.name[: -len(".token")].partition("@")
+        if tok_agent == agent_name and (not owner or tok_owner == owner):
+            return True
+    return False
 
 
 def _wait_for_auth(agent_name: str, owner: str | None, max_wait_seconds: int | None, interval: int = 30) -> None:

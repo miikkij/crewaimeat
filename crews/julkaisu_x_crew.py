@@ -1,14 +1,17 @@
-"""julkaisu-x: one English X thread from one brief. A step of the `julkaisupoyta` workflow.
+"""julkaisu-x: one English X thread from the editor's angle. A step of the `julkaisupoyta` workflow.
 
-Reads the brief at `julkaisu.<ref>.brief` and writes `julkaisu.<ref>.x` — an object with `text` (the
-posts, separated by a blank line) and `notes` (what it left out and why). It posts nothing anywhere
-and contacts nobody: the workflow's human-input gate is where a person picks approve / rewrite /
-discard.
+Reads `julkaisu.{ref}.aineisto` and writes `julkaisu.{ref}.x` as `{text, notes}` — the posts
+separated by a blank line.
 
-The crew is a thin wrapper: the run's `ref` is resolved IN CODE from the dispatched task and bound
-into the tool, the brief is read and required, and the house rules (3–6 posts, each under 280
-characters, no thread announcement, no emoji bullets, no follow-bait) are checked deterministically
-before anything is written. See `crewaimeat.julkaisu_pipeline`.
+**This one leads with the before-state.** The Finnish LinkedIn post opens on the fix; this thread
+opens on what people were stuck with, and lets the fix arrive as the turn. If the two read as
+translations of each other the run failed, even though both keys are non-empty. That divergence is
+built into the prompt structurally — the two writers are handed the same facts through a different
+door (`story_block(lead=...)`) — because "reads like a translation" is a judgement no check can make
+across two languages. See the note in `crewaimeat.julkaisu_pipeline`.
+
+It posts nothing anywhere and contacts nobody: the workflow's human-input gate is where a person
+picks approve / rewrite / discard.
 
 Register + approve, then restart the fleet:
   npx aimeat@latest connect --url https://aimeat.io --owner <your-aimeat-account> --agent julkaisu-x
@@ -26,61 +29,63 @@ AGENT_NAME = "julkaisu-x"
 CHANNEL = "x"
 
 # ── This agent's own declaration ─────────────────────────────────────────────────────────────
-# The single source for what this agent is: its model routing, how it is discovered, and what it
-# promises — including the workflow signals, so a `julkaisupoyta` step can name this offer. The
-# `{ref}` in the keys is a workflow VARIABLE and stays literal here; the engine substitutes it per
-# run. Hardcoding a value there would write every run into the same key.
+# `{ref}` is a workflow VARIABLE and stays literal here; the engine substitutes it per run.
 LLM_PROFILE = "content"  # English prose — grok's one strength, and this thread is English only
 TAGS = ["julkaisupoyta", "x-thread", "somekirjoitus", "role.task-runner"]
 CAPABILITIES = {
     "technical": [{"name": "julkaisu-x", "type": "skill"}],
-    "domain": ["X threads", "product launch copy", "consumes:julkaisu-brief@1"],
+    "domain": ["X threads", "release storytelling", "consumes:julkaisu-aineisto@1"],
     "languages": ["en"],
 }
 OFFERS = [
     {
         "id": "kirjoita-x",
         "title": "Kirjoita X-ketju englanniksi",
-        "ask": "Anna minulle avain julkaisu.{ref}.brief, niin kirjoitan siitä yhden X-ketjun englanniksi "
-        "(3–6 postausta). En julkaise sitä mihinkään enkä ota yhteyttä kehenkään — teksti jää "
-        "muistiin, ja ihminen päättää mitä sille tehdään.",
-        "example": "Kirjoita X-ketju tämän viikon julkaisusta",
+        "ask": "Kirjoitan toimittajan aineistosta yhden X-ketjun englanniksi (3–6 postausta, kukin alle "
+        "280 merkkiä). Avaan siitä mikä oli ennen rikki, en korjauksesta — se on suomenkielisen "
+        "postauksen kulma. En ilmoittele ketjua, en pyydä seuraamaan, enkä kirjoita asioista "
+        "jotka aineisto rajasi ulos. En julkaise mitään mihinkään.",
+        "example": "Kirjoita tämän ajon X-ketju",
         "cost": "cheap",
         "latency": "minutes",
         "tags": ["julkaisupoyta"],
         "repeatability": "idempotent",
         "verification": "deterministic",
         "dataHandling": "llm-provider",
-        "json": True,  # the deliverable is an object ({text, notes}); format follows when the node enum has "json"
+        "json": True,
         "consequences": [],
-        "required_to_function": {"kind": "deterministic", "op": "nonempty", "key": "julkaisu.{ref}.brief"},
+        "required_to_function": {"kind": "deterministic", "op": "nonempty", "key": "julkaisu.{ref}.aineisto"},
         "success_signal": {"kind": "deterministic", "op": "nonempty", "key": "julkaisu.{ref}.x"},
         "deliverable_location": {"key": "julkaisu.{ref}.x"},
         "sample": {
-            "text": "Your AI connection now finishes only after you have decided what the agent is "
-            "allowed to do.\n\nThe approval window asks up front: keep what it has, read-only, "
-            "standard, full — or tick the permissions yourself.\n\nBefore, the connection was made "
-            "with whatever permissions the agent happened to hold. Changing them meant finding "
-            "Profile > Agents and rebuilding the whole MCP connection.\n\nThat rebuild was where new "
-            "users stopped. Now the choice happens once, before the connection is done.",
-            "notes": "Left out the changelog date and the list of supported clients — four posts hold "
-            "one change, and the brief carries the source.",
+            "text": "Changing what your AI agent was allowed to do meant tearing the whole connection "
+            "down and building it again.\n\nNot the permissions. The connection.\n\nSo people left it "
+            "on whatever it happened to have, or gave up halfway through setup.\n\nThe approval window "
+            "now asks before the connection completes: keep what it has, read-only, standard, full, or "
+            "tick them yourself.\n\nOne choice, once, before anything is live. Next time you connect an "
+            "AI service, read that window instead of clicking past it.",
+            "notes": "Left out the agent-identity line and the account-scope line — the material ruled "
+            "both out of this story. Opened on the rebuild, not the fix, so this is not the "
+            "Finnish post in English.",
         },
     }
 ]
 
 README = """[[FIGLET:slant]["Julkaisu X"]]
 
-Kirjoittaa yhdestä julkaisubriiffistä yhden englanninkielisen X-ketjun: 3–6 postausta, jokainen alle
-280 merkkiä, ensimmäinen seisoo yksin väitteenä. Ei "🧵"-ilmoitusta, ei emoji-luetteloita, ei
-seuraamispyyntöä lopussa.
+Kirjoitan toimittajan aineistosta yhden englanninkielisen X-ketjun: 3–6 postausta, kukin alle 280
+merkkiä, tyhjä rivi väliin.
 
-**Mistä luen ja mihin kirjoitan:** briiffi `julkaisu.<ref>.brief` → ketju `julkaisu.<ref>.x`
-(`text` = postaukset tyhjällä rivillä erotettuina, + `notes`). **En julkaise mitään mihinkään** —
-ihminen hyväksyy, korjauttaa tai hylkää.
+**Kulmani on ENNEN-tila.** Aloitan siitä mikä oli rikki, ja korjaus tulee käänteenä. Suomenkielinen
+LinkedIn-postaus samasta aiheesta aloittaa korjauksesta — jos nämä kaksi lukevat kuin sama teksti
+kahdella kielellä, ajo epäonnistui vaikka molemmat tiedostot ovat olemassa.
 
-**Miten annat työn:** julkaisupöytä-työnkulku antaa sen itse. Käsin: kerro ajossa mikä `ref` on
-(esim. "kirjoita X-ketju avaimesta julkaisu.demo1.brief").
+**Mistä luen:** `julkaisu.<ref>.aineisto`. **Mihin kirjoitan:** `julkaisu.<ref>.x` (`text` =
+postaukset tyhjällä rivillä erotettuina, + `notes`).
+
+Ensimmäinen postaus seisoo yksin väitteenä. Ei "🧵"-ilmoitusta, ei emoji-luetteloita, ei
+seuraamispyyntöä lopussa — viimeinen postaus kertoo mitä lukija voi tehdä seuraavaksi.
+**En julkaise mitään mihinkään.**
 """
 
 
@@ -98,9 +103,9 @@ def build_domain(ctx: BuildContext):
     task = Task(
         description=(
             f"Today is {ctx.today}. Request: '{ctx.prompt}'\n\n"
-            "1. Call write_julkaisu() EXACTLY ONCE. It takes no arguments: it reads this run's brief, "
-            "writes the English thread against the house rules, and stores it under this run's own "
-            "key. You do NOT write the posts yourself.\n"
+            "1. Call write_julkaisu() EXACTLY ONCE. It takes no arguments: it reads the editor's material "
+            "for this run, writes the English thread against the house rules — opening on the before-state, "
+            "not the fix — and stores it under this run's own key. You do NOT write the posts yourself.\n"
             "2. Return its report verbatim — the key it wrote and the length, or the FAILED line and "
             "its reason."
         ),
