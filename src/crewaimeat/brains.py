@@ -317,7 +317,13 @@ def write_crew_stub(agent_name: str, crews_dir: str | os.PathLike | None = None)
 
     target_dir = str(crews_dir) if crews_dir is not None else str(_project_root() / "crews")
     os.makedirs(target_dir, exist_ok=True)
-    path = os.path.join(target_dir, f"{_stub_stem(agent_name)}.py")
+    path = os.path.realpath(os.path.join(target_dir, f"{_stub_stem(agent_name)}.py"))
+    # _stub_stem already collapses every non-alphanumeric run, so the stem cannot carry a separator —
+    # but check the RESOLVED path lands inside target_dir instead of trusting that from a distance. A
+    # stub about to be written anywhere else is a bug to stop, not a file to write.
+    root = os.path.realpath(target_dir)
+    if not path.startswith(root + os.sep):
+        raise ValueError(f"refusing to write a crew stub outside {root!r} for agent {agent_name!r}")
     body = (
         '"""Auto-generated brain stub — do not edit. The behavior lives in the brain '
         "(crewaimeat.brains), edited in the agency cockpit; this stub only launches it.\n"

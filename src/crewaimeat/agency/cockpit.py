@@ -1035,13 +1035,15 @@ def create_app(token: str | None = None) -> FastAPI:
         # Remove the connector TOKEN(s) too — otherwise the serve daemon keeps loading a deleted agent from
         # its leftover token file (the 'news-paska is still served though I deleted it' zombie).
         try:
-            import glob
-
             from crewaimeat._home import aimeat_home
 
-            for tokf in glob.glob(str(aimeat_home() / "tokens" / f"{agent}@*.token")):
+            # Same rule as the log tail: compare against the names the token store actually holds rather
+            # than globbing a pattern built from the URL. What we unlink comes from the listing.
+            for tokf in (aimeat_home() / "tokens").glob("*.token"):
+                if tokf.name.split("@", 1)[0] != agent:
+                    continue
                 try:
-                    os.remove(tokf)
+                    tokf.unlink()
                 except OSError:
                     pass
         except Exception:  # noqa: BLE001
@@ -1299,11 +1301,15 @@ def create_app(token: str | None = None) -> FastAPI:
         ]
         n = max(1, min(int(n or 80), 5000))  # clamp so a caller can't blow up the read
         READ_CAP = 1024 * 1024  # HARD ceiling on bytes ever loaded (1MB) — independent of n, so this can't OOM
+        # Pick the log by MATCHING what logs/ actually holds, instead of building a path out of the
+        # request. Every path opened below comes from the directory listing, so the URL segment steers
+        # nothing — it only decides which of the already-present files we prefer.
+        present = {p.name: p for p in Path("logs").glob("*.log")}
         for name in candidates:
-            p = Path("logs") / name
+            p = present.get(name)
+            if p is None:
+                continue
             try:
-                if not p.is_file():
-                    continue
                 # Tail by BYTES — a stuck crew can grow the log to GBs; never read more than READ_CAP.
                 size = p.stat().st_size
                 with p.open("rb") as f:
