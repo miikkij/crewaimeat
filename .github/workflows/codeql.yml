@@ -32,7 +32,9 @@ jobs:
       - uses: github/codeql-action/init@42947a340483f03ba47bb1a039b2c519aab3df85 # v3
         with:
           languages: ${{ matrix.language }}
-          queries: security-extended
+          # Default query suite, deliberately — see aimeat-protocol's codeql.yml. security-extended's
+          # low-precision audit queries flood the tab with noise and bury the real findings. Depth,
+          # when wanted, is a periodic security-extended run fed to triage, not the always-on tab.
           config: |
             paths-ignore:
               - 'tests/**'
