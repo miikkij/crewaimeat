@@ -112,8 +112,9 @@ def test_crew_offers_match_spec_shape():
             # across the ways the boundary is actually written. "I never post" is the clearest form of
             # negative scope there is; leaving it out made this assert a word list rather than the
             # contract.
-            NEGATIVE = ("don't", "do not", "does not", "never", "refuse", "not ", " only", "scan only", "drafts only")
-            assert any(m in o["ask"].lower() for m in NEGATIVE), (
+            from crewaimeat.forge_catalog import has_negative_scope
+
+            assert has_negative_scope(o["ask"]), (
                 f"{agent}/{meta['id']}: ask must carry negative scope (say what it will NOT do)"
             )
             for cq in o["consequences"]:

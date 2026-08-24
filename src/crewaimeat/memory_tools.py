@@ -23,6 +23,33 @@ from crewai.tools import tool
 from crewaimeat.aimeat_crew import _aimeat_call
 
 
+def owner_scope_value(agent_name: str, key: str):
+    """The value a SIBLING agent wrote at an exact key. Cross-agent read: memory is namespaced by the
+    WRITING agent's GAII, so a value written by a sibling (e.g. the fetcher's raw keys) is NOT under
+    this agent's own GAII. owner_scope=true lists across ALL same-owner agents (the pattern
+    workflow.py uses to collect workers' deliverables)."""
+    r = _aimeat_call(agent_name, "aimeat_memory_list", {"owner_scope": True, "prefix": key})
+    items = (r or {}).get("items") if isinstance(r, dict) else None
+    for it in items or []:
+        if isinstance(it, dict) and it.get("key") == key and it.get("value") is not None:
+            return it.get("value")
+    return None
+
+
+def read_owner_key(agent_name: str, key: str):
+    """The value at an EXACT owner memory key, including one written by a SIBLING agent.
+
+    Own GAII first, then the same-owner cross-agent lookup — the path the news pipeline already
+    proved. Returns None when the key has no value anywhere. Use this when you do not know which
+    agent wrote the key; use `owner_scope_value` when you already know it was a sibling.
+    """
+    r = _aimeat_call(agent_name, "aimeat_memory_read", {"key": key})  # own GAII first
+    val = (r.get("value") if isinstance(r, dict) else r) if r is not None else None
+    if val is not None:
+        return val
+    return owner_scope_value(agent_name, key)
+
+
 def make_memory_tools(agent_name: str) -> list:
     """Return content-memory crewai tools (write_memory / read_memory / list_memory) for this agent."""
 
@@ -52,17 +79,6 @@ def make_memory_tools(agent_name: str) -> list:
             return f"FAILED to write '{key}' (no result from memory_write)."
         return f"OK: wrote '{key}' (visibility={vis})."
 
-    def _owner_scope_value(key: str):
-        # Cross-agent read: memory is namespaced by the WRITING agent's GAII, so a value written by a
-        # sibling (e.g. the fetcher's raw keys) is NOT under this agent's own GAII. owner_scope=true lists
-        # across ALL same-owner agents (the pattern workflow.py uses to collect workers' deliverables).
-        r = _aimeat_call(agent_name, "aimeat_memory_list", {"owner_scope": True, "prefix": key})
-        items = (r or {}).get("items") if isinstance(r, dict) else None
-        for it in items or []:
-            if isinstance(it, dict) and it.get("key") == key and it.get("value") is not None:
-                return it.get("value")
-        return None
-
     @tool("read_memory")
     def read_memory(key: str) -> str:
         """Read the value at an EXACT owner memory key — INCLUDING keys written by OTHER same-owner agents
@@ -72,10 +88,7 @@ def make_memory_tools(agent_name: str) -> list:
         (the upstream stage may not have run yet)."""
         if not key or not str(key).strip():
             return "FAILED: key is required."
-        r = _aimeat_call(agent_name, "aimeat_memory_read", {"key": key})  # own GAII first
-        val = (r.get("value") if isinstance(r, dict) else r) if r is not None else None
-        if val is None:
-            val = _owner_scope_value(key)  # then same-owner cross-agent (sibling-written keys)
+        val = read_owner_key(agent_name, key)  # own GAII, then same-owner cross-agent (sibling keys)
         if val is None:
             return f"NOT FOUND: '{key}' has no value yet (upstream stage may not have run). Do not fabricate — stop."
         out = val if isinstance(val, str) else json.dumps(val, ensure_ascii=False)
@@ -237,7 +250,7 @@ def make_memory_tools(agent_name: str) -> list:
             if k == f"news.{date}.{edition}.raw":
                 v = it.get("value")
                 if v is None:
-                    v = _owner_scope_value(k)
+                    v = owner_scope_value(agent_name, k)
                 if isinstance(v, str):
                     try:
                         v = json.loads(v)
@@ -248,7 +261,7 @@ def make_memory_tools(agent_name: str) -> list:
             elif k.startswith(f"news.{date}.{edition}.raw."):
                 v = it.get("value")
                 if v is None:
-                    v = _owner_scope_value(k)
+                    v = owner_scope_value(agent_name, k)
                 _record_raw(k.rsplit(".", 1)[-1], v)
         FEATURE = {"koodaus", "prompt-niksi", "matikka"}
         clean = []
@@ -260,7 +273,7 @@ def make_memory_tools(agent_name: str) -> list:
             cat = "editorial" if is_ed else k.rsplit(".", 1)[-1]
             body = it.get("value")
             if body is None:
-                body = _owner_scope_value(k)
+                body = owner_scope_value(agent_name, k)
             txt = body if isinstance(body, str) else (json.dumps(body, ensure_ascii=False) if body is not None else "")
             lines = [ln.strip().lstrip("#").strip() for ln in txt.splitlines() if ln.strip()]
             entry = {

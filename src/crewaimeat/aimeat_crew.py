@@ -1682,6 +1682,34 @@ def _mark_todos_done(agent_name: str, tid: str) -> None:
         )
 
 
+# --------------------------------------------------------------------------- #
+# Run-scoped deliverable keys — where a crew's REAL output landed, when that is not the scaffold's
+# derived crews.<agent>.<task>.latest_output. A pipeline that writes a contract key (the workflow
+# blueprint's key, e.g. julkaisu.<ref>.linkedin) records it here; the finalize callback then names
+# THAT key as the task's `deliverable_key`. Without it a task completes pointing at the wrapper's
+# prose instead of the deliverable the workflow's success_signal reads — the Inbox and the run view
+# would show the report, not the piece. Keyed by task_id, mirroring author_tool's verify verdicts.
+# --------------------------------------------------------------------------- #
+_RUN_DELIVERABLE_KEYS: dict[str, str] = {}
+
+
+def record_deliverable_key(task_id: str | None, key: str) -> None:
+    """Record the memory key a run actually wrote, so completion points at it."""
+    if task_id and key:
+        _RUN_DELIVERABLE_KEYS[task_id] = key
+
+
+def get_deliverable_key(task_id: str | None) -> str | None:
+    """The recorded deliverable key for a task, or None (then the derived key stands)."""
+    return _RUN_DELIVERABLE_KEYS.get(task_id or "")
+
+
+def reset_deliverable_key(task_id: str | None) -> None:
+    """Start a clean slate for a task (called when its pipeline tools are built)."""
+    if task_id:
+        _RUN_DELIVERABLE_KEYS.pop(task_id, None)
+
+
 def _make_complete_cb(
     agent_name: str,
     tid: str,
@@ -1751,7 +1779,10 @@ def _make_complete_cb(
         # rejects a completed task), so a task never lands Done with its todos still pending (0/1).
         _mark_todos_done(agent_name, tid)
         payload = {"task_id": tid, "message": "Crew finished; deliverable published to memory."}
-        if mem_key:
+        # A pipeline that wrote a contract key (the workflow blueprint's key) named it here; that key
+        # IS the deliverable, so it wins over the scaffold's derived crews.<agent>.… wrapper key.
+        key = _RUN_DELIVERABLE_KEYS.pop(tid, None) or mem_key
+        if key:
             # The Offers/Inbox contract: the task record's deliverable key points at the memory key
             # holding the deliverable — without it the Inbox shows the task but no content/sample,
             # and `outcome` comes back with a message and no address to follow.
@@ -1762,11 +1793,11 @@ def _make_complete_cb(
             # `deliverableKey`, which is simply ignored — no error, the completion succeeds, and the
             # pointer is silently absent. Measured 2026-08-16: task a73ddeb9 completed with a real
             # deliverable in memory and its outcome carried state/message/at but no deliverable_key.
-            payload["deliverable_key"] = mem_key
-            payload["message"] = f"Crew finished; deliverable published to memory at {mem_key}."
+            payload["deliverable_key"] = key
+            payload["message"] = f"Crew finished; deliverable published to memory at {key}."
         res = _aimeat_call(agent_name, "aimeat_task_complete", payload)
         print(
-            f"[{agent_name}] task completed deterministically {tid} (deliverable_key={mem_key or '-'}): {bool(res)}",
+            f"[{agent_name}] task completed deterministically {tid} (deliverable_key={key or '-'}): {bool(res)}",
             file=sys.stderr,
         )
 

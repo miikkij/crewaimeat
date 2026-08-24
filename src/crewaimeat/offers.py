@@ -16,11 +16,19 @@ node's PUT /v1/agents/:name/offers route will own once it ships).
 from __future__ import annotations
 
 import datetime
+import fnmatch
+import json
 import re
 import sys
 from zoneinfo import ZoneInfo
 
-from aimeat_crewai.workflow_spec import NONE, Sig, is_workflow_compatible  # published grammar + compat check
+from aimeat_crewai.workflow_spec import (  # published grammar + compat check
+    NONE,
+    Sig,
+    SignalError,
+    is_workflow_compatible,
+    validate_signal,
+)
 
 from crewaimeat.aimeat_crew import _aimeat_call
 
@@ -478,6 +486,40 @@ def fetch_crew_sample(agent: str) -> str:
         return "untested"
 
 
+def fetch_deliverable_sample(agent: str, key_pattern: str):
+    """Latest real deliverable at the key the OFFER declares — for a crew whose output does not live
+    under `crews.<agent>.`.
+
+    An offer that names a `{var}`-templated deliverable key (a workflow step's output, e.g.
+    `julkaisu.{ref}.linkedin`) writes the piece THERE; `crews.<agent>.` then holds only the wrapper's
+    status line, and sampling that would advertise "OK: … -> julkaisu.demo1.linkedin" as the work.
+    Same hard rule as everywhere else: a real excerpt or the literal "untested", never invented. A
+    structured deliverable is returned as the OBJECT it is (the contract allows an object sample).
+    """
+    head = (key_pattern or "").split("{", 1)[0]
+    if not head:
+        return "untested"
+    glob = re.sub(r"\{[^}]+\}", "*", key_pattern)
+    try:
+        r = _aimeat_call(agent, "aimeat_memory_list", {"owner_scope": True, "prefix": head, "limit": 200}) or {}
+        items = [it for it in (r.get("items") or []) if fnmatch.fnmatch(str(it.get("key") or ""), glob)]
+        if not items:
+            return "untested"
+        last = items[-1]
+        v = last.get("value")
+        if not v:
+            v = (_aimeat_call(agent, "aimeat_memory_read", {"key": last.get("key")}) or {}).get("value")
+        if not v:
+            return "untested"
+        if isinstance(v, dict):
+            encoded = json.dumps(v, ensure_ascii=False)
+            return v if len(encoded) <= _SAMPLE_MAX else _md_excerpt(encoded)
+        return _md_excerpt(v if isinstance(v, str) else str(v))
+    except Exception as exc:  # noqa: BLE001
+        print(f"[offers] deliverable sample fetch failed for {agent} ({key_pattern}): {exc!r}", file=sys.stderr)
+        return "untested"
+
+
 # Prose task-runner offers to make workflow-compatible with a GENERIC signal (output exists under
 # crews.<agent>.). They produce free prose, not a run-keyed deliverable, so the signal is weak — it
 # only makes the agent selectable as a workflow step; a real workflow overrides it. Orchestrators
@@ -497,17 +539,54 @@ _GENERIC_WORKFLOW_OFFERS = {
 }
 
 
+_SIGNAL_FIELDS = ("required_to_function", "success_signal", "deliverable_location")
+
+
+def _declared_signals(agent: str, meta: dict) -> dict | None:
+    """The workflow signals an offer META declares itself, or None when it declares none.
+
+    A workflow step may only name an offer that publishes all three of `success_signal`,
+    `required_to_function` and `deliverable.location.key` — the node rejects the workflow at SAVE
+    otherwise. So a half-declared set is a bug that would surface much later, as an unexplained save
+    rejection: reject it here, at the boundary, naming the agent and the offer.
+    """
+    if not any(meta.get(f) is not None for f in _SIGNAL_FIELDS):
+        return None
+    where = f"{agent}/{meta.get('id')}"
+    missing = [f for f in _SIGNAL_FIELDS if meta.get(f) is None]
+    if missing:
+        raise ValueError(
+            f"{where}: an offer that declares its own workflow signals must declare all of "
+            f"{', '.join(_SIGNAL_FIELDS)} — missing {', '.join(missing)}. "
+            "A workflow step naming this offer would be rejected at save."
+        )
+    for field in ("required_to_function", "success_signal"):
+        value = meta[field]
+        if field == "required_to_function" and value == NONE:
+            continue
+        try:
+            validate_signal(value)
+        except SignalError as exc:
+            raise ValueError(f"{where}: {field} is not a valid signal — {exc}") from exc
+    loc = meta["deliverable_location"]
+    if not isinstance(loc, dict) or not loc.get("key"):
+        raise ValueError(f"{where}: deliverable_location must be an object with a non-empty 'key'")
+    return {f: meta[f] for f in _SIGNAL_FIELDS}
+
+
 def crew_offer(agent: str, meta: dict, with_sample: bool = False) -> dict:
     """One spec-shaped offer for a task-runner crew (deliverable = memory prefix, Run flow)."""
     # A structured offer wants format="json" + an object sample. The node enum doesn't carry "json"
     # yet, so until JSON_FORMAT_SUPPORTED flips we keep "document" and just publish the object sample.
     fmt = "json" if (meta.get("json") and JSON_FORMAT_SUPPORTED) else "document"
+    # role.task-runner always; a crew may add its own (e.g. the workflow it is a step of).
+    tags = ["role.task-runner"] + [t for t in (meta.get("tags") or []) if t != "role.task-runner"]
     offer = {
         "id": meta["id"],
         "title": meta["title"],
         "ask": meta["ask"],
         "example": meta["example"],
-        "tags": ["role.task-runner"],
+        "tags": tags,
         "cost": meta["cost"],
         "latency": meta["latency"],
         "repeatability": meta["repeatability"],
@@ -537,7 +616,9 @@ def crew_offer(agent: str, meta: dict, with_sample: bool = False) -> dict:
     # success_signal + required_to_function + deliverable.location.key.
     from crewaimeat.workflow_spec import AGENT_SIGNALS
 
-    sig = AGENT_SIGNALS.get(meta["id"])
+    # A crew that declares its OWN signals wins: the crew file is the one source for what an agent is,
+    # and AGENT_SIGNALS is only the shared map the Sanomat workflow definition also reads.
+    sig = _declared_signals(agent, meta) or AGENT_SIGNALS.get(meta["id"])
     if sig:
         # The node now accepts required_to_function:"none" at the OFFER level (not just the step), so
         # a source offer publishes it directly — no placeholder workaround needed.
@@ -568,10 +649,15 @@ def offers_doc_any(agent: str, with_samples: bool = False) -> dict:
     for meta in crew_offers(agent):
         o = crew_offer(agent, meta, with_sample=False)
         if with_samples:
-            if sample is None:
-                sample = fetch_crew_sample(agent)  # one network read per agent; all offers share the prefix
+            declared = (meta.get("deliverable_location") or {}).get("key") or ""
+            if "{" in declared:
+                live = fetch_deliverable_sample(agent, declared)  # the offer says where its work lands
+            else:
+                if sample is None:
+                    sample = fetch_crew_sample(agent)  # one network read per agent; all offers share the prefix
+                live = sample
             # live last-run excerpt → this offer's authored example → "untested" (golden sample, never invented)
-            o["deliverable"]["sample"] = _resolve_sample(sample, meta.get("sample"))
+            o["deliverable"]["sample"] = _resolve_sample(live, meta.get("sample"))
         doc["offers"].append(o)
     return doc
 

@@ -312,6 +312,19 @@ _LATENCY_ENUM = ("seconds", "minutes", "long-running")
 # WHOLE WORDS that count as stating NEGATIVE SCOPE in an offer's ask (the hard offer rule). Matched as
 # words, not substrings, so "notes"/"another" don't count as "not".
 _NEG_SCOPE_WORDS = {"not", "never", "without", "no", "cannot", "avoid", "only", "beyond", "nor"}
+# The same rule in Finnish — a Finnish-facing agent writes its ask in Finnish, and "En julkaise sitä
+# mihinkään" is as clear a boundary as "I never post". Whole words, so "kysyen" is not a negation.
+_NEG_SCOPE_WORDS |= {"en", "ei", "emme", "eikä", "eivät", "älä", "ilman", "vain", "pelkästään"}
+
+
+def has_negative_scope(ask: str) -> bool:
+    """True when an offer's ask states what the agent will NOT do (the hard offer rule).
+
+    THE definition — crew-forge gates on it when it assembles an offer, and the offers floor asserts
+    it over every crew's authored ask. Two copies of "what counts as a boundary" drift; this one
+    does not.
+    """
+    return _has_negative_scope(ask)
 
 
 def _has_negative_scope(ask: str) -> bool:

@@ -4,6 +4,41 @@ Notable changes to crewaimeat. Format loosely follows [Keep a Changelog](https:/
 Dates are the working dates; entries are **uncommitted and take effect on the next fleet restart**
 (the daemons import the modules at start).
 
+## [Unreleased] — 2026-08-24
+
+### Added
+- **JULKAISUPÖYTÄ — three writer agents for the `julkaisupoyta` workflow.** `julkaisu-linkedin`
+  (Finnish LinkedIn post), `julkaisu-x` (English X thread) and `julkaisu-video` (Finnish 9:16 script)
+  each read the same brief at `julkaisu.{ref}.brief` and write one piece of their own —
+  `julkaisu.{ref}.<channel>` = `{text, notes}`, owner-visible. **None of them posts anything or
+  contacts anyone**; the workflow's human-input gate is where a person picks approve / rewrite /
+  discard. The prose is the only part a model decides: `crewaimeat.julkaisu_pipeline` resolves the
+  run's `ref` in code, requires the brief, checks the house rules (length, post count, hashtag pile,
+  banned openers, emoji bullets, follow-bait, stock-footage directions), hands violations back for a
+  rewrite, and after three attempts writes NOTHING and reports which rule failed — so a step that
+  cannot meet the brief goes output-RED with a reason rather than shipping a bad post.
+- **A crew can declare its OWN workflow signals** in its `OFFERS` entry
+  (`required_to_function` / `success_signal` / `deliverable_location`), instead of the offer id
+  having to appear in the central `workflow_spec.AGENT_SIGNALS` map. Same rule as the rest of the
+  declaration: the crew file is the one source. A half-declared set is rejected at the boundary
+  naming the agent and offer, because the node would otherwise reject the whole workflow at save.
+  An offer may also add its own `tags` alongside `role.task-runner`.
+
+### Fixed
+- **A task now points at the deliverable, not at the wrapper's report.** A pipeline that writes a
+  contract key (a workflow blueprint's key, e.g. `julkaisu.{ref}.linkedin`) records it with
+  `aimeat_crew.record_deliverable_key`, and completion names THAT key as `deliverable_key`. Before,
+  every task completed pointing at `crews.<agent>.<task>.latest_output` — for these crews, a status
+  line — so the Inbox showed the report where the piece should be.
+- **An offer's golden sample is fetched from where the offer says its work lands.** A crew whose
+  deliverable key is templated (`julkaisu.{ref}.linkedin`) sampled `crews.<agent>.` and would have
+  advertised "OK: … -> julkaisu.demo1.linkedin" as its sample. Structured deliverables come back as
+  the object they are.
+- **The negative-scope rule works in Finnish.** "En julkaise sitä mihinkään" is as clear a boundary
+  as "I never post", but the offers floor kept its own English word list and would have failed every
+  Finnish-facing agent. There is now one definition (`forge_catalog.has_negative_scope`), matched as
+  whole words, used by both crew-forge and the floor.
+
 ## [Unreleased] — 2026-08-22
 
 ### Added
