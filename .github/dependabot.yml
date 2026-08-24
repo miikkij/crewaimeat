@@ -1,0 +1,20 @@
+# Keep the GitHub Actions SHA pins fresh — the maintenance half of pinning.
+#
+# Every action in .github/workflows is pinned to an immutable commit SHA (a floating @v4 runs whatever
+# a retag points at, the supply-chain hole pinning closes). The cost is that a pin never moves on its
+# own, so a fixed action version silently misses its own fixes. This updater opens ONE grouped PR a
+# week that bumps the pins (SHA and the trailing version comment together).
+#
+# Scoped to github-actions ONLY. The pip (uv) ecosystem is left to Dependabot SECURITY alerts (a
+# separate feature, enabled on the repo) for known CVEs, without the noise of routine version-bump PRs.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci

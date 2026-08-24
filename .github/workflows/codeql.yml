@@ -1,0 +1,48 @@
+# CodeQL, advanced setup — mirrors aimeat-protocol's. Advanced rather than default so paths can be
+# scoped: the default setup analyses everything, and here that means the test floor, the built Tauri
+# artifacts and the vendored runtime snapshot, which bury the findings that matter. Two languages:
+# python (the agency itself) and actions (the workflows run with write scopes and publish signed
+# installers, so a workflow-injection is a real finding). Advisory — results land on the Security tab;
+# nothing here blocks a merge.
+
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '41 4 * * 1' # weekly refresh so alert state tracks main even in a quiet week
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, actions]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: github/codeql-action/init@42947a340483f03ba47bb1a039b2c519aab3df85 # v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended
+          config: |
+            paths-ignore:
+              - 'tests/**'
+              - 'output/**'
+              - 'benchmarks/**'
+              - 'docs/**'
+              - '**/.venv/**'
+              - '**/node_modules/**'
+              - 'aimeat-agency/src-tauri/target/**'
+
+      - uses: github/codeql-action/analyze@42947a340483f03ba47bb1a039b2c519aab3df85 # v3
+        with:
+          category: codeql/${{ matrix.language }}

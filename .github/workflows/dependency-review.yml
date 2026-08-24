@@ -1,0 +1,33 @@
+# Dependency review: on every PR, diff the dependency manifests and FAIL the PR if it introduces a
+# dependency with a high-severity known vulnerability or a GPL/AGPL licence.
+#
+# crewaimeat is MIT (see LICENSE). An AGPL dependency reaching the agency — which runs on customers'
+# machines and on the aimeat.io substrate — would trigger a source-disclosure obligation, so a GPL/AGPL
+# dep must be a deliberate, approved decision rather than a silent lockfile bump. LGPL is not denied:
+# weak copyleft that a normal MIT project carries fine.
+#
+# Needs the repository dependency graph (turned on with Dependabot alerts). Free on this public repo.
+
+name: Dependency review
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write # for the summary comment on a failing PR
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+          deny-licenses: >-
+            GPL-2.0-only, GPL-2.0-or-later, GPL-3.0-only, GPL-3.0-or-later,
+            AGPL-3.0-only, AGPL-3.0-or-later
+          comment-summary-in-pr: on-failure
