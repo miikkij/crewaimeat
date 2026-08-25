@@ -131,35 +131,63 @@ def _walk(value: Any):
             yield from _walk(v)
 
 
+def scope_entries(task: dict | None) -> dict[str, str]:
+    """The task's scope as {name: value}.
+
+    THE SHAPE IS A LIST OF RECORDS, and reading it as a mapping is why this went wrong. The node
+    sends (verified on task 061bf2e3, 2026-08-25):
+
+        "scope": [{"name": "var.ref",         "type": "text",       "value": "2026-08-25-ujr7"},
+                  {"name": "deliverable_key", "type": "memory_key", "value": "julkaisu.….tausta"}]
+
+    `deliverable_key` is the VALUE of a `name` field, not a key of the object. The old reader looked
+    for a dict key by that name, found none, and reported "no key and no variables in the dispatch"
+    while the dispatch was carrying both — a tool announcing an absence that was not there, which
+    cost an hour of diagnosis on the node side. A mapping shape is still accepted, because a
+    hand-made task may carry one.
+    """
+    out: dict[str, str] = {}
+    scope = (task or {}).get("scope")
+    for entry in scope if isinstance(scope, list) else []:
+        if isinstance(entry, dict) and str(entry.get("name") or "").strip():
+            value = entry.get("value")
+            if isinstance(value, (str, int, float)) and str(value).strip():
+                out.setdefault(str(entry["name"]).strip().lower(), str(value).strip())
+    for k, v in _walk(task or {}):
+        key = str(k).lower()
+        if key.startswith("var.") and isinstance(v, (str, int, float)) and str(v).strip():
+            out.setdefault(key, str(v).strip())
+        elif key in ("vars", "params", "variables") and isinstance(v, dict):
+            for name, value in v.items():
+                if isinstance(value, (str, int, float)) and str(value).strip():
+                    n = str(name).strip().lower()
+                    out.setdefault(n if n.startswith("var.") else f"var.{n}", str(value).strip())
+    return out
+
+
 def scope_deliverable_key(task: dict | None) -> str | None:
     """The output key the dispatch NAMED, or None.
 
-    RULE 1, and it outranks everything else: if the task's scope carries `deliverable_key`, that is
-    the address, complete and final — written character for character, never prefixed, extended or
+    RULE 1, and it outranks everything else: if the scope carries `deliverable_key`, that is the
+    address, complete and final — written character for character, never prefixed, extended or
     "improved". The engine checks the key IT knows; anything else is a dead step.
+
+    The task's top-level `deliverableKey` is deliberately NOT used: on a finished task that field is
+    what the agent REPORTED writing, so trusting it would make a re-dispatch chase its own tail.
     """
-    for k, v in _walk(task or {}):
+    named = scope_entries(task).get("deliverable_key")
+    if named:
+        return named
+    scope = (task or {}).get("scope")
+    for k, v in _walk(scope if isinstance(scope, (dict, list)) else {}):
         if str(k).lower() in ("deliverable_key", "deliverablekey") and isinstance(v, str) and v.strip():
             return v.strip()
     return None
 
 
 def scope_vars(task: dict | None) -> dict[str, str]:
-    """The run's variables, as the scope carries them: `var.<name>` fields (RULE 2).
-
-    Also accepts a `vars` / `params` object, because the same values reach a task both ways depending
-    on how the run was started, and a variable the engine did send is not worth losing to a shape.
-    """
-    out: dict[str, str] = {}
-    for k, v in _walk(task or {}):
-        key = str(k)
-        if key.lower().startswith("var.") and isinstance(v, (str, int, float)) and str(v).strip():
-            out.setdefault(key[4:].lower(), str(v).strip())
-        elif key.lower() in ("vars", "params", "variables") and isinstance(v, dict):
-            for name, value in v.items():
-                if isinstance(value, (str, int, float)) and str(value).strip():
-                    out.setdefault(str(name).lower().removeprefix("var."), str(value).strip())
-    return out
+    """The run's variables (RULE 2) — `var.<name>` from the scope, without the prefix."""
+    return {n[4:]: v for n, v in scope_entries(task).items() if n.startswith("var.") and n[4:]}
 
 
 def today_id() -> str:
@@ -186,11 +214,11 @@ def resolve_id(task: dict | None) -> tuple[str, str]:
     variables = scope_vars(task)
     for name in _ID_VARS:
         if variables.get(name):
-            return variables[name], f"rule 2: the run's var.{name}"
+            return variables[name], f"saanto 2: rakennettu var.{name}:sta"
     if len(variables) == 1:
         name, value = next(iter(variables.items()))
-        return value, f"rule 2: the run's only variable, var.{name}"
-    return today_id(), "rule 3: no key and no variables in the dispatch, so the id is today's date"
+        return value, f"saanto 2: rakennettu ajon ainoasta muuttujasta var.{name}"
+    return today_id(), "saanto 3: ei avainta eika muuttujia, paivamaara"
 
 
 def _id_of_key(key: str) -> str | None:
@@ -213,7 +241,7 @@ def run_address(task: dict | None, channel: str) -> tuple[str, str, str]:
     """
     named = scope_deliverable_key(task)
     if named:
-        return named, (_id_of_key(named) or resolve_id(task)[0]), "rule 1: the dispatch named deliverable_key"
+        return named, (_id_of_key(named) or resolve_id(task)[0]), "saanto 1: deliverable_key scopesta"
     run_id, rule = resolve_id(task)
     return PIECE_KEY.format(ref=run_id, channel=channel), run_id, rule
 

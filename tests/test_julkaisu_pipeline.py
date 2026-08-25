@@ -125,7 +125,7 @@ OHJAAJAT = {
 # The dispatch every test run gets. RULE 2: the scope carries the run variable, so the address is
 # BUILT from it — never generated. A test that passed a bare id would be testing the old defect.
 RUN_ID = "2026-08-24"
-TASK = {"id": "t-9", "scope": {"var.date": RUN_ID}}
+TASK = {"id": "t-9", "scope": [{"name": "var.date", "type": "text", "value": RUN_ID}]}
 
 
 class _StubLLM:
@@ -151,44 +151,50 @@ def _piece(text: str, notes: str = "jätin pois päivämäärän") -> str:
 def test_rule_1_the_named_key_wins_and_is_used_character_for_character():
     task = {
         "id": "t-1",
-        "scope": {"deliverable_key": "julkaisu.2026-08-24.linkedin", "var.date": "2026-08-01"},
+        "scope": [
+            {"name": "deliverable_key", "type": "memory_key", "value": "julkaisu.2026-08-24.linkedin"},
+            {"name": "var.date", "type": "text", "value": "2026-08-01"},
+        ],
     }
     key, run_id, rule = jp.run_address(task, "linkedin")
     assert key == "julkaisu.2026-08-24.linkedin", "the named key is final — not rebuilt from a variable"
     assert run_id == "2026-08-24", "the run id is read back OUT of the named key, so the input matches"
-    assert rule.startswith("rule 1")
+    assert rule.startswith("saanto 1")
 
 
 def test_rule_1_takes_a_named_key_even_in_a_shape_we_do_not_recognise():
     """Not our template, not our business: the engine named it, so it is written there verbatim."""
-    key, run_id, rule = jp.run_address({"scope": {"deliverable_key": "kansi/2026-W34/li"}}, "linkedin")
-    assert key == "kansi/2026-W34/li" and rule.startswith("rule 1")
+    task = {"scope": [{"name": "deliverable_key", "value": "kansi/2026-W34/li"}]}
+    key, run_id, rule = jp.run_address(task, "linkedin")
+    assert key == "kansi/2026-W34/li" and rule.startswith("saanto 1")
     assert run_id == jp.today_id(), "an unparseable key still needs an id for the INPUT side"
 
 
 def test_rule_2_builds_the_key_from_the_runs_variables():
     for field, value in (("var.ref", "viikko34"), ("var.date", "2026-08-24")):
-        key, run_id, rule = jp.run_address({"scope": {field: value}}, "x")
+        key, run_id, rule = jp.run_address({"scope": [{"name": field, "value": value}]}, "x")
         assert key == f"julkaisu.{value}.x" and run_id == value
-        assert rule.startswith("rule 2")
+        assert rule.startswith("saanto 2")
 
 
 def test_rule_2_also_reads_a_vars_object():
-    key, _id, rule = jp.run_address({"scope": {"vars": {"date": "2026-08-24"}}}, "video")
-    assert key == "julkaisu.2026-08-24.video" and rule.startswith("rule 2")
+    key, _id, rule = jp.run_address(
+        {"scope": {"vars": {"date": "2026-08-24"}}}, "video"
+    )  # mapping shape still accepted
+    assert key == "julkaisu.2026-08-24.video" and rule.startswith("saanto 2")
 
 
 def test_rule_3_is_todays_date_and_nothing_else():
     key, run_id, rule = jp.run_address({"id": "t-1", "description": "kirjoita jotain"}, "aineisto")
     assert run_id == jp.today_id() and key == f"julkaisu.{jp.today_id()}.aineisto"
-    assert rule.startswith("rule 3")
+    assert rule.startswith("saanto 3")
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", run_id), "the id is a date, never a generated token"
 
 
 def test_no_id_is_ever_generated():
     """The whole defect in one assertion: whatever the dispatch looks like, the id is either given or
     it is today's date. Nothing in this module may produce anything else."""
-    for task in ({}, {"id": "t-1"}, {"scope": {}}, {"scope": {"unrelated": "x"}}, None):
+    for task in ({}, {"id": "t-1"}, {"scope": []}, {"scope": [{"name": "offer", "value": "x"}]}, None):
         _key, run_id, _rule = jp.run_address(task, "linkedin")
         assert run_id == jp.today_id()
     assert not hasattr(jp, "resolve_ref"), "the old ref-sniffing resolver must be gone, not deprecated"
@@ -1148,3 +1154,75 @@ def test_one_version_keeps_the_old_flat_shape(stubbed, monkeypatch):
 
     value = next(w for w in stubbed if w["tool"] == "aimeat_memory_write")["value"]
     assert set(value) == {"text", "notes"} and "versiot" not in value
+
+
+# ── the dispatch's REAL shape (verified against task 061bf2e3, 2026-08-25) ───────────────────────
+# The node sends the scope as a LIST OF RECORDS. Reading it as a mapping is what made the tool
+# announce "no key and no variables in the dispatch" while the dispatch was carrying both.
+REAL_SCOPE = [
+    {"name": "workflow-run", "type": "text", "value": "julkaisupoyta/1678fd09", "description": "tutkija"},
+    {"name": "offer", "type": "text", "value": "tutki-tausta", "description": "Search the web for background"},
+    {"name": "var.ref", "type": "text", "value": "2026-08-25-ujr7", "description": "workflow variable {ref}"},
+    {"name": "var.run", "type": "text", "value": "1678fd09", "description": "workflow variable {run}"},
+    {"name": "var.date", "type": "text", "value": "2026-08-25", "description": "workflow variable {date}"},
+    {"name": "deliverable_key", "type": "memory_key", "value": "julkaisu.2026-08-25-ujr7.tausta"},
+]
+
+
+def test_the_scope_list_is_read_as_records_not_as_a_mapping():
+    task = {"id": "061bf2e3", "scope": REAL_SCOPE}
+    entries = jp.scope_entries(task)
+    assert entries["deliverable_key"] == "julkaisu.2026-08-25-ujr7.tausta"
+    assert jp.scope_vars(task) == {"ref": "2026-08-25-ujr7", "run": "1678fd09", "date": "2026-08-25"}
+
+
+def test_an_id_that_is_not_todays_date_survives():
+    """The whole point. While the tool could not read the scope, every run's id had to be today's
+    date — so a second run on the same day overwrote the first, and the app had to refuse one."""
+    key, run_id, rule = jp.run_address({"scope": REAL_SCOPE}, "tausta")
+    assert key == "julkaisu.2026-08-25-ujr7.tausta"
+    assert run_id == "2026-08-25-ujr7" != jp.today_id()
+    assert rule.startswith("saanto 1")
+
+
+def test_the_log_names_the_rule_that_actually_fired():
+    """The old line said "no key and no variables in the dispatch" while both were present. That
+    sentence cost an hour of diagnosis on the node side, so each rule now names itself."""
+    _k, _i, r1 = jp.run_address({"scope": REAL_SCOPE}, "tausta")
+    _k, _i, r2 = jp.run_address({"scope": [e for e in REAL_SCOPE if e["name"] != "deliverable_key"]}, "tausta")
+    _k, _i, r3 = jp.run_address({"id": "t"}, "tausta")
+    assert "deliverable_key scopesta" in r1
+    assert "var.ref" in r2 and "rakennettu" in r2
+    assert "paivamaara" in r3
+    assert r1 != r2 != r3
+
+
+def test_the_input_key_belongs_to_the_same_run_as_the_output():
+    """`julkaisu.{ref}.tilaus`, never `julkaisu.<today>.tilaus` — the id is read back out of the
+    named key so the read and the write cannot drift apart."""
+    _key, run_id, _rule = jp.run_address({"scope": REAL_SCOPE}, "tausta")
+    assert jp.TILAUS_KEY.format(ref=run_id) == "julkaisu.2026-08-25-ujr7.tilaus"
+
+
+def test_the_completion_pointer_is_not_mistaken_for_the_target():
+    """A finished task's top-level `deliverableKey` is what the agent REPORTED writing. Trusting it
+    would make a re-dispatch chase its own tail, so only the scope entry counts."""
+    task = {"deliverableKey": "julkaisu.vanha.tausta", "scope": [{"name": "var.ref", "value": "uusi"}]}
+    key, run_id, rule = jp.run_address(task, "tausta")
+    assert key == "julkaisu.uusi.tausta" and run_id == "uusi" and rule.startswith("saanto 2")
+
+
+def test_every_owner_read_carries_owner_scope(monkeypatch):
+    """Without the flag `aimeat_memory_read` sees only the CALLER's namespace, so an agent cannot
+    read anything a person or an app wrote under the owner's own GHII. Measured: NOT_FOUND on a
+    tilaus one minute after the app wrote it; the same key with the flag returns it in full."""
+    import crewaimeat.memory_tools as mt
+
+    calls: list = []
+    monkeypatch.setattr(
+        mt, "_aimeat_call", lambda agent, tool, payload: calls.append((tool, payload)) or {"value": {"ok": 1}}
+    )
+    mt.read_owner_key("julkaisu-tutkija", "julkaisu.2026-08-25.tilaus")
+    tool, payload = calls[0]
+    assert tool == "aimeat_memory_read"
+    assert payload.get("owner_scope") is True, "an owner-written key is invisible without this flag"

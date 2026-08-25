@@ -43,7 +43,13 @@ def read_owner_key(agent_name: str, key: str):
     proved. Returns None when the key has no value anywhere. Use this when you do not know which
     agent wrote the key; use `owner_scope_value` when you already know it was a sibling.
     """
-    r = _aimeat_call(agent_name, "aimeat_memory_read", {"key": key})  # own GAII first
+    # owner_scope=True IS THE READ, not an optimisation. Without it `aimeat_memory_read` looks only
+    # in the CALLER's namespace (`<agent>#<owner>@<node>`), so an agent cannot see anything a person
+    # or an app wrote under the owner's own GHII. Measured 2026-08-25: julkaisu-tutkija got
+    # NOT_FOUND on julkaisu.2026-08-25.tilaus one minute after the app had written it, then
+    # researched the words of its task description instead — which is how it ended up reading about
+    # WhatsApp and PDF manuals. The same flag on the same key returns the order in full.
+    r = _aimeat_call(agent_name, "aimeat_memory_read", {"key": key, "owner_scope": True})
     val = (r.get("value") if isinstance(r, dict) else r) if r is not None else None
     if val is not None:
         return val
