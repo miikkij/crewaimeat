@@ -81,14 +81,20 @@ TAUSTA = {
     "ei_loytynyt": "En löytänyt lukua keskeytyksistä GAII-tunnisteen osalta.",
 }
 OHJAAJAT = {
-    "versio": 1,
+    "versio": 3,
     "kaytto": {
         "full": "Ohjaajan koko kieli.",
         "inspired-by": "Vain henki ja yksi ele.",
         "opposite-of": "Käännetään ylösalaisin.",
         "blend": "Kaksi tai kolme yhdessä.",
+        "free-hand": "Vapaat kädet: saa poiketa, kerro missä poikkesit.",
     },
-    "tyylit": [{"id": "asiallinen", "nimi": "Asiallinen", "kuvaus": "Sanoo mikä muuttui ja kenelle."}],
+    "tyylit": [
+        {"id": "asiallinen", "nimi": "Asiallinen", "kuvaus": "Sanoo mikä muuttui ja kenelle."},
+        {"id": "lyhyt", "nimi": "Tiukka", "kuvaus": "Puolet lyhyempi kuin luulisi tarvitsevansa."},
+        {"id": "numeroilla", "nimi": "Numeroilla", "kuvaus": "Rakentuu mitatun luvun ympärille."},
+        {"id": "villi", "nimi": "Villi synteesi", "kuvaus": "Keksi jotain jota lähteissä ei ole."},
+    ],
     "ohjaajat": [
         {
             "id": "fincher",
@@ -99,6 +105,8 @@ OHJAAJAT = {
             "aani": "Matala pohja.",
             "sopii": "Uskottavuuteen.",
             "ei_sovi": "Iloiseen.",
+            "teksti": "Ei yhtään adjektiivia jota ei voi mitata.",
+            "esimerkki": "Neljätoista päivää. Nyt luku on nolla.",
         },
         {
             "id": "gondry",
@@ -846,6 +854,7 @@ def _angle(nro=1, prob=70, **kw):
         "miksi_toimii": "Koska.",
         "kenelle": "kehittajat",
         "nojaa": "Artikla 50 alkaa 2.8.2026",
+        "lahteet": ["https://ai-act-service-desk.ec.europa.eu/en/faq"],
         "todennakoisyys": prob,
         "perustelu": "Siksi.",
         "ohjaaja_ele": "inspired by David Fincher",
@@ -937,7 +946,8 @@ def test_each_kaytto_changes_the_instruction():
     opp = jb.director_block(OHJAAJAT, {"id": "fincher", "kaytto": "opposite-of"})
     blend = jb.director_block(OHJAAJAT, {"ids": ["fincher", "gondry"], "kaytto": "blend"})
     assert "kauttaaltaan" in full
-    assert "rytmi]" in blend and "Michel Gondry" in blend
+    assert "Michel Gondry" in blend and "David Fincher" in blend
+    assert "PAINOT RATKAISEVAT" in blend, "several directors must not be averaged into mush"
     assert opp != full and "full" not in opp
 
 
@@ -988,3 +998,153 @@ def test_the_kansi_chain_wires_end_to_end():
         assert req["key"] == want_in, f"{agent} reads {req.get('key')}, expected {want_in}"
         assert offer["deliverable"]["location"]["key"] == want_out
         assert len(offer["ask"]) <= 500
+
+
+# ── KANSI v3 update: several directors, several styles, several versions ─────────────────────────
+def test_several_directors_at_once_with_their_weights():
+    """`ohjaajat` is a LIST and that is the point. 70/30 must read as one carrying the work and the
+    other cutting across it, not as both at half power."""
+    block = jb.director_block(
+        OHJAAJAT,
+        [
+            {"id": "fincher", "kaytto": "full", "paino": 70},
+            {"id": "gondry", "kaytto": "opposite-of", "paino": 30},
+        ],
+    )
+    assert "David Fincher" in block and "Michel Gondry" in block
+    assert "OSUUS 70%" in block and "OSUUS 30%" in block
+    assert block.index("OSUUS 70%") < block.index("OSUUS 30%"), "the heavier hand is stated first"
+    assert "KESKIARVOISTA" in block and "ohjaaja_ele" in block
+
+
+def test_free_hand_is_a_real_reading():
+    block = jb.director_block(OHJAAJAT, [{"id": "fincher", "kaytto": "free-hand"}])
+    assert "poikkesit" in block
+
+
+def test_a_director_writes_prose_not_only_pictures():
+    """`teksti` and `esimerkki` are how a director writes. Three of the four writers produce prose,
+    so leaving those out was leaving out the part that applies to them."""
+    block = jb.director_block(OHJAAJAT, [{"id": "fincher", "kaytto": "full"}])
+    assert "TEKSTI (" in block and "adjektiivia" in block
+    assert "esimerkkirivi:" in block
+
+
+def test_styles_are_a_list_and_all_of_them_hold():
+    block = jb.style_block(OHJAAJAT, ["lyhyt", "numeroilla"])
+    assert "pidä KAIKKI" in block and "Tiukka" in block and "Numeroilla" in block
+    assert "Asiallinen" in jb.style_block(OHJAAJAT, "asiallinen"), "a single style still works"
+
+
+def test_an_inventive_style_changes_the_source_rule_rather_than_lifting_it():
+    """`villi` and `spekulaatio` ask for an idea, not a defensible claim. Inventing is allowed when
+    asked for; dressing an invention as a finding never is — so `lahteet` must stay empty."""
+    assert jb.invention_ordered(["lyhyt", "villi"]) == ["villi"]
+    assert jb.invention_ordered(["asiallinen"]) == []
+
+    def angle(**kw):
+        a = {
+            "nro": kw.get("nro", 1),
+            "otsikko": f"K{kw.get('nro', 1)}",
+            "kulma": "x",
+            "avaus": "y",
+            "miksi_toimii": "z",
+            "kenelle": "kehittajat",
+            "nojaa": "changelog",
+            "lahteet": [],
+            "todennakoisyys": 60,
+            "perustelu": "s",
+            "ohjaaja_ele": "e",
+            "riski": "r",
+        }
+        a.update(kw)
+        return a
+
+    wild = angle(lahteet=["https://ai-act-service-desk.ec.europa.eu/en/faq"])
+    bad = jb.check_kulmat([wild, angle(nro=2, todennakoisyys=20)], 2, TAUSTA, ["villi"])
+    assert any("TYHJ" in v for v in bad), "an invented claim may not carry a source that does not support it"
+    assert jb.check_kulmat([angle(), angle(nro=2, todennakoisyys=20)], 2, TAUSTA, ["villi"]) == []
+
+
+def test_an_angle_resting_on_research_must_show_its_sources():
+    """The app puts `lahteet` on the card so a reader can CHECK the claim instead of trusting it."""
+
+    def angle(nro, prob, **kw):
+        a = {
+            "nro": nro,
+            "otsikko": f"K{nro}",
+            "kulma": "x",
+            "avaus": "y",
+            "miksi_toimii": "z",
+            "kenelle": "kehittajat",
+            "nojaa": "Artikla 50 alkaa 2.8.2026",
+            "lahteet": ["https://ai-act-service-desk.ec.europa.eu/en/faq"],
+            "todennakoisyys": prob,
+            "perustelu": "s",
+            "ohjaaja_ele": "e",
+            "riski": "r",
+        }
+        a.update(kw)
+        return a
+
+    assert jb.check_kulmat([angle(1, 70), angle(2, 30)], 2, TAUSTA) == []
+    empty = jb.check_kulmat([angle(1, 70, lahteet=[]), angle(2, 30)], 2, TAUSTA)
+    assert any("tyhjä" in v for v in empty)
+    stray = jb.check_kulmat([angle(1, 70, lahteet=["https://example.com/invented"]), angle(2, 30)], 2, TAUSTA)
+    assert any("ei ole taustan" in v for v in stray)
+    # resting on the changelog alone is a legitimate and visible answer
+    assert jb.check_kulmat([angle(1, 70, nojaa="changelog", lahteet=[]), angle(2, 30)], 2, TAUSTA) == []
+
+
+# ── the writers: reach, language, versions ───────────────────────────────────────────────────────
+def test_a_slot_outside_vaikuttaa_is_written_plainly():
+    """A Fincher video beside an unadorned LinkedIn post is a normal order, not a mistake."""
+    order = {**VALINTA, "vaikuttaa": ["video"], "ohjaajat": [{"id": "fincher", "kaytto": "full"}]}
+    directed = jp.story_block(order, TAUSTA, OHJAAJAT, channel="video")
+    plain = jp.story_block(order, TAUSTA, OHJAAJAT, channel="linkedin")
+    assert "David Fincher" in directed
+    assert "EI OHJAAJAA" in plain
+    assert "TEKSTI (näin hän kirjoittaa)" not in plain, "no directorial voice reaches an undirected slot"
+    assert jp.slot_is_directed(order, "video") and not jp.slot_is_directed(order, "linkedin")
+    assert jp.slot_is_directed({}, "linkedin"), "an order naming no vaikuttaa directs everything"
+
+
+def test_the_language_is_ordered_not_hardcoded():
+    """LinkedIn-in-Finnish was a decision nobody made on purpose."""
+    assert jp.languages_for({"kielet": {"linkedin": "en"}}, "linkedin", "fi") == ["en"]
+    assert jp.languages_for({"kielet": {"x": "both"}}, "x", "en") == ["fi", "en"]
+    assert jp.languages_for({}, "linkedin", "fi") == ["fi"], "no order means the channel default"
+
+
+def test_several_versions_land_in_versiot_and_must_actually_differ(stubbed, monkeypatch):
+    llm = _StubLLM([_piece(GOOD_LINKEDIN), _piece(GOOD_LINKEDIN.replace("Yhteys", "Ikkuna"))])
+    monkeypatch.setattr(jp, "get_llm", lambda **k: llm)
+    monkeypatch.setattr(jp, "record_deliverable_key", lambda tid, key: None)
+    monkeypatch.setattr(
+        jp,
+        "read_owner_key",
+        lambda a, key: (
+            {"versioita": 2}
+            if key.endswith(".tilaus")
+            else (dict(VALINTA) if key.endswith(".valinta") else (dict(TAUSTA) if key.endswith(".tausta") else None))
+        ),
+    )
+
+    out = jp.write_julkaisu("julkaisu-linkedin", "linkedin", TASK)
+
+    value = next(w for w in stubbed if w["tool"] == "aimeat_memory_write")["value"]
+    assert [v["nro"] for v in value["versiot"]] == [1, 2]
+    assert all(v["kieli"] == "fi" for v in value["versiot"])
+    assert "ERO" in llm.prompts[1] and "avausliike" in llm.prompts[1], "version 2 is told to differ, and how"
+    assert "2 versio(ta)" in out
+
+
+def test_one_version_keeps_the_old_flat_shape(stubbed, monkeypatch):
+    """Every existing reader and every published signal is untouched by the versions feature."""
+    monkeypatch.setattr(jp, "get_llm", lambda **k: _StubLLM([_piece(GOOD_LINKEDIN)]))
+    monkeypatch.setattr(jp, "record_deliverable_key", lambda tid, key: None)
+
+    jp.write_julkaisu("julkaisu-linkedin", "linkedin", TASK)
+
+    value = next(w for w in stubbed if w["tool"] == "aimeat_memory_write")["value"]
+    assert set(value) == {"text", "notes"} and "versiot" not in value

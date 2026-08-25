@@ -30,6 +30,7 @@ import json
 import os
 import re
 import sys
+from typing import Any
 
 import requests
 from aimeat_crewai.provenance import HumanInvolvement, Level, Method, declare, source
@@ -101,9 +102,12 @@ def _director(doc: dict, director_id: str) -> dict | None:
 
 
 def _director_lines(d: dict) -> str:
+    """One director as the node describes him. `teksti` and `esimerkki` matter as much as `kuva`:
+    they are how he writes PROSE, which is what three of the four writers actually produce."""
     rows = [
         f"  {label}: {d.get(field)}"
         for field, label in (
+            ("teksti", "TEKSTI (näin hän kirjoittaa)"),
             ("kuva", "kuva"),
             ("rytmi", "rytmi"),
             ("vari", "väri"),
@@ -113,50 +117,105 @@ def _director_lines(d: dict) -> str:
         )
         if str(d.get(field) or "").strip()
     ]
+    if str(d.get("esimerkki") or "").strip():
+        rows.append(f"  esimerkkirivi: {d['esimerkki']}")
     return f"{d.get('nimi')} ({d.get('id')})\n" + "\n".join(rows)
 
 
-def director_block(doc: dict, ohjaaja: dict | None) -> str:
-    """The director instruction for this run, rendered from the NODE's list per `kaytto`.
+def _as_director_list(ohjaaja: Any) -> list[dict]:
+    """The order's directors as a list, whatever shape it arrives in.
 
-    Raises on a director the list does not carry — an order naming an unknown director is a mistake
+    `ohjaajat` is a LIST and that is the point — one to three at once, each with its own reading and
+    its own weight. A single object (the older shape, and what a hand-written order may still carry)
+    is simply a list of one.
+    """
+    if isinstance(ohjaaja, list):
+        return [o for o in ohjaaja if isinstance(o, dict) and (o.get("id") or o.get("ids"))]
+    if isinstance(ohjaaja, dict) and (ohjaaja.get("id") or ohjaaja.get("ids")):
+        ids = [i for i in (ohjaaja.get("ids") or []) if i]
+        if ids:  # a legacy blend carried its members in `ids`
+            return [{"id": i, "kaytto": ohjaaja.get("kaytto"), "paino": ohjaaja.get("paino")} for i in ids]
+        return [ohjaaja]
+    return []
+
+
+_KAYTTO_TAIL = {
+    "full": "Tee tämä hänen tavallaan kauttaaltaan.",
+    "inspired-by": "Ota VAIN henki ja yksi tunnistettava ele. Nimeä se: 'inspired by <nimi>'. Älä matki.",
+    "opposite-of": "KÄÄNNÄ hänet ylösalaisin ja nimeä mikä käännettiin.",
+    "blend": "Sulauta: rytmi yhdeltä, kuva toiselta, ääni kolmannelta.",
+    "free-hand": "Tyyli on lähtökohta, saat poiketa jos jokin toimii paremmin — kerro missä poikkesit.",
+}
+
+
+def director_block(doc: dict, ohjaaja: Any) -> str:
+    """The direction for this run, rendered from the NODE's list — one to three directors with weights.
+
+    Raises on a director the list does not carry: an order naming an unknown director is a mistake
     worth surfacing, not something to quietly ignore and write in no style at all.
     """
-    ohjaaja = ohjaaja or {}
-    kaytto = str(ohjaaja.get("kaytto") or "inspired-by").strip().casefold()
-    how = (doc.get("kaytto") or {}).get(kaytto) or ""
-    ids = [i for i in (ohjaaja.get("ids") or []) if i] or ([ohjaaja["id"]] if ohjaaja.get("id") else [])
-    if not ids:
-        return "OHJAAJA: ei ohjaajaa — kirjoita talon omalla äänellä."
-    found = []
-    for i in ids:
-        d = _director(doc, i)
+    ordered = _as_director_list(ohjaaja)
+    if not ordered:
+        return "OHJAAJA: ei ohjaajaa — kirjoita talon omalla äänellä, tilatussa tyylissä."
+    rows, total = [], sum(int(o.get("paino") or 0) for o in ordered)
+    for o in sorted(ordered, key=lambda x: -int(x.get("paino") or 0)):
+        d = _director(doc, o.get("id"))
         if d is None:
             known = ", ".join(str(x.get("id")) for x in (doc.get("ohjaajat") or [])[:20])
-            raise LookupError(f"the order names director {i!r}, which {OHJAAJAT_KEY} does not carry. Known: {known}")
-        found.append(d)
-    head = f"OHJAAJA — käyttötapa '{kaytto}': {how}\n\n"
-    if kaytto == "blend" and len(found) > 1:
-        roles = ("rytmi", "kuva", "ääni")
-        body = "\n\n".join(
-            f"[{roles[i] if i < len(roles) else 'lisä'}] " + _director_lines(d) for i, d in enumerate(found)
+            raise LookupError(
+                f"the order names director {o.get('id')!r}, which {OHJAAJAT_KEY} does not carry. Known: {known}"
+            )
+        kaytto = str(o.get("kaytto") or "inspired-by").strip().casefold()
+        how = (doc.get("kaytto") or {}).get(kaytto) or ""
+        share = f" — OSUUS {int(o['paino'])}%" if total and o.get("paino") else ""
+        rows.append(f"[{kaytto}{share}] {how}\n{_director_lines(d)}\n  → {_KAYTTO_TAIL.get(kaytto, '')}")
+    head = "OHJAUS — " + ("yksi ohjaaja" if len(rows) == 1 else f"{len(rows)} ohjaajaa yhtä aikaa") + ":\n\n"
+    tail = ""
+    if len(rows) > 1:
+        tail = (
+            "\n\nPAINOT RATKAISEVAT SEKOITUKSEN, ÄLÄ KESKIARVOISTA NIITÄ PUUROKSI. 70/30 luetaan "
+            "niin, että toinen kantaa työn ja toinen leikkaa sen poikki — ei niin, että molemmat "
+            "ovat puoliteholla. Kerro kentässä 'ohjaaja_ele' KUKA teki mitäkin."
         )
-    else:
-        body = "\n\n".join(_director_lines(d) for d in found)
-    tail = {
-        "full": "\nTee tämä hänen tavallaan kauttaaltaan.",
-        "inspired-by": "\nOta VAIN henki ja yksi tunnistettava ele. Nimeä se: 'inspired by <nimi>'. Älä matki.",
-        "opposite-of": "\nKÄÄNNÄ hänet ylösalaisin ja nimeä mikä käännettiin.",
-        "blend": "\nEnsimmäinen antaa rytmin, toinen kuvan, kolmas äänen.",
-    }.get(kaytto, "")
-    return head + body + tail
+    return head + "\n\n".join(rows) + tail
 
 
-def style_block(doc: dict, tyyli: str | None) -> str:
-    for s in doc.get("tyylit") or []:
-        if isinstance(s, dict) and str(s.get("id", "")).casefold() == str(tyyli or "").casefold():
-            return f"TYYLI — {s.get('nimi')}: {s.get('kuvaus')}"
-    return f"TYYLI: {tyyli}" if tyyli else "TYYLI: asiallinen"
+def style_block(doc: dict, tyylit: Any) -> str:
+    """The ordered styles — a LIST, because a piece can be several at once (tight AND numbers-led)."""
+    wanted = [tyylit] if isinstance(tyylit, str) else [t for t in (tyylit or []) if isinstance(t, str)]
+    wanted = [t for t in wanted if t.strip()] or ["asiallinen"]
+    known = {str(s.get("id", "")).casefold(): s for s in (doc.get("tyylit") or []) if isinstance(s, dict)}
+    rows = []
+    for t in wanted:
+        s = known.get(t.casefold())
+        rows.append(f"  - {s.get('nimi')}: {s.get('kuvaus')}" if s else f"  - {t}")
+    head = "TYYLI:" if len(rows) == 1 else "TYYLIT — pidä KAIKKI näistä yhtä aikaa:"
+    return head + "\n" + "\n".join(rows)
+
+
+# Two styles ask for invention ON PURPOSE. Everything else in this chain refuses an unsourced claim;
+# these two want an idea instead of a defensible one, so the rule changes shape rather than lifting:
+# mark what you invented, and attach NO source to it. Inventing is allowed when asked for; dressing
+# an invention as a finding never is.
+INVENTIVE_STYLES = ("villi", "spekulaatio")
+
+
+def invention_ordered(tyylit: Any) -> list[str]:
+    wanted = [tyylit] if isinstance(tyylit, str) else [t for t in (tyylit or []) if isinstance(t, str)]
+    return [t for t in wanted if t.strip().casefold() in INVENTIVE_STYLES]
+
+
+def _invention_note(tyylit: Any) -> str:
+    inventive = invention_ordered(tyylit)
+    if not inventive:
+        return ""
+    return (
+        f"\n\nTILATTU TYYLI ({'/'.join(inventive)}) PYYTÄÄ MENEMÄÄN LÄHTEIDEN YLI — se on tarkoitus, "
+        "ei lipsahdus. Kärjistä, vertaa kaukaa, kuvittele seuraus viiden vuoden päähän.\n"
+        "  · MERKITSE jokainen keksitty kohta itse tekstiin, jotta sen erottaa.\n"
+        "  · JÄTÄ 'lahteet' TYHJÄKSI. Keksitylle väitteelle ei liitetä lähdettä joka ei tue sitä.\n"
+        "Keksiminen on sallittua kun sitä pyydetään; keksityn pukeminen löydökseksi ei ole koskaan."
+    )
 
 
 def entries_block(tilaus: dict, body_chars: int = 2500) -> str:
@@ -451,6 +510,7 @@ def tutki_tausta(agent_name: str, task: dict | None = None, task_id: str | None 
 
 # ── the angles ───────────────────────────────────────────────────────────────────────────────────
 _ANGLE_FIELDS = ("otsikko", "kulma", "avaus", "miksi_toimii", "kenelle", "nojaa", "perustelu", "ohjaaja_ele", "riski")
+_ORDER_TYYLIT = "tyylit"  # the order carries a LIST of styles; `tyyli` was the single-value shape
 _SPREAD_MIN = 15  # a row of near-identical probabilities is a tell that nothing was judged
 
 
@@ -504,7 +564,7 @@ def _grounding_tokens(tausta: dict) -> set[str]:
     return {w.casefold() for p in parts for w in _GROUND_WORD.findall(p)}
 
 
-def check_kulmat(angles: list, wanted: int, tausta: dict) -> list[str]:
+def check_kulmat(angles: list, wanted: int, tausta: dict, tyylit: Any = None) -> list[str]:
     """The director's contract, checked in code."""
     bad: list[str] = []
     if not isinstance(angles, list) or not angles:
@@ -518,6 +578,10 @@ def check_kulmat(angles: list, wanted: int, tausta: dict) -> list[str]:
     # a perfectly good angle set failed three attempts twice in a row on prod (2026-08-25). A check
     # that cries wolf gets switched off; this one matches on a shared DISTINCTIVE WORD instead.
     claim_tokens = _grounding_tokens(tausta)
+    allowed_sources = {_norm_url(f.get("lahde")) for f in (tausta.get("loydokset") or []) if isinstance(f, dict)}
+    allowed_sources |= {_norm_url(v.get("lahde")) for v in (tausta.get("vertailu") or []) if isinstance(v, dict)}
+    allowed_sources.discard("")
+    inventive = invention_ordered(tyylit)
     probs = []
     for i, a in enumerate(angles, 1):
         if not isinstance(a, dict):
@@ -532,13 +596,36 @@ def check_kulmat(angles: list, wanted: int, tausta: dict) -> list[str]:
         else:
             probs.append(p)
         nojaa = str(a.get("nojaa") or "").strip()
-        grounded = "changelog" in nojaa.casefold() or bool(
-            {w.casefold() for w in _GROUND_WORD.findall(nojaa)} & claim_tokens
-        )
+        on_changelog = "changelog" in nojaa.casefold()
+        grounded = on_changelog or bool({w.casefold() for w in _GROUND_WORD.findall(nojaa)} & claim_tokens)
         if nojaa and claim_tokens and not grounded:
             bad.append(
                 f"kulma {i}: 'nojaa' ({nojaa[:50]!r}) ei osoita mihinkään taustassa olevaan — "
                 "nimeä löydös, vertailu tai vastaväite, tai kirjoita 'changelog'."
+            )
+        # `lahteet` is what the app puts on the card so a reader can CHECK the claim instead of
+        # trusting it. Required whenever the angle rests on research; deliberately empty when it
+        # rests on the changelog entry alone, or when an inventive style was ordered — attaching a
+        # source that does not support what you wrote is the one thing that is never allowed.
+        srcs = a.get("lahteet")
+        if not isinstance(srcs, list):
+            bad.append(f"kulma {i}: 'lahteet' puuttuu — anna lista (tyhjä lista jos nojaa on 'changelog').")
+            continue
+        stray = [s for s in srcs if _norm_url(s) not in allowed_sources]
+        if stray and allowed_sources:
+            bad.append(
+                f"kulma {i}: lähde {stray[0]!r} ei ole taustan lähteiden joukossa — kopioi tarkka URL "
+                "löydöksestä, älä kirjoita omaa."
+            )
+        if not srcs and not on_changelog and not inventive and allowed_sources:
+            bad.append(
+                f"kulma {i}: 'lahteet' on tyhjä vaikka kulma nojaa tutkimukseen — kopioi käyttämiesi "
+                "löydösten URLit, tai kirjoita 'changelog' kenttään nojaa."
+            )
+        if srcs and inventive:
+            bad.append(
+                f"kulma {i}: tyyli {'/'.join(inventive)} keksii tarkoituksella, joten 'lahteet' jätetään "
+                "TYHJÄKSI — keksitylle väitteelle ei liitetä lähdettä joka ei tue sitä."
             )
     if len(probs) >= 3 and max(probs) - min(probs) < _SPREAD_MIN:
         bad.append(
@@ -572,9 +659,10 @@ def _kulmat_prompt(tilaus: dict, tausta: dict, doc: dict, wanted: int, already: 
         "JOKAINEN KULMA KANTAA TODENNÄKÖISYYDEN: kuinka todennäköisesti se uppoaa juuri tähän "
         "kohdeyleisöön, 0–100, ja perustelun. Hajota ne rehellisesti — viisi kahdeksankymppistä on "
         "merkki siitä ettei mitään arvioitu. Jos kulma on heikko, anna sille matala luku ja sano miksi.\n\n"
-        + director_block(doc, tilaus.get("ohjaaja"))
+        + director_block(doc, tilaus.get("ohjaajat") or tilaus.get("ohjaaja"))
         + "\n\n"
-        + style_block(doc, tilaus.get("tyyli"))
+        + style_block(doc, tilaus.get("tyylit") or tilaus.get("tyyli"))
+        + _invention_note(tilaus.get("tyylit") or tilaus.get("tyyli"))
         + "\n\n"
         "AIHE:\n" + entries_block(tilaus, 1500) + "\n\n"
         "TAUSTA — LÖYDÖKSET:\n" + (findings or "(ei löydöksiä)") + "\n\n"
@@ -589,7 +677,8 @@ def _kulmat_prompt(tilaus: dict, tausta: dict, doc: dict, wanted: int, already: 
         '{\n  "kulmat": [{"otsikko": "lyhyt nimi", "kulma": "se yksi lause jonka lukija toistaisi", '
         '"avaus": "varsinainen ensimmäinen rivi, kirjoitettuna", "miksi_toimii": "miksi tämä uppoaa, '
         'kohdeyleisön kannalta", "kenelle": "kuka tarkalleen", "nojaa": "mihin taustan löydökseen '
-        'tämä nojaa, tai changelog", "todennakoisyys": 72, "perustelu": "miksi juuri se luku eikä '
+        'tämä nojaa, tai changelog", "lahteet": ["https://…kopioi käyttämiesi löydösten TARKAT URLit, '
+        'tyhjä lista jos nojaa on changelog"], "todennakoisyys": 72, "perustelu": "miksi juuri se luku eikä '
         'korkeampi", "ohjaaja_ele": "se yksi näkyvä ele joka on otettu ohjaajalta", "riski": "mikä '
         'tässä voi mennä pieleen"}],\n  "notes": "mitä jätit tietoisesti yrittämättä"\n}'
     )
@@ -623,13 +712,16 @@ def tee_kulmat(agent_name: str, task: dict | None = None, task_id: str | None = 
     llm = get_llm(for_tool_use=False, temperature=0.7, agent_name=agent_name)
     try:
         base = _kulmat_prompt(tilaus, tausta, ohjaajat, wanted, already, extra)
+        tyylit = tilaus.get("tyylit") or tilaus.get("tyyli")
     except LookupError as exc:  # an order naming a director the node does not carry
         return f"FAILED: {exc}{addr}"
     prompt, doc, violations = base, None, ["(no attempt ran)"]
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         out = llm.call([{"role": "user", "content": prompt}])
         doc = parse_json_object(out)
-        violations = ["vastaus ei ollut JSON-olio."] if doc is None else check_kulmat(doc.get("kulmat"), wanted, tausta)
+        violations = (
+            ["vastaus ei ollut JSON-olio."] if doc is None else check_kulmat(doc.get("kulmat"), wanted, tausta, tyylit)
+        )
         print(
             f"[{agent_name}] kulmat attempt {attempt}/{_MAX_ATTEMPTS}: "
             + ("OK" if not violations else "; ".join(violations)),

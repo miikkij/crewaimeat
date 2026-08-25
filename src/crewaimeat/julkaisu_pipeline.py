@@ -96,6 +96,18 @@ KEY_RULE_BACKSTORY = (
 )
 
 _MAX_ATTEMPTS = 3  # first write + two rewrites against the violations we hand back
+# `versioita` x `kielet` is a product, and every piece is a paid generation. 3 versions in both
+# languages would be 6; this is the ceiling, and the report says when it bit.
+_MAX_VERSIONS = 4
+
+
+def _opening_of(made: dict) -> str:
+    """The first line of a produced version — what the next version must not repeat."""
+    if made.get("text"):
+        return str(made["text"]).strip().splitlines()[0][:120]
+    shots = made.get("kohtaukset") or []
+    return str((shots[0] or {}).get("puhe", ""))[:120] if shots else "(ei avausta)"
+
 
 _TEXT_TAG = re.compile(r"<TEKSTI>(.*?)</TEKSTI>", re.S | re.I)
 _NOTES_TAG = re.compile(r"<HUOMIOT>(.*?)</HUOMIOT>", re.S | re.I)
@@ -268,10 +280,42 @@ def _picked_block(valinta: dict, kulmat: list[dict]) -> str:
     )
 
 
+def slot_is_directed(valinta: dict, channel: str) -> bool:
+    """Does the direction reach THIS slot? (`vaikuttaa` in the order.)
+
+    A slot missing from that list is written plainly, in the ordered style, with no directorial voice
+    at all — a Fincher video beside an unadorned LinkedIn post is a normal order, not a mistake. An
+    order naming no `vaikuttaa` directs everything, which is the older behaviour.
+    """
+    reach = valinta.get("vaikuttaa")
+    if reach is None:
+        return True
+    return channel in {str(x).strip().casefold() for x in (reach or []) if isinstance(x, str)}
+
+
+def languages_for(valinta: dict, channel: str, default: str) -> list[str]:
+    """Which language(s) this channel is written in — `fi`, `en`, or `both`.
+
+    This used to be hardcoded per writer (LinkedIn Finnish, X English), which is a decision nobody
+    made on purpose. `both` produces the piece twice, once in each language, as two versions.
+    """
+    kielet = valinta.get("kielet")
+    want = str((kielet or {}).get(channel) or "").strip().casefold() if isinstance(kielet, dict) else ""
+    if want == "both":
+        return ["fi", "en"]
+    return [want] if want in ("fi", "en") else [default]
+
+
 def story_block(
-    valinta: dict, tausta: dict, ohjaajat: dict, kulmat: list[dict] | None = None, *, lead: str = "avaus"
+    valinta: dict,
+    tausta: dict,
+    ohjaajat: dict,
+    kulmat: list[dict] | None = None,
+    *,
+    lead: str = "avaus",
+    channel: str = "",
 ) -> str:
-    """The brief a writer works from: the chosen angle, the research behind it, and the director.
+    """The brief a writer works from: the chosen angle, the research behind it, and the direction.
 
     `lead` keeps the Finnish post and the English thread two pieces rather than one text twice —
     LinkedIn opens on the angle's written first line, X opens on the tension (the counter-argument
@@ -318,13 +362,20 @@ def story_block(
     # same post as a Gondry one: rhythm, sentence length and what is left unsaid all carry.
     from crewaimeat.julkaisu_brief import director_block, style_block
 
-    block += (
-        "\n\n" + director_block(ohjaajat, valinta.get("ohjaaja")) + "\n\n" + style_block(ohjaajat, valinta.get("tyyli"))
-    )
-    block += (
-        "\n\nOHJAAJA KOSKEE MYÖS KIRJOITTAMISTA: rytmi, lauseen pituus, mitä jätetään sanomatta. "
-        "Älä kuvaile ohjaajaa — kirjoita hänen rytmissään."
-    )
+    styles = style_block(ohjaajat, valinta.get("tyylit") or valinta.get("tyyli"))
+    if channel and not slot_is_directed(valinta, channel):
+        # Ordered plain: the direction reaches other slots, not this one.
+        block += (
+            "\n\nEI OHJAAJAA TÄHÄN OSAAN. Tilaus rajasi ohjauksen muihin paloihin, joten kirjoita "
+            "tämä suoraan ja koruttomasti tilatussa tyylissä. Älä lainaa kenenkään kuvakieltä.\n\n" + styles
+        )
+    else:
+        block += "\n\n" + director_block(ohjaajat, valinta.get("ohjaajat") or valinta.get("ohjaaja")) + "\n\n" + styles
+        block += (
+            "\n\nOHJAAJA KOSKEE MYÖS KIRJOITTAMISTA: rytmi, lauseen pituus, mitä jätetään sanomatta. "
+            "Kentässä TEKSTI lukee miten hän kirjoittaa — se on tämän palan tärkein rivi. "
+            "Älä kuvaile ohjaajaa, kirjoita hänen rytmissään."
+        )
     if str(valinta.get("lisaohje") or "").strip():
         block += f"\n\nLISÄOHJE TILAAJALTA (tämä voittaa talon oletukset): {valinta['lisaohje']}"
     return block
@@ -609,6 +660,7 @@ CHANNELS: dict[str, dict] = {
     "linkedin": {
         "agent": "julkaisu-linkedin",
         "lead": "avaus",
+        "lang": "fi",
         "what": "LinkedIn-postaus (suomi, 600–1200 merkkiä)",
         "prompt": _linkedin_prompt,
         "check": check_linkedin,
@@ -619,6 +671,7 @@ CHANNELS: dict[str, dict] = {
     "x": {
         "agent": "julkaisu-x",
         "lead": "riski",
+        "lang": "en",
         "what": "X thread (English, 3–6 posts)",
         "prompt": _x_prompt,
         "check": check_x,
@@ -629,6 +682,7 @@ CHANNELS: dict[str, dict] = {
     "video": {
         "agent": "julkaisu-video",
         "lead": "avaus",
+        "lang": "fi",
         "what": "pystyvideon kuvaluettelo (suomi, 9:16, 45–75 s)",
         "prompt": _video_prompt,
         "check": check_video,
@@ -676,7 +730,11 @@ def write_julkaisu(agent_name: str, channel: str, task: dict | None = None, task
         tausta = read_tausta(agent_name, run_id)
         ohjaajat = read_ohjaajat(agent_name)
         kulmat = (_read_json_key(agent_name, KULMAT_KEY.format(ref=run_id)) or {}).get("kulmat") or []
-        block = story_block(valinta, tausta, ohjaajat, kulmat, lead=spec["lead"])
+        # The order carries `versioita`, `kielet`, `vaikuttaa` and `tyylit`; the choice carries the
+        # angle and may repeat any of them. The choice wins where it speaks, the order fills the rest
+        # — so the app can put those fields in either place and neither is silently ignored.
+        order = {**(_read_json_key(agent_name, TILAUS_KEY.format(ref=run_id)) or {}), **valinta}
+        block = story_block(order, tausta, ohjaajat, kulmat, lead=spec["lead"], channel=channel)
     except LookupError as exc:
         print(f"[{agent_name}] {exc}", file=sys.stderr)
         return f"FAILED: {exc}{inferred}"
@@ -693,51 +751,89 @@ def write_julkaisu(agent_name: str, channel: str, task: dict | None = None, task
     llm = get_llm(for_tool_use=False, temperature=spec["temperature"], agent_name=agent_name)
     base = spec["prompt"](brief)
     structured = spec["structured"]
-    prompt, value, previous, violations = base, None, "", ["(no attempt ran)"]
-    for attempt in range(1, _MAX_ATTEMPTS + 1):
-        out = llm.call([{"role": "user", "content": prompt}])
+
+    def _one(base_prompt: str) -> tuple[dict | None, list[str]]:
+        """One version, retried against its own violations. (value, violations)."""
+        prompt, value, previous, violations = base_prompt, None, "", ["(no attempt ran)"]
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            out = llm.call([{"role": "user", "content": prompt}])
+            if structured:
+                doc = parse_json_object(out)
+                if doc is None:
+                    value, previous, violations = None, str(out)[:1500], ["vastaus ei ollut JSON-olio."]
+                else:
+                    value, previous, violations = doc, json.dumps(doc, ensure_ascii=False)[:2000], spec["check"](doc)
+            else:
+                text, notes = parse_piece(out)
+                if not text:
+                    value, previous, violations = (
+                        None,
+                        str(out)[:1000],
+                        ["vastauksesta puuttui <TEKSTI>-lohko / the reply had no <TEKSTI> block."],
+                    )
+                else:
+                    value, previous, violations = {"text": text, "notes": notes}, text, spec["check"](text, brief)
+            print(
+                f"[{agent_name}] {channel} attempt {attempt}/{_MAX_ATTEMPTS}: "
+                + ("OK" if not violations else "; ".join(violations)),
+                file=sys.stderr,
+            )
+            if not violations:
+                return value, []
+            prompt = (
+                base_prompt
+                + "\n\n"
+                + spec["retry_lead"]
+                + "\n"
+                + "\n".join(f"- {v}" for v in violations)
+                + "\n\nEDELLINEN VERSIO / PREVIOUS VERSION:\n"
+                + (previous or "(tyhjä)")
+            )
+        return None, violations
+
+    # How many pieces this order wants, and in which languages. `both` produces the piece twice; the
+    # product is capped so an order cannot quietly turn into six paid generations.
+    langs = languages_for(order, channel, spec["lang"])
+    try:
+        want_versions = max(1, min(3, int(order.get("versioita") or 1)))
+    except (TypeError, ValueError):
+        want_versions = 1
+    plan = [(lang, n) for lang in langs for n in range(1, want_versions + 1)]
+    capped = ""
+    if len(plan) > _MAX_VERSIONS:
+        capped = f" Order asked for {len(plan)} pieces; capped at {_MAX_VERSIONS}."
+        plan = plan[:_MAX_VERSIONS]
+
+    made: list[dict] = []
+    violations: list[str] = []
+    for nro, (lang, _n) in enumerate(plan, start=1):
+        extra = f"\n\nKIELI: kirjoita tämä versio kielellä '{lang}'."
+        if made:
+            openings = "\n".join(f"  - {_opening_of(m)}" for m in made)
+            extra += (
+                f"\n\nTÄMÄ ON VERSIO {nro}. Aiemmat versiot avasivat näin:\n{openings}\n"
+                "Sinun on ERO TTAVA enemmän kuin sanamuodoilla: eri avausliike, eri asia edellä. "
+                "Kaksi saman tekstin kiertoilmausta on huonompi kuin yksi teksti, koska ne maksavat "
+                "kaksin verroin eivätkä ratkaise mitään."
+            )
+        value, violations = _one(base + extra)
+        if value is None:
+            return (
+                f"FAILED: {channel} version {nro} did not meet the house rules after {_MAX_ATTEMPTS} "
+                "attempts — " + "; ".join(violations) + f". Nothing was written to {key}.{inferred}"
+            )
+        made.append({"nro": nro, "kieli": lang, **value})
+
+    # A single-version order keeps the old flat shape, so every existing reader and signal is
+    # untouched. Several versions go in `versiot` — and for the script the first version's scenes are
+    # ALSO mirrored at the top level, because the published success_signal counts `kohtaukset` there
+    # and a multi-version script would otherwise read as "produced nothing".
+    if len(made) == 1:
+        value = {k: v for k, v in made[0].items() if k not in ("nro", "kieli")}
+    else:
+        value = {"versiot": made}
         if structured:
-            doc = parse_json_object(out)
-            if doc is None:
-                value, previous, violations = None, str(out)[:1500], ["vastaus ei ollut JSON-olio."]
-            else:
-                value = doc
-                previous = json.dumps(doc, ensure_ascii=False)[:2000]
-                violations = spec["check"](doc)
-        else:
-            text, notes = parse_piece(out)
-            if not text:
-                value, previous, violations = (
-                    None,
-                    str(out)[:1000],
-                    ["vastauksesta puuttui <TEKSTI>-lohko / the reply had no <TEKSTI> block."],
-                )
-            else:
-                value = {"text": text, "notes": notes}
-                previous = text
-                violations = spec["check"](text, brief)
-        print(
-            f"[{agent_name}] {channel} attempt {attempt}/{_MAX_ATTEMPTS}: "
-            + ("OK" if not violations else "; ".join(violations)),
-            file=sys.stderr,
-        )
-        if not violations:
-            break
-        prompt = (
-            base
-            + "\n\n"
-            + spec["retry_lead"]
-            + "\n"
-            + "\n".join(f"- {v}" for v in violations)
-            + "\n\nEDELLINEN VERSIO / PREVIOUS VERSION:\n"
-            + (previous or "(tyhjä)")
-        )
-    if violations or value is None:
-        return (
-            f"FAILED: {channel} did not meet the house rules after {_MAX_ATTEMPTS} attempts — "
-            + "; ".join(violations)
-            + f". Nothing was written to {key}.{inferred}"
-        )
+            value.update({k: made[0].get(k) for k in ("kesto_s", "muoto", "kohtaukset", "kuvapyynnot") if k in made[0]})
 
     written = _aimeat_call(
         agent_name,
@@ -764,10 +860,13 @@ def write_julkaisu(agent_name: str, channel: str, task: dict | None = None, task
         return f"FAILED to write '{key}' (tunnel/transport) — the piece did not land.{inferred}"
     record_deliverable_key(task_id, key)
     if structured:
-        size = f"{len(value.get('kohtaukset') or [])} kohtausta, {len(value.get('kuvapyynnot') or [])} kuvapyyntöä"
+        first = made[0]
+        size = f"{len(first.get('kohtaukset') or [])} kohtausta, {len(first.get('kuvapyynnot') or [])} kuvapyyntöä"
     else:
-        size = f"{len(value['text'])} chars, notes {len(value['notes'])} chars"
-    return f"OK: {spec['what']} -> {key} ({size}). Not posted anywhere.{inferred}"
+        size = f"{len(made[0]['text'])} chars, notes {len(made[0]['notes'])} chars"
+    how_many = f"{len(made)} versio(ta) [{', '.join(m['kieli'] for m in made)}], " if len(made) > 1 else ""
+    directed = "" if slot_is_directed(order, channel) else " Ohjaus ei koskenut tätä osaa (vaikuttaa)."
+    return f"OK: {spec['what']} -> {key} ({how_many}{size}). Not posted anywhere.{capped}{directed}{inferred}"
 
 
 # ── the images ───────────────────────────────────────────────────────────────────────────────────
