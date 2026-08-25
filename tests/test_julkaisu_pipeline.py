@@ -1226,3 +1226,63 @@ def test_every_owner_read_carries_owner_scope(monkeypatch):
     tool, payload = calls[0]
     assert tool == "aimeat_memory_read"
     assert payload.get("owner_scope") is True, "an owner-written key is invisible without this flag"
+
+
+# ── the word "changelog" in `lahteet` (prod, 2026-08-25 18:16) ───────────────────────────────────
+def _ang(nro, prob, nojaa, lahteet):
+    return {
+        "nro": nro,
+        "otsikko": f"K{nro}",
+        "kulma": "a",
+        "avaus": "b",
+        "miksi_toimii": "c",
+        "kenelle": "kehittajat",
+        "nojaa": nojaa,
+        "lahteet": lahteet,
+        "todennakoisyys": prob,
+        "perustelu": "e",
+        "ohjaaja_ele": "f",
+        "riski": "g",
+    }
+
+
+def test_the_word_changelog_in_lahteet_does_not_throw_a_run_away():
+    """What actually happened: the director produced good angles, put the word "changelog" in
+    `lahteet` instead of leaving it empty, and my check burned all three attempts and wrote nothing.
+    The app then showed the director as OFFLINE — it had run, and finished, and been discarded.
+
+    A bare word is not a citation; it is the model naming where the angle stands, in the wrong
+    field. The intent is not in doubt, so it is tidied, not fatal."""
+    angles = [
+        _ang(1, 74, "Artikla 50 alkaa 2.8.2026", ["https://ai-act-service-desk.ec.europa.eu/en/faq"]),
+        _ang(2, 45, "changelog", []),
+        _ang(3, 30, "changelog", ["changelog"]),
+    ]
+    notes = jb.normalise_kulmat(angles)
+    assert any("ei-URLin" in n for n in notes), "the tidy is reported, not silent"
+    assert angles[2]["lahteet"] == [], "a non-URL token is dropped so the app never shows it as a source"
+    assert jb.check_kulmat(angles, 3, TAUSTA) == []
+
+
+def test_an_invented_url_is_still_refused():
+    """The tidy loosens nothing that matters. A URL that no page in the research carries is an
+    invented citation, and that is the whole reason this check exists."""
+    angles = [_ang(1, 74, "Artikla 50 alkaa 2.8.2026", ["https://invented.example/x"]), _ang(2, 30, "changelog", [])]
+    jb.normalise_kulmat(angles)
+    bad = jb.check_kulmat(angles, 2, TAUSTA)
+    assert any("ei ole taustan" in v for v in bad)
+
+
+def test_the_prompt_says_where_changelog_goes():
+    """The example used to hide the rule inside a string in the JSON sample, which is how the model
+    put the word in the wrong field in the first place."""
+    prompt = jb._kulmat_prompt(
+        {"merkinnat": [{"date": "2026-08-25", "title": "T", "body": "B"}], "kulmia": 3},
+        TAUSTA,
+        OHJAAJAT,
+        3,
+        [],
+        "",
+    )
+    assert "JÄTÄ lahteet TYHJÄKSI" in prompt
+    assert "älä kirjoita sanaa 'changelog' lähteeksi" in prompt

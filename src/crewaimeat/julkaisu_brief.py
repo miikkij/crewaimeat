@@ -564,6 +564,26 @@ def _grounding_tokens(tausta: dict) -> set[str]:
     return {w.casefold() for p in parts for w in _GROUND_WORD.findall(p)}
 
 
+def normalise_kulmat(angles: Any) -> list[str]:
+    """Tidy what is unambiguous before judging it. Returns notes about what was tidied.
+
+    One thing only: an entry in `lahteet` that is not a URL. A model writing `"lahteet": ["changelog"]`
+    has named where the angle stands in the wrong field — the intent is not in doubt, and the correct
+    shape for it is an empty list. Dropping the token is normalising, not guessing; an entry that IS
+    a URL is left alone so the invented-citation check can still refuse it.
+    """
+    notes: list[str] = []
+    for a in angles if isinstance(angles, list) else []:
+        if not isinstance(a, dict) or not isinstance(a.get("lahteet"), list):
+            continue
+        kept = [s for s in a["lahteet"] if _URL_RE.match(str(s).strip())]
+        dropped = [s for s in a["lahteet"] if s not in kept]
+        if dropped:
+            a["lahteet"] = kept
+            notes.append(f"kulma {a.get('nro')}: 'lahteet' sisälsi ei-URLin ({dropped[0]!r}), poistettu")
+    return notes
+
+
 def check_kulmat(angles: list, wanted: int, tausta: dict, tyylit: Any = None) -> list[str]:
     """The director's contract, checked in code."""
     bad: list[str] = []
@@ -611,7 +631,12 @@ def check_kulmat(angles: list, wanted: int, tausta: dict, tyylit: Any = None) ->
         if not isinstance(srcs, list):
             bad.append(f"kulma {i}: 'lahteet' puuttuu — anna lista (tyhjä lista jos nojaa on 'changelog').")
             continue
-        stray = [s for s in srcs if _norm_url(s) not in allowed_sources]
+        # An INVENTED URL is the danger this check exists for. A bare word like "changelog" is not a
+        # citation at all — it is the model naming where the angle stands, in the wrong field — and
+        # `normalise_kulmat` has already dropped it. Failing a whole run over that token is what
+        # happened on 2026-08-25: three attempts burned, nothing written, and the app reported the
+        # director as offline when it had run and produced perfectly good angles.
+        stray = [s for s in srcs if _URL_RE.match(str(s).strip()) and _norm_url(s) not in allowed_sources]
         if stray and allowed_sources:
             bad.append(
                 f"kulma {i}: lähde {stray[0]!r} ei ole taustan lähteiden joukossa — kopioi tarkka URL "
@@ -656,6 +681,9 @@ def _kulmat_prompt(tilaus: dict, tausta: dict, doc: dict, wanted: int, already: 
         f"Olet ohjaaja. Keksi {wanted} ERILAISTA KULMAA samaan aineistoon — ei {wanted} sanamuotoa "
         "yhdestä ideasta, vaan eri tarinoita jotka voisi kertoa. Yksi voi lähteä tutkimuslöydöksestä, "
         "yksi vastaväitteestä, yksi yhden ihmisen turhautumisesta, yksi vertailusta, yksi luvusta.\n\n"
+        "LÄHTEET: 'lahteet' sisältää VAIN URLeja, jotka on kopioitu tarkalleen alla olevista "
+        "löydöksistä. Jos kulma nojaa pelkkään muutosmerkintään, kirjoita nojaa: 'changelog' ja "
+        "JÄTÄ lahteet TYHJÄKSI listaksi — älä kirjoita sanaa 'changelog' lähteeksi.\n\n"
         "JOKAINEN KULMA KANTAA TODENNÄKÖISYYDEN: kuinka todennäköisesti se uppoaa juuri tähän "
         "kohdeyleisöön, 0–100, ja perustelun. Hajota ne rehellisesti — viisi kahdeksankymppistä on "
         "merkki siitä ettei mitään arvioitu. Jos kulma on heikko, anna sille matala luku ja sano miksi.\n\n"
@@ -677,8 +705,8 @@ def _kulmat_prompt(tilaus: dict, tausta: dict, doc: dict, wanted: int, already: 
         '{\n  "kulmat": [{"otsikko": "lyhyt nimi", "kulma": "se yksi lause jonka lukija toistaisi", '
         '"avaus": "varsinainen ensimmäinen rivi, kirjoitettuna", "miksi_toimii": "miksi tämä uppoaa, '
         'kohdeyleisön kannalta", "kenelle": "kuka tarkalleen", "nojaa": "mihin taustan löydökseen '
-        'tämä nojaa, tai changelog", "lahteet": ["https://…kopioi käyttämiesi löydösten TARKAT URLit, '
-        'tyhjä lista jos nojaa on changelog"], "todennakoisyys": 72, "perustelu": "miksi juuri se luku eikä '
+        'tämä nojaa, tai changelog", "lahteet": ["https://tarkka-url-kaytetysta-loydoksesta"], '
+        '"todennakoisyys": 72, "perustelu": "miksi juuri se luku eikä '
         'korkeampi", "ohjaaja_ele": "se yksi näkyvä ele joka on otettu ohjaajalta", "riski": "mikä '
         'tässä voi mennä pieleen"}],\n  "notes": "mitä jätit tietoisesti yrittämättä"\n}'
     )
@@ -719,9 +747,12 @@ def tee_kulmat(agent_name: str, task: dict | None = None, task_id: str | None = 
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         out = llm.call([{"role": "user", "content": prompt}])
         doc = parse_json_object(out)
-        violations = (
-            ["vastaus ei ollut JSON-olio."] if doc is None else check_kulmat(doc.get("kulmat"), wanted, tausta, tyylit)
-        )
+        if doc is None:
+            violations = ["vastaus ei ollut JSON-olio."]
+        else:
+            for note in normalise_kulmat(doc.get("kulmat")):
+                print(f"[{agent_name}] {note}", file=sys.stderr)
+            violations = check_kulmat(doc.get("kulmat"), wanted, tausta, tyylit)
         print(
             f"[{agent_name}] kulmat attempt {attempt}/{_MAX_ATTEMPTS}: "
             + ("OK" if not violations else "; ".join(violations)),
