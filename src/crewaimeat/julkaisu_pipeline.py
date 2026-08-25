@@ -817,7 +817,25 @@ def write_julkaisu(agent_name: str, channel: str, task: dict | None = None, task
                 + "\n\nEDELLINEN VERSIO / PREVIOUS VERSION:\n"
                 + (previous or "(tyhjä)")
             )
-        return None, violations
+        # OUT OF ATTEMPTS. A HOUSE RULE IS NOT A REASON TO THROW THE WORK AWAY.
+        #
+        # Nothing here publishes. A person reads the piece at the gate and decides, so "post 3 is 305
+        # characters" is a note for them, not a failure: they trim it in five seconds. Discarding the
+        # whole run instead is a worse outcome than the violation — and it happened three times
+        # (a 40-char `nojaa` prefix, the word "changelog" in `lahteet`, now 280 chars).
+        #
+        # So only a piece nobody can USE is fatal: no text at all, or a script with no scenes for
+        # julkaisu-kuva to read. Everything else is stored WITH its violations recorded, where the
+        # person sees them.
+        if value is None or _unusable(channel, value):
+            return None, violations
+        return value, violations
+
+    def _unusable(channel: str, value: dict) -> bool:
+        """True when the next step cannot consume this at all — the only fatal class."""
+        if channel == "video":
+            return not isinstance(value.get("kohtaukset"), list) or not value["kohtaukset"]
+        return not str(value.get("text") or "").strip()
 
     # How many pieces this order wants, and in which languages. `both` produces the piece twice; the
     # product is capped so an order cannot quietly turn into six paid generations.
@@ -845,9 +863,20 @@ def write_julkaisu(agent_name: str, channel: str, task: dict | None = None, task
                 "kaksin verroin eivätkä ratkaise mitään."
             )
         value, violations = _one(base + extra)
+        if value is not None and violations:
+            # Recorded, not hidden: the gate shows them and the person decides. The report says so
+            # too, so a run that bent a rule never looks the same as one that kept them all.
+            value = dict(value)
+            value["rikkeet"] = list(violations)
+            value["notes"] = (
+                str(value.get("notes") or "").strip()
+                + "\n\nTALON SÄÄNNÖT EIVÄT TÄYTY:\n"
+                + "\n".join(f"- {v}" for v in violations)
+            ).strip()
+            print(f"[{agent_name}] {channel} v{nro}: stored WITH {len(violations)} rule(s) unmet", file=sys.stderr)
         if value is None:
             return (
-                f"FAILED: {channel} version {nro} did not meet the house rules after {_MAX_ATTEMPTS} "
+                f"FAILED: {channel} version {nro} is unusable after {_MAX_ATTEMPTS} "
                 "attempts — " + "; ".join(violations) + f". Nothing was written to {key}.{inferred}"
             )
         made.append({"nro": nro, "kieli": lang, **value})
@@ -894,7 +923,9 @@ def write_julkaisu(agent_name: str, channel: str, task: dict | None = None, task
         size = f"{len(made[0]['text'])} chars, notes {len(made[0]['notes'])} chars"
     how_many = f"{len(made)} versio(ta) [{', '.join(m['kieli'] for m in made)}], " if len(made) > 1 else ""
     directed = "" if slot_is_directed(order, channel) else " Ohjaus ei koskenut tätä osaa (vaikuttaa)."
-    return f"OK: {spec['what']} -> {key} ({how_many}{size}). Not posted anywhere.{capped}{directed}{inferred}"
+    unmet = sum(len(m.get("rikkeet") or []) for m in made)
+    bent = f" {unmet} talon sääntöä jäi täyttymättä — merkitty kohtaan 'rikkeet', ihminen päättää." if unmet else ""
+    return f"OK: {spec['what']} -> {key} ({how_many}{size}). Not posted anywhere.{bent}{capped}{directed}{inferred}"
 
 
 # ── the images ───────────────────────────────────────────────────────────────────────────────────

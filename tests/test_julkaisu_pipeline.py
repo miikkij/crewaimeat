@@ -472,16 +472,22 @@ def test_a_violation_is_handed_back_and_the_rewrite_is_what_lands(stubbed, monke
     assert not write["value"]["text"].lower().startswith("olen innoissani")
 
 
-def test_a_piece_that_never_meets_the_rules_is_not_written(stubbed, monkeypatch):
+def test_a_piece_that_never_meets_the_rules_is_kept_with_them_recorded(stubbed, monkeypatch):
+    """This asserted the opposite until 2026-08-26, and the opposite was wrong.
+
+    Discarding meant a finished run vanished over a rule the person could have fixed in seconds —
+    and since nothing here publishes, there is no danger being prevented. The piece is stored, the
+    unmet rules travel with it, and the person decides at the gate."""
     llm = _StubLLM([_piece("liian lyhyt")] * jp._MAX_ATTEMPTS)
     monkeypatch.setattr(jp, "get_llm", lambda **k: llm)
+    monkeypatch.setattr(jp, "record_deliverable_key", lambda tid, key: None)
 
     out = jp.write_julkaisu("julkaisu-linkedin", "linkedin", TASK)
 
-    assert out.startswith("FAILED") and "merkkiä" in out
-    assert not [w for w in stubbed if w["tool"] == "aimeat_memory_write"], (
-        "a piece that breaks the house rules must not be stored — the step goes output-RED with a reason"
-    )
+    write = next(w for w in stubbed if w["tool"] == "aimeat_memory_write")
+    assert write["value"]["text"] == "liian lyhyt"
+    assert any("merkkiä" in v for v in write["value"]["rikkeet"])
+    assert out.startswith("OK:") and "jäi täyttymättä" in out
 
 
 # ── the images: a URL alone is not enough ────────────────────────────────────────────────────────
@@ -1286,3 +1292,62 @@ def test_the_prompt_says_where_changelog_goes():
     )
     assert "JÄTÄ lahteet TYHJÄKSI" in prompt
     assert "älä kirjoita sanaa 'changelog' lähteeksi" in prompt
+
+
+# ── a house rule is a note for the person, not a reason to throw the work away ───────────────────
+def test_a_too_long_post_is_stored_with_the_violation_recorded(stubbed, monkeypatch):
+    """Nothing here publishes — a person reads the thread at the gate and decides. "post 3 is 305
+    characters" is something they fix in five seconds; discarding the whole run instead is the worse
+    outcome, and it happened three times before this."""
+    long_thread = "A claim that stands alone.\n\n" + ("x" * 300) + "\n\nWhat you can do next."
+    monkeypatch.setattr(jp, "get_llm", lambda **k: _StubLLM([_piece(long_thread)] * jp._MAX_ATTEMPTS))
+    monkeypatch.setattr(jp, "record_deliverable_key", lambda tid, key: None)
+
+    out = jp.write_julkaisu("julkaisu-x", "x", TASK)
+
+    write = next(w for w in stubbed if w["tool"] == "aimeat_memory_write")
+    assert write["key"] == "julkaisu.2026-08-24.x", "the piece is STORED, not discarded"
+    assert any("280" in v for v in write["value"]["rikkeet"]), "the violation travels with the piece"
+    assert "TALON SÄÄNNÖT EIVÄT TÄYTY" in write["value"]["notes"], "the gate shows it to the person"
+    assert out.startswith("OK:") and "jäi täyttymättä" in out, "the report never hides a bent rule"
+
+
+def test_a_clean_piece_carries_no_violations(stubbed, monkeypatch):
+    monkeypatch.setattr(jp, "get_llm", lambda **k: _StubLLM([_piece(GOOD_X)]))
+    monkeypatch.setattr(jp, "record_deliverable_key", lambda tid, key: None)
+    out = jp.write_julkaisu("julkaisu-x", "x", TASK)
+    value = next(w for w in stubbed if w["tool"] == "aimeat_memory_write")["value"]
+    assert "rikkeet" not in value and "jäi täyttymättä" not in out
+
+
+def test_a_piece_nobody_can_use_is_still_fatal(stubbed, monkeypatch):
+    """The one class that stays fatal: no text at all. There is nothing for a person to fix."""
+    monkeypatch.setattr(jp, "get_llm", lambda **k: _StubLLM(["ei mitään lohkoa"] * jp._MAX_ATTEMPTS))
+    out = jp.write_julkaisu("julkaisu-x", "x", TASK)
+    assert out.startswith("FAILED") and "unusable" in out
+    assert not [w for w in stubbed if w["tool"] == "aimeat_memory_write"]
+
+
+def test_a_script_with_no_scenes_is_fatal_because_the_image_agent_reads_them(stubbed, monkeypatch):
+    import json as _json
+
+    empty = {"kesto_s": 0, "muoto": "9:16", "kohtaukset": [], "kuvapyynnot": [], "text": "t", "notes": "n"}
+    monkeypatch.setattr(jp, "get_llm", lambda **k: _StubLLM([_json.dumps(empty)] * jp._MAX_ATTEMPTS))
+    out = jp.write_julkaisu("julkaisu-video", "video", TASK)
+    assert out.startswith("FAILED")
+    assert not [w for w in stubbed if w["tool"] == "aimeat_memory_write"]
+
+
+def test_a_short_script_is_kept_with_its_violations(stubbed, monkeypatch):
+    """Six scenes instead of eight is a note, not a discard — the person can shoot it or ask again."""
+    import json as _json
+
+    short = _script(n=6)  # 30 s, under the 45 s floor
+    monkeypatch.setattr(
+        jp, "get_llm", lambda **k: _StubLLM([_json.dumps(short, ensure_ascii=False)] * jp._MAX_ATTEMPTS)
+    )
+    monkeypatch.setattr(jp, "record_deliverable_key", lambda tid, key: None)
+    out = jp.write_julkaisu("julkaisu-video", "video", TASK)
+    value = next(w for w in stubbed if w["tool"] == "aimeat_memory_write")["value"]
+    assert len(value["kohtaukset"]) == 6 and value["rikkeet"]
+    assert out.startswith("OK:")
