@@ -134,6 +134,13 @@ _DEFAULT_BASE = {
 # fallback context window if a model/provider declares none (conservative)
 _FALLBACK_CONTEXT = 32768
 
+# The OUTPUT budget every non-Ollama endpoint asks for, unless the endpoint or AIMEAT_MAX_TOKENS says
+# otherwise. Deliberately generous: on a reasoning model the thinking and the answer share this
+# number, so a budget sized for the answer alone truncates the answer. Left unset, OpenRouter handed
+# out 2048 and a reply died mid-JSON after 1169 reasoning tokens — and a truncated reply reads as a
+# model talking nonsense, not as an error, which is how it went unnoticed.
+_DEFAULT_MAX_TOKENS = 16384
+
 
 def _providers_file() -> str | None:
     """Path to the provider-config JSON, or None. LLM_PROVIDERS_FILE wins; else ./llm_providers.json."""
@@ -412,6 +419,20 @@ class MultiProviderLLM(BaseLLM):
             if str(ep["model"]).startswith("ollama/"):
                 cool = float(os.getenv("OLLAMA_TEMPERATURE", "0.1"))
                 kw["temperature"] = min(temperature, cool)
+            # OUTPUT BUDGET. Send an explicit, GENEROUS max_tokens rather than letting the provider
+            # pick: with none set, OpenRouter capped a call at 2048 completion tokens, a reasoning
+            # model spent 1169 of them thinking, and the answer was cut off mid-JSON —
+            #   "Could not parse response content as the length limit was reached
+            #    (completion_tokens=2048, reasoning_tokens=1169)"      [julkaisu.log, 2026-08-25]
+            # A truncated reply does not look like an error from the outside. It looks like the model
+            # produced nonsense, which is why this was mistaken for flaky output for a long time.
+            #
+            # Reasoning tokens come out of the SAME budget as the answer, so the floor has to clear
+            # thinking AND the reply. An endpoint may override it in llm_providers.json, and
+            # AIMEAT_MAX_TOKENS lowers it everywhere at once if a provider ever refuses this much.
+            # Ollama is left alone: a local server allocates against this number.
+            elif ep.get("max_tokens") or os.getenv("AIMEAT_MAX_TOKENS") or _DEFAULT_MAX_TOKENS:
+                kw["max_tokens"] = int(ep.get("max_tokens") or os.getenv("AIMEAT_MAX_TOKENS") or _DEFAULT_MAX_TOKENS)
             if ep.get("base_url"):
                 kw["base_url"] = ep["base_url"]
             if ep.get("api_key"):

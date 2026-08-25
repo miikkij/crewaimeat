@@ -137,3 +137,52 @@ def test_no_provider_at_all_raises_actionable(monkeypatch):
         monkeypatch.delenv(var, raising=False)
     with pytest.raises(RuntimeError, match="No LLM provider is configured"):
         llmmod.get_llm(agent_name="watcher")
+
+
+# ── the output budget (2026-08-25) ───────────────────────────────────────────────────────────────
+# Left unset, OpenRouter capped a call at 2048 completion tokens; a reasoning model spent 1169 of
+# them thinking and the reply died mid-JSON. A truncated reply reads as nonsense, not as an error.
+def _budget_eps():
+    return [
+        {
+            "model": "openrouter/deepseek/deepseek-v4-pro",
+            "label": "cloud",
+            "context": 131072,
+            "api_key": "test",
+            "base_url": "https://openrouter.ai/api/v1",
+        },
+        {"model": "ollama/gemma4:latest", "label": "local", "context": 32768, "base_url": "http://localhost:11434"},
+    ]
+
+
+def test_a_cloud_endpoint_asks_for_a_generous_output_budget():
+    from crewaimeat.llm import _DEFAULT_MAX_TOKENS, MultiProviderLLM
+
+    chain = MultiProviderLLM(_budget_eps()[:1], 0.3)
+    assert chain._llms[0].max_tokens == _DEFAULT_MAX_TOKENS
+    assert _DEFAULT_MAX_TOKENS >= 8192, "reasoning tokens share this budget with the answer"
+
+
+def test_ollama_is_left_alone():
+    """A local server allocates against this number, so it keeps whatever it was going to use."""
+    from crewaimeat.llm import MultiProviderLLM
+
+    chain = MultiProviderLLM(_budget_eps()[1:], 0.3)
+    assert getattr(chain._llms[0], "max_tokens", None) is None
+
+
+def test_an_endpoint_may_override_the_budget():
+    from crewaimeat.llm import MultiProviderLLM
+
+    eps = _budget_eps()[:1]
+    eps[0]["max_tokens"] = 32000
+    assert MultiProviderLLM(eps, 0.3)._llms[0].max_tokens == 32000
+
+
+def test_the_budget_can_be_lowered_everywhere_at_once(monkeypatch):
+    """The escape hatch: if a provider ever refuses this much, one env var pulls every endpoint down
+    without editing a config file on each machine."""
+    from crewaimeat.llm import MultiProviderLLM
+
+    monkeypatch.setenv("AIMEAT_MAX_TOKENS", "4096")
+    assert MultiProviderLLM(_budget_eps()[:1], 0.3)._llms[0].max_tokens == 4096
