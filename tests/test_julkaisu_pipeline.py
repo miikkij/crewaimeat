@@ -1210,6 +1210,19 @@ def test_the_input_key_belongs_to_the_same_run_as_the_output():
     assert jp.TILAUS_KEY.format(ref=run_id) == "julkaisu.2026-08-25-ujr7.tilaus"
 
 
+def test_a_new_channels_key_is_recognised_without_editing_a_list():
+    """The id is read back out of the named key by matching its last segment. That list was
+    hand-kept, and `grok` was missing within one agent of it being written — which does not fail
+    loudly: the key stays right and the RUN ID silently becomes today, so the agent would have read
+    yesterday's shot list while writing to the correct place. The suffixes are derived now."""
+    for channel in ("grok", "video", "kuvat", "tausta", "kulmat", "valinta", "tilaus", "linkedin", "x"):
+        key = f"julkaisu.2026-08-25-ujr7.{channel}"
+        _k, run_id, rule = jp.run_address({"scope": [{"name": "deliverable_key", "value": key}]}, channel)
+        assert run_id == "2026-08-25-ujr7", f"{channel}: the id came off the calendar, not out of the key"
+        assert rule.startswith("saanto 1")
+    assert jp._id_of_key("julkaisu.2026-08-25.jotain-muuta") is None, "an unknown shape stays unknown"
+
+
 def test_the_completion_pointer_is_not_mistaken_for_the_target():
     """A finished task's top-level `deliverableKey` is what the agent REPORTED writing. Trusting it
     would make a re-dispatch chase its own tail, so only the scope entry counts."""

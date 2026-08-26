@@ -56,6 +56,7 @@ TILAUS_KEY = "julkaisu.{ref}.tilaus"
 TAUSTA_KEY = "julkaisu.{ref}.tausta"
 KULMAT_KEY = "julkaisu.{ref}.kulmat"
 VALINTA_KEY = "julkaisu.{ref}.valinta"
+GROK_KEY = "julkaisu.{ref}.grok"
 OHJAAJAT_KEY = "julkaisu.ohjaajat"
 
 # The chosen angle's fields a writer works from.
@@ -221,10 +222,28 @@ def resolve_id(task: dict | None) -> tuple[str, str]:
     return today_id(), "saanto 3: ei avainta eika muuttujia, paivamaara"
 
 
+def _key_suffixes() -> set[str]:
+    """Every last segment a julkaisu key can carry, DERIVED from the key constants and the channel
+    table rather than kept as a list here.
+
+    A hand-kept list was wrong within one agent of being written: `grok` was missing, and a suffix
+    this does not recognise is not cosmetic — rule 1 then reads the run id off the CALENDAR instead
+    of out of the key it was handed, so the agent writes to the right place while reading yesterday's
+    material.
+    """
+    derived = {
+        v.rsplit(".", 1)[-1]
+        for k, v in globals().items()
+        if k.endswith("_KEY") and isinstance(v, str) and v.startswith("julkaisu.{ref}.")
+    }
+    # `portti` and `mittaus` are written by the app and the measuring step, not from a constant here.
+    return {s for s in derived if "{" not in s} | set(CHANNELS) | {"aineisto", "portti", "mittaus"}
+
+
 def _id_of_key(key: str) -> str | None:
     """The id inside a `julkaisu.<id>.<channel>` key, or None when it is shaped differently."""
-    m = re.match(r"^julkaisu\.(.+)\.(?:aineisto|linkedin|x|video|kuvat|portti|mittaus)$", key or "", re.I)
-    return m.group(1) if m else None
+    m = re.match(r"^julkaisu\.(.+)\.([a-z0-9_-]+)$", key or "", re.I)
+    return m.group(1) if m and m.group(2).casefold() in _key_suffixes() else None
 
 
 def run_address(task: dict | None, channel: str) -> tuple[str, str, str]:
