@@ -22,6 +22,15 @@ code, so they cannot be written back by a model having a bad day:
 Order inside a prompt is chronological, because the model is sequential: **a climax in the last
 sentence does not get time to happen.** Action first, camera immediately after.
 
+Every generated clip gets FOUR prompts, not one — `lyhyt`, `keskiko`, `laaja`, `massiivinen`, from
+8 words to ~3000 characters. They are not candidates to pick the best of: a person runs the same
+shot on all four in Imagine and watches where the extra text starts helping and where it starts
+drowning the shot. Nobody has that line measured, so it is run rather than argued about. The long
+versions add what the frame does NOT show — material, air, layers of sound, what must not move —
+because repeating what is visible would make 3000 characters the same sentence four times, and the
+experiment would measure nothing. `presetit` are the run's own look, designed from its order, angle
+and background; a preset that would fit any job was not made for this one.
+
 Two disagreements in the research are deliberately NOT settled here. Negations (one guide calls them
 useless, two write them every time) and one-camera-move vs 2–3 beats: the agent takes the documented
 default, and says in `miksi` when it departs, so a person can run the same shot both ways.
@@ -66,6 +75,45 @@ REFERENCE_MAX_RES = "720p"  # reference-to-video is capped there; 1080p is T2V/I
 # already at the edge of where Imagine holds together.
 _CLIP_MAX_SHOTS = 2
 _CLIP_MAX_SECONDS = 12
+
+# FOUR prompts for every generated clip, and this is the point of the job — not four candidates to
+# pick the best of, but an EXPERIMENT. A person runs the same shot on all four in Imagine and sees
+# with their own eyes where the extra text starts helping and where it starts drowning the shot.
+# Nobody has that line measured; every guide guesses it. So it is not reasoned about, it is run.
+PROMPT_SIZES = ("lyhyt", "keskiko", "laaja", "massiivinen")
+# `lyhyt` is what I2V wants off a strong still; `keskiko` is the T2V recommendation; the two long
+# ones are deliberately past every published recommendation.
+_WORDS = {"lyhyt": (8, 25), "keskiko": (20, 60)}
+_CHARS = {"laaja": (1000, 1500), "massiivinen": (2500, 3800)}
+_IMAGINE_MAX_CHARS = 4096  # the hard ceiling; `massiivinen` stays clear of it on purpose
+# 8-25 words cannot carry a spoken line AND a Sound: block — asking for them there would be the
+# rule being right about the danger and wrong about the size.
+_TOO_SHORT_FOR_SPEECH = ("lyhyt",)
+_LONG_SIZES = ("laaja", "massiivinen")
+
+# A preset is designed FOR THIS JOB from its order, angle and background — "this job's preset is
+# this job's place". A name off a generic shelf is the tell that it was not.
+_GENERIC_PRESETS = frozenset(
+    {
+        "pimea",
+        "pimeä",
+        "kirkas",
+        "karu",
+        "havainto",
+        "eleginen",
+        "ulkona",
+        "dark",
+        "bright",
+        "moody",
+        "cinematic",
+        "neutral",
+        "default",
+        "oletus",
+        "perus",
+        "standard",
+        "yleinen",
+    }
+)
 
 
 # ── what it reads ────────────────────────────────────────────────────────────────────────────────
@@ -202,8 +250,82 @@ def _said(line: str) -> str:
     return re.sub(r"[\s\"'“”‘’]+", " ", str(line or "")).strip().casefold()
 
 
-def check_clips(clips: list, shots: list[dict]) -> list[str]:
-    """The four things that break the app, plus the prompt rules the research settled."""
+def prompts_of(clip: dict) -> dict[str, str]:
+    """A clip's prompts as {size: text}, tolerating a single `prompt` string from an older shape."""
+    p = clip.get("promptit")
+    if isinstance(p, dict):
+        return {k: str(v or "") for k, v in p.items() if k in PROMPT_SIZES}
+    one = str(clip.get("prompt") or "").strip()
+    return {"keskiko": one} if one else {}
+
+
+def check_presets(presets: Any, clips: list) -> list[str]:
+    """The presets are this job's own look, not a shelf. Optional: none at all is fine."""
+    bad: list[str] = []
+    if presets is None or presets == []:
+        return bad
+    if not isinstance(presets, list):
+        return [f"'presetit' pitää olla lista, ei {type(presets).__name__}."]
+    ids: list[str] = []
+    for p in presets:
+        if not isinstance(p, dict):
+            bad.append("preset ei ole olio.")
+            continue
+        pid = str(p.get("id") or "").strip()
+        if not pid:
+            bad.append(f"presetiltä {p.get('nimi')!r} puuttuu 'id'.")
+        ids.append(pid)
+        for field in ("nimi", "look", "aani", "miksi"):
+            if not str(p.get(field) or "").strip():
+                bad.append(f"preset {pid or '?'}: '{field}' on tyhjä.")
+        # "Ei kiinteitä nimiä kuten 'Pimeä'": a preset that would fit any job was not made for this one.
+        for field in ("id", "nimi"):
+            if str(p.get(field) or "").strip().casefold() in _GENERIC_PRESETS:
+                bad.append(
+                    f"preset {pid or '?'}: {field} on {p.get(field)!r} — geneerinen nimi kelpaisi mihin "
+                    "tahansa työhön. Presetin pitää olla tämän työn oma paikka."
+                )
+    dupes = sorted({i for i in ids if ids.count(i) > 1 and i})
+    if dupes:
+        bad.append(f"preset-id toistuu: {dupes} — klippi viittaa niihin, joten niiden pitää olla eri.")
+    known = {i for i in ids if i}
+    for c in clips if isinstance(clips, list) else []:
+        ref = str((c or {}).get("preset") or "").strip() if isinstance(c, dict) else ""
+        if ref and ref not in known:
+            bad.append(f"klippi {c.get('id')}: preset {ref!r} ei ole 'presetit'-listassa.")
+    return bad
+
+
+def _check_prompt_size(cid: str, size: str, text: str) -> list[str]:
+    """Is this version actually its own size? Four near-identical prompts are not the experiment."""
+    bad: list[str] = []
+    n_words, n_chars = len(text.split()), len(text)
+    if size in _WORDS:
+        lo, hi = _WORDS[size]
+        if not (lo <= n_words <= hi):
+            bad.append(f"klippi {cid}: promptit.{size} on {n_words} sanaa — pitää olla {lo}–{hi}.")
+    if size in _CHARS:
+        lo, hi = _CHARS[size]
+        if n_chars < lo:
+            bad.append(
+                f"klippi {cid}: promptit.{size} on {n_chars} merkkiä, pitää olla vähintään {lo}. "
+                "Lisää sitä mitä kuvassa EI näy — materiaali, ilma, äänen kerrokset, mikä pysyy "
+                "paikallaan — älä toista sitä mikä näkyy."
+            )
+        elif n_chars > hi:
+            bad.append(f"klippi {cid}: promptit.{size} on {n_chars} merkkiä — yli tavoitteen {hi}.")
+    if n_chars >= _IMAGINE_MAX_CHARS:
+        bad.append(f"klippi {cid}: promptit.{size} on {n_chars} merkkiä — Imaginen kova raja on {_IMAGINE_MAX_CHARS}.")
+    return bad
+
+
+def check_clips(clips: list, shots: list[dict], sizes: tuple[str, ...] = PROMPT_SIZES) -> list[str]:
+    """The four things that break the app, plus the prompt rules the research settled.
+
+    `sizes` is which prompt versions must be present — the long two are written in a second pass, so
+    the first pass is checked against the short two rather than told it is missing what nobody has
+    written yet.
+    """
     bad: list[str] = []
     if not isinstance(clips, list) or not clips:
         return ["klippejä ei tullut yhtään."]
@@ -244,63 +366,71 @@ def check_clips(clips: list, shots: list[dict]) -> list[str]:
                 bad.append(f"klippi {cid}: ruutukaappaus on aina tyyppi 'nauhoita', ei {c.get('tyyppi')!r}.")
             if not str(c.get("nauhoitusohje") or "").strip():
                 bad.append(f"klippi {cid}: nauhoitettavalta puuttuu 'nauhoitusohje'.")
-            if str(c.get("prompt") or "").strip():
+            if prompts_of(c):
                 bad.append(f"klippi {cid}: nauhoitettavalle ei kirjoiteta promptia — se kuvataan, ei generoida.")
         elif c.get("tyyppi") != "generoi":
             bad.append(f"klippi {cid}: tyyppi on {c.get('tyyppi')!r}, pitäisi olla 'generoi'.")
-        elif not str(c.get("prompt") or "").strip():
-            bad.append(f"klippi {cid}: generoitavalta puuttuu 'prompt'.")
+        else:
+            # One line per missing size, not one listing them: every message about a version is then
+            # addressed `promptit.<size>`, which is what lets pass 2 be handed exactly its own two.
+            for size in [s for s in sizes if not prompts_of(c).get(s, "").strip()]:
+                bad.append(
+                    f"klippi {cid}: promptit.{size} puuttuu — jokaisesta generoitavasta klipistä "
+                    f"kirjoitetaan kaikki neljä versiota ({', '.join(PROMPT_SIZES)})."
+                )
 
         # 3. the length is one Imagine offers, and not the ceiling by reflex.
         if c.get("grok_kesto_s") not in GROK_DURATIONS:
             bad.append(f"klippi {cid}: grok_kesto_s on {c.get('grok_kesto_s')!r} — sallitut {GROK_DURATIONS}.")
 
-        # 4. the prompt rules the research settled.
-        prompt = str(c.get("prompt") or "")
-        if prompt:
+        # 4. the prompt rules the research settled — every version, because a person runs every version.
+        cuts_only = all(str(by_nro.get(n, {}).get("liike") or "").casefold() == _CUT for n in nums)
+        stills_only = all(str(by_nro.get(n, {}).get("liike") or "").casefold() == "still" for n in nums)
+        speaks = any(str(by_nro.get(n, {}).get("puhe") or "").strip() for n in nums)
+        for size, prompt in sorted(prompts_of(c).items(), key=lambda kv: PROMPT_SIZES.index(kv[0])):
+            if not prompt.strip():
+                continue
+            where = f"klippi {cid} / {size}"
+            bad += _check_prompt_size(str(cid), size, prompt)
             if _FAKE_LOCK.search(prompt):
                 bad.append(
-                    f"klippi {cid}: prompti sanoo 'locked/stable/steady' kamerasta — ne luetaan liikkeeksi. "
+                    f"{where}: prompti sanoo 'locked/stable/steady' kamerasta — ne luetaan liikkeeksi. "
                     f"Kirjoita '{_LOCK_PHRASE.capitalize()}.'"
                 )
             if _ASKS_FOR_TEXT.search(prompt):
-                bad.append(f"klippi {cid}: prompti pyytää luettavaa tekstiä ruutuun — se on artefakti, ei ohje.")
+                bad.append(f"{where}: prompti pyytää luettavaa tekstiä ruutuun — se on artefakti, ei ohje.")
             for n in nums:
                 rt = str(by_nro.get(n, {}).get("ruututeksti") or "").strip()
                 if rt and rt.casefold() in prompt.casefold():
                     bad.append(
-                        f"klippi {cid}: ruututeksti {rt!r} on promptissa — se kuuluu kenttään ruututeksti_jalkikateen."
+                        f"{where}: ruututeksti {rt!r} on promptissa — se kuuluu ruututeksti_jalkikateen-kenttään."
                     )
-            if _opens_with_style(
-                prompt, all(str(by_nro.get(n, {}).get("liike") or "").casefold() == _CUT for n in nums)
-            ):
+            if _opens_with_style(prompt, cuts_only):
                 bad.append(
-                    f"klippi {cid}: prompti alkaa tyylillä tai kameralla eikä teolla — teko ensimmäiseen "
+                    f"{where}: prompti alkaa tyylillä tai kameralla eikä teolla — teko ensimmäiseen "
                     f"lauseeseen: {_first_sentence(prompt)!r}"
                 )
-            # The spoken line is the script's, word for word. A model that translates or paraphrases it
-            # produces a clip that says something the person never wrote — and the voice is generated
-            # in the same pass, so there is no fixing it in the edit.
+            if stills_only and _LOCK_PHRASE not in prompt.casefold():
+                bad.append(f"{where}: staattinen kohtaus ilman '{_LOCK_PHRASE.capitalize()}.' — kamera ajautuu.")
+            # 8-25 words carry motion, one camera and the sound — not a spoken line. Everything longer
+            # carries the line, and it is the SCRIPT's line: a model that translates or paraphrases it
+            # makes a clip that says something the person never wrote, and the voice is generated in
+            # the same pass, so there is no fixing it in the edit.
+            if size in _TOO_SHORT_FOR_SPEECH:
+                continue
             for n in nums:
                 said = _said(by_nro.get(n, {}).get("puhe"))
                 if said and said not in _said(prompt):
                     bad.append(
-                        f"klippi {cid}: kohtauksen {n} puhe ei ole promptissa sellaisenaan — lainaa se "
+                        f"{where}: kohtauksen {n} puhe ei ole promptissa sellaisenaan — lainaa se "
                         f'sanatarkasti äläkä käännä: "{str(by_nro[n]["puhe"]).strip()}"'
                     )
             if "sound:" not in prompt.casefold() and any(
                 str(by_nro.get(n, {}).get("aani") or "").casefold() == "puhe" for n in nums
             ):
-                bad.append(f"klippi {cid}: puheellisessa klipissä ei ole 'Sound:'-lohkoa.")
-            if (
-                any(str(by_nro.get(n, {}).get("puhe") or "").strip() for n in nums)
-                and "no music" not in prompt.casefold()
-            ):
-                bad.append(f"klippi {cid}: puhetta on mutta 'no music' puuttuu — malli lisää muuten scoren omin päin.")
-            if all(str(by_nro.get(n, {}).get("liike") or "").casefold() == "still" for n in nums) and (
-                _LOCK_PHRASE not in prompt.casefold()
-            ):
-                bad.append(f"klippi {cid}: staattinen kohtaus ilman '{_LOCK_PHRASE.capitalize()}.' — kamera ajautuu.")
+                bad.append(f"{where}: puheellisessa klipissä ei ole 'Sound:'-lohkoa.")
+            if speaks and "no music" not in prompt.casefold():
+                bad.append(f"{where}: puhetta on mutta 'no music' puuttuu — malli lisää muuten scoren omin päin.")
 
         # settings the app reads straight off the clip
         if c.get("tunnelma") not in TUNNELMAT:
@@ -361,37 +491,35 @@ def _shots_block(clips: list[dict]) -> str:
 
 
 def build_prompt(clips: list[dict], valinta: dict, tilaus: dict, video: dict) -> str:
+    """PASS 1: the run's shape — presets and each clip's settings. NO prompts.
+
+    The prompts are asked per clip afterwards, because the answer and the model's THINKING share one
+    token budget. Measured on z-ai/glm-5.3-flash: one uncapped call spent 10 034 of 14 693 completion
+    tokens on reasoning, so under our 16 384 cap a whole-run answer had ~1 800 tokens left and stopped
+    mid-string at 6 025 characters — valid JSON that simply ended. Asking for less per call is the fix
+    that does not depend on guessing how much a model will think.
+    """
     angle = (valinta.get("kulma") or {}) if isinstance(valinta.get("kulma"), dict) else {}
     aspect = str(video.get("muoto") or "9:16")
     return (
         "Olet Grok Imagine -skriptaaja. Kohtausluettelo on JO olemassa etkä keksi tarinaa: käännät "
         "sen klipeiksi ja asetuksiksi, jotka ihminen vie Imagineen sellaisenaan.\n\n"
-        "PROMPTIN JÄRJESTYS ON AIKAJÄRJESTYS, koska malli on peräkkäinen — viimeisen lauseen "
-        "huippukohta ei ehdi tapahtua:\n"
-        "  [teko, mitä tapahtuu ensin] [yksi kameraliike] [Look: valo ja materiaali] "
-        "[Sound: konkreettinen] [mikä ei muutu]\n\n"
-        "SÄÄNNÖT, jotka on testattu — nämä tarkistetaan koneellisesti:\n"
-        f"- Staattinen kohtaus: kirjoita '{_LOCK_PHRASE.capitalize()}.' ÄLÄ 'locked', 'stable camera' "
-        "tai 'steady shot' — ne luetaan sulavaksi liikkeeksi ja kamera ajautuu.\n"
-        "- ÄLÄ pyydä luettavaa tekstiä ruutuun. Ruututeksti EI mene promptiin; se menee kenttään "
-        "'ruututeksti_jalkikateen' editoria varten.\n"
-        "- Ääni: 'Sound:' (ei 'AUDIO:'), konkreettinen materiaaliääni ('rain on glass'), ei 'city "
-        "sounds'. Kun puhetta on, lisää 'no music' — malli lisää muuten scoren omin päin.\n"
-        "- Puhe lainausmerkeissä ja sävy perään, ei referoituna: referoitu puhe tuottaa muminaa.\n"
-        "- Puhuttu repliikki on kohtauksen 'puhe' SANATARKASTI. Älä käännä sitä äläkä muotoile "
-        "uusiksi: ääni syntyy samassa ajossa, joten väärä repliikki ei ole korjattavissa editissä.\n"
-        "- Yksi nimetty kameraliike per klippi. Jos kokeilet 2–3 beatia pilkuilla, sano se 'miksi'-kentässä.\n"
-        "- Intensiteettisanat toimivat ('fully', 'with tremendous force', 'then faster'), ja ilmasanat "
-        "luetaan liikkeeksi ('wind whipping', 'heat shimmer').\n"
-        "- Kuvaa EI kuvailla uudestaan kun se on aloitusruutuna.\n"
-        "- Ihmiset kuvassa: leveämpi kuva ja hitaampi liike. Tiukka lähikuva + nopea liike sotkee kasvot.\n"
-        "- Oletus 'kielto': false, eli positiivinen nimeäminen ('Keep the subject, the framing and the "
-        "horizon unchanged.'). Jos poikkeat, perustele 'miksi'-kentässä.\n\n"
+        "TÄSSÄ VAIHEESSA ET KIRJOITA YHTÄKÄÄN PROMPTIA. Ne tilataan klippi kerrallaan erikseen. Nyt "
+        "päätät presetit ja kunkin klipin asetukset.\n\n"
         "PITUUS: grok_kesto_s on 6, 10 tai 15 — PIENIN joka kantaa sisällön. Fysiikka ja äänen rytmi "
         "pitävät parhaiten 5–8 sekunnissa; 12–15 s ajautuu. Älä pyöristä kattoon.\n\n"
+        "PRESETIT suunnittelet TÄLLE TYÖLLE tilauksen tyyleistä, valitusta kulmasta ja taustasta. "
+        "Ei kiinteitä nimiä kuten 'Pimeä': tämän työn preset on tämän työn paikka, ja jos preset "
+        "kelpaisi mihin tahansa työhön, sitä ei ole tehty tästä. Kenttä 'look' on valo ja materiaali, "
+        "'aani' äänimaisema, 'miksi' yksi lause siitä miksi tämä työ näyttää tältä. Klippi viittaa "
+        "yhteen kentällä 'preset', ja useampi klippi SAA käyttää samaa — se on niiden tarkoitus.\n\n"
+        "RUUTUTEKSTI ei mene promptiin vaan kenttään 'ruututeksti_jalkikateen' editoria varten: "
+        "luettava teksti ruudussa on dokumentoitu artefakti, ei ohje.\n\n"
+        "'kielto' on oletuksena false, eli positiivinen nimeäminen ('Keep the subject, the framing "
+        "and the horizon unchanged.'). Jos poikkeat, perustele 'miksi'-kentässä.\n\n"
         "NAUHOITETTAVAT (tyyppi 'nauhoita') ovat ruutukaappauksia: kirjoita niille 'nauhoitusohje' — "
-        "mitä ruudulla tehdään, missä järjestyksessä ja millä tahdilla — ÄLÄ promptia. Niitä ei ajeta "
-        "Imaginessa lainkaan, joten ÄLÄ kirjoita niille 'imagine'-lohkoa.\n\n"
+        "mitä ruudulla tehdään, missä järjestyksessä ja millä tahdilla. Niitä ei ajeta Imaginessa "
+        "lainkaan, joten ÄLÄ kirjoita niille 'imagine'-lohkoa äläkä presettiä.\n\n"
         f"KULMA: {angle.get('kulma') or '-'}\n"
         f"AVAUS: {angle.get('avaus') or '-'}\n"
         f"KENELLE: {angle.get('kenelle') or '-'}\n"
@@ -402,15 +530,136 @@ def build_prompt(clips: list[dict], valinta: dict, tilaus: dict, video: dict) ->
         + FINNISH_NATIVE_STYLE
         + "\n\nVASTAUKSEN MUOTO — pelkkä JSON-olio. Palauta KAIKKI klipit, samoilla id:illä:\n"
         '{"asetukset": {"tarkkuus": "720p", "kuvasuhde": "' + aspect + '", "ketjutus": false},\n'
+        ' "presetit": [{"id": "tyonoma-tunnus", "nimi": "Työn oma nimi",\n'
+        '   "look": "valo ja materiaali englanniksi, yksi tiivis lause",\n'
+        '   "aani": "äänimaisema englanniksi", "miksi": "yksi lause suomeksi: miksi tämä työ näyttää tältä"}],\n'
         ' "klipit": [{"id": "5-6", "kohtaukset": [5,6], "tyyppi": "generoi", "kesto_s": 12,\n'
         '   "grok_kesto_s": 10, "aani": true, "tunnelma": "pimea", "kielto": false,\n'
-        '   "kuva": "ensimmainen_ruutu", "kuva_url": "…",\n'
+        '   "kuva": "ensimmainen_ruutu", "kuva_url": "…", "preset": "tyonoma-tunnus",\n'
         '   "imagine": {"tila": "image-to-video", "kesto": "10s", "tarkkuus": "720p",\n'
         '     "kuvasuhde": "' + aspect + '", "aani": "paalla", "liite": "mitä kuvalle tehdään ja miksi"},\n'
-        '   "prompt": "teko ensin. Camera not moving. Look: … Sound: … no music. Keep the subject unchanged.",\n'
         '   "ruututeksti_jalkikateen": ["…"], "miksi": "yksi lause"}]}\n'
         f"tunnelma: {' | '.join(t or '(tyhjä)' for t in TUNNELMAT)}   tila: {' | '.join(MODES)}"
     )
+
+
+_PROMPT_RULES = (
+    "SÄÄNNÖT, jotka on testattu — nämä tarkistetaan koneellisesti:\n"
+    f"- Teko ENSIMMÄISESSÄ lauseessa. Malli on peräkkäinen: viimeisen lauseen huippukohta ei ehdi "
+    "tapahtua. Järjestys on aikajärjestys: [teko] [yksi kameraliike] [Look: valo ja materiaali] "
+    "[Sound: konkreettinen] [mikä ei muutu].\n"
+    f"- Staattinen kohtaus: kirjoita '{_LOCK_PHRASE.capitalize()}.' ÄLÄ 'locked', 'stable camera' "
+    "tai 'steady shot' — ne luetaan sulavaksi liikkeeksi ja kamera ajautuu.\n"
+    "- ÄLÄ pyydä luettavaa tekstiä ruutuun. Ruututeksti EI mene promptiin.\n"
+    "- Ääni: 'Sound:' (ei 'AUDIO:'), konkreettinen materiaaliääni ('rain on glass'), ei 'city "
+    "sounds'. Kun puhetta on, lisää 'no music' — malli lisää muuten scoren omin päin.\n"
+    "- Puhe lainausmerkeissä ja sävy perään, ei referoituna: referoitu puhe tuottaa muminaa. "
+    "Repliikki on kohtauksen 'puhe' SANATARKASTI — ääni syntyy samassa ajossa kuin kuva, joten "
+    "väärä repliikki ei ole korjattavissa editissä.\n"
+    "- Yksi nimetty kameraliike per klippi.\n"
+    "- Intensiteettisanat toimivat ('fully', 'with tremendous force', 'then faster'), ja ilmasanat "
+    "luetaan liikkeeksi ('wind whipping', 'heat shimmer').\n"
+    "- Ihmiset kuvassa: leveämpi kuva ja hitaampi liike. Tiukka lähikuva + nopea liike sotkee kasvot.\n"
+)
+
+
+def _clip_brief(clip: dict, preset: dict | None, angle: dict) -> str:
+    """The one clip a prompt call is about: its shots, its look, the angle it serves."""
+    shots = "\n".join(
+        f"  kohtaus {s.get('nro')}: [{s.get('kuvakoko')}] {s.get('kuvassa')}\n"
+        f"     liike: {s.get('liike')} | ääni: {s.get('aani')} | puhe: {s.get('puhe')!r}"
+        for s in clip.get("_shots") or []
+    )
+    return (
+        f"KOHTAUKSET:\n{shots}\n\n"
+        + (
+            f"PRESET '{preset.get('nimi')}' — look: {preset.get('look')} | ääni: {preset.get('aani')}\n\n"
+            if preset
+            else ""
+        )
+        + (f"KULMA: {angle.get('kulma') or '-'}\nKENELLE: {angle.get('kenelle') or '-'}\n\n" if angle else "")
+        + (
+            "KUVA ON ALOITUSRUUTUNA, joten ÄLÄ kuvaile sitä uudestaan.\n\n"
+            if clip.get("kuva") == "ensimmainen_ruutu"
+            else ""
+        )
+    )
+
+
+def build_short_prompt(clip: dict, preset: dict | None, angle: dict) -> str:
+    """PASS 2: the two SHORT versions of ONE clip."""
+    lo_s, hi_s = _WORDS["lyhyt"]
+    lo_k, hi_k = _WORDS["keskiko"]
+    return (
+        f"Kirjoitat KLIPIN {clip['id']} kaksi LYHYTTÄ promptiversiota Grok Imagineen. Kohtaus on jo "
+        "kirjoitettu etkä keksi tarinaa — käännät sen.\n\n"
+        + _clip_brief(clip, preset, angle)
+        + _PROMPT_RULES
+        + "\nNELJÄ VERSIOTA, JOISTA NYT KAKSI: ne eivät ole vaihtoehtoja joista valitaan paras, vaan "
+        "koe. Ihminen ajaa saman kohtauksen kaikilla neljällä ja katsoo missä kohtaa lisäteksti alkaa "
+        "auttaa ja missä se alkaa hukuttaa.\n"
+        f"- 'lyhyt': {lo_s}–{hi_s} SANAA. VAIN se mitä kuva ei kerro: liike, yksi kamera, ääni. "
+        "EI repliikkiä — se ei mahdu tähän mittaan.\n"
+        f"- 'keskiko': {lo_k}–{hi_k} SANAA, 2–3 virkettä. Subjekti, teko, kamera, valo, 'Sound:' ja "
+        "repliikki sanatarkasti.\n\n"
+        "VASTAA pelkällä JSON-oliolla:\n"
+        '{"lyhyt": "…", "keskiko": "…"}'
+    )
+
+
+def build_long_prompt(clip: dict, preset: dict | None, angle: dict, aspect: str) -> str:
+    """PASS 3: the two long versions of ONE clip.
+
+    Asked per clip rather than for the whole run at once, because `massiivinen` is ~3000 characters
+    and a single response carrying several of them is where a model runs out of budget — and a
+    truncated JSON costs the whole run, not one clip. The short versions are handed back in so the
+    long ones stay the SAME shot rather than four independent inventions.
+    """
+    have = prompts_of(clip)
+    lo_l, hi_l = _CHARS["laaja"]
+    lo_m, hi_m = _CHARS["massiivinen"]
+    return (
+        f"Kirjoitat KLIPIN {clip['id']} kaksi PITKÄÄ promptiversiota Grok Imagineen. Lyhyet versiot "
+        "ovat jo olemassa, ja pitkät ovat SAMA kohtaus — ei uutta tarinaa, ei uutta kohtausta.\n\n"
+        f"LYHYT (on jo): {have.get('lyhyt', '-')}\n"
+        f"KESKIKO (on jo): {have.get('keskiko', '-')}\n\n"
+        + _clip_brief(clip, preset, angle)
+        + "MITÄ PITUUS TARKOITTAA — tämä on koko tehtävä:\n"
+        f"- 'laaja': {lo_l}–{hi_l} MERKKIÄ. Yli minkään suosituksen, tarkoituksella. Materiaalit, "
+        "valon suunta ja laatu, mitä taustalla tapahtuu, äänen kerrokset, mikä ei saa muuttua.\n"
+        f"- 'massiivinen': noin {lo_m}–{hi_m} MERKKIÄ. Niin paljon kuin kohtauksesta on sanottavaa. "
+        f"Kova raja on {_IMAGINE_MAX_CHARS}; älä mene siihen kiinni.\n\n"
+        "SÄÄNTÖ JOKA TEKEE PITUUDESTA MERKITYKSELLISEN: pitkissä versioissa lisätään sitä mitä "
+        "kuvassa EI näy — materiaali, ilma, äänen kerrokset, mikä pysyy paikallaan — EI toistoa "
+        "siitä mikä näkyy. Muuten 3000 merkkiä on vain sama lause neljästi, eikä koe mittaa mitään.\n\n"
+        "Samat säännöt kuin lyhyissä: teko ENSIMMÄISESSÄ lauseessa, "
+        f"'{_LOCK_PHRASE.capitalize()}.' staattiseen (ei 'locked'/'stable'/'steady'), 'Sound:'-lohko, "
+        "'no music' kun puhetta on, repliikki SANATARKASTI kohtauksen 'puhe'-kentästä, eikä koskaan "
+        "pyyntöä luettavasta tekstistä ruutuun.\n\n"
+        "VASTAA pelkällä JSON-oliolla:\n"
+        '{"laaja": "…", "massiivinen": "…"}'
+    )
+
+
+def check_prompt_sizes(clip: dict, shots: list[dict], sizes: tuple[str, ...]) -> list[str]:
+    """Only what THESE versions of this clip are answerable for.
+
+    Scoped deliberately: a prompt call must not be handed a complaint about a setting it was never
+    asked to write, or it would rewrite prose to answer a note about `imagine.tila` and never
+    converge. Matched on the message's own markers (`klippi X / laaja:`, `promptit.laaja`) rather
+    than the bare word, because `laaja` is also a SHOT SIZE in the script.
+    """
+    marks = tuple(m for s in sizes for m in (f"/ {s}", f"promptit.{s}"))
+    return [v for v in check_clips([clip], shots) if any(m in v for m in marks)]
+
+
+def _written(prompts: dict, sizes: tuple[str, ...]) -> int:
+    """How many of the asked-for versions actually carry text."""
+    return sum(1 for s in sizes if str(prompts.get(s) or "").strip())
+
+
+def _more_written(trial: dict, current: dict, sizes: tuple[str, ...]) -> bool:
+    return _written(trial, sizes) > _written(current, sizes)
 
 
 # ── the run ──────────────────────────────────────────────────────────────────────────────────────
@@ -427,9 +676,14 @@ def _merge(planned: dict, written: dict) -> dict:
     )
     if planned.get("kuva_url"):
         out["kuva_url"] = planned["kuva_url"]
+    # Normalise an older single `prompt` into the four-version shape, so one field carries the prompts.
+    got = prompts_of(out)
+    out.pop("prompt", None)
+    out["promptit"] = {s: got[s] for s in PROMPT_SIZES if got.get(s, "").strip()}
     if planned["tyyppi"] == "nauhoita":
-        out.pop("prompt", None)  # a recording is filmed, never generated
+        out.pop("promptit", None)  # a recording is filmed, never generated
         out.pop("imagine", None)  # …and never run in Imagine, so it has nothing to select there
+        out.pop("preset", None)  # …and its look is the real screen's, not one we designed
         out["kuva"], out["kuva_url"] = "ei", ""
     return out
 
@@ -459,33 +713,92 @@ def tee_grok(agent_name: str, task: dict | None = None, task_id: str | None = No
     )
 
     llm = get_llm(for_tool_use=False, temperature=0.6, agent_name=agent_name)
+
+    # PASS 1: the grouping is already decided, so this is settings and presets — and NO prompts.
+    # Every prompt is asked per clip below, because the answer and the model's thinking share one
+    # token budget: a whole-run answer stopped mid-string at 6025 characters (see build_prompt).
     base = build_prompt(planned, valinta, tilaus, video)
-    prompt, clips, violations = base, None, ["(no attempt ran)"]
+    prompt, clips, presets, violations = base, None, [], ["(no attempt ran)"]
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         doc = parse_json_object(llm.call([{"role": "user", "content": prompt}]))
         if doc is None:
-            clips, violations = None, ["vastaus ei ollut JSON-olio."]
+            got_clips, got_presets, tried = None, [], ["vastaus ei ollut JSON-olio."]
         else:
             written = {str(c.get("id")): c for c in (doc.get("klipit") or []) if isinstance(c, dict)}
-            clips = [_merge(p, written.get(p["id"], {})) for p in planned]
-            violations = check_clips(clips, shots)
+            got_clips = [_merge(p, written.get(p["id"], {})) for p in planned]
+            got_presets = doc.get("presetit") if isinstance(doc.get("presetit"), list) else []
+            tried = check_clips(got_clips, shots, sizes=()) + check_presets(got_presets, got_clips)
         print(
-            f"[{agent_name}] grok attempt {attempt}/{_MAX_ATTEMPTS}: "
-            + ("OK" if not violations else "; ".join(violations[:4])),
+            f"[{agent_name}] grok pass 1 attempt {attempt}/{_MAX_ATTEMPTS}: "
+            + ("OK" if got_clips is not None and not tried else "; ".join(tried[:4])),
             file=sys.stderr,
         )
-        if not violations:
+        # A RETRY MUST NEVER END WORSE THAN ITS BEST ATTEMPT. On the first live run of the four-prompt
+        # shape, attempt 2 produced a complete structure that was one word over on one prompt, and
+        # attempt 3 came back as prose — which overwrote it with None and failed the whole run. Work
+        # that was already in hand cannot be destroyed by a later flaky answer.
+        if got_clips is not None and (clips is None or len(tried) < len(violations)):
+            clips, presets, violations = got_clips, got_presets, tried
+        if clips is not None and not violations:
             break
-        prompt = base + "\n\nKorjaa nämä ja kirjoita koko JSON uudestaan:\n" + "\n".join(f"- {v}" for v in violations)
+        prompt = base + "\n\nKorjaa nämä ja kirjoita koko JSON uudestaan:\n" + "\n".join(f"- {v}" for v in tried)
     if clips is None:
-        return f"FAILED: the clips could not be read as JSON after {_MAX_ATTEMPTS} attempts. Nothing was written to {key}.{addr}"
+        return f"FAILED: the clips could not be read as JSON in any of {_MAX_ATTEMPTS} attempts. Nothing was written to {key}.{addr}"
+
+    # PASSES 2 and 3: the prompts, one clip and one pair of sizes at a time. `massiivinen` alone is
+    # ~3000 characters, and one response carrying every clip's would run out of budget again — here a
+    # failed call costs one pair on one clip, and everything already written stays.
+    by_preset = {str(p.get("id")): p for p in presets if isinstance(p, dict)}
+    angle = (valinta.get("kulma") or {}) if isinstance(valinta.get("kulma"), dict) else {}
+    aspect = str(video.get("muoto") or "9:16")
+    plan_by_id = {p["id"]: p for p in planned}
+    short = tuple(s for s in PROMPT_SIZES if s not in _LONG_SIZES)
+    for clip in [c for c in clips if c["tyyppi"] == "generoi"]:
+        with_shots = {**clip, "_shots": plan_by_id[clip["id"]]["_shots"]}
+        preset = by_preset.get(str(clip.get("preset") or ""))
+        for pass_no, sizes in ((2, short), (3, _LONG_SIZES)):
+            # The long call is built AFTER the short one lands, so it can quote it back — the long
+            # versions are the same shot at more length, not a fresh invention.
+            with_shots["promptit"] = clip.get("promptit", {})
+            asked = (
+                build_short_prompt(with_shots, preset, angle)
+                if sizes == short
+                else build_long_prompt(with_shots, preset, angle, aspect)
+            )
+            ask, best = asked, check_prompt_sizes(clip, shots, sizes)
+            for attempt in range(1, _MAX_ATTEMPTS + 1):
+                doc = parse_json_object(llm.call([{"role": "user", "content": ask}])) or {}
+                got = {s: str(doc.get(s) or "") for s in sizes if str(doc.get(s) or "").strip()}
+                trial = {**clip, "promptit": {**clip.get("promptit", {}), **got}}
+                missed = check_prompt_sizes(trial, shots, sizes)
+                sizes_txt = " ".join(f"{s}={len(got.get(s, ''))}" for s in sizes)
+                print(
+                    f"[{agent_name}] grok pass {pass_no} {clip['id']} attempt {attempt}/{_MAX_ATTEMPTS} "
+                    f"({sizes_txt} merkkiä): " + ("OK" if not missed else "; ".join(missed[:2])),
+                    file=sys.stderr,
+                )
+                # Same rule as pass 1: take the new answer only when it is actually better. But
+                # "better" is not just a smaller violation count — an EMPTY slot violates once (the
+                # version is missing) exactly like a written one that bends a style rule, so a strict
+                # count comparison would keep nothing over prose a person could fix in five seconds.
+                # More versions written wins first; only then does the violation count decide.
+                if _more_written(trial["promptit"], clip.get("promptit", {}), sizes) or (
+                    _written(trial["promptit"], sizes) == _written(clip.get("promptit", {}), sizes)
+                    and len(missed) < len(best)
+                ):
+                    clip["promptit"], best = trial["promptit"], missed
+                if not best:
+                    break
+                ask = asked + "\n\nKorjaa nämä ja kirjoita molemmat uudestaan:\n" + "\n".join(f"- {m}" for m in missed)
+
+    violations = check_clips(clips, shots) + check_presets(presets, clips)
 
     # A prompt-rule violation is a note for the person, not a reason to discard the work (d03cce3) —
     # nothing here publishes. A clip with nothing to paste IS unusable, and that still fails.
     unusable = [
         c["id"]
         for c in clips
-        if (c["tyyppi"] == "generoi" and not str(c.get("prompt") or "").strip())
+        if (c["tyyppi"] == "generoi" and not any(t.strip() for t in prompts_of(c).values()))
         or (c["tyyppi"] == "nauhoita" and not str(c.get("nauhoitusohje") or "").strip())
     ]
     if unusable:
@@ -494,7 +807,6 @@ def tee_grok(agent_name: str, task: dict | None = None, task_id: str | None = No
             f"{_MAX_ATTEMPTS} attempts — " + "; ".join(violations[:3]) + f". Nothing was written to {key}.{addr}"
         )
 
-    aspect = str(video.get("muoto") or "9:16")
     value: dict[str, Any] = {
         "asetukset": {
             "tarkkuus": REFERENCE_MAX_RES
@@ -503,6 +815,7 @@ def tee_grok(agent_name: str, task: dict | None = None, task_id: str | None = No
             "kuvasuhde": aspect,
             "ketjutus": any(c.get("kuva") == "ei" and c["tyyppi"] == "generoi" for c in clips),
         },
+        "presetit": [p for p in presets if isinstance(p, dict)],
         "klipit": clips,
     }
     if violations:
@@ -531,10 +844,21 @@ def tee_grok(agent_name: str, task: dict | None = None, task_id: str | None = No
         return f"FAILED to write '{key}' (tunnel/transport) — the clips did not land.{addr}"
     record_deliverable_key(task_id, key)
     rec = sum(1 for c in clips if c["tyyppi"] == "nauhoita")
+    gen = [c for c in clips if c["tyyppi"] == "generoi"]
     bent = f" {len(violations)} sääntöä jäi täyttymättä — merkitty kohtaan 'rikkeet'." if violations else ""
+    # The person reads this to decide whether to run the experiment, so it says what they get: how
+    # many prompts landed, and the preset names — which are the part only they can judge as "made
+    # for this job".
+    sizes = ", ".join(
+        f"{s} {min((len(prompts_of(c).get(s, '')) for c in gen), default=0)}–"
+        f"{max((len(prompts_of(c).get(s, '')) for c in gen), default=0)} merkkiä"
+        for s in PROMPT_SIZES
+    )
+    names = ", ".join(str(p.get("nimi") or p.get("id")) for p in presets if isinstance(p, dict)) or "ei yhtään"
     return (
-        f"OK: {len(clips)} klippiä ({rec} nauhoita / {len(clips) - rec} generoi) -> {key}. "
-        f"Ei julkaise mitään, valmistelee.{bent}{addr}"
+        f"OK: {len(clips)} klippiä ({rec} nauhoita / {len(gen)} generoi), "
+        f"{sum(len(prompts_of(c)) for c in gen)} promptia -> {key}. "
+        f"Pituudet: {sizes}. Presetit: {names}. Ei julkaise mitään, valmistelee.{bent}{addr}"
     )
 
 

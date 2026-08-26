@@ -8,6 +8,11 @@ The app can do this as a rule-transform and keeps that as its fallback. What the
 a rule cannot reach: camera and sound written as prose, a subject that stays recognisable across
 clips, and each clip's own settings with the reason for them.
 
+Every generated clip gets FOUR prompts — 8 words to ~3000 characters — because where extra text
+stops helping a video model is not measured anywhere. So it is not argued about: the person runs the
+same shot on all four and looks. `presetit` are this run's own look, designed from its order, angle
+and background, and a preset that would fit any job was not made for this one.
+
 Four things break the app if they are wrong, so all four are enforced in code
 (`crewaimeat.julkaisu_grok`), not merely requested in the prompt:
 
@@ -60,6 +65,8 @@ OFFERS = [
         "title": "Käännä kuvaluettelo Grok Imagine -klipeiksi",
         "ask": "Otan valmiin kuvaluettelon ja teen siitä klipit, jotka voit liittää Grok Imagineen "
         "sellaisenaan — mukana tila, kesto, tarkkuus, kuvasuhde ja ääni, valmiiksi valittuina. "
+        "Jokaisesta generoitavasta klipistä kirjoitan NELJÄ promptiversiota kahdeksasta sanasta "
+        "kolmeentuhanteen merkkiin, jotta näet itse missä kohtaa lisäteksti lakkaa auttamasta. "
         "Ruutukaappaukset merkitsen nauhoitettaviksi enkä kirjoita niille promptia. En keksi "
         "tarinaa, en generoi videota enkä julkaise mitään — valmistelen, sinä ajat Imaginen.",
         "example": "Tee tämän ajon videosta Grok-klipit",
@@ -88,6 +95,17 @@ OFFERS = [
         "deliverable_location": {"key": "julkaisu.{ref}.grok"},
         "sample": {
             "asetukset": {"tarkkuus": "720p", "kuvasuhde": "9:16", "ketjutus": False},
+            "presetit": [
+                {
+                    "id": "hiljainen-osoiterivi",
+                    "nimi": "Hiljainen osoiterivi",
+                    "look": "near-dark home office, one monitor as the only light, deep shadow holding most of "
+                    "the frame, cold blue-grey cast on the desk edge",
+                    "aani": "room tone of an empty flat, a fan somewhere behind the wall, no music",
+                    "miksi": "Valittu kulma on hiljaisuus ja se mitä selain jätti tekemättä; pimeys on tämän "
+                    "jutun materiaali eikä tunnelmaefekti.",
+                }
+            ],
             "klipit": [
                 {
                     "id": "5",
@@ -100,6 +118,7 @@ OFFERS = [
                     "kielto": False,
                     "kuva": "ensimmainen_ruutu",
                     "kuva_url": "https://aimeat.io/v1/pub/…/images/20260826-011659-2b5d055bc2.jpg",
+                    "preset": "hiljainen-osoiterivi",
                     "imagine": {
                         "tila": "image-to-video",
                         "kesto": "6s",
@@ -108,10 +127,21 @@ OFFERS = [
                         "aani": "paalla",
                         "liite": "Liitä kuva ensimmäiseksi ruuduksi. Se määrää kuvasuhteen, joten älä pakota toista.",
                     },
-                    "prompt": "The shadow creeps across the desk as the monitor glow dims. Camera not moving. "
-                    "Look: near-dark, one screen as the only light, deep shadow holding most of the frame. "
-                    'Sound: narration, low and unhurried: "Darkness is what the browser left undone." '
-                    "Room tone under it, no music. Keep the subject, the framing and the horizon unchanged.",
+                    # Four versions of the SAME shot, 8 words to ~3000 characters. Not candidates to
+                    # choose between: the person runs all four and sees where the extra text stops
+                    # helping. The long ones add what the frame does NOT show.
+                    "promptit": {
+                        "lyhyt": "The shadow creeps across the desk as the glow dims. Camera not moving. "
+                        "Room tone, no music.",
+                        "keskiko": "The shadow creeps across the desk as the monitor glow dims. Camera not "
+                        "moving. Look: near-dark, one screen as the only light, deep shadow holding most of "
+                        'the frame. Sound: narration, low and unhurried: "Darkness is what the browser left '
+                        'undone." Room tone under it, no music. Keep the subject, the framing and the horizon '
+                        "unchanged.",
+                        "laaja": "…1000–1500 merkkiä samasta kohtauksesta: materiaalit, valon suunta ja laatu, "
+                        "mitä taustalla tapahtuu, äänen kerrokset, mikä ei saa muuttua…",
+                        "massiivinen": "…noin 3000 merkkiä samasta kohtauksesta, niin paljon kuin siitä on sanottavaa…",
+                    },
                     "ruututeksti_jalkikateen": [],
                     "miksi": "Kuusi sekuntia riittää yhdelle liikkeelle, ja lyhyempi pitää fysiikan kasassa.",
                 },
@@ -151,6 +181,17 @@ En keksi tarinaa — se on jo kirjoitettu.
 Jokaisessa klipissä on **asetukset valmiina** — tila, kesto, tarkkuus, kuvasuhde, ääni — koska sinun
 ei pidä johtaa niitä promptista vaan lukea ne. Mukana `miksi`: yksi lause siitä miksi juuri nämä.
 
+**Jokaisesta generoitavasta klipistä tulee neljä promptia**, ei yhtä: `lyhyt` (8–25 sanaa),
+`keskiko` (20–60 sanaa), `laaja` (1000–1500 merkkiä) ja `massiivinen` (~3000 merkkiä). Ne eivät ole
+vaihtoehtoja joista valitset parhaan, vaan **koe**: ajat saman kohtauksen kaikilla neljällä ja näet
+omin silmin missä kohtaa lisäteksti alkaa auttaa ja missä se alkaa hukuttaa. Sitä rajaa ei ole
+kenelläkään mitattuna. Pitkissä versioissa lisätään sitä mitä kuvassa **ei näy** — materiaali, ilma,
+äänen kerrokset, mikä pysyy paikallaan — koska muuten 3000 merkkiä olisi sama lause neljästi.
+
+**`presetit` suunnitellaan tälle työlle** sen tilauksesta, kulmasta ja taustasta: `look`, `aani` ja
+yksi lause siitä miksi tämä työ näyttää tältä. Ei kiinteitä nimiä — jos preset kelpaisi mihin
+tahansa työhön, sitä ei ole tehty tästä. Useampi klippi saa viitata samaan.
+
 **Ruutukaappaukset nauhoitetaan**, niille kirjoitetaan nauhoitusohje eikä promptia, eikä
 nauhoitettavaa ja generoitavaa koskaan yhdistetä samaan klippiin. Nauhoitettavalla ei myöskään ole
 `imagine`-asetuksia: sitä ei ajeta Imaginessa lainkaan.
@@ -186,10 +227,12 @@ def build_domain(ctx: BuildContext):
             + "THIS RUN: you read julkaisu.<id>.video (plus .kuvat, .valinta, .tilaus), and you write "
             "julkaisu.<id>.grok.\n\n"
             "1. Call tee_grok() EXACTLY ONCE. It takes no arguments: it reads this run's shot list, "
-            "groups the shots into clips, writes the Imagine prompts and settings, and stores them "
-            "under this run's own key. You do NOT write prompts yourself and you do NOT regroup.\n"
-            "2. Return its report verbatim — how many clips landed and where, or the FAILED line and "
-            "its reason."
+            "groups the shots into clips, designs this job's presets, writes FOUR prompt versions "
+            "for every generated clip plus the Imagine settings, and stores them under this run's "
+            "own key. It takes minutes, because the longest version alone is ~3000 characters per "
+            "clip. You do NOT write prompts yourself and you do NOT regroup.\n"
+            "2. Return its report verbatim — how many clips and prompts landed, the version lengths "
+            "and the preset names, or the FAILED line and its reason."
         ),
         agent=writer,
         expected_output="The tee_grok report: clips written + the memory key, or the FAILED reason.",
