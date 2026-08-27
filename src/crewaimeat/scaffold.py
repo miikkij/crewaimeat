@@ -25,6 +25,9 @@ def _usage() -> str:
         "  crewaimeat new-crew <agent-name>       scaffold a new crew from the template\n"
         "  crewaimeat new-json-agent <agent>      an agent whose crew lives ON THE NODE, editable in AIMEAT\n"
         "  crewaimeat try <def.json> --prompt X   run a JSON crew def ONCE, locally — registers nothing\n"
+        "  crewaimeat publish <def.json> --as A   validate + publish a def to the node's crew registry\n"
+        "  crewaimeat install <agent> --as A      materialise a def from the registry (--node-backed)\n"
+        "  crewaimeat defs --as A                 what the crew registry holds\n"
         "  crewaimeat doctor [--live] [--strict]  reconcile registries + routes (and the node)\n"
         "  crewaimeat retire <agent> [--apply]    stop an agent participating (the opposite of forging one)\n"
         "  crewaimeat costs [--days N]            model spend per agent + is the routing still priced right\n"
@@ -153,6 +156,10 @@ def main(argv: list[str] | None = None) -> int:
         from crewaimeat.crew_try import main as try_main
 
         return try_main(argv[1:])
+    if argv and argv[0] in ("publish", "install", "defs"):
+        from crewaimeat.crew_publish import main as publish_main
+
+        return publish_main(argv)
     if argv and argv[0] == "doctor":
         from crewaimeat.doctor.cli import main as doctor_main
 

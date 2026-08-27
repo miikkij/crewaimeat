@@ -193,6 +193,12 @@ def run_json_agent(agent_name: str, **overrides: Any) -> None:
     live = Definition(agent_name, doc, revision)
     spec = crewspec_from_json(doc, **overrides)
     spec.build_domain = live.build  # the work half follows the node; the identity half was set above
+
+    # The Crew tab's Validate and Try buttons, answered beside the agent's own work. A person asking
+    # whether their unpublished draft is valid must not queue behind whatever the agent is writing.
+    from crewaimeat.crew_invoke import start_invoke_thread
+
+    start_invoke_thread(agent_name)
     print(
         f"[{agent_name}] JSON crew from {registry_key(agent_name)} (revision {revision}): "
         f"{len(doc.get('agents') or [])} agent(s), {len(doc.get('tasks') or [])} task(s) — "
