@@ -22,6 +22,12 @@ status cells, append decisions), so the two sides stay synced without drifting p
   tools are on the **appdev** MCP surface; access as owner `happydude500001`.
 - **Reference in a handoff prompt** by organism_id + ws + doc id; a fresh session opens its handoff doc,
   reads the spec, does the work, updates the spec. Node feature requests for aimeat-protocol also live here.
+- **READ THE DOC IMMEDIATELY BEFORE YOU WRITE IT — `aimeat_workspace_write` on an existing id is a full
+  OVERWRITE, not a merge.** A living spec is living because the OTHER side edits it too: on 2026-08-28 I
+  sent my own local copy as an update and erased aimeat-dev's answers to two open questions, which they
+  then had to merge back by hand. `aimeat_workspace_read(ids=[…])` first, edit THAT text, write, publish —
+  and keep the gap between read and write short. When you only have something to add, add a section rather
+  than resending the whole document; there is nothing to clobber in a paragraph that did not exist before.
 - Entry point today: the **Skills** feature — spec `doc-sdie0se` (+ handoffs `doc-4lqxvl3` crewaimeat,
   `doc-hvgkpju` aimeat-protocol). Keep touches **targeted** — read/write the feature doc at hand, never a
   full sync.
