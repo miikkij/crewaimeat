@@ -23,6 +23,7 @@ def _usage() -> str:
     return (
         "Usage:\n"
         "  crewaimeat new-crew <agent-name>       scaffold a new crew from the template\n"
+        "  crewaimeat try <def.json> --prompt X   run a JSON crew def ONCE, locally — registers nothing\n"
         "  crewaimeat doctor [--live] [--strict]  reconcile registries + routes (and the node)\n"
         "  crewaimeat retire <agent> [--apply]    stop an agent participating (the opposite of forging one)\n"
         "  crewaimeat costs [--days N]            model spend per agent + is the routing still priced right\n"
@@ -38,7 +39,11 @@ def _usage() -> str:
         "  -> did the paper get better when the model changed? Attributed per article, not per date.\n"
         "  crewaimeat costs --prices\n"
         "  -> does any chain reach an expensive pinned model before a cheaper equal? A pin that was\n"
-        "     2.7x CHEAPER when it was chosen was 4.2x DEARER eleven days later, and nothing went red."
+        "     2.7x CHEAPER when it was chosen was 4.2x DEARER eleven days later, and nothing went red.\n"
+        "  crewaimeat try crew_defs/joker.json --prompt 'kissoista'\n"
+        "  -> the bench: validate + one real run. No registration, no fleet restart, nothing to clean\n"
+        "     up. Add --as <registered-agent> when the def uses node tools and its own name has no\n"
+        "     token yet — the crew stays the doc's, only the credentials are borrowed."
     )
 
 
@@ -123,6 +128,10 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if len(argv) >= 2 and argv[0] == "new-crew":
         return _new_crew(argv[1])
+    if argv and argv[0] == "try":
+        from crewaimeat.crew_try import main as try_main
+
+        return try_main(argv[1:])
     if argv and argv[0] == "doctor":
         from crewaimeat.doctor.cli import main as doctor_main
 
