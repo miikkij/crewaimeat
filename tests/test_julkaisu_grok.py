@@ -130,7 +130,28 @@ KUVAT = {
     ]
 }
 VALINTA = {"kulma": {"kulma": "Selain lakkasi kysymasta", "avaus": "Yksitoista kuukautta", "kenelle": "kehittajat"}}
-TILAUS = {"tyylit": ["havainto"], "kielet": ["fi"]}
+TILAUS = {
+    "tyylit": ["havainto"],
+    "kielet": ["fi"],
+    "tuote": {"nimi": "AIMEAT", "osoite": "https://aimeat.io"},
+}
+
+
+def _nauhoitus(kesto: int, **over) -> dict:
+    """An executable brief: a page, a size, an initial state, steps that end when the clip does."""
+    rec = {
+        "url": "https://aimeat.io",
+        "viewport": {"w": 1080, "h": 1920},
+        "esivalmistelu": "Avaa sivu ja odota kunnes se on latautunut.",
+        "askeleet": [{"t": f"0-{kesto}", "tee": "Pida paikallaan, ei liiketta"}],
+        "kesto_s": kesto,
+        "muoto": "webm tai mp4, yksi jatkuva nauhoitus",
+        "huom": "Ala klikkaa mitaan.",
+    }
+    rec.update(over)
+    return rec
+
+
 TASK = {"id": "t-1", "scope": [{"name": "deliverable_key", "type": "text", "value": "julkaisu.2026-08-25.grok"}]}
 
 
@@ -226,8 +247,9 @@ def _clip(planned: dict, with_prompts: bool = False) -> dict:
         }
     )
     if planned["tyyppi"] == "nauhoita":
-        # A recording is filmed off a real screen: no prompt, and nothing to select in Imagine.
-        out["nauhoitusohje"] = "Avaa selain ja pida osoiterivi nakyvissa kolme sekuntia."
+        # A recording is filmed off a real screen: no prompt, nothing to select in Imagine, and no
+        # `grok_kesto_s` — its length is its content. What it carries is an executable brief.
+        out["nauhoitus"] = _nauhoitus(planned["kesto_s"])
         return out
     spoken = " ".join(f'"{s["puhe"]}"' for s in planned["_shots"] if str(s.get("puhe") or "").strip())
     out["preset"] = PRESETS[0]["id"]
@@ -335,7 +357,7 @@ def test_a_prompt_written_for_a_recording_is_thrown_away(stubbed, monkeypatch):
     written = next(w for w in stubbed if w["tool"] == "aimeat_memory_write")["value"]["klipit"]
     rec = [c for c in written if c["tyyppi"] == "nauhoita"]
     assert rec and all("prompt" not in c for c in rec)
-    assert all(c["nauhoitusohje"].strip() for c in rec)
+    assert all(c["nauhoitus"]["url"] for c in rec)
     assert out.startswith("OK:")
 
 
@@ -345,7 +367,7 @@ def test_a_recording_with_no_instruction_is_fatal(stubbed, monkeypatch):
     for p in jg.plan_clips(SHOTS, KUVAT):
         c = _clip(p)
         if p["tyyppi"] == "nauhoita":
-            c["nauhoitusohje"] = ""
+            c["nauhoitus"] = None
         clips.append(c)
     monkeypatch.setattr(jg, "get_llm", lambda **k: _StubLLM([_reply(clips)] * jg._MAX_ATTEMPTS))
 
@@ -363,8 +385,14 @@ def test_the_length_is_the_shortest_that_carries_not_the_ceiling(content, want):
     assert jg.suggest_duration(content) == want
 
 
-def test_every_planned_length_is_one_imagine_offers():
-    assert all(c["grok_kesto_s"] in jg.GROK_DURATIONS for c in jg.plan_clips(SHOTS, KUVAT))
+def test_only_a_generated_clip_has_an_imagine_length():
+    """Grok never runs a recording, so a `grok_kesto_s` on one would describe a generation that does
+    not happen — and send a later reader looking for it. Its length is its content, full stop."""
+    clips = jg.plan_clips(SHOTS, KUVAT)
+    gen = [c for c in clips if c["tyyppi"] == "generoi"]
+    rec = [c for c in clips if c["tyyppi"] == "nauhoita"]
+    assert gen and all(c["grok_kesto_s"] in jg.GROK_DURATIONS for c in gen)
+    assert rec and all("grok_kesto_s" not in c for c in rec)
 
 
 # ── 4. the prompt rules the research settled ─────────────────────────────────────────────────────
@@ -690,3 +718,80 @@ def test_a_flawed_prompt_still_beats_an_empty_one(stubbed, monkeypatch):
     gen = [c for c in value["klipit"] if c["tyyppi"] == "generoi"]
     assert all(jg.prompts_of(c).get("lyhyt", "").strip() for c in gen), "the flawed text was KEPT"
     assert out.startswith("OK:") and any("liikkeeksi" in r for r in value["rikkeet"])
+
+
+# -- a recorded clip is a commission something RUNS, not a description a person reads -------------
+def _one_recording(**over) -> list[str]:
+    """One recorded clip's brief, checked on its own."""
+    clips = [_clip(p) for p in jg.plan_clips(SHOTS, KUVAT)]
+    rec = next(c for c in clips if c["tyyppi"] == "nauhoita")
+    rec["nauhoitus"] = _nauhoitus(rec["kesto_s"], **over)
+    return jg.check_clips(clips, SHOTS, sizes=(), aspect="9:16", product_url="https://aimeat.io")
+
+
+def test_the_steps_end_exactly_when_the_clip_does():
+    """Measured: the heading said 9 s and the beats ran to 10. The last step's end IS the duration."""
+    bad = _one_recording(askeleet=[{"t": "0-4", "tee": "a"}, {"t": "4-10", "tee": "b"}], kesto_s=9)
+    assert any("viimeinen askel loppuu" in b for b in bad)
+    assert not any("viimeinen askel" in b for b in _one_recording())
+
+
+def test_a_gap_between_steps_is_caught():
+    bad = _one_recording(askeleet=[{"t": "0-3", "tee": "a"}, {"t": "5-9", "tee": "b"}], kesto_s=9)
+    assert any("edellinen loppui" in b for b in bad)
+
+
+def test_a_step_without_a_time_range_is_caught():
+    assert any("muoto on" in b for b in _one_recording(askeleet=[{"t": "alussa", "tee": "a"}]))
+
+
+def test_an_invented_address_is_refused(monkeypatch):
+    """`pwademo.fi` was an example the researcher made up. It answers with a DNS error, and the
+    runner improvises from there — so 'it was in the shot list' is no defence."""
+    monkeypatch.setattr(jg, "_resolves", lambda host: host != "pwademo.fi")
+    bad = _one_recording(url="https://pwademo.fi")
+    assert any("ei vastaa nimipalvelussa" in b and "aimeat.io" in b for b in bad)
+
+
+def test_a_real_address_passes_and_being_offline_accuses_nobody(monkeypatch):
+    """A machine with no DNS at all must not report every address as invented — that would turn a
+    network outage into a wall of false accusations."""
+    monkeypatch.setattr(jg, "_resolves", lambda host: True)
+    assert not any("nimipalvelussa" in b for b in _one_recording(url="https://aimeat.io"))
+    monkeypatch.setattr(jg, "_resolves", lambda host: False)  # nothing resolves: we are offline
+    assert not any("nimipalvelussa" in b for b in _one_recording(url="https://pwademo.fi"))
+
+
+def test_a_vertical_cut_is_recorded_vertically():
+    """1280x720 into a 9:16 edit is black bars nobody can explain later."""
+    bad = _one_recording(viewport={"w": 1280, "h": 720}, huom="")
+    assert any("mustat palkit" in b for b in bad)
+    # …unless the brief SAYS the shot will be cropped, which is the honest case for a desktop browser
+    assert not any(
+        "mustat palkit" in b
+        for b in _one_recording(viewport={"w": 1280, "h": 720}, huom="Tyopoydan selain, rajataan pystyyn.")
+    )
+
+
+def test_a_missing_field_names_itself():
+    for field in ("url", "viewport", "askeleet", "kesto_s"):
+        assert any(f"nauhoitus.{field} puuttuu" in b for b in _one_recording(**{field: None})), field
+
+
+def test_a_recording_gets_the_brief_and_the_generated_clip_does_not(stubbed, monkeypatch):
+    monkeypatch.setattr(jg, "get_llm", lambda **k: _StubLLM([_good_reply()]))
+    jg.tee_grok("julkaisu-grok", task=TASK)
+    clips = next(w for w in stubbed if w["tool"] == "aimeat_memory_write")["value"]["klipit"]
+    rec = [c for c in clips if c["tyyppi"] == "nauhoita"]
+    gen = [c for c in clips if c["tyyppi"] == "generoi"]
+    assert rec and all(isinstance(c["nauhoitus"], dict) and c["nauhoitus"]["url"] for c in rec)
+    assert all("grok_kesto_s" not in c and "promptit" not in c for c in rec)
+    assert gen and all("nauhoitus" not in c and c["grok_kesto_s"] in jg.GROK_DURATIONS for c in gen)
+
+
+def test_the_orders_product_address_is_what_the_prompt_offers():
+    """'If the material names no real address, use the product's own' — so the prompt has to carry
+    it. A rule the writer cannot act on is not a rule."""
+    assert jg.product_address(TILAUS) == "https://aimeat.io"
+    prompt = jg.build_prompt(jg.plan_clips(SHOTS, KUVAT), VALINTA, TILAUS, VIDEO)
+    assert "https://aimeat.io" in prompt and "ÄLÄ KEKSI" in prompt

@@ -22,8 +22,13 @@ Four things break the app if they are wrong, so all four are enforced in code
   3. A clip's id is its shot numbers joined by a hyphen (5 and 6 -> "5-6"). The app matches an
      uploaded video AND the clip's settings on that id, so the GROUPING is done in code — a model
      that merged shots differently on a re-run would rename a clip the person already filled.
-  4. A `ruutukaappaus` shot is always `"nauhoita"` with a `nauhoitusohje` and never a prompt, and
-     recorded and generated shots never share a clip.
+  4. A `ruutukaappaus` shot is always `"nauhoita"`, carrying an executable `nauhoitus` brief and
+     never a prompt, and recorded and generated shots never share a clip.
+
+A recorded clip is a commission something RUNS — the reader is an agent with a browser and a
+recorder, not a person — so it names the page, the window size, the starting state and the beats.
+The address must exist: an invented one is a dead end, and the shot list is exactly where invented
+example addresses come from.
 
 It posts nothing and generates nothing: it prepares, and a person runs Imagine.
 
@@ -63,12 +68,14 @@ OFFERS = [
     {
         "id": "tee-grok",
         "title": "Käännä kuvaluettelo Grok Imagine -klipeiksi",
-        "ask": "Otan valmiin kuvaluettelon ja teen siitä klipit, jotka voit liittää Grok Imagineen "
-        "sellaisenaan — mukana tila, kesto, tarkkuus, kuvasuhde ja ääni, valmiiksi valittuina. "
-        "Jokaisesta generoitavasta klipistä kirjoitan NELJÄ promptiversiota kahdeksasta sanasta "
-        "kolmeentuhanteen merkkiin, jotta näet itse missä kohtaa lisäteksti lakkaa auttamasta. "
-        "Ruutukaappaukset merkitsen nauhoitettaviksi enkä kirjoita niille promptia. En keksi "
-        "tarinaa, en generoi videota enkä julkaise mitään — valmistelen, sinä ajat Imaginen.",
+        # The node caps `ask` at 500 chars — a real limit, so what it says is what a person needs to
+        # decide: what arrives, and where the boundary is. The instruction itself lives in the prompt.
+        "ask": "Teen valmiista kuvaluettelosta klipit Grok Imagineen: tila, kesto, tarkkuus, "
+        "kuvasuhde ja ääni valmiiksi valittuina. Jokaisesta generoitavasta klipistä NELJÄ "
+        "promptiversiota 8 sanasta 3000 merkkiin, jotta näet itse missä lisäteksti lakkaa "
+        "auttamasta. Ruutukaappauksista ajettavan nauhoitustoimeksiannon: osoite, ikkunan koko, "
+        "alkutila, askeleet. En keksi tarinaa enkä osoitteita, en generoi videota enkä julkaise "
+        "mitään — valmistelen, sinä ajat Imaginen.",
         "example": "Tee tämän ajon videosta Grok-klipit",
         "cost": "cheap",
         "latency": "minutes",
@@ -150,17 +157,35 @@ OFFERS = [
                     "kohtaukset": [1, 2],
                     "tyyppi": "nauhoita",
                     "kesto_s": 9,
-                    "grok_kesto_s": 10,
+                    # No `grok_kesto_s`: Grok never generates this clip, so its length is `kesto_s`.
+                    # No `imagine` block either — there is nothing to select for a shot filmed off a
+                    # real screen, and a mode here would read as an instruction to generate the
+                    # product's own UI, the one thing the shot list forbids.
                     "aani": True,
                     "tunnelma": "havainto",
                     "kielto": False,
                     "kuva": "ei",
-                    # No `imagine` block: a recording is filmed off a real screen, so there is
-                    # nothing to select in Imagine — and a mode written here would be an instruction
-                    # to generate the product's own UI, which is the one thing the shot list forbids.
-                    "nauhoitusohje": "Avaa pwademo.fi Chromessa. Pidä osoiterivi näkyvissä kolme sekuntia: "
-                    "vain kirjanmerkkitähti, ei asennuskuvaketta. Avaa sitten kolmen pisteen valikko ja "
-                    "vie hiiri kohtaan 'Save and share' niin että harmaa 'Create shortcut…' näkyy.",
+                    # An executable commission, not a description: the reader is an agent with a
+                    # browser and a recorder, so it gets the page, the size, the starting state, the
+                    # beats and the format — everything it cannot infer.
+                    "nauhoitus": {
+                        "url": "https://aimeat.io",
+                        "viewport": {"w": 1080, "h": 1920},
+                        "esivalmistelu": "Avaa sivu ja odota kunnes se on latautunut. Varmista ettei "
+                        "asennuskehote ole näkyvissä.",
+                        "askeleet": [
+                            {
+                                "t": "0-3",
+                                "tee": "Pidä osoiterivi paikallaan: vain kirjanmerkkitähti, ei asennuskuvaketta",
+                            },
+                            {"t": "3-5", "tee": "Avaa kolmen pisteen valikko"},
+                            {"t": "5-7", "tee": "Vie osoitin riville 'Save and share', pysähdy"},
+                            {"t": "7-9", "tee": "Zoomaa hitaasti harmaaseen riviin 'Create shortcut…'"},
+                        ],
+                        "kesto_s": 9,
+                        "muoto": "webm tai mp4, yksi jatkuva nauhoitus",
+                        "huom": "Älä klikkaa mitään. Ruututeksti lisätään jälkikäteen editorissa.",
+                    },
                     "ruututeksti_jalkikateen": ["The browser stopped asking."],
                     "miksi": "Ruutukaappaus nauhoitetaan aina: generoitu käyttöliittymä olisi väärä, ja väärä "
                     "on pahempi kuin ei mitään.",
@@ -192,9 +217,14 @@ kenelläkään mitattuna. Pitkissä versioissa lisätään sitä mitä kuvassa *
 yksi lause siitä miksi tämä työ näyttää tältä. Ei kiinteitä nimiä — jos preset kelpaisi mihin
 tahansa työhön, sitä ei ole tehty tästä. Useampi klippi saa viitata samaan.
 
-**Ruutukaappaukset nauhoitetaan**, niille kirjoitetaan nauhoitusohje eikä promptia, eikä
-nauhoitettavaa ja generoitavaa koskaan yhdistetä samaan klippiin. Nauhoitettavalla ei myöskään ole
-`imagine`-asetuksia: sitä ei ajeta Imaginessa lainkaan.
+**Ruutukaappaus on ajettava toimeksianto**, ei kuvaus: `nauhoitus`-olio jossa on osoite, ikkunan
+koko, alkutila, aikaan sidotut askeleet ja muoto. Lukija on agentti jolla on selain ja nauhoitin,
+joten se saa kaiken mitä ei voi päätellä. Osoite on **olemassa oleva** — jos aineisto ei nimeä
+sellaista, käytän tuotteen omaa osoitetta enkä keksi, koska keksitty osoite pysäyttää ajajan.
+Askelten viimeinen loppuaika on sama kuin klipin kesto, ja pystyvideoon nauhoitetaan pystyssä.
+
+Nauhoitettavalla ei ole promptia, presettiä, `imagine`-asetuksia eikä `grok_kesto_s`-kenttää: Grok
+ei generoi sitä, joten sen kesto on `kesto_s` eikä mikään muu.
 
 **Puhuttu repliikki on kohtausluettelon oma, sanatarkasti.** Ääni syntyy samassa ajossa kuin kuva,
 joten käännetty tai uusiksi muotoiltu repliikki ei ole korjattavissa editissä.

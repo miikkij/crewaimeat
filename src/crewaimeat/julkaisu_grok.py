@@ -91,6 +91,15 @@ _IMAGINE_MAX_CHARS = 4096  # the hard ceiling; `massiivinen` stays clear of it o
 _TOO_SHORT_FOR_SPEECH = ("lyhyt",)
 _LONG_SIZES = ("laaja", "massiivinen")
 
+# A RECORDED CLIP IS A COMMISSION SOMETHING RUNS, not a description a person reads. The reader is a
+# Claude Code session with a browser and a recorder, so the instruction carries what such a reader
+# needs and cannot infer: which page, in what state, at what size, in what steps, for how long.
+# Measured (2026-08-27): the prose version named no address at all, and the address the shot list
+# DID name — `pwademo.fi` — was an example the researcher invented. It answers with a DNS error, and
+# everything after that point is the runner improvising.
+_STEP_TIME = re.compile(r"^\s*(\d+(?:[.,]\d+)?)\s*[-–—]\s*(\d+(?:[.,]\d+)?)\s*$")
+_NAUHOITUS_FIELDS = ("url", "viewport", "askeleet", "kesto_s")
+
 # A preset is designed FOR THIS JOB from its order, angle and background — "this job's preset is
 # this job's place". A name off a generic shelf is the tell that it was not.
 _GENERIC_PRESETS = frozenset(
@@ -176,18 +185,21 @@ def plan_clips(shots: list[dict], kuvat: dict) -> list[dict]:
         total = sum(int(s.get("kesto_s") or 0) for s in current)
         recorded = str(current[0].get("kuvakoko") or "").strip().casefold() == SCREEN_RECORDING
         image = next((by_shot[n] for n in nums if n in by_shot), None)
-        clips.append(
-            {
-                "id": clip_id(nums),
-                "kohtaukset": nums,
-                "tyyppi": "nauhoita" if recorded else "generoi",
-                "kesto_s": total,
-                "grok_kesto_s": suggest_duration(total),
-                "kuva": "ensimmainen_ruutu" if (image and not recorded) else "ei",
-                "kuva_url": (image or {}).get("url", ""),
-                "_shots": current[:],
-            }
-        )
+        clip = {
+            "id": clip_id(nums),
+            "kohtaukset": nums,
+            "tyyppi": "nauhoita" if recorded else "generoi",
+            "kesto_s": total,
+            "kuva": "ensimmainen_ruutu" if (image and not recorded) else "ei",
+            "kuva_url": (image or {}).get("url", ""),
+            "_shots": current[:],
+        }
+        # Only a GENERATED clip has an Imagine length. A recording's length is its content, full
+        # stop — Grok never runs it, so a `grok_kesto_s` there would describe a generation that
+        # does not happen.
+        if not recorded:
+            clip["grok_kesto_s"] = suggest_duration(total)
+        clips.append(clip)
         current.clear()
 
     for shot in shots:
@@ -248,6 +260,102 @@ def _opens_with_style(prompt: str, cut_is_the_action: bool) -> bool:
 def _said(line: str) -> str:
     """A spoken line reduced to what must survive into the prompt."""
     return re.sub(r"[\s\"'“”‘’]+", " ", str(line or "")).strip().casefold()
+
+
+def product_address(tilaus: dict) -> str:
+    """The order's own product address — the answer when the material names no real one."""
+    tuote = tilaus.get("tuote") if isinstance(tilaus.get("tuote"), dict) else {}
+    return str(tuote.get("osoite") or "").strip()
+
+
+def _host_of(url: str) -> str:
+    m = re.match(r"^\s*https?://([^/\s:]+)", str(url or ""), re.I)
+    return (m.group(1) if m else "").casefold()
+
+
+def _resolves(host: str) -> bool | None:
+    """Does this host exist? None when we cannot tell — no network is not the same as no address."""
+    import socket
+
+    if not host:
+        return False
+    try:
+        socket.getaddrinfo(host, None)
+        return True
+    except OSError:
+        return False
+
+
+def check_nauhoitus(cid: str, rec: Any, aspect: str, product_url: str, control_host: str = "") -> list[str]:
+    """A recording brief is executable or it is nothing.
+
+    Three rules, and every one of them has been broken once on a real run (2026-08-27):
+    the step times ran a second past the stated duration, the address was an example somebody made
+    up, and a 9:16 cut was to be recorded in a 1280x720 window.
+    """
+    bad: list[str] = []
+    if not isinstance(rec, dict):
+        return [f"klippi {cid}: 'nauhoitus' puuttuu — nauhoitettava klippi on ajettava toimeksianto, ei kuvaus."]
+    for field in _NAUHOITUS_FIELDS:
+        if rec.get(field) in (None, "", [], {}):
+            bad.append(f"klippi {cid}: nauhoitus.{field} puuttuu.")
+
+    # 1. the last step's end time IS the clip's duration.
+    steps = rec.get("askeleet") if isinstance(rec.get("askeleet"), list) else []
+    last_end = None
+    for i, step in enumerate(steps, 1):
+        if not isinstance(step, dict) or not str(step.get("tee") or "").strip():
+            bad.append(f"klippi {cid}: nauhoitus.askeleet[{i}] on tyhjä — jokainen askel sanoo mitä tehdään.")
+            continue
+        m = _STEP_TIME.match(str(step.get("t") or ""))
+        if not m:
+            bad.append(f'klippi {cid}: nauhoitus.askeleet[{i}].t on {step.get("t")!r} — muoto on "0-3".')
+            continue
+        start, end = (float(g.replace(",", ".")) for g in m.groups())
+        if end <= start:
+            bad.append(f"klippi {cid}: nauhoitus.askeleet[{i}] alkaa {start} ja loppuu {end}.")
+        if last_end is not None and abs(start - last_end) > 0.01:
+            bad.append(f"klippi {cid}: nauhoitus.askeleet[{i}] alkaa {start} s mutta edellinen loppui {last_end} s.")
+        last_end = end
+    want = rec.get("kesto_s")
+    if steps and last_end is not None and isinstance(want, (int, float)) and abs(last_end - float(want)) > 0.01:
+        bad.append(
+            f"klippi {cid}: viimeinen askel loppuu {last_end} s mutta nauhoitus.kesto_s on {want} — "
+            "viimeisen askeleen loppuaika ON klipin kesto."
+        )
+
+    # 2. the address exists. An invented one is not an instruction, it is a dead end — and the shot
+    # list is exactly where invented example addresses come from, so "it was in the material" is no
+    # defence. Checked by DNS only, and skipped entirely when the control host does not resolve
+    # either (that is this machine being offline, not the address being made up).
+    url = str(rec.get("url") or "")
+    host = _host_of(url)
+    if url and not host:
+        bad.append(f"klippi {cid}: nauhoitus.url on {url!r} — anna koko osoite (https://…).")
+    elif host and _resolves(control_host or _host_of(product_url)) is not False and _resolves(host) is False:
+        bad.append(
+            f"klippi {cid}: nauhoitus.url {url!r} ei vastaa nimipalvelussa — keksitty osoite pysäyttää "
+            f"sen joka ajaa ohjeen. Käytä tuotteen omaa osoitetta ({product_url or 'tilaus.tuote.osoite'})."
+        )
+
+    # 3. a vertical cut is recorded vertically, or `huom` says why it is not.
+    vp = rec.get("viewport") if isinstance(rec.get("viewport"), dict) else {}
+    w, h = vp.get("w"), vp.get("h")
+    if not (isinstance(w, int) and isinstance(h, int) and w > 0 and h > 0):
+        bad.append(f"klippi {cid}: nauhoitus.viewport on {vp!r} — anna {{'w': …, 'h': …}} pikseleinä.")
+    else:
+        a_w, _, a_h = str(aspect or "9:16").partition(":")
+        try:
+            wanted_tall = int(a_h) > int(a_w)
+        except ValueError:
+            wanted_tall = True
+        if wanted_tall and w >= h and not str(rec.get("huom") or "").strip():
+            bad.append(
+                f"klippi {cid}: kooste on {aspect} pystyä mutta nauhoitus on {w}x{h} vaakaa. Nauhoita "
+                "pystyssä, tai sano 'huom'-kentässä miksi tämä rajataan — muuten koosteeseen tulee "
+                "mustat palkit eikä kukaan tiedä miksi."
+            )
+    return bad
 
 
 def prompts_of(clip: dict) -> dict[str, str]:
@@ -319,7 +427,13 @@ def _check_prompt_size(cid: str, size: str, text: str) -> list[str]:
     return bad
 
 
-def check_clips(clips: list, shots: list[dict], sizes: tuple[str, ...] = PROMPT_SIZES) -> list[str]:
+def check_clips(
+    clips: list,
+    shots: list[dict],
+    sizes: tuple[str, ...] = PROMPT_SIZES,
+    aspect: str = "9:16",
+    product_url: str = "",
+) -> list[str]:
     """The four things that break the app, plus the prompt rules the research settled.
 
     `sizes` is which prompt versions must be present — the long two are written in a second pass, so
@@ -364,10 +478,16 @@ def check_clips(clips: list, shots: list[dict], sizes: tuple[str, ...] = PROMPT_
         if recorded_shots:
             if c.get("tyyppi") != "nauhoita":
                 bad.append(f"klippi {cid}: ruutukaappaus on aina tyyppi 'nauhoita', ei {c.get('tyyppi')!r}.")
-            if not str(c.get("nauhoitusohje") or "").strip():
-                bad.append(f"klippi {cid}: nauhoitettavalta puuttuu 'nauhoitusohje'.")
+            bad += check_nauhoitus(str(cid), c.get("nauhoitus"), aspect, product_url)
             if prompts_of(c):
                 bad.append(f"klippi {cid}: nauhoitettavalle ei kirjoiteta promptia — se kuvataan, ei generoida.")
+            # Grok does not generate this clip, so its length is `kesto_s` and nothing else. The
+            # field in the wrong place sends a later reader looking for a generation that never was.
+            if c.get("grok_kesto_s") is not None:
+                bad.append(
+                    f"klippi {cid}: nauhoitettavalla ei ole 'grok_kesto_s' — sen kesto on kesto_s "
+                    f"({c.get('kesto_s')} s), koska Grok ei generoi sitä."
+                )
         elif c.get("tyyppi") != "generoi":
             bad.append(f"klippi {cid}: tyyppi on {c.get('tyyppi')!r}, pitäisi olla 'generoi'.")
         else:
@@ -379,8 +499,8 @@ def check_clips(clips: list, shots: list[dict], sizes: tuple[str, ...] = PROMPT_
                     f"kirjoitetaan kaikki neljä versiota ({', '.join(PROMPT_SIZES)})."
                 )
 
-        # 3. the length is one Imagine offers, and not the ceiling by reflex.
-        if c.get("grok_kesto_s") not in GROK_DURATIONS:
+        # 3. the length is one Imagine offers, and not the ceiling by reflex — generated clips only.
+        if not recorded_shots and c.get("grok_kesto_s") not in GROK_DURATIONS:
             bad.append(f"klippi {cid}: grok_kesto_s on {c.get('grok_kesto_s')!r} — sallitut {GROK_DURATIONS}.")
 
         # 4. the prompt rules the research settled — every version, because a person runs every version.
@@ -472,8 +592,10 @@ def _shots_block(clips: list[dict]) -> str:
     rows = []
     for c in clips:
         head = (
-            f"KLIPPI {c['id']} — tyyppi {c['tyyppi']}, sisältöä {c['kesto_s']} s, "
-            f"ehdotettu grok_kesto_s {c['grok_kesto_s']}"
+            f"KLIPPI {c['id']} — tyyppi {c['tyyppi']}, sisältöä {c['kesto_s']} s"
+            # Only a generated clip has an Imagine length to suggest; a recording's length IS its
+            # content, and naming a grok_kesto_s here is how one gets written where it must not be.
+            + (f", ehdotettu grok_kesto_s {c['grok_kesto_s']}" if c.get("grok_kesto_s") else "")
             + (f", KUVA aloitusruuduksi: {c['kuva_url']}" if c.get("kuva_url") else "")
         )
         rows.append(head)
@@ -501,6 +623,7 @@ def build_prompt(clips: list[dict], valinta: dict, tilaus: dict, video: dict) ->
     """
     angle = (valinta.get("kulma") or {}) if isinstance(valinta.get("kulma"), dict) else {}
     aspect = str(video.get("muoto") or "9:16")
+    product_url = product_address(tilaus)
     return (
         "Olet Grok Imagine -skriptaaja. Kohtausluettelo on JO olemassa etkä keksi tarinaa: käännät "
         "sen klipeiksi ja asetuksiksi, jotka ihminen vie Imagineen sellaisenaan.\n\n"
@@ -517,9 +640,26 @@ def build_prompt(clips: list[dict], valinta: dict, tilaus: dict, video: dict) ->
         "luettava teksti ruudussa on dokumentoitu artefakti, ei ohje.\n\n"
         "'kielto' on oletuksena false, eli positiivinen nimeäminen ('Keep the subject, the framing "
         "and the horizon unchanged.'). Jos poikkeat, perustele 'miksi'-kentässä.\n\n"
-        "NAUHOITETTAVAT (tyyppi 'nauhoita') ovat ruutukaappauksia: kirjoita niille 'nauhoitusohje' — "
-        "mitä ruudulla tehdään, missä järjestyksessä ja millä tahdilla. Niitä ei ajeta Imaginessa "
-        "lainkaan, joten ÄLÄ kirjoita niille 'imagine'-lohkoa äläkä presettiä.\n\n"
+        "NAUHOITETTAVAT (tyyppi 'nauhoita') ovat ruutukaappauksia. Niille EI kirjoiteta promptia, "
+        "'imagine'-lohkoa, presettiä eikä 'grok_kesto_s'-kenttää: Grok ei generoi niitä, joten niiden "
+        "kesto on 'kesto_s' eikä mikään muu.\n\n"
+        "SEN SIJAAN kirjoitat niille 'nauhoitus'-olion, ja se on AJETTAVA TOIMEKSIANTO eikä kuvaus. "
+        "Lukija ei ole ihminen vaan agentti jolla on selain ja nauhoitin, joten se tarvitsee kaiken "
+        "mitä se ei voi päätellä:\n"
+        f"- 'url': OLEMASSA OLEVA osoite. Jos aineisto ei nimeä sellaista, käytä tuotteen omaa "
+        f"osoitetta {product_url or '(tilaus.tuote.osoite)'} — ÄLÄ KEKSI. Kohtausluettelossa voi olla "
+        "keksittyjä esimerkkiosoitteita, ja keksitty osoite ei ole ohje vaan umpikuja.\n"
+        f"- 'viewport': {{'w': …, 'h': …}} pikseleinä, ja se vastaa kuvasuhdetta {aspect}. Pystyvideoon "
+        "nauhoitetaan PYSTYSSÄ. Jos kohtaus on työpöydän selain eikä mahdu pystyyn, sano se "
+        "'huom'-kentässä, jotta rajaus on tiedossa eikä koosteessa ihmetellä mustia palkkeja.\n"
+        "- 'esivalmistelu': mikä ALKUTILA pitää järjestää ennen nauhoitusta. 'Tyhjä asennuskuvakkeen "
+        "paikka' on ehto joka varmistetaan, ei havainto joka todetaan.\n"
+        "- 'askeleet': lista {'t': '0-3', 'tee': '…'}. Askeleet ovat peräkkäisiä ilman aukkoja, ja "
+        "VIIMEISEN ASKELEEN LOPPUAIKA ON KLIPIN KESTO — sama luku kuin 'kesto_s'.\n"
+        "- 'kesto_s': sama kuin klipin kesto_s.\n"
+        "- 'muoto': esim. 'webm tai mp4, yksi jatkuva nauhoitus'.\n"
+        "- 'huom': mitä EI tehdä — ei klikkauksia jos otto on liikkeestä, ei ruututekstiä kuvaan, "
+        "ei hiirtä näkyviin jos se ei kuulu kohtaukseen.\n\n"
         f"KULMA: {angle.get('kulma') or '-'}\n"
         f"AVAUS: {angle.get('avaus') or '-'}\n"
         f"KENELLE: {angle.get('kenelle') or '-'}\n"
@@ -538,6 +678,15 @@ def build_prompt(clips: list[dict], valinta: dict, tilaus: dict, video: dict) ->
         '   "kuva": "ensimmainen_ruutu", "kuva_url": "…", "preset": "tyonoma-tunnus",\n'
         '   "imagine": {"tila": "image-to-video", "kesto": "10s", "tarkkuus": "720p",\n'
         '     "kuvasuhde": "' + aspect + '", "aani": "paalla", "liite": "mitä kuvalle tehdään ja miksi"},\n'
+        '   "ruututeksti_jalkikateen": ["…"], "miksi": "yksi lause"},\n'
+        '  {"id": "1-2", "kohtaukset": [1,2], "tyyppi": "nauhoita", "kesto_s": 9,\n'
+        '   "aani": true, "tunnelma": "karu", "kielto": false, "kuva": "ei",\n'
+        '   "nauhoitus": {"url": "' + (product_url or "https://…") + '",\n'
+        '     "viewport": {"w": 1080, "h": 1920},\n'
+        '     "esivalmistelu": "mikä alkutila järjestetään ennen nauhoitusta",\n'
+        '     "askeleet": [{"t": "0-3", "tee": "…"}, {"t": "3-9", "tee": "…"}],\n'
+        '     "kesto_s": 9, "muoto": "webm tai mp4, yksi jatkuva nauhoitus",\n'
+        '     "huom": "mitä EI tehdä"},\n'
         '   "ruututeksti_jalkikateen": ["…"], "miksi": "yksi lause"}]}\n'
         f"tunnelma: {' | '.join(t or '(tyhjä)' for t in TUNNELMAT)}   tila: {' | '.join(MODES)}"
     )
@@ -684,7 +833,16 @@ def _merge(planned: dict, written: dict) -> dict:
         out.pop("promptit", None)  # a recording is filmed, never generated
         out.pop("imagine", None)  # …and never run in Imagine, so it has nothing to select there
         out.pop("preset", None)  # …and its look is the real screen's, not one we designed
+        out.pop("grok_kesto_s", None)  # …and its length is kesto_s, because Grok never runs it
         out["kuva"], out["kuva_url"] = "ei", ""
+        # A prose instruction from the older shape is kept as the note, not thrown away: it is what
+        # a person would have read, and it belongs beside the brief rather than nowhere.
+        prose = str(out.pop("nauhoitusohje", "") or "").strip()
+        if prose and isinstance(out.get("nauhoitus"), dict) and not str(out["nauhoitus"].get("huom") or "").strip():
+            out["nauhoitus"]["huom"] = prose
+    else:
+        out["grok_kesto_s"] = planned["grok_kesto_s"]
+        out.pop("nauhoitus", None)  # a generated clip is not filmed off a screen
     return out
 
 
@@ -713,6 +871,8 @@ def tee_grok(agent_name: str, task: dict | None = None, task_id: str | None = No
     )
 
     llm = get_llm(for_tool_use=False, temperature=0.6, agent_name=agent_name)
+    aspect = str(video.get("muoto") or "9:16")
+    product_url = product_address(tilaus)
 
     # PASS 1: the grouping is already decided, so this is settings and presets — and NO prompts.
     # Every prompt is asked per clip below, because the answer and the model's thinking share one
@@ -727,7 +887,9 @@ def tee_grok(agent_name: str, task: dict | None = None, task_id: str | None = No
             written = {str(c.get("id")): c for c in (doc.get("klipit") or []) if isinstance(c, dict)}
             got_clips = [_merge(p, written.get(p["id"], {})) for p in planned]
             got_presets = doc.get("presetit") if isinstance(doc.get("presetit"), list) else []
-            tried = check_clips(got_clips, shots, sizes=()) + check_presets(got_presets, got_clips)
+            tried = check_clips(got_clips, shots, sizes=(), aspect=aspect, product_url=product_url) + check_presets(
+                got_presets, got_clips
+            )
         print(
             f"[{agent_name}] grok pass 1 attempt {attempt}/{_MAX_ATTEMPTS}: "
             + ("OK" if got_clips is not None and not tried else "; ".join(tried[:4])),
@@ -750,7 +912,6 @@ def tee_grok(agent_name: str, task: dict | None = None, task_id: str | None = No
     # failed call costs one pair on one clip, and everything already written stays.
     by_preset = {str(p.get("id")): p for p in presets if isinstance(p, dict)}
     angle = (valinta.get("kulma") or {}) if isinstance(valinta.get("kulma"), dict) else {}
-    aspect = str(video.get("muoto") or "9:16")
     plan_by_id = {p["id"]: p for p in planned}
     short = tuple(s for s in PROMPT_SIZES if s not in _LONG_SIZES)
     for clip in [c for c in clips if c["tyyppi"] == "generoi"]:
@@ -791,7 +952,7 @@ def tee_grok(agent_name: str, task: dict | None = None, task_id: str | None = No
                     break
                 ask = asked + "\n\nKorjaa nämä ja kirjoita molemmat uudestaan:\n" + "\n".join(f"- {m}" for m in missed)
 
-    violations = check_clips(clips, shots) + check_presets(presets, clips)
+    violations = check_clips(clips, shots, aspect=aspect, product_url=product_url) + check_presets(presets, clips)
 
     # A prompt-rule violation is a note for the person, not a reason to discard the work (d03cce3) —
     # nothing here publishes. A clip with nothing to paste IS unusable, and that still fails.
@@ -799,7 +960,7 @@ def tee_grok(agent_name: str, task: dict | None = None, task_id: str | None = No
         c["id"]
         for c in clips
         if (c["tyyppi"] == "generoi" and not any(t.strip() for t in prompts_of(c).values()))
-        or (c["tyyppi"] == "nauhoita" and not str(c.get("nauhoitusohje") or "").strip())
+        or (c["tyyppi"] == "nauhoita" and not isinstance(c.get("nauhoitus"), dict))
     ]
     if unusable:
         return (
