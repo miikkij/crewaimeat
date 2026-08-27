@@ -134,12 +134,37 @@ _DEFAULT_BASE = {
 # fallback context window if a model/provider declares none (conservative)
 _FALLBACK_CONTEXT = 32768
 
-# The OUTPUT budget every non-Ollama endpoint asks for, unless the endpoint or AIMEAT_MAX_TOKENS says
-# otherwise. Deliberately generous: on a reasoning model the thinking and the answer share this
-# number, so a budget sized for the answer alone truncates the answer. Left unset, OpenRouter handed
-# out 2048 and a reply died mid-JSON after 1169 reasoning tokens — and a truncated reply reads as a
-# model talking nonsense, not as an error, which is how it went unnoticed.
-_DEFAULT_MAX_TOKENS = 16384
+# NO ARBITRARY OUTPUT CAP. A number picked here is a guess about a model we have not measured, and
+# the failure it causes is silent: the reply just stops, or never starts.
+#
+# Sending nothing is not the answer either — with no value, OpenRouter applied 2048 and a reply died
+# mid-JSON after 1169 reasoning tokens (julkaisu.log, 2026-08-25). So we send a CEILING WE NEVER
+# EXPECT TO REACH, whose only job is to stop a provider from imposing a thrifty default of its own.
+#
+# What a guessed cap costs, measured on one real prompt (z-ai/glm-5.3-flash, 2026-08-27):
+#
+#     max_tokens=16384  finish='length'  content=0 chars      reasoning=16385
+#     max_tokens=32768  finish='stop'    content=9225 chars   reasoning=25600
+#     max_tokens=(none) finish='stop'    content=11247 chars  reasoning=29409
+#
+# 16384 looked generous and emitted NOT ONE CHARACTER: on a reasoning model the thinking and the
+# answer come out of the same budget, and the thinking alone wanted 29k. `max_tokens` is a CEILING,
+# not a spend — a model that writes 800 tokens costs 800 whatever this says — so there is nothing to
+# save by keeping it low, and a run to lose by getting it wrong.
+#
+# It cannot be the context either. max_tokens is counted INSIDE the window together with the prompt
+# (OpenRouter, 2026-08-27):
+#
+#     deepseek-v4-pro (1048576 ctx)  max_tokens=131072   OK
+#     deepseek-v4-pro (1048576 ctx)  max_tokens=1048576  REFUSED "you requested about 1048…"
+#     gpt-oss-120b     (131072 ctx)  max_tokens=32768    OK
+#     gpt-oss-120b     (131072 ctx)  max_tokens=131072   REFUSED "you requested about 131078"
+#
+# — six tokens of prompt over the line is enough to be refused, and a refused endpoint drops out of
+# the chain silently, which trades one quiet failure for another. So: HALF THE WINDOW. Vast next to
+# any real answer (the largest measured need was 29k of thinking plus 3k of text) and impossible to
+# refuse unless the prompt alone fills half the model, in which case the call was lost anyway.
+_OUTPUT_SHARE_OF_CONTEXT = 2
 
 
 def _providers_file() -> str | None:
@@ -419,20 +444,14 @@ class MultiProviderLLM(BaseLLM):
             if str(ep["model"]).startswith("ollama/"):
                 cool = float(os.getenv("OLLAMA_TEMPERATURE", "0.1"))
                 kw["temperature"] = min(temperature, cool)
-            # OUTPUT BUDGET. Send an explicit, GENEROUS max_tokens rather than letting the provider
-            # pick: with none set, OpenRouter capped a call at 2048 completion tokens, a reasoning
-            # model spent 1169 of them thinking, and the answer was cut off mid-JSON —
-            #   "Could not parse response content as the length limit was reached
-            #    (completion_tokens=2048, reasoning_tokens=1169)"      [julkaisu.log, 2026-08-25]
-            # A truncated reply does not look like an error from the outside. It looks like the model
-            # produced nonsense, which is why this was mistaken for flaky output for a long time.
-            #
-            # Reasoning tokens come out of the SAME budget as the answer, so the floor has to clear
-            # thinking AND the reply. An endpoint may override it in llm_providers.json, and
-            # AIMEAT_MAX_TOKENS lowers it everywhere at once if a provider ever refuses this much.
-            # Ollama is left alone: a local server allocates against this number.
-            elif ep.get("max_tokens") or os.getenv("AIMEAT_MAX_TOKENS") or _DEFAULT_MAX_TOKENS:
-                kw["max_tokens"] = int(ep.get("max_tokens") or os.getenv("AIMEAT_MAX_TOKENS") or _DEFAULT_MAX_TOKENS)
+            # OUTPUT CEILING, not a budget — see _OUTPUT_SHARE_OF_CONTEXT. Derived from the model's
+            # own declared window, so it is a fact about that model rather than a number someone
+            # picked. An endpoint may still state its own when a provider genuinely refuses this
+            # much. Ollama is left alone: a local server ALLOCATES against this number.
+            else:
+                stated = ep.get("max_tokens") or os.getenv("AIMEAT_MAX_TOKENS")
+                window = int(ep.get("context") or _FALLBACK_CONTEXT)
+                kw["max_tokens"] = int(stated) if stated else window // _OUTPUT_SHARE_OF_CONTEXT
             if ep.get("base_url"):
                 kw["base_url"] = ep["base_url"]
             if ep.get("api_key"):

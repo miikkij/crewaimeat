@@ -155,12 +155,30 @@ def _budget_eps():
     ]
 
 
-def test_a_cloud_endpoint_asks_for_a_generous_output_budget():
-    from crewaimeat.llm import _DEFAULT_MAX_TOKENS, MultiProviderLLM
+def test_a_cloud_endpoint_gets_a_ceiling_it_will_never_reach():
+    """NOT a budget. Measured 2026-08-27 on a real prompt: max_tokens=16384 returned `finish='length'`
+    and ZERO characters, because 16 385 reasoning tokens came out of the same allowance. A cap sized
+    for the answer silences the model, and the caller cannot tell that from a model failing. The
+    endpoint's declared context wins when it has one — that is a fact about the model, not a guess."""
+    from crewaimeat.llm import _FALLBACK_CONTEXT, MultiProviderLLM
 
+    # …and it can never BE the window: max_tokens is counted inside it together with the prompt, so
+    # asking for 131072 on a 131072-context model is refused for "about 131078 tokens" (measured
+    # 2026-08-27). Half the window is vast next to any real answer and cannot be refused.
     chain = MultiProviderLLM(_budget_eps()[:1], 0.3)
-    assert chain._llms[0].max_tokens == _DEFAULT_MAX_TOKENS
-    assert _DEFAULT_MAX_TOKENS >= 8192, "reasoning tokens share this budget with the answer"
+    assert chain._llms[0].max_tokens == 131072 // 2, "half of the endpoint's declared window"
+
+    no_context = [{**_budget_eps()[0], "context": None}]
+    assert MultiProviderLLM(no_context, 0.3)._llms[0].max_tokens == _FALLBACK_CONTEXT // 2
+
+
+def test_an_endpoint_may_still_state_its_own_limit():
+    """A provider that genuinely refuses a large value can say so in llm_providers.json — a MEASURED
+    limit is not a guess. Nothing else may put a number here."""
+    from crewaimeat.llm import MultiProviderLLM
+
+    stated = [{**_budget_eps()[0], "max_tokens": 4096}]
+    assert MultiProviderLLM(stated, 0.3)._llms[0].max_tokens == 4096
 
 
 def test_ollama_is_left_alone():

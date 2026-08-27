@@ -167,7 +167,9 @@ def _vision_meta(image: bytes, mime: str, brief: str, *, agent: str | None = Non
                         ],
                     }
                 ],
-                "max_tokens": 400,
+                # No max_tokens. The answer here IS small — a few hundred characters of JSON — but a
+                # cap sized for the answer is what silences a model that thinks first: the thinking
+                # comes out of the same budget, and the caller sees an empty reply with no error.
                 # Authoritative cost for the ledger (this direct call bypasses CrewAI's hook).
                 "usage": {"include": True},
             },

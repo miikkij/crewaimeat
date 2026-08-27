@@ -67,6 +67,25 @@ status cells, append decisions), so the two sides stay synced without drifting p
   prose, weak at code and weak in Finnish); Finnish prose → the `news` profile (DeepSeek V4 Pro);
   code/app crews → `coding`. A crew that declares no profile falls to `default` silently; doctor
   reports it and the fleet host names it at start-up.
+- **NO OUTPUT LIMITS. Never cap `max_tokens` on a cloud model.** Not "generously", not "just to be
+  safe" — a number nobody measured is a guess, and the failure is SILENT: the reply stops mid-JSON,
+  or never starts. `max_tokens` is a CEILING, not a spend; a model that writes 800 tokens costs 800
+  whatever it says, so a low cap saves nothing and loses runs. Measured on one real prompt
+  (2026-08-27): `max_tokens=16384` → `finish='length'`, **content 0 characters**, 16 385 reasoning
+  tokens; uncapped → 11 247 characters, `finish='stop'`. On a reasoning model the thinking and the
+  answer share the budget, and the thinking wanted 29 k on its own. `crewaimeat.llm` therefore sends
+  a ceiling it never expects to reach (the endpoint's declared `context`, else 131072) purely to stop
+  a provider imposing its own thrifty default — OpenRouter applies 2048 when sent nothing. The ONE
+  exception is a **local** Ollama server, which allocates against the number. If output comes back
+  empty or truncated, read `finish_reason` and `completion_tokens_details.reasoning_tokens` before
+  blaming the model. The same rule governs every other invented ceiling in this repo — character
+  counts, post lengths, retry caps: if a limit is not the vendor's documented one or the owner's
+  stated one, it does not get to throw work away.
+- **Which model runs is the owner's call.** When a pinned id dies (404, retired, renamed), report it
+  and ASK — never substitute the vendor's suggested successor. `stealth/ox-alpha` → `z-ai/glm-5.3-flash`
+  was a 1:1 id swap that kept the POSITION and changed the BEHAVIOUR: the replacement was a reasoning
+  model, and it broke three separate things across the fleet before anyone connected them to a routing
+  change nobody had approved.
 - **`crewaimeat doctor` before you claim anything is fine.** Three lenses: registries (do the crew
   files, serve.json and the node agree), conformance (a call-graph route check — node calls go through
   `_aimeat_call`/`_aimeat_rest`, a crew's model comes from routing not a constructor, a failure on the

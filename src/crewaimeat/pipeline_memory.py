@@ -54,12 +54,17 @@ def default_analysis_llm(agent_name: str, embedder_tag: str) -> Any:
 
         model = os.getenv("AIMEAT_MEMORY_ANALYSIS_MODEL", "ollama/gemma4:latest")
         base = (os.getenv("OLLAMA_HOST") or "http://localhost:11434").rstrip("/")
-        # max_tokens caps OBSERVED runaway generations (gemma4 occasionally loops on the encode-analysis
-        # until the 65k limit ~ 10 GPU-minutes, then crewai falls back to defaults anyway). The analysis
-        # output is a small metadata JSON, so 2048 never truncates a healthy response — a runaway just
-        # fails 30x faster into the same defaults path. (NOT the reasoning-model max_tokens trap: this
-        # is a plain instruct model emitting JSON, not burning budget on reasoning tokens.)
-        return LLM(model=model, temperature=0.1, base_url=base, max_tokens=2048)
+        # A LOCAL server allocates against max_tokens, so this one is a real resource decision rather
+        # than a guess about the model: gemma4 was observed looping on the encode-analysis until the
+        # 65k limit (~10 GPU-minutes) before crewai fell back to defaults anyway. Overridable, and it
+        # applies to the local tier only — never to a cloud model, where a cap this size is the trap
+        # that emits nothing at all.
+        return LLM(
+            model=model,
+            temperature=0.1,
+            base_url=base,
+            max_tokens=int(os.getenv("AIMEAT_MEMORY_LOCAL_MAX_TOKENS", "8192")),
+        )
     # CLOUD TIER: a CONCRETE model, never the crew's own chain.
     #
     # The chain's primary is the `openrouter/free` META-ROUTER, which picks a different model per
@@ -87,7 +92,8 @@ def default_analysis_llm(agent_name: str, embedder_tag: str) -> Any:
             temperature=0.1,
             base_url="https://openrouter.ai/api/v1",
             api_key=key,
-            max_tokens=2048,  # the analysis output is a small JSON; a runaway fails fast into defaults
+            # No output cap: a guessed ceiling on a cloud model is how a reply comes back empty,
+            # and the caller cannot tell that from the model failing. See crewaimeat.llm.
         )
 
     from crewaimeat.llm import get_llm
