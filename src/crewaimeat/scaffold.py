@@ -23,6 +23,7 @@ def _usage() -> str:
     return (
         "Usage:\n"
         "  crewaimeat new-crew <agent-name>       scaffold a new crew from the template\n"
+        "  crewaimeat new-json-agent <agent>      an agent whose crew lives ON THE NODE, editable in AIMEAT\n"
         "  crewaimeat try <def.json> --prompt X   run a JSON crew def ONCE, locally — registers nothing\n"
         "  crewaimeat doctor [--live] [--strict]  reconcile registries + routes (and the node)\n"
         "  crewaimeat retire <agent> [--apply]    stop an agent participating (the opposite of forging one)\n"
@@ -128,6 +129,26 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if len(argv) >= 2 and argv[0] == "new-crew":
         return _new_crew(argv[1])
+    if len(argv) >= 2 and argv[0] == "new-json-agent":
+        from crewaimeat.json_agent import registry_key, write_loader
+
+        name = argv[1]
+        try:
+            path = write_loader(name)
+        except (ValueError, FileExistsError) as exc:
+            print(f"FAILED: {exc}")
+            return 1
+        print(f"wrote {path}")
+        print(
+            f"\nThat file is the whole of the agent HERE — it only names it. The crew itself lives on\n"
+            f"the node at {registry_key(name)} and is edited in AIMEAT under\n"
+            f"profile > agents > {name} > Crew. Publish there and the NEXT TASK uses it: no restart.\n\n"
+            f"Before you publish, try the definition locally:\n"
+            f"  crewaimeat try <def.json> --prompt 'a real request'\n\n"
+            f"Then register + approve the agent once, and start the fleet:\n"
+            f"  npx aimeat@latest connect --url https://aimeat.io --owner <owner> --agent {name}"
+        )
+        return 0
     if argv and argv[0] == "try":
         from crewaimeat.crew_try import main as try_main
 
