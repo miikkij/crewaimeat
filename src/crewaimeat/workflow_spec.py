@@ -305,6 +305,7 @@ WORKFLOWS: dict[str, dict] = {
                     "en_US": "Fetch the day's raw news per category.",
                 },
                 "stage": ("crewaimeat.fetch_pipeline", "build_edition_raw"),
+                "retry": {"max": 2, "backoff_min": 3},  # one transient failure must not end the step
             },
             # Desk A + Desk B run in parallel after fetch; one agent each, signals inherited from offers.
             {
@@ -347,6 +348,7 @@ WORKFLOWS: dict[str, dict] = {
                     "en_US": "Space-weather article (NOAA/NASA).",
                 },
                 "stage": ("crewaimeat.space_weather_pipeline", "write_space_weather"),
+                "retry": {"max": 2, "backoff_min": 3},  # one transient failure must not end the step
             },
             {
                 "id": "features",
@@ -358,6 +360,7 @@ WORKFLOWS: dict[str, dict] = {
                     "en_US": "Features + news quiz from the day's articles.",
                 },
                 "stage": ("crewaimeat.features_pipeline", "build_quiz"),
+                "retry": {"max": 2, "backoff_min": 3},  # one transient failure must not end the step
             },
             {
                 "id": "editorial",
