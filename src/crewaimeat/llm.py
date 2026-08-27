@@ -152,19 +152,29 @@ _FALLBACK_CONTEXT = 32768
 # not a spend — a model that writes 800 tokens costs 800 whatever this says — so there is nothing to
 # save by keeping it low, and a run to lose by getting it wrong.
 #
-# It cannot be the context either. max_tokens is counted INSIDE the window together with the prompt
-# (OpenRouter, 2026-08-27):
+# It cannot be derived from the context either, and this one took the fleet down. max_tokens is
+# counted INSIDE the window together with the prompt (OpenRouter, 2026-08-27):
 #
 #     deepseek-v4-pro (1048576 ctx)  max_tokens=131072   OK
 #     deepseek-v4-pro (1048576 ctx)  max_tokens=1048576  REFUSED "you requested about 1048…"
 #     gpt-oss-120b     (131072 ctx)  max_tokens=32768    OK
 #     gpt-oss-120b     (131072 ctx)  max_tokens=131072   REFUSED "you requested about 131078"
 #
-# — six tokens of prompt over the line is enough to be refused, and a refused endpoint drops out of
-# the chain silently, which trades one quiet failure for another. So: HALF THE WINDOW. Vast next to
-# any real answer (the largest measured need was 29k of thinking plus 3k of text) and impossible to
-# refuse unless the prompt alone fills half the model, in which case the call was lost anyway.
-_OUTPUT_SHARE_OF_CONTEXT = 2
+# A version of this file that sent the whole context reached a running fleet and refused EVERY call
+# on EVERY endpoint, falling through the entire chain to a local Ollama that was not running —
+# news-fetcher and space-weather-writer crash-looped until it was restarted. Half the window would
+# have survived those two cases, but it is the same kind of answer: a number we compute without
+# knowing the prompt, which a long enough prompt still collides with.
+#
+# SO WE SEND NOTHING. There is no value that cannot collide, so the safe value is no value: the
+# provider then allows what the model actually allows. An endpoint may still state its own when a
+# provider genuinely needs one — that is a measured fact about that endpoint, not a guess about all
+# of them.
+#
+# (The 2026-08-25 note that OpenRouter imposes 2048 when sent nothing is why a ceiling was tried at
+# all. Even were it still true, a truncated reply is a bad answer from one call; a computed ceiling
+# that overshoots the window is every call on every endpoint failing at once. The blast radii are
+# not comparable.)
 
 
 def _providers_file() -> str | None:
@@ -444,14 +454,14 @@ class MultiProviderLLM(BaseLLM):
             if str(ep["model"]).startswith("ollama/"):
                 cool = float(os.getenv("OLLAMA_TEMPERATURE", "0.1"))
                 kw["temperature"] = min(temperature, cool)
-            # OUTPUT CEILING, not a budget — see _OUTPUT_SHARE_OF_CONTEXT. Derived from the model's
-            # own declared window, so it is a fact about that model rather than a number someone
-            # picked. An endpoint may still state its own when a provider genuinely refuses this
-            # much. Ollama is left alone: a local server ALLOCATES against this number.
+            # NO OUTPUT CAP unless this endpoint states one. See the note above: every value we
+            # computed ourselves was wrong in a different way, and the last one refused every call
+            # on every endpoint at once. Ollama is untouched here too — a local server allocates
+            # against the number, so it sets its own in the config.
             else:
                 stated = ep.get("max_tokens") or os.getenv("AIMEAT_MAX_TOKENS")
-                window = int(ep.get("context") or _FALLBACK_CONTEXT)
-                kw["max_tokens"] = int(stated) if stated else window // _OUTPUT_SHARE_OF_CONTEXT
+                if stated:
+                    kw["max_tokens"] = int(stated)
             if ep.get("base_url"):
                 kw["base_url"] = ep["base_url"]
             if ep.get("api_key"):

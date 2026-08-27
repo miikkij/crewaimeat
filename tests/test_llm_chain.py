@@ -160,16 +160,17 @@ def test_a_cloud_endpoint_gets_a_ceiling_it_will_never_reach():
     and ZERO characters, because 16 385 reasoning tokens came out of the same allowance. A cap sized
     for the answer silences the model, and the caller cannot tell that from a model failing. The
     endpoint's declared context wins when it has one — that is a fact about the model, not a guess."""
-    from crewaimeat.llm import _FALLBACK_CONTEXT, MultiProviderLLM
+    from crewaimeat.llm import MultiProviderLLM
 
-    # …and it can never BE the window: max_tokens is counted inside it together with the prompt, so
-    # asking for 131072 on a 131072-context model is refused for "about 131078 tokens" (measured
-    # 2026-08-27). Half the window is vast next to any real answer and cannot be refused.
+    # …and no value we compute ourselves is safe: max_tokens is counted INSIDE the context window
+    # together with the prompt, so any ceiling can be pushed over the edge by a long enough input.
+    # A version that sent the whole context refused every call on every endpoint and crash-looped
+    # the fleet (2026-08-28). The safe value is no value.
     chain = MultiProviderLLM(_budget_eps()[:1], 0.3)
-    assert chain._llms[0].max_tokens == 131072 // 2, "half of the endpoint's declared window"
+    assert chain._llms[0].max_tokens is None, "nothing we did not measure gets sent"
 
     no_context = [{**_budget_eps()[0], "context": None}]
-    assert MultiProviderLLM(no_context, 0.3)._llms[0].max_tokens == _FALLBACK_CONTEXT // 2
+    assert MultiProviderLLM(no_context, 0.3)._llms[0].max_tokens is None
 
 
 def test_an_endpoint_may_still_state_its_own_limit():
