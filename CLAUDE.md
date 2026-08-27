@@ -105,6 +105,49 @@ status cells, append decisions), so the two sides stay synced without drifting p
 
 ---
 
+## Working on a LIVE fleet — the night of 2026-08-28, written down so it is not repeated
+
+One 404 on a retired model became: a reasoning model at the head of every profile, truncated JSON,
+empty replies, a 35-minute run, and finally every call on every endpoint refused at once with the
+fleet crash-looping. Root cause of the whole chain: **an obstacle in front of the task was treated as
+part of the task.** Five rules came out of it.
+
+- **When something blocks you and it is not yours to change, REPORT it — do not remove it.** A dead
+  model id, a missing permission, a config that belongs to the owner: say what is blocking, what it
+  would take, and stop. Removing the blocker to keep going is how a one-agent verification turned
+  into a fleet-wide routing change nobody approved. (See the two rules above on `max_tokens` and on
+  who chooses the model.)
+- **NEVER edit shared infrastructure in increments while a fleet can restart.** The committed code
+  was correct both times; the WORKING TREE between edits was not, and a restart loaded exactly that
+  half-finished version — `llm.py` sending the whole context window as `max_tokens`, so every
+  endpoint 400ed, the chain fell through to a local Ollama that was not running, and news-fetcher
+  and space-weather-writer crash-looped. Finish the change, run the tests, and only then let it
+  exist on disk in a state something can load. `llm.py`, `aimeat_crew.py`, `llm_providers.json` and
+  the workflow definitions are all shared: a mistake there is not one agent's, it is 53.
+- **Inference is not measurement — not mine, and not another agent's.** I called an empty reply "the
+  same truncation" (it was `finish='length'` with `content=0`, a different fault), and
+  `workflow-inspector` filed a confident report blaming `interactive` mode when the node showed
+  `task-runner`. Read the actual field — `finish_reason`, `completion_tokens_details`, the agent's
+  real `mode` — before forming a theory. **A subagent's report is a claim, not evidence**; verify it
+  against the node before acting on it.
+- **Fix the cause, not the shape of the symptom.** A truncating response was answered by splitting
+  one prompt into three passes. The split was worth keeping (a failed call now costs one clip, not
+  the run) but it was chosen for the wrong reason: the cause was a cap, and one measurement would
+  have shown that before the restructuring.
+- **A retry must never end worse than its best attempt, and WRITTEN beats EMPTY.** Attempt 2 produced
+  a complete result one word over a limit; attempt 3 returned prose and overwrote it with `None`,
+  failing a run whose work was already in hand. And when ranking attempts, a MISSING field violates
+  once exactly like a written one that bends a rule — compare what is filled first, only then the
+  violation count, or the loop keeps nothing over something a person could fix in five seconds.
+
+**Every workflow step needs `retry`.** A step without one is a single transient failure away from
+being permanently red, and a red step takes everything that waits on it down too: on 2026-08-28
+`space-weather` hit one connection error, and `editorial` — which waits on it — was skipped, so the
+edition shipped with 21 articles and no front page. `write-a`/`write-b`/`editorial` had retries;
+`fetch`/`space-weather`/`features` did not. All six do now, in `workflow_spec.py` AND on the node.
+
+---
+
 ## Fleet & daemon — when a crew-agent actually comes ONLINE
 - The fleet host **auto-discovers every `crews/*_crew.py`** (that has a `run()`) — no roster to edit.
   A leading underscore parks a crew: `crews/_foo_crew.py` is skipped (`forge._crew_files`, why the
