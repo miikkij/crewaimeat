@@ -60,21 +60,23 @@ def _errors_of(exc: CrewDocError) -> list[str]:
     return list(getattr(exc, "errors", None) or [str(exc)])
 
 
-def load_def(agent_name: str) -> tuple[dict, Any]:
+def load_def(agent_name: str) -> tuple[dict, int | None]:
     """`(doc, revision)` from the node. Raises `CrewDocError` when there is none, it is not JSON, or
     it does not validate — the caller decides whether it has a last-good to fall back on.
 
     The stored value is an ENVELOPE — `crew_registry.publish_crew_def` writes
-    `{version, publishedAt, agent_name, doc}` — and a bare document is accepted too so a def written
-    by hand still loads.
+    `{version, publishedAt, agent_name, doc, publishedBy}` — and a bare document is accepted too so
+    a def written by hand still loads.
 
-    WHICH FIELD IDENTIFIES A PUBLISH. Not `version`: that is the envelope's SCHEMA version, a
-    constant, and reporting it would show a number that never changes however often the definition
-    is edited. There is no revision counter, so the identity of the loaded definition is
-    `publishedAt`, which does change on every publish. `revision` is read first for a future writer
-    that adds a real counter. The first draft of this read a `revision` key that nothing writes, and
-    reported null from a live agent while its unit tests passed — because the test envelope had been
-    written from the docstring instead of from the writer.
+    REVISION IS A NUMBER OR IT IS NOTHING (aimeat-dev, spec v6). The counter belongs to the node's
+    own publish route, which numbers from `max(.version.N) + 1`; a CLI publish deliberately does NOT
+    number, because a second counter is the same mistake as a second validator. So `revision` is the
+    envelope's integer when it has one and None when it does not — never `version` (the envelope's
+    SCHEMA version, a constant) and no longer `publishedAt` standing in for a number. An earlier
+    draft reported the timestamp under this name, and the tab rendered "Live: revision 0" beside
+    "Runtime loaded revision 2026-08-28T02:43:19+03:00": two different notions of the same word in
+    one box. A numberless publish is a real state with its own words — the tab says "published from
+    outside this tab" — and it needs the field ABSENT, not filled with something else.
     """
     key = registry_key(agent_name)
     value = read_owner_key(agent_name, key)
@@ -91,7 +93,9 @@ def load_def(agent_name: str) -> tuple[dict, Any]:
             ]
         )
     doc = value["doc"] if isinstance(value.get("doc"), dict) else value
-    revision = (value.get("revision") or value.get("publishedAt")) if doc is not value else None
+    raw = value.get("revision") if doc is not value else None
+    # `bool` is an int in Python, and `True` as a revision would print as a plausible "1".
+    revision = raw if isinstance(raw, int) and not isinstance(raw, bool) else None
     errors = validate_crew_doc(doc)
     if errors:
         raise CrewDocError(errors)
@@ -113,11 +117,16 @@ def report_runtime(agent_name: str, *, revision: Any, ok: bool, errors: list[str
         ver = "unknown"
     payload = {
         "loadedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "revision": revision,
         "ok": bool(ok),
         "errors": list(errors or []),
         "runtime": f"crewaimeat {ver}",
     }
+    # OMITTED, not null. The tab reads a missing `revision` as "loaded the definition, published
+    # from outside this tab" and a present one as "loaded revision N". Sending null would make it
+    # choose between rendering the word "null" and treating absent and null alike — and the second
+    # is a guess we would be forcing on it.
+    if isinstance(revision, int) and not isinstance(revision, bool):
+        payload["revision"] = revision
     try:
         _aimeat_call(
             agent_name,

@@ -74,7 +74,17 @@ def publish_crew_def(
             f"cannot hold it is a definition nobody can edit.",
         )
     key = registry_key(name)
-    envelope = {"version": _ENVELOPE_VERSION, "publishedAt": _now_iso(), "agent_name": name, "doc": doc}
+    # No `revision`. The counter is the node publish route's alone (aimeat-dev, spec v6): a second
+    # counter is the same mistake as a second validator, and a CLI publish is deliberately outside
+    # the numbered history — the tab says so in as many words, and the next publish there numbers on
+    # from `max(.version.N) + 1`. `publishedBy` says who wrote it, which is the useful half.
+    envelope = {
+        "version": _ENVELOPE_VERSION,
+        "publishedAt": _now_iso(),
+        "agent_name": name,
+        "publishedBy": agent,
+        "doc": doc,
+    }
     r = _aimeat_call(agent, "aimeat_memory_write", {"key": key, "value": envelope, "visibility": visibility})
     if r is None:
         return False, key, f"FAILED to write registry key '{key}' (no result from memory_write)."

@@ -24,14 +24,25 @@ DOC_V1 = {
 DOC_V2 = {**DOC_V1, "tasks": [{**DOC_V1["tasks"][0], "expected_output": "Two lines."}]}
 
 
-def _envelope(doc, revision="2026-08-28T00:00:00Z"):
-    """The envelope `crew_registry.publish_crew_def` really writes — no more, no less.
+def _envelope(doc, revision=None, published_at="2026-08-28T00:00:00Z"):
+    """Both publishers in one fixture, because the runtime has to read both.
 
-    `test_the_fixture_matches_what_the_registry_actually_writes` holds this honest. An earlier
-    version of this fixture invented a `revision` key from the reader's docstring; every test passed
-    and the live agent reported `revision: null`, because no writer has ever written that key.
+    The CLI writes `{version, publishedAt, agent_name, doc}` with NO number —
+    `test_the_fixture_matches_what_the_registry_actually_writes` holds that honest. The node's own
+    publish route adds an integer `revision`, numbering from the kept history. An earlier version of
+    this fixture invented a `revision` key from the reader's docstring; every test passed and the
+    live agent reported `revision: null`, because no writer wrote that key.
     """
-    return {"version": 1, "publishedAt": revision, "agent_name": doc["agent_name"], "doc": doc}
+    env = {
+        "version": 1,
+        "publishedAt": published_at,
+        "agent_name": doc["agent_name"],
+        "publishedBy": doc["agent_name"],
+        "doc": doc,
+    }
+    if revision is not None:
+        env["revision"] = revision
+    return env
 
 
 @pytest.fixture
@@ -53,9 +64,27 @@ def node(monkeypatch):
     return state
 
 
-def test_the_definition_comes_from_the_node_with_its_revision(node):
+def test_a_cli_publish_has_no_revision_number(node):
+    """A CLI publish deliberately does not number (aimeat-dev, spec v6): a second counter is the same
+    mistake as a second validator. The tab renders the absence as "published from outside this tab"."""
     doc, revision = ja.load_def("node-agent")
-    assert doc == DOC_V1 and revision == "2026-08-28T00:00:00Z"
+    assert doc == DOC_V1 and revision is None
+
+
+def test_the_nodes_own_publish_carries_its_number(node):
+    node["value"] = _envelope(DOC_V1, revision=4)
+    doc, revision = ja.load_def("node-agent")
+    assert doc == DOC_V1 and revision == 4
+
+
+def test_a_revision_that_is_not_a_number_is_not_a_revision(node):
+    """`publishedAt` stood in for the number once and the tab rendered "Live: revision 0" beside
+    "Runtime loaded revision 2026-08-28T02:43:19+03:00" — two notions of one word in one box. `True`
+    is here because bool is an int in Python and would have printed as a plausible "1"."""
+    for bad in ("2026-08-28T00:00:00Z", True, 1.5, {"n": 1}):
+        node["value"] = _envelope(DOC_V1, revision=bad)
+        _doc, revision = ja.load_def("node-agent")
+        assert revision is None, f"{bad!r} was taken for a revision number"
 
 
 def test_a_bare_document_still_loads(node):
@@ -76,29 +105,29 @@ def test_an_agent_with_no_definition_says_exactly_that(node):
 def test_a_new_revision_is_picked_up_on_the_next_build(node):
     """The hot reload. `run_crew` calls build_domain once per task, so re-reading there is the whole
     mechanism — publish, and the next task is the new agent. No restart, no push handler."""
-    live = ja.Definition("node-agent", DOC_V1, "2026-08-28T00:00:00Z")
-    node["value"] = _envelope(DOC_V2, revision="2026-08-28T09:00:00Z")
+    live = ja.Definition("node-agent", DOC_V1, 3)
+    node["value"] = _envelope(DOC_V2, revision=9)
 
     assert live.refresh() == DOC_V2
-    assert live.revision == "2026-08-28T09:00:00Z"
+    assert live.revision == 9
     reported = [w for w in node["writes"] if w["tool"] == "aimeat_memory_write"]
-    assert reported and reported[-1]["value"]["revision"] == "2026-08-28T09:00:00Z"
+    assert reported and reported[-1]["value"]["revision"] == 9
     assert reported[-1]["value"]["ok"] is True
 
 
 def test_a_broken_publish_does_not_take_the_agent_down(node, capsys):
     """Somebody saves a typo. The agent keeps running yesterday's definition and says why — going
     dark would be the worse outcome, and the tab needs the reason, not just the old number."""
-    node["value"] = _envelope({**DOC_V1, "temperature": 9}, revision="2026-08-28T09:00:00Z")
-    live = ja.Definition("node-agent", DOC_V1, "2026-08-28T00:00:00Z")
+    node["value"] = _envelope({**DOC_V1, "temperature": 9}, revision=9)
+    live = ja.Definition("node-agent", DOC_V1, 3)
 
     assert live.refresh() == DOC_V1, "still the last definition that validated"
-    assert live.revision == "2026-08-28T00:00:00Z"
+    assert live.revision == 3
 
     err = capsys.readouterr().err
     assert "definition REJECTED" in err and "temperature" in err
     status = [w for w in node["writes"] if w["tool"] == "aimeat_memory_write"][-1]["value"]
-    assert status["ok"] is False and status["revision"] == "2026-08-28T00:00:00Z"
+    assert status["ok"] is False and status["revision"] == 3
     assert any("temperature" in e for e in status["errors"]), "the tab shows WHY it is on the old one"
 
 
@@ -106,7 +135,7 @@ def test_a_read_that_fails_keeps_the_agent_on_its_feet(node, capsys):
     """A tunnel blip is not a definition change. Same floor, different reason — and no status write,
     because we learned nothing about what the node holds."""
     node["value"] = ConnectionError("tunnel down")
-    live = ja.Definition("node-agent", DOC_V1, "2026-08-28T00:00:00Z")
+    live = ja.Definition("node-agent", DOC_V1, 3)
 
     assert live.refresh() == DOC_V1
     assert "could not read" in capsys.readouterr().err
@@ -172,7 +201,7 @@ def test_the_fixture_matches_what_the_registry_actually_writes(monkeypatch):
         f"the registry writes {sorted(written)}; the test double builds {sorted(_envelope(DOC_V1))}"
     )
     assert written["doc"] == DOC_V1
-    assert "revision" not in written, "no writer emits a revision counter — load_def falls back to publishedAt"
+    assert "revision" not in written, "the CLI must not number — that counter is the node route's"
 
 
 def _spec_for(node, monkeypatch):
@@ -190,11 +219,11 @@ def test_a_publish_wake_refreshes_an_idle_agent(node, monkeypatch):
     spec = _spec_for(node, monkeypatch)
     assert "records" in spec.listen_for, "no records subscription, so the wake never arrives"
 
-    node["value"] = _envelope(DOC_V2, revision="2026-08-28T09:00:00Z")
+    node["value"] = _envelope(DOC_V2, revision=9)
     spec.on_record({"type": "crew.def_updated", "key": "crews.registry.node-agent"})
 
     status = [w for w in node["writes"] if w["tool"] == "aimeat_memory_write"][-1]["value"]
-    assert status["revision"] == "2026-08-28T09:00:00Z" and status["ok"] is True
+    assert status["revision"] == 9 and status["ok"] is True
 
 
 def test_another_record_event_is_left_alone(node, monkeypatch):
@@ -207,3 +236,13 @@ def test_another_record_event_is_left_alone(node, monkeypatch):
 
     after = len([w for w in node["writes"] if w["tool"] == "aimeat_memory_write"])
     assert after == before, "an unrelated record event triggered a definition read"
+
+
+def test_a_numberless_definition_reports_no_revision_field_at_all(node):
+    """OMITTED, not null. The tab reads a missing `revision` as "loaded the definition, published
+    from outside this tab"; sending null would make it choose between printing the word and treating
+    absent and null alike, and the second is a guess we would be forcing on it."""
+    ja.report_runtime("node-agent", revision=None, ok=True)
+    written = [w for w in node["writes"] if w["tool"] == "aimeat_memory_write"][-1]["value"]
+    assert "revision" not in written, "a numberless publish must leave the field out, not send null"
+    assert written["ok"] is True and written["loadedAt"]
