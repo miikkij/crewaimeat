@@ -56,7 +56,7 @@ def tmp_root(tmp_path, monkeypatch):
 def test_publish_validates_and_writes(monkeypatch):
     fake = _FakeCall({"aimeat_memory_write": {"ok": True}})
     monkeypatch.setattr(reg, "_aimeat_call", fake)
-    ok, key, detail = reg.publish_crew_def(_good_doc(), agent="crew-forge")
+    ok, key, detail = reg.publish_crew_def(_good_doc(), agent="release-notes-writer")
     assert ok and key == "crews.registry.release-notes-writer", detail
     writes = fake.wrote("aimeat_memory_write")
     assert len(writes) == 1
@@ -66,12 +66,37 @@ def test_publish_validates_and_writes(monkeypatch):
     assert env["agent_name"] == "release-notes-writer" and env["doc"] == _good_doc() and env["publishedAt"]
 
 
+def test_publish_refuses_to_file_a_def_under_somebody_else(monkeypatch):
+    """A memory write lands in the CALLER's namespace, and the node's Crew tab reads the agent's own
+    key. So publishing with a sibling's token produces a definition the tab cannot see.
+
+    This is not hypothetical: json-demo's first definition was published with a lender's token
+    because json-demo had no token yet. The runtime found it anyway — `fetch_crew_def` falls back to
+    an owner_scope list — so nothing failed, and the tab said "No definition yet" about a definition
+    that was in use at that moment. The silent fallback is exactly what hid it.
+    """
+    fake = _FakeCall({"aimeat_memory_write": {"ok": True}})
+    monkeypatch.setattr(reg, "_aimeat_call", fake)
+    ok, _key, detail = reg.publish_crew_def(_good_doc(), agent="crew-forge")
+    assert not ok and "WRONG NAMESPACE" in detail
+    assert "--as release-notes-writer" in detail, "the refusal has to say what to do instead"
+    assert fake.wrote("aimeat_memory_write") == [], "nothing may be written to the wrong namespace"
+
+
+def test_a_foreign_namespace_can_still_be_asked_for_deliberately(monkeypatch):
+    """Installing another owner's public definition is the case that legitimately writes elsewhere."""
+    fake = _FakeCall({"aimeat_memory_write": {"ok": True}})
+    monkeypatch.setattr(reg, "_aimeat_call", fake)
+    ok, _key, _detail = reg.publish_crew_def(_good_doc(), agent="crew-forge", allow_foreign_namespace=True)
+    assert ok and len(fake.wrote("aimeat_memory_write")) == 1
+
+
 def test_publish_refuses_invalid_def(monkeypatch):
     fake = _FakeCall({"aimeat_memory_write": {"ok": True}})
     monkeypatch.setattr(reg, "_aimeat_call", fake)
     doc = _good_doc()
     doc["tasks"] = []  # invalid — no tasks
-    ok, key, detail = reg.publish_crew_def(doc, agent="crew-forge")
+    ok, key, detail = reg.publish_crew_def(doc, agent="release-notes-writer")
     assert not ok and "not published" in detail
     assert fake.wrote("aimeat_memory_write") == []  # a broken def is NEVER written
 
@@ -79,7 +104,7 @@ def test_publish_refuses_invalid_def(monkeypatch):
 def test_publish_rejects_bad_visibility(monkeypatch):
     fake = _FakeCall({"aimeat_memory_write": {"ok": True}})
     monkeypatch.setattr(reg, "_aimeat_call", fake)
-    ok, _key, detail = reg.publish_crew_def(_good_doc(), agent="crew-forge", visibility="secret")
+    ok, _key, detail = reg.publish_crew_def(_good_doc(), agent="release-notes-writer", visibility="secret")
     assert not ok and "visibility" in detail
     assert fake.wrote("aimeat_memory_write") == []
 
@@ -87,7 +112,7 @@ def test_publish_rejects_bad_visibility(monkeypatch):
 def test_publish_public_visibility(monkeypatch):
     fake = _FakeCall({"aimeat_memory_write": {"ok": True}})
     monkeypatch.setattr(reg, "_aimeat_call", fake)
-    ok, _key, _detail = reg.publish_crew_def(_good_doc(), agent="crew-forge", visibility="public")
+    ok, _key, _detail = reg.publish_crew_def(_good_doc(), agent="release-notes-writer", visibility="public")
     assert ok and fake.wrote("aimeat_memory_write")[0]["visibility"] == "public"
 
 
@@ -198,6 +223,9 @@ def test_publish_crew_tool_reads_local_file(tmp_root, monkeypatch):
     monkeypatch.setattr(reg, "_aimeat_call", fake)
     publish_crew, _install = reg.make_registry_tools("crew-forge")
     out = _run_tool(publish_crew, target_agent="release-notes-writer", visibility="owner")
+    # The forge SHARES a def under its own GAII — the use `install_crew --from <gaii>` is built on —
+    # so this one deliberately writes outside the target's namespace. The agent's OWN definition, the
+    # one the Crew tab reads, goes through `crewaimeat publish --as <the agent itself>` instead.
     assert "published crew def 'release-notes-writer'" in out
     assert fake.wrote("aimeat_memory_write")[0]["key"] == "crews.registry.release-notes-writer"
 

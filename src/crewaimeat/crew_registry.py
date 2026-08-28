@@ -39,17 +39,40 @@ def _now_iso() -> str:
         return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
-def publish_crew_def(doc: dict, *, agent: str, visibility: str = "owner") -> tuple[bool, str, str]:
+def publish_crew_def(
+    doc: dict, *, agent: str, visibility: str = "owner", allow_foreign_namespace: bool = False
+) -> tuple[bool, str, str]:
     """Validate ``doc`` and publish it to the AIMEAT crew registry (``crews.registry.<agent_name>``)
     using ``agent``'s token. Returns ``(ok, key, detail)``. A def that fails validation is NEVER
     published (fail loud). ``visibility``: ``owner`` (your fleet) or ``public`` (any owner can install it
-    by your GAII)."""
+    by your GAII).
+
+    THE TOKEN DECIDES THE NAMESPACE, so ``agent`` must be the agent the definition is FOR. A memory
+    write lands in the caller's own namespace, and the Crew tab reads the agent's own key — so
+    publishing json-demo's definition with a sibling's token filed it under the sibling and the tab
+    said "No definition yet" about a definition that existed and was in use. Nothing failed: the
+    runtime found it anyway, because ``fetch_crew_def`` falls back to an ``owner_scope`` list, and
+    that fallback is what hid the mistake for a day. Publishing under someone else is refused now,
+    and ``allow_foreign_namespace`` is the deliberate way to say you meant it — installing a public
+    definition from another owner's GAII being the case that legitimately does.
+    """
     errors = validate_crew_doc(doc)
     if errors:
         return False, "", "INVALID crew def — not published:\n  - " + "\n  - ".join(errors)
     if visibility not in ("owner", "public"):
         return False, "", f"visibility must be 'owner' or 'public' (got {visibility!r})."
     name = doc["agent_name"]
+    if name != agent and not allow_foreign_namespace:
+        return (
+            False,
+            "",
+            f"WRONG NAMESPACE — not published. This definition is for {name!r}, but it would be "
+            f"written with {agent!r}'s token, which files it under {agent!r}. The node's Crew tab "
+            f"reads {name!r}'s own key and would report no definition at all.\n"
+            f"  Publish as the agent itself:  crewaimeat publish <def.json> --as {name}\n"
+            f"  If {name!r} has no token yet, register it first — a definition for an agent that "
+            f"cannot hold it is a definition nobody can edit.",
+        )
     key = registry_key(name)
     envelope = {"version": _ENVELOPE_VERSION, "publishedAt": _now_iso(), "agent_name": name, "doc": doc}
     r = _aimeat_call(agent, "aimeat_memory_write", {"key": key, "value": envelope, "visibility": visibility})
@@ -162,7 +185,12 @@ def make_registry_tools(agent_name: str) -> list:
             doc = load_crew_doc(path)
         except Exception as exc:  # noqa: BLE001 — a corrupt local file is the operator's to fix, reported not raised
             return f"Could not read crew_defs/{path.name}: {exc}"
-        _ok, _key, detail = publish_crew_def(doc, agent=agent_name, visibility=visibility)
+        # ONE key, TWO uses. A def published HERE is a def to SHARE: it is installed elsewhere by
+        # this publisher's GAII, so the publisher's namespace is where it belongs and where
+        # `install_crew --from <gaii>` looks for it. The other use — an agent's OWN definition, which
+        # the node's Crew tab reads from that agent's own key — is what `publish_crew_def` refuses to
+        # misfile, and is `crewaimeat publish --as <the agent itself>` on the CLI.
+        _ok, _key, detail = publish_crew_def(doc, agent=agent_name, visibility=visibility, allow_foreign_namespace=True)
         return detail
 
     @tool("install_crew")
