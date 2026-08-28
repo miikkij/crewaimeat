@@ -9,8 +9,15 @@ So the node asks. The transport is the connector tunnel's server-initiated `invo
 built, id-correlated and time-bounded — surfaced to us by the serve daemon as a long-poll queue, the
 same shape tasks/records/dms already use (living spec doc-mtc3ztsbxn9n, answer A):
 
-    GET  /local/invoke/next?wait=<ms>&agent=<name>  -> {id, capability, input, caller, timeout_ms} | 204
-    POST /local/invoke/<id>/result                  <- {ok, result}
+    GET  /local/invoke/next?wait=<ms>&agent=<name>
+      200 {ok: true, data: {agent, owner, id, capability, input, caller, timeout_ms, received_at}}
+      204 nothing arrived within `wait`
+    POST /local/invoke/<id>/result?agent=<name>     <- {ok, result}
+      404 UNKNOWN_INVOKE when the id is already answered, expired, or not this agent's
+
+    THE FIRST POLL MUST HAPPEN BEFORE ANYONE PRESSES A BUTTON. If nobody has fetched for 90 s the
+    daemon answers the node `NO_HANDLER` itself, and the tab says the runtime is not listening —
+    so this thread starts with the agent, not on demand.
 
 A TRIAL LEAVES NOTHING BEHIND. No task, no memory write, no offer — the same promise `crewaimeat try`
 makes, because it is the same code path. The node holds the result in memory for a quarter of an hour
@@ -182,11 +189,17 @@ def serve_invokes(agent_name: str, *, stop: threading.Event | None = None, poll_
             continue
 
         try:
-            frame = r.json()
+            body = r.json()
         except ValueError:
             print(f"[{agent_name}] invoke: reply was not JSON; skipping", file=sys.stderr)
             continue
-        _answer(session, base, frame, agent_name)
+        # The daemon wraps every /local/*/next answer as {ok, data} — the same shape dm_drain_next
+        # unwraps. Reading the envelope AS the frame leaves `id` empty, and this loop would then
+        # drop every single invoke while reporting "frame without an id", which reads like the
+        # node's fault. A bare frame is still accepted: a future daemon may stop wrapping, and
+        # answering is cheaper than being right about the shape.
+        frame = (body or {}).get("data") if isinstance(body, dict) and "data" in body else body
+        _answer(session, base, frame or {}, agent_name)
 
 
 def _answer(session: Any, base: str, frame: dict, agent_name: str) -> None:
@@ -204,7 +217,14 @@ def _answer(session: Any, base: str, frame: dict, agent_name: str) -> None:
         ok, result = False, {"code": "HANDLER_CRASHED", "message": f"{type(exc).__name__}: {exc}"}
 
     try:
-        session.post(f"{base}/local/invoke/{invoke_id}/result", json={"ok": ok, "result": result}, timeout=30)
+        # `agent` is required: one daemon serves every agent in the fleet, and the id alone does not
+        # say whose invoke this was — without it the post is refused as UNKNOWN_INVOKE.
+        session.post(
+            f"{base}/local/invoke/{invoke_id}/result",
+            params={"agent": agent_name},
+            json={"ok": ok, "result": result},
+            timeout=30,
+        )
     except Exception as exc:  # noqa: BLE001 — the node times the call out; say why it went unanswered
         print(f"[{agent_name}] invoke {invoke_id[:8]}: could not post result ({exc})", file=sys.stderr)
         return
