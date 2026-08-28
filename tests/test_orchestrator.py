@@ -11,12 +11,23 @@ def _iso(minutes_ago: float) -> str:
     return (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat().replace("+00:00", "Z")
 
 
-ROSTER = [
-    {"name": "jingle-writer", "gaii": "jingle-writer#o@n", "last_seen": _iso(0.2)},
-    {"name": "web-researcher", "gaii": "web-researcher#o@n", "last_seen": _iso(2)},
-    {"name": "finnish-corporate-researcher", "gaii": "finnish-corporate-researcher#o@n", "last_seen": _iso(120)},
-    {"name": "concierge", "gaii": "concierge#o@n", "last_seen": _iso(0.1)},
-]
+def _roster():
+    """Built when the test RUNS, not when the module is imported.
+
+    These timestamps are relative ("2 minutes ago") and the assertion is about a 15-minute freshness
+    window, so freezing them at import made the test a stopwatch on the rest of the suite: on a busy
+    machine the full run takes an hour, "2 minutes ago" has aged into "62 minutes ago" by the time
+    this executes, and web-researcher drops out of a list the test says it belongs in. It failed in
+    the full suite and passed alone, which is the signature.
+    """
+    return [
+        {"name": "jingle-writer", "gaii": "jingle-writer#o@n", "last_seen": _iso(0.2)},
+        {"name": "web-researcher", "gaii": "web-researcher#o@n", "last_seen": _iso(2)},
+        {"name": "finnish-corporate-researcher", "gaii": "finnish-corporate-researcher#o@n", "last_seen": _iso(120)},
+        {"name": "concierge", "gaii": "concierge#o@n", "last_seen": _iso(0.1)},
+    ]
+
+
 DIRECTORY = {
     "finnish-corporate-researcher": "Finnish company research",
     "web-researcher": "general web research",
@@ -26,7 +37,7 @@ DIRECTORY = {
 
 
 def test_services_from_roster_drops_stale_and_missing():
-    out = orchestrator.services_from_roster(ROSTER, DIRECTORY, max_age_s=900)
+    out = orchestrator.services_from_roster(_roster(), DIRECTORY, max_age_s=900)
     names = [s["name"] for s in out]
     # jingle-writer + web-researcher are fresh; finnish (120 min) is stale; ghost-agent isn't on the node.
     assert names == ["web-researcher", "jingle-writer"]
@@ -40,10 +51,10 @@ def test_services_preserve_directory_order():
 
 
 def test_in_roster_matches_by_name_from_gaii():
-    assert orchestrator.in_roster(ROSTER, "jingle-writer#o@n") is True
-    assert orchestrator.in_roster(ROSTER, "jingle-writer") is True
-    assert orchestrator.in_roster(ROSTER, "some-human@n") is False
-    assert orchestrator.in_roster(ROSTER, None) is False
+    assert orchestrator.in_roster(_roster(), "jingle-writer#o@n") is True
+    assert orchestrator.in_roster(_roster(), "jingle-writer") is True
+    assert orchestrator.in_roster(_roster(), "some-human@n") is False
+    assert orchestrator.in_roster(_roster(), None) is False
 
 
 def test_directory_text_handles_empty():
