@@ -7,8 +7,6 @@ spins forever is worse than one that says why — and a trial leaves nothing beh
 
 from __future__ import annotations
 
-import threading
-
 import pytest
 
 import crewaimeat.crew_invoke as ci
@@ -96,59 +94,6 @@ def test_a_trial_that_blows_up_answers_with_the_reason(monkeypatch):
     assert "duration_ms" in result
 
 
-def test_a_handler_crash_is_still_posted_back(monkeypatch):
-    """Our own bug must not leave the caller waiting for a timeout."""
-    posted: list = []
-
-    class _Session:
-        headers: dict = {}
-
-        def post(self, url, params=None, json=None, timeout=None):  # noqa: A002 - mirrors requests
-            posted.append((url, json))
-
-    monkeypatch.setattr(ci, "handle", lambda *a, **k: (_ for _ in ()).throw(ValueError("boom")))
-    ci._answer(_Session(), "http://x", {"id": "abc123", "capability": "crew.validate", "input": {}}, "node-agent")
-
-    assert posted and posted[0][0].endswith("/local/invoke/abc123/result")
-    assert posted[0][1]["ok"] is False and posted[0][1]["result"]["code"] == "HANDLER_CRASHED"
-
-
-def test_an_old_connector_is_reported_once_and_then_left_alone(monkeypatch, capsys):
-    """404 every 25 s would bury the log of an agent that is otherwise working perfectly."""
-    stop = threading.Event()
-    calls: dict = {"n": 0}
-
-    class _R:
-        status_code = 404
-        content = b""
-
-    class _Session:
-        headers: dict = {}
-
-        def get(self, *a, **k):
-            calls["n"] += 1
-            if calls["n"] >= 3:
-                stop.set()
-            return _R()
-
-    monkeypatch.setattr(ci, "_serve_base", lambda: "http://127.0.0.1:1")
-    monkeypatch.setattr("requests.Session", lambda: _Session())
-    monkeypatch.setattr(threading.Event, "wait", lambda self, t=None: None)
-
-    ci.serve_invokes("node-agent", stop=stop)
-
-    err = capsys.readouterr().err
-    assert err.count("older connector") == 1, "said once, not once per poll"
-    assert "Everything else works" in err
-
-
-def test_no_serve_daemon_is_not_fatal(monkeypatch, capsys):
-    """No loopback daemon means no buttons. The agent's own work is unaffected, so this returns."""
-    monkeypatch.setattr(ci, "_serve_base", lambda: (_ for _ in ()).throw(RuntimeError("no discovery file")))
-    ci.serve_invokes("node-agent", stop=threading.Event())
-    assert "will not reach this agent" in capsys.readouterr().err
-
-
 @pytest.mark.parametrize("capability", ci._CAPABILITIES)
 def test_every_declared_capability_is_actually_handled(capability):
     """The list in the module and the branches in `handle` must not drift apart."""
@@ -156,81 +101,45 @@ def test_every_declared_capability_is_actually_handled(capability):
     assert result.get("code") != "UNKNOWN_CAPABILITY"
 
 
-# The daemon's real shapes, from the shared spec (doc-mtc3ztsbxn9n, answer A). These two tests exist
-# because the first version of the poller read the ENVELOPE as the frame: `id` came back empty and
-# every invoke was dropped with "frame without an id" — a message that reads like the node's fault.
 def _envelope(frame):
     """`GET /local/invoke/next` answers `{ok, data}`, like every other /local/*/next head."""
     return {"ok": True, "data": frame}
 
 
-def test_the_poller_unwraps_the_daemons_envelope(monkeypatch):
-    answered: list = []
-    stop = threading.Event()
+def test_the_adapter_matches_the_packages_handler_signature():
+    """`CrewSpec.on_invoke` is handed straight to `run_crew_daemon`, which calls
+    `handler(capability, input, invoke)` and accepts either a result or an `(ok, result)` pair.
 
-    class _R:
-        status_code = 200
-        content = b"{}"
+    Pinned against the REAL call site rather than a hand-written double: the transport used to live
+    in this repo and was deleted when aimeat-crewai 0.22.0 shipped a better one (a worker pool, so a
+    minutes-long `crew.try` does not block the `crew.validate` behind it). If that signature ever
+    changes, this fails here instead of the button spinning in somebody's browser.
+    """
+    import inspect
 
-        @staticmethod
-        def json():
-            stop.set()
-            return _envelope(
-                {"agent": "node-agent", "id": "inv-1", "capability": "crew.validate", "input": {"doc": DOC}}
-            )
+    from aimeat_crewai.daemon import run_invoke_listener
 
-    class _Session:
-        headers: dict = {}
+    assert list(inspect.signature(ci.on_invoke).parameters) == ["capability", "payload", "invoke"]
 
-        def get(self, *a, **k):
-            return _R()
+    ok, result = ci.on_invoke("crew.validate", {"doc": DOC}, {"agent": "node-agent", "id": "inv-1"})
+    assert ok is True and result == {"errors": []}
 
-    monkeypatch.setattr(ci, "_serve_base", lambda: "http://127.0.0.1:1")
-    monkeypatch.setattr("requests.Session", lambda: _Session())
-    monkeypatch.setattr(ci, "_answer", lambda _s, _b, frame, _a: answered.append(frame))
-
-    ci.serve_invokes("node-agent", stop=stop)
-
-    assert answered and answered[0]["id"] == "inv-1", "the envelope was handed on instead of the frame"
-    assert answered[0]["capability"] == "crew.validate"
+    # The package unwraps exactly this pair shape; anything else it treats as a bare result.
+    src = inspect.getsource(run_invoke_listener.__module__ and __import__("aimeat_crewai.daemon", fromlist=["x"]))
+    assert "isinstance(out, tuple) and len(out) == 2 and isinstance(out[0], bool)" in src, (
+        "the package no longer reads an (ok, result) pair — on_invoke must return what it now expects"
+    )
 
 
-def test_a_bare_frame_is_still_answered(monkeypatch):
-    """If a future daemon stops wrapping, answering is cheaper than being right about the shape."""
-    answered: list = []
-    stop = threading.Event()
+def test_the_agent_name_comes_from_the_frame():
+    """One daemon, many agents: a trial must spend the identity the invoke arrived for."""
+    seen: dict = {}
+    import crewaimeat.crew_invoke as mod
 
-    class _R:
-        status_code = 200
-        content = b"{}"
-
-        @staticmethod
-        def json():
-            stop.set()
-            return {"id": "inv-2", "capability": "crew.try", "input": {"doc": DOC, "prompt": "x"}}
-
-    monkeypatch.setattr(ci, "_serve_base", lambda: "http://127.0.0.1:1")
-    monkeypatch.setattr("requests.Session", lambda: type("S", (), {"headers": {}, "get": lambda self, *a, **k: _R()})())
-    monkeypatch.setattr(ci, "_answer", lambda _s, _b, frame, _a: answered.append(frame))
-
-    ci.serve_invokes("node-agent", stop=stop)
-
-    assert answered and answered[0]["id"] == "inv-2"
-
-
-def test_the_result_says_which_agent_it_is_for(monkeypatch):
-    """One daemon serves the whole fleet; the id alone does not say whose invoke this was, and a post
-    without `agent` comes back UNKNOWN_INVOKE."""
-    posted: list = []
-
-    class _Session:
-        headers: dict = {}
-
-        def post(self, url, params=None, json=None, timeout=None):  # noqa: A002 - mirrors requests
-            posted.append((url, params, json))
-
-    monkeypatch.setattr(ci, "handle", lambda *a, **k: (True, {"errors": []}))
-    ci._answer(_Session(), "http://x", {"id": "inv-3", "capability": "crew.validate", "input": {}}, "node-agent")
-
-    assert posted and posted[0][0].endswith("/local/invoke/inv-3/result")
-    assert posted[0][1] == {"agent": "node-agent"}
+    original = mod.handle
+    try:
+        mod.handle = lambda cap, payload, *, agent_name: seen.setdefault("who", agent_name) and None or (True, {})
+        mod.on_invoke("crew.validate", {"doc": DOC}, {"agent": "lender", "id": "x"})
+    finally:
+        mod.handle = original
+    assert seen["who"] == "lender"

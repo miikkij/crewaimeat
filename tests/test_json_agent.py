@@ -173,3 +173,37 @@ def test_the_fixture_matches_what_the_registry_actually_writes(monkeypatch):
     )
     assert written["doc"] == DOC_V1
     assert "revision" not in written, "no writer emits a revision counter — load_def falls back to publishedAt"
+
+
+def _spec_for(node, monkeypatch):
+    """Run `run_json_agent` up to the point it would hand the spec to the daemon, and return it."""
+    captured: dict = {}
+    # `run_crew` is imported inside the function, so the patch has to land on the SOURCE module.
+    monkeypatch.setattr("crewaimeat.aimeat_crew.run_crew", lambda spec: captured.setdefault("spec", spec))
+    ja.run_json_agent("node-agent")
+    return captured["spec"]
+
+
+def test_a_publish_wake_refreshes_an_idle_agent(node, monkeypatch):
+    """An idle agent builds nothing, so without this it would advertise its start-up revision forever
+    and the tab would read "published, not in force" for a definition that IS in force."""
+    spec = _spec_for(node, monkeypatch)
+    assert "records" in spec.listen_for, "no records subscription, so the wake never arrives"
+
+    node["value"] = _envelope(DOC_V2, revision="2026-08-28T09:00:00Z")
+    spec.on_record({"type": "crew.def_updated", "key": "crews.registry.node-agent"})
+
+    status = [w for w in node["writes"] if w["tool"] == "aimeat_memory_write"][-1]["value"]
+    assert status["revision"] == "2026-08-28T09:00:00Z" and status["ok"] is True
+
+
+def test_another_record_event_is_left_alone(node, monkeypatch):
+    """The records queue is shared. Refreshing the definition on somebody else's event would read the
+    node on every unrelated push, and would swallow a handler the crew declared for itself."""
+    spec = _spec_for(node, monkeypatch)
+    before = len([w for w in node["writes"] if w["tool"] == "aimeat_memory_write"])
+
+    spec.on_record({"type": "workspace.record.created", "space": "notes"})
+
+    after = len([w for w in node["writes"] if w["tool"] == "aimeat_memory_write"])
+    assert after == before, "an unrelated record event triggered a definition read"

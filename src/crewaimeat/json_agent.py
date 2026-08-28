@@ -204,10 +204,31 @@ def run_json_agent(agent_name: str, **overrides: Any) -> None:
     spec.build_domain = live.build  # the work half follows the node; the identity half was set above
 
     # The Crew tab's Validate and Try buttons, answered beside the agent's own work. A person asking
-    # whether their unpublished draft is valid must not queue behind whatever the agent is writing.
-    from crewaimeat.crew_invoke import start_invoke_thread
+    # whether their unpublished draft is valid must not queue behind whatever the agent is writing —
+    # the daemon runs these in their own pool, so a minutes-long trial does not hold up a validate.
+    from crewaimeat.crew_invoke import on_invoke
 
-    start_invoke_thread(agent_name)
+    spec.on_invoke = on_invoke
+
+    # HOT RELOAD IS ALREADY FREE — this wake is about REPORTING, not loading. `build_domain` runs
+    # once per task, so a publish reaches the next task whatever we do here. What it cannot reach is
+    # an agent that is doing nothing: an idle agent builds nothing, so it would go on advertising the
+    # revision it started with, and the Crew tab would show "published, not in force" indefinitely
+    # for a definition that is perfectly in force. Publishing sends `crew.def_updated` down the
+    # records queue (living spec doc-mtc3ztsbxn9n); refreshing on it makes the tab tell the truth
+    # within seconds. Anything else on that queue is not ours and is left alone.
+    _listen = tuple(spec.listen_for or ("tasks",))
+    if "records" not in _listen:
+        spec.listen_for = (*_listen, "records")
+    _caller_on_record = spec.on_record
+
+    def _on_record(event):  # noqa: ANN001 — the daemon's event dict
+        if str((event or {}).get("type") or "") == "crew.def_updated":
+            live.refresh()
+            return None
+        return _caller_on_record(event) if _caller_on_record else None
+
+    spec.on_record = _on_record
     print(
         f"[{agent_name}] JSON crew from {registry_key(agent_name)} (revision {revision}): "
         f"{len(doc.get('agents') or [])} agent(s), {len(doc.get('tasks') or [])} task(s) — "

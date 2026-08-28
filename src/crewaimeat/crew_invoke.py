@@ -5,40 +5,27 @@ publishing. Both answers can only come from HERE: `validate_crew_doc` is the one
 one in JS would drift and hand out green lights for definitions that fail at run time), and a trial
 has to build the real crew with the real tools.
 
-So the node asks. The transport is the connector tunnel's server-initiated `invoke` frame — already
-built, id-correlated and time-bounded — surfaced to us by the serve daemon as a long-poll queue, the
-same shape tasks/records/dms already use (living spec doc-mtc3ztsbxn9n, answer A):
+THE TRANSPORT IS NOT OURS. The node asks over the connector tunnel's server-initiated `invoke` frame,
+and `aimeat-crewai>=0.22.0` serves that queue: `run_crew_daemon(on_invoke=...)` polls from the moment
+the agent starts, runs handlers in a small pool, answers HANDLER_ERROR when one raises, and reports
+an older serve daemon once instead of spinning on 404s. This module wrote all of that by hand for a
+day and it is deleted: the package's version polls from startup for the same reason (the daemon
+answers the node NO_HANDLER for an agent nobody has polled in 90 s) and is BETTER, because a
+minutes-long `crew.try` runs in the pool instead of blocking the `crew.validate` behind it.
 
-    GET  /local/invoke/next?wait=<ms>&agent=<name>
-      200 {ok: true, data: {agent, owner, id, capability, input, caller, timeout_ms, received_at}}
-      204 nothing arrived within `wait`
-    POST /local/invoke/<id>/result?agent=<name>     <- {ok, result}
-      404 UNKNOWN_INVOKE when the id is already answered, expired, or not this agent's
-
-    THE FIRST POLL MUST HAPPEN BEFORE ANYONE PRESSES A BUTTON. If nobody has fetched for 90 s the
-    daemon answers the node `NO_HANDLER` itself, and the tab says the runtime is not listening —
-    so this thread starts with the agent, not on demand.
+What stays here is the part the package cannot know: what a crewaimeat definition means. `handle()`
+is that, and `CrewSpec.on_invoke` is where it plugs in.
 
 A TRIAL LEAVES NOTHING BEHIND. No task, no memory write, no offer — the same promise `crewaimeat try`
 makes, because it is the same code path. The node holds the result in memory for a quarter of an hour
 and never stores it.
 
-WHY THIS RUNS AS A THREAD BESIDE THE AGENT, not as part of its task loop: a person clicking Validate
-is not work the agent queues, it is a question about a document they have not published yet. It must
-answer in seconds while the agent may be busy for minutes on a real task, and it must answer for a
-document that is NOT the agent's current definition. Sharing the task loop would make the button wait
-for whatever the agent happens to be writing.
-
 FAILURE IS AN ANSWER TOO. Every capability replies — a build that raises, a model that errors, an
-unknown capability — because a button that spins forever is worse than one that says why. The only
-thing that stays silent is a queue that is empty (204) or a daemon too old to have the endpoint,
-which is reported once and then left alone.
+unknown capability — because a button that spins forever is worse than one that says why.
 """
 
 from __future__ import annotations
 
-import sys
-import threading
 import time
 from typing import Any
 
@@ -47,15 +34,6 @@ from typing import Any
 _POLL_WAIT_MS = 25_000  # long-poll; the daemon answers 204 when nothing arrives
 _RETRY_S = 5.0  # after a transport error, before parking again
 _CAPABILITIES = ("crew.validate", "crew.try")
-
-
-def _serve_base() -> str:
-    from aimeat_crewai.mcp_client import _read_discovery, serve_discovery_path
-
-    doc = _read_discovery(serve_discovery_path())
-    if not doc or not doc.get("port"):
-        raise RuntimeError("no serve daemon discovery file — the fleet's loopback daemon is not running")
-    return f"http://127.0.0.1:{doc['port']}"
 
 
 def handle(capability: str, payload: dict, *, agent_name: str) -> tuple[bool, dict]:
@@ -137,110 +115,12 @@ def _run_trial(doc: dict, prompt: str, *, agent_name: str) -> tuple[bool, dict]:
     }
 
 
-def serve_invokes(agent_name: str, *, stop: threading.Event | None = None, poll_wait_ms: int = _POLL_WAIT_MS) -> None:
-    """Park on the invoke queue for `agent_name` and answer until `stop` is set.
+def on_invoke(capability: str, payload: Any, invoke: dict | None = None) -> tuple[bool, dict]:
+    """`CrewSpec.on_invoke` adapter — the package's handler signature, our meaning.
 
-    Runs forever by design — it is the agent's side of a button somebody may press at any time.
+    `(capability, input, invoke) -> (ok, result)`. The agent name comes from the frame rather than a
+    closure: the daemon serves one agent per listener, and reading it from the frame keeps this a
+    plain function that the fleet can pass straight through.
     """
-    import requests
-
-    stop = stop or threading.Event()
-    try:
-        base = _serve_base()
-    except Exception as exc:  # noqa: BLE001 — no daemon means no buttons; the agent's own work is fine
-        print(f"[{agent_name}] invoke: {exc}; the Crew tab's buttons will not reach this agent.", file=sys.stderr)
-        return
-
-    session = requests.Session()
-    session.headers.update({"X-Aimeat-Agent": agent_name})
-    said_missing = False
-    print(f"[{agent_name}] invoke: answering crew.validate + crew.try on {base}", file=sys.stderr)
-
-    while not stop.is_set():
-        try:
-            r = session.get(
-                f"{base}/local/invoke/next",
-                params={"wait": poll_wait_ms, "agent": agent_name},
-                timeout=(poll_wait_ms / 1000) + 10,
-            )
-        except Exception as exc:  # noqa: BLE001 — a blip: wait and park again
-            print(f"[{agent_name}] invoke poll failed ({type(exc).__name__}: {exc}); retrying", file=sys.stderr)
-            stop.wait(_RETRY_S)
-            continue
-
-        if r.status_code == 404:
-            # An older connector without the invoke surface. Said ONCE — repeating it every 25 s
-            # would bury the log of an agent that is otherwise working perfectly well.
-            if not said_missing:
-                print(
-                    f"[{agent_name}] invoke: this serve daemon has no /local/invoke/next "
-                    "(older connector) — Validate and Try in the Crew tab cannot reach this agent "
-                    "until it is updated. Everything else works.",
-                    file=sys.stderr,
-                )
-                said_missing = True
-            stop.wait(60.0)
-            continue
-        if r.status_code == 204 or not r.content:
-            continue
-        if r.status_code >= 400:
-            print(f"[{agent_name}] invoke poll HTTP {r.status_code}; retrying", file=sys.stderr)
-            stop.wait(_RETRY_S)
-            continue
-
-        try:
-            body = r.json()
-        except ValueError:
-            print(f"[{agent_name}] invoke: reply was not JSON; skipping", file=sys.stderr)
-            continue
-        # The daemon wraps every /local/*/next answer as {ok, data} — the same shape dm_drain_next
-        # unwraps. Reading the envelope AS the frame leaves `id` empty, and this loop would then
-        # drop every single invoke while reporting "frame without an id", which reads like the
-        # node's fault. A bare frame is still accepted: a future daemon may stop wrapping, and
-        # answering is cheaper than being right about the shape.
-        frame = (body or {}).get("data") if isinstance(body, dict) and "data" in body else body
-        _answer(session, base, frame or {}, agent_name)
-
-
-def _answer(session: Any, base: str, frame: dict, agent_name: str) -> None:
-    """Run one frame and post the result. An id we cannot answer is still an answer we must post."""
-    invoke_id = str((frame or {}).get("id") or "")
-    capability = str((frame or {}).get("capability") or "")
-    if not invoke_id:
-        print(f"[{agent_name}] invoke: frame without an id; dropped", file=sys.stderr)
-        return
-
-    print(f"[{agent_name}] invoke {invoke_id[:8]} {capability}", file=sys.stderr)
-    try:
-        ok, result = handle(capability, frame.get("input") or {}, agent_name=agent_name)
-    except Exception as exc:  # noqa: BLE001 — never leave the caller waiting on our own bug
-        ok, result = False, {"code": "HANDLER_CRASHED", "message": f"{type(exc).__name__}: {exc}"}
-
-    try:
-        # `agent` is required: one daemon serves every agent in the fleet, and the id alone does not
-        # say whose invoke this was — without it the post is refused as UNKNOWN_INVOKE.
-        session.post(
-            f"{base}/local/invoke/{invoke_id}/result",
-            params={"agent": agent_name},
-            json={"ok": ok, "result": result},
-            timeout=30,
-        )
-    except Exception as exc:  # noqa: BLE001 — the node times the call out; say why it went unanswered
-        print(f"[{agent_name}] invoke {invoke_id[:8]}: could not post result ({exc})", file=sys.stderr)
-        return
-    summary = "ok" if ok else f"failed: {result.get('code')}"
-    print(f"[{agent_name}] invoke {invoke_id[:8]} {capability} -> {summary}", file=sys.stderr)
-
-
-def start_invoke_thread(agent_name: str) -> threading.Event:
-    """Answer invokes beside the agent's own work. Returns the stop event; the thread is a daemon so
-    it never keeps the fleet alive on its own."""
-    stop = threading.Event()
-    threading.Thread(
-        target=serve_invokes,
-        args=(agent_name,),
-        kwargs={"stop": stop},
-        name=f"invoke:{agent_name}",
-        daemon=True,
-    ).start()
-    return stop
+    agent_name = str((invoke or {}).get("agent") or "")
+    return handle(capability, payload if isinstance(payload, dict) else {}, agent_name=agent_name)

@@ -200,6 +200,13 @@ class CrewSpec:
     #   "shared.moodboard_requests"), OR a 0-arg callable resolved at daemon start — e.g.
     #   contract_record_spaces(AGENT, CONTRACT), which discovers member workspaces × the contract's
     #   record/input namespaces. Replaces a record-scanning idle_hook.
+    on_invoke: Any = None  # (aimeat-crewai>=0.22.0, AIMEAT>=3.9) handler for a SERVER-INITIATED call:
+    #   `(capability, input, invoke) -> result` or `(ok, result)`. This is what makes the Crew tab's
+    #   Validate and Try buttons work — the node asks the running agent over the tunnel and waits for
+    #   the answer, so nothing is queued, nothing is written, and nothing is left behind. The daemon
+    #   polls from the moment it starts (the serve daemon answers the node NO_HANDLER for an agent
+    #   nobody has polled in 90 s) and runs handlers in a small pool, so a minutes-long `crew.try`
+    #   does not block the `crew.validate` behind it.
     on_record: Any = None  # handler for a pushed record event {type,organism_id,ws,space,id,op,ts}. op is
     #   "created"|"updated" for a write, or "catchup" (id=None) once per space on (re)connect — re-scan that
     #   space, then go event-only. The event is a WAKE + coordinates (no record value); the handler does its
@@ -2845,6 +2852,7 @@ def run_crew(spec: CrewSpec) -> None:
                 record_spaces=_records,  # subscribe to workspace-record PUSH events for these spaces (0.7.0)
                 on_record=spec.on_record,  # handler for a pushed record event (or None -> synthetic task)
                 on_dm=_on_dm,  # federated-inbox DM wake: caller's on_dm, else the dm_serviceable generic, else None
+                on_invoke=spec.on_invoke,  # the node ASKING this agent something and waiting (Crew tab)
                 llm=get_llm(agent_name=spec.agent_name),
                 owner=spec.owner,
                 on_idle=_on_idle,
