@@ -19,7 +19,8 @@ per-repo handoff doc points at it. Both repo sessions **read AND update** the sp
 status cells, append decisions), so the two sides stay synced without drifting prompts.
 - **Write:** `aimeat_workspace_write(space="plan", value={title, markdown})` → then
   `aimeat_workspace_publish(namespace="docs.plans", id=…)` (a draft is NOT live until published). Workspace
-  tools are on the **appdev** MCP surface; access as owner `happydude500001`.
+  tools are on the **plain AIMEAT** MCP surface; access as owner `happydude500001`. (The separate `appdev`
+  surface was removed 2026-08-28 for being in the way — do not go looking for it.)
 - **Reference in a handoff prompt** by organism_id + ws + doc id; a fresh session opens its handoff doc,
   reads the spec, does the work, updates the spec. Node feature requests for aimeat-protocol also live here.
 - **READ THE DOC IMMEDIATELY BEFORE YOU WRITE IT — `aimeat_workspace_write` on an existing id is a full
