@@ -32,11 +32,25 @@ def _has_build_domain(stem: str) -> bool:
     return "\ndef build_domain(" in (CREWS_DIR / f"{stem}.py").read_text(encoding="utf-8")
 
 
+def _is_node_backed(stem: str) -> bool:
+    """True when the crew's definition lives at `crews.registry.<agent>` rather than in this repo.
+
+    These tests are declared deterministic, no LLM, NO NETWORK — and a node-backed crew's
+    `build_domain` has to read the node to know what it is building. There is nothing local to
+    assert about: the loader holds a name. So it is excluded here and covered where it belongs, by
+    `tests/test_json_agent.py` (the loading contract) and `crewaimeat try` (the definition itself).
+    Read from source, like `_has_build_domain`, so collecting never imports a crew.
+    """
+    return '\nCREW_DEF_SOURCE = "node"' in (CREWS_DIR / f"{stem}.py").read_text(encoding="utf-8")
+
+
+NODE_BACKED_MODULES = [m for m in LIVE_CREW_MODULES if _is_node_backed(m)]
+
 # The build_domain contract floor applies to crews that HAVE a build_domain. Brain stubs are held to
 # their own (smaller) contract in test_build_domain.test_brain_stubs_are_really_brain_stubs, so a
 # crew can never leave the floor merely by not defining the function.
-CREW_MODULES = [m for m in LIVE_CREW_MODULES if _has_build_domain(m)]
-BRAIN_STUB_MODULES = [m for m in LIVE_CREW_MODULES if not _has_build_domain(m)]
+CREW_MODULES = [m for m in LIVE_CREW_MODULES if _has_build_domain(m) and m not in NODE_BACKED_MODULES]
+BRAIN_STUB_MODULES = [m for m in LIVE_CREW_MODULES if not _has_build_domain(m) and m not in NODE_BACKED_MODULES]
 
 # A distinctive ask so we can prove ctx.prompt reaches a task description (TSK-4 / the
 # crew-builddomain-must-inject-ctx-prompt lesson).

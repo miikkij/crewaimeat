@@ -40,6 +40,7 @@ blueprint_test.json
 
 # user-specific provider/model priority config (the .example is committed)
 llm_providers.json
+llm_providers.json.*
 docs/internal/
 
 # LOCOMO benchmark: the dataset is downloaded on demand (provenance printed), not vendored;

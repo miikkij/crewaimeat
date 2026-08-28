@@ -64,8 +64,17 @@ def load_def(agent_name: str) -> tuple[dict, Any]:
     """`(doc, revision)` from the node. Raises `CrewDocError` when there is none, it is not JSON, or
     it does not validate — the caller decides whether it has a last-good to fall back on.
 
-    The stored value is an ENVELOPE (`{version, publishedAt, agent_name, doc, revision, publishedBy}`),
-    and a bare document is accepted too so a def written by hand or by `crew_registry` still loads.
+    The stored value is an ENVELOPE — `crew_registry.publish_crew_def` writes
+    `{version, publishedAt, agent_name, doc}` — and a bare document is accepted too so a def written
+    by hand still loads.
+
+    WHICH FIELD IDENTIFIES A PUBLISH. Not `version`: that is the envelope's SCHEMA version, a
+    constant, and reporting it would show a number that never changes however often the definition
+    is edited. There is no revision counter, so the identity of the loaded definition is
+    `publishedAt`, which does change on every publish. `revision` is read first for a future writer
+    that adds a real counter. The first draft of this read a `revision` key that nothing writes, and
+    reported null from a live agent while its unit tests passed — because the test envelope had been
+    written from the docstring instead of from the writer.
     """
     key = registry_key(agent_name)
     value = read_owner_key(agent_name, key)
@@ -82,7 +91,7 @@ def load_def(agent_name: str) -> tuple[dict, Any]:
             ]
         )
     doc = value["doc"] if isinstance(value.get("doc"), dict) else value
-    revision = value.get("revision") if doc is not value else None
+    revision = (value.get("revision") or value.get("publishedAt")) if doc is not value else None
     errors = validate_crew_doc(doc)
     if errors:
         raise CrewDocError(errors)
@@ -229,6 +238,12 @@ from __future__ import annotations
 from crewaimeat.json_agent import Definition, load_def, run_json_agent
 
 AGENT_NAME = "{agent_name}"
+
+# Read by `crewaimeat doctor` (statically, via ast). It says: the declarations doctor looks for —
+# TAGS, CAPABILITIES, OFFERS, LLM_PROFILE — are deliberately absent HERE because they are on the
+# node. Without it doctor would report this healthy agent as having no identity, no offer and no
+# routing decision, and go red in pre-commit for every JSON agent ever added.
+CREW_DEF_SOURCE = "node"
 
 _live: Definition | None = None
 

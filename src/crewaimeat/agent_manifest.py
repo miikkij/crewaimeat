@@ -177,7 +177,14 @@ def read(path: Path, root: Path) -> Manifest | None:
 
     doc_path = _json_doc_path(literals, tree, root)
     kind = "python"
-    if doc_path and doc_path.exists():
+    # A NODE-BACKED crew declares nothing about itself here on purpose: its whole definition lives at
+    # `crews.registry.<agent>` and is edited in AIMEAT. The loader says so with one constant, because
+    # this reader is STATIC (ast, no imports, no network — it has to run in CI where there is no node)
+    # and would otherwise report a perfectly healthy agent as having no identity, no offer and no
+    # routing. What we cannot see, we name; we do not accuse.
+    if str(literals.get("CREW_DEF_SOURCE") or "").strip().lower() == "node":
+        kind = "node"
+    elif doc_path and doc_path.exists():
         kind = "json"
         try:
             doc = json.loads(doc_path.read_text(encoding="utf-8"))

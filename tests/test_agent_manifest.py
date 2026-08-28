@@ -35,6 +35,14 @@ def run() -> None:
 '''
 
 
+PLAIN_CREW = """AGENT_NAME = "plain"
+
+
+def build_domain(ctx):
+    return [], []
+"""
+
+
 def _repo(tmp_path: Path, files: dict[str, str], defs: dict[str, dict] | None = None) -> Path:
     root = tmp_path / "repo"
     (root / "crews").mkdir(parents=True)
@@ -136,10 +144,41 @@ def test_a_parked_crew_is_read_but_not_live(tmp_path):
 def test_every_live_crew_declares_a_model_profile():
     """The silent fallback this replaced: an agent with no profile resolved to `default` with no log
     line, which put 20 of 46 crews on a profile nobody chose. A default is fine — an UNDECIDED one is
-    not, so every live crew must say which it wants."""
+    not, so every live crew must say which it wants.
+
+    A node-backed crew (`kind == "node"`) is exempt because its profile is not missing, it is
+    elsewhere: the whole definition lives at `crews.registry.<agent>` and is read at task-build time.
+    The loader here holds the name and nothing else, on purpose.
+    """
     root = Path(__file__).resolve().parent.parent
-    missing = sorted(m.agent for m in agent_manifest.all_manifests(root, refresh=True) if m.live and not m.llm_profile)
+    missing = sorted(
+        m.agent
+        for m in agent_manifest.all_manifests(root, refresh=True)
+        if m.live and not m.llm_profile and m.kind != "node"
+    )
     assert not missing, f"live crews with no LLM_PROFILE: {missing}"
+
+
+def test_a_node_backed_loader_is_read_as_node_kind():
+    """The exemption above is only safe if the marker is what grants it — an ordinary crew that
+    forgot its declarations must still be caught."""
+    root = Path(__file__).resolve().parent.parent
+    from crewaimeat.json_agent import loader_source
+
+    path = root / "crews" / "_probe_crew.py"
+    path.write_text(loader_source("probe-agent"), encoding="utf-8")
+    try:
+        m = agent_manifest.read(path, root)
+        assert m is not None and m.kind == "node" and m.agent == "probe-agent"
+        assert m.llm_profile is None and m.tags is None and m.offers is None
+        plain = path.with_name("_plain_crew.py")
+        plain.write_text(PLAIN_CREW, encoding="utf-8")
+        try:
+            assert agent_manifest.read(plain, root).kind == "python", "no marker, no exemption"
+        finally:
+            plain.unlink()
+    finally:
+        path.unlink()
 
 
 def test_a_parked_crew_advertises_nothing():

@@ -38,6 +38,17 @@ class Inventory:
         return {c.agent for c in self.live if c.agent}
 
     @property
+    def node_backed(self) -> set[str]:
+        """Agents whose whole definition lives at `crews.registry.<agent>`, not in this repo.
+
+        Doctor is static and offline by design (it runs in CI, where there is no node), so for these
+        it can see the NAME and nothing else. The three declaration checks below therefore step
+        around them and the report says so — a check that accuses an agent of missing what doctor
+        merely cannot see teaches the reader to ignore it.
+        """
+        return {c.agent for c in self.live if c.agent and c.kind == "node"}
+
+    @property
     def parked_agents(self) -> set[str]:
         return {c.agent for c in self.crews if c.parked and c.agent}
 

@@ -16,6 +16,7 @@ from crew_fixtures import (
     CREW_MODULES,
     CREWS_DIR,
     LIVE_CREW_MODULES,
+    NODE_BACKED_MODULES,
     SENTINEL,
     make_ctx,
 )
@@ -109,10 +110,14 @@ def test_max_iter_is_a_sane_backstop(module_name):
 
 
 def test_every_live_crew_is_on_a_contract_floor():
-    """No crew may sit outside BOTH floors. CREW_MODULES and BRAIN_STUB_MODULES are derived from the
-    same disk listing, so this can only fail if the derivation itself breaks — which is exactly the
-    failure that let a hand-kept list cover 21 of 46 crews for two months."""
-    covered = set(CREW_MODULES) | set(BRAIN_STUB_MODULES)
+    """No crew may sit outside ALL floors. The three lists are derived from the same disk listing, so
+    this can only fail if the derivation itself breaks — which is exactly the failure that let a
+    hand-kept list cover 21 of 46 crews for two months.
+
+    A node-backed crew is on the third floor, not off the building: it cannot be held to the
+    build_domain contract (that contract lives on the node and reading it is network), so it is held
+    instead to what IS local — see `test_a_node_backed_loader_declares_only_its_name` below."""
+    covered = set(CREW_MODULES) | set(BRAIN_STUB_MODULES) | set(NODE_BACKED_MODULES)
     missing = sorted(set(LIVE_CREW_MODULES) - covered)
     assert not missing, f"live crews on no contract floor: {missing}"
     assert len(LIVE_CREW_MODULES) >= 40, (
@@ -169,3 +174,23 @@ def test_finnish_researcher_has_no_unsubstituted_placeholders():
         assert "{ctx.prompt}" not in d, "finnish: literal {ctx.prompt} leaked into a task description"
     joined = "\n".join((t.description or "") for t in tasks)
     assert "Nokia" in joined, "finnish: the real query did not reach the tasks"
+
+
+@pytest.mark.parametrize("module_name", NODE_BACKED_MODULES)
+def test_a_node_backed_loader_declares_only_its_name(module_name):
+    """The floor for a crew whose definition is on the node: the loader must be EMPTY of definition.
+
+    Its contract cannot be checked here — the agents, tasks and tools are at
+    `crews.registry.<agent>` and reading them is a network call these tests forbid. What can be
+    checked is that nobody quietly grew a second source of truth inside the loader: a TAGS here and
+    a tags there is precisely the drift the manifest work removed. So the assertion is inverted —
+    the file must declare nothing but its name.
+    """
+    src = (CREWS_DIR / f"{module_name}.py").read_text(encoding="utf-8")
+    for constant in ("TAGS", "CAPABILITIES", "OFFERS", "LLM_PROFILE", "SKILLS"):
+        assert f"{constant} =" not in src, (
+            f"{module_name} declares {constant} locally while its definition lives on the node — "
+            f"two sources, and the node's wins silently"
+        )
+    assert 'CREW_DEF_SOURCE = "node"' in src, "the marker is what earns the exemptions; it must be present"
+    assert "def build_domain(" in src and "def run(" in src, "the fleet still discovers and builds it like any crew"

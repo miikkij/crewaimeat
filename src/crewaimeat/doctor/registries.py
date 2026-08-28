@@ -49,6 +49,12 @@ def check(inv: Inventory, report: Report) -> None:
         f"{sum(1 for a in inv.live_agents if inv.declared_profile(a))} routing · "
         f"routing overrides: {len([k for k in ((inv.routing or {}).get('crews') or {}) if not k.startswith('_')])}"
     )
+    if inv.node_backed:
+        report.note(
+            f"node-backed, declared on the node not here: {', '.join(sorted(inv.node_backed))} "
+            f"(identity, offer and routing live at crews.registry.<agent>; doctor is offline and "
+            f"cannot read them — check them with `crewaimeat defs --as <agent>`)"
+        )
 
 
 def _crews_vs_serve(inv: Inventory, report: Report) -> None:
@@ -108,7 +114,7 @@ def _crews_vs_serve(inv: Inventory, report: Report) -> None:
 def _crews_vs_identity(inv: Inventory, report: Report) -> None:
     from crewaimeat.aimeat_crew import _validate_capabilities
 
-    for agent in sorted(inv.live_agents):
+    for agent in sorted(inv.live_agents - inv.node_backed):
         if not inv.declares_identity(agent):
             report.add(
                 Finding(
@@ -168,7 +174,7 @@ def _contract_offer_agents() -> set[str]:
 
 def _crews_vs_offers(inv: Inventory, report: Report) -> None:
     from_contract = _contract_offer_agents()
-    for agent in sorted(inv.live_agents):
+    for agent in sorted(inv.live_agents - inv.node_backed):
         if inv.declares_offer(agent) or agent in from_contract:
             continue
         crew = inv.crew_of(agent)
@@ -201,7 +207,7 @@ def _crews_vs_routing(inv: Inventory, report: Report) -> None:
             )
         )
         return
-    for agent in sorted(inv.live_agents):
+    for agent in sorted(inv.live_agents - inv.node_backed):
         if agent in crews_map or inv.declared_profile(agent):
             continue
         report.add(
