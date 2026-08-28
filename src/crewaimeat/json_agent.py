@@ -90,7 +90,8 @@ def load_def(agent_name: str) -> tuple[dict, int | None]:
             [
                 f"{key} holds no crew definition (got {type(value).__name__}). This agent is "
                 "registered but not yet defined — publish a definition to that key."
-            ]
+            ],
+            missing=True,
         )
     doc = value["doc"] if isinstance(value.get("doc"), dict) else value
     raw = value.get("revision") if doc is not value else None
@@ -183,6 +184,64 @@ class Definition:
         return build_domain_from_json(self.refresh(), ctx)
 
 
+STAGED_DIR = "crew_defs"  # where the forge leaves a definition for its agent to publish on first start
+
+
+def staged_path(agent_name: str):
+    """`crew_defs/<name>.json` — a definition written before the agent could hold one."""
+    from pathlib import Path
+
+    from crewaimeat.forge import _project_root
+    from crewaimeat.forge_json import _doc_base
+
+    return Path(_project_root()) / STAGED_DIR / f"{_doc_base(agent_name)}.json"
+
+
+def seed_from_staged(agent_name: str) -> tuple[dict, int | None] | None:
+    """Publish this agent's staged definition AS ITSELF, once, and return it. None when there is none.
+
+    WHY THE AGENT DOES THIS AND NOT THE FORGE. A definition must be published with the token of the
+    agent it is for — that is what puts it in the namespace the node's Crew tab reads. But the token
+    does not exist until a person approves the device flow, and `register_agent` is deliberately
+    non-blocking: it surfaces the code and returns. So at the only moment the forge is running, there
+    is nothing to publish with. The first party that holds the token is the agent itself, on its
+    first start. It publishes, and from then on the node's copy is the source of truth.
+
+    ONLY INTO AN EMPTY KEY. The caller passes here solely when the registry key holds nothing
+    (`CrewDocError.missing`); a definition that exists and fails to validate is somebody's mistake to
+    see, not something to bury under a file from disk. And an agent whose definition someone has
+    since edited in the tab must never be reset to what the forge first imagined.
+    """
+    from crewaimeat.crew_registry import publish_crew_def
+
+    path = staged_path(agent_name)
+    if not path.is_file():
+        return None
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"[{agent_name}] staged definition at {path} is unreadable: {exc}", file=sys.stderr)
+        return None
+    if not isinstance(doc, dict) or doc.get("agent_name") != agent_name:
+        print(
+            f"[{agent_name}] staged definition at {path} is for "
+            f"{(doc or {}).get('agent_name')!r}, not this agent — refusing to publish it.",
+            file=sys.stderr,
+        )
+        return None
+    ok, key, detail = publish_crew_def(doc, agent=agent_name)
+    if not ok:
+        print(f"[{agent_name}] could not publish its staged definition: {detail}", file=sys.stderr)
+        return None
+    print(
+        f"[{agent_name}] FIRST START: published its staged definition to {key}. "
+        f"From here the node holds it — edit it in AIMEAT under profile > agents > {agent_name} > Crew, "
+        f"and {path.name} is only the record of what it started as.",
+        file=sys.stderr,
+    )
+    return load_def(agent_name)
+
+
 def run_json_agent(agent_name: str, **overrides: Any) -> None:
     """Run the agent whose crew is defined on the node. The five-line loader in `crews/` calls this.
 
@@ -196,17 +255,22 @@ def run_json_agent(agent_name: str, **overrides: Any) -> None:
     try:
         doc, revision = load_def(agent_name)
     except CrewDocError as exc:
-        errs = _errors_of(exc)
-        print(f"[{agent_name}] CANNOT START — {registry_key(agent_name)}:", file=sys.stderr)
-        for e in errs:
-            print(f"  - {e}", file=sys.stderr)
-        print(
-            f"[{agent_name}] An agent with no definition has nothing to be. Publish one "
-            "(`crewaimeat try` validates it first) and start the fleet again.",
-            file=sys.stderr,
-        )
-        report_runtime(agent_name, revision=None, ok=False, errors=errs)
-        raise
+        # An EMPTY key on an agent the forge just built is not a failure yet: the definition was
+        # staged on disk because nothing could publish it before this agent held its own token.
+        seeded = seed_from_staged(agent_name) if exc.missing else None
+        if seeded is None:
+            errs = _errors_of(exc)
+            print(f"[{agent_name}] CANNOT START — {registry_key(agent_name)}:", file=sys.stderr)
+            for e in errs:
+                print(f"  - {e}", file=sys.stderr)
+            print(
+                f"[{agent_name}] An agent with no definition has nothing to be. Publish one "
+                "(`crewaimeat try` validates it first) and start the fleet again.",
+                file=sys.stderr,
+            )
+            report_runtime(agent_name, revision=None, ok=False, errors=errs)
+            raise
+        doc, revision = seeded
 
     live = Definition(agent_name, doc, revision)
     spec = crewspec_from_json(doc, **overrides)

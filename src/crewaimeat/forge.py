@@ -873,7 +873,7 @@ def register_and_launch(agent_name: str) -> str:
 
 
 @tool("write_and_validate_crew_json")
-def write_and_validate_crew_json(crew_json: str, request: str = "") -> str:
+def write_and_validate_crew_json(crew_json: str, request: str = "", node_backed: bool = False) -> str:
     """Write + validate a NEW crew from a JSON crew DEFINITION — the exec-free path (no generated Python
     is ever run to find out whether it's valid).
 
@@ -887,6 +887,13 @@ def write_and_validate_crew_json(crew_json: str, request: str = "") -> str:
     `context` lists EARLIER task ids (a DAG). At least one task description MUST inject the request with
     `{{ctx.prompt}}` (use `{{ctx.today}}` for time-sensitive work).
 
+    `node_backed`: pass True when the OWNER will configure this agent afterwards. The definition then
+    lives on the node at crews.registry.<name> and is edited in AIMEAT under profile > agents > <name>
+    > Crew — publish there and the agent's NEXT TASK uses it, with no restart. The JSON written here
+    becomes the STAGED copy the agent publishes as itself the first time it starts, because a
+    definition must be written with the token of the agent it is for and nothing else holds that
+    token. Pass False (the default) when the definition is yours and should not change under you.
+
     On VALID it writes crew_defs/<name>.json (the definition) + crews/<name>_crew.py (a thin loader) and
     the crew is ready to register. On INVALID it returns the EXACT list of problems (unknown tool, a task
     pointing at a missing agent, a non-DAG context edge, a missing {{ctx.prompt}}, a bad field, ...) and
@@ -899,7 +906,7 @@ def write_and_validate_crew_json(crew_json: str, request: str = "") -> str:
             "INVALID: crew_json is not a JSON object (send ONLY the crew-def object). "
             "Fix it and call write_and_validate_crew_json again."
         )
-    ok, detail, _path = forge_json.write_json_crew(doc, request=request)
+    ok, detail, _path = forge_json.write_json_crew(doc, request=request, node_backed=bool(node_backed))
     if ok and str(request).strip() and isinstance(doc, dict):
         # Remember the build as forge experience, mirroring the Python path. Fields are DERIVED from the
         # doc: capabilities = the union of agents' tool ids; domain = the non-role tags.

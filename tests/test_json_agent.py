@@ -11,6 +11,8 @@ about what the runtime decides.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 import crewaimeat.json_agent as ja
@@ -246,3 +248,74 @@ def test_a_numberless_definition_reports_no_revision_field_at_all(node):
     written = [w for w in node["writes"] if w["tool"] == "aimeat_memory_write"][-1]["value"]
     assert "revision" not in written, "a numberless publish must leave the field out, not send null"
     assert written["ok"] is True and written["loadedAt"]
+
+
+# ── first start: the agent publishes what the forge staged ───────────────────────────────────────
+def _stage(tmp_path, monkeypatch, doc):
+    """A `crew_defs/<name>.json` on disk, the way the forge leaves one."""
+    from crewaimeat.forge_json import _doc_base
+
+    (tmp_path / "crew_defs").mkdir(parents=True, exist_ok=True)
+    # The forge names the file by `_doc_base`, not by the agent name verbatim — mirror the real
+    # writer, or this fixture tests a path nothing produces.
+    path = tmp_path / "crew_defs" / f"{_doc_base(doc.get('agent_name', 'x'))}.json"
+    path.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr("crewaimeat.forge._project_root", lambda: tmp_path)
+    return path
+
+
+def test_an_empty_key_is_seeded_from_the_staged_definition(node, tmp_path, monkeypatch):
+    """The forge cannot publish for the agent — the token does not exist until a person approves, and
+    `register_agent` is deliberately non-blocking. The first party holding that token is the agent."""
+    _stage(tmp_path, monkeypatch, DOC_V1)
+    node["value"] = None  # registered, never defined
+
+    published: dict = {}
+
+    def _publish(doc, *, agent, visibility="owner", allow_foreign_namespace=False):
+        published.update({"doc": doc, "agent": agent})
+        node["value"] = _envelope(doc)
+        return True, f"crews.registry.{agent}", "ok"
+
+    monkeypatch.setattr("crewaimeat.crew_registry.publish_crew_def", _publish)
+    doc, revision = ja.seed_from_staged("node-agent")
+
+    assert doc == DOC_V1 and revision is None
+    assert published["agent"] == "node-agent", "it must publish as ITSELF or the tab cannot see it"
+
+
+def test_a_staged_definition_for_another_agent_is_refused(node, tmp_path, monkeypatch, capsys):
+    """One stray file must never make an agent into somebody else."""
+    _stage(tmp_path, monkeypatch, DOC_V1)  # sets _project_root; then plant the wrong doc at OUR name
+    from crewaimeat.forge_json import _doc_base
+
+    (tmp_path / "crew_defs" / f"{_doc_base('node-agent')}.json").write_text(
+        json.dumps({**DOC_V1, "agent_name": "someone-else"}), encoding="utf-8"
+    )
+    called: list = []
+    monkeypatch.setattr("crewaimeat.crew_registry.publish_crew_def", lambda *a, **k: called.append(1))
+
+    assert ja.seed_from_staged("node-agent") is None
+    assert not called and "not this agent" in capsys.readouterr().err
+
+
+def test_nothing_staged_is_simply_nothing(node, tmp_path, monkeypatch):
+    monkeypatch.setattr("crewaimeat.forge._project_root", lambda: tmp_path)
+    assert ja.seed_from_staged("node-agent") is None
+
+
+def test_seeding_is_only_ever_offered_for_an_EMPTY_key(node, tmp_path, monkeypatch, capsys):
+    """THE ONE THAT MATTERS. A definition that exists and fails to validate is somebody's mistake to
+    read, and an agent someone has since edited in the tab must never be reset to what the forge first
+    imagined. So a bad document must reach the operator, not be overwritten from disk."""
+    _stage(tmp_path, monkeypatch, DOC_V1)
+    node["value"] = _envelope({**DOC_V1, "temperature": 9})  # published, and wrong
+    called: list = []
+    monkeypatch.setattr("crewaimeat.crew_registry.publish_crew_def", lambda *a, **k: called.append(1))
+    monkeypatch.setattr("crewaimeat.aimeat_crew.run_crew", lambda spec: None)
+
+    with pytest.raises(CrewDocError):
+        ja.run_json_agent("node-agent")
+
+    assert not called, "a staged file was published over a definition that merely failed validation"
+    assert "temperature" in capsys.readouterr().err, "the operator has to see WHY it refused"

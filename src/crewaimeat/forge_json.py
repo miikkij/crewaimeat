@@ -98,13 +98,24 @@ def _sample_ctx() -> Any:
     return BuildContext(task={}, prompt="(sample task text)", llm=None, today="(today)")
 
 
-def write_json_crew(doc: Any, *, request: str | None = None) -> tuple[bool, str, Any]:
+def write_json_crew(doc: Any, *, request: str | None = None, node_backed: bool = False) -> tuple[bool, str, Any]:
     """Validate a crew doc and, on VALID, write ``crew_defs/<base>.json`` + the thin loader.
 
     Returns ``(ok, detail, loader_path)``. INVALID returns ``(False, "<errors>", None)`` with NOTHING
     written, so a bad def never reaches the fleet. Validation is exec-free: ``validate_crew_doc`` catches
     schema/wiring problems, then a construction smoke test proves the tools resolve and the tasks build.
-    ``request`` is accepted for symmetry with the Python path (forge memory is written by the caller)."""
+    ``request`` is accepted for symmetry with the Python path (forge memory is written by the caller).
+
+    ``node_backed=True`` writes the loader that follows ``crews.registry.<agent>`` instead of the one
+    that reads the file. The JSON is still written, because it is the only place the definition can
+    live until the agent exists: it becomes the STAGED copy that the agent publishes as itself on its
+    first start (``json_agent.seed_from_staged``). That detour is not an accident of the design, it
+    is the design — a definition belongs in the namespace of the agent it is for, and nothing but
+    that agent holds the token to put it there.
+
+    Take the node-backed one when a person will configure the agent afterwards, which is what the
+    Crew tab is for. Take the file one when the definition is yours and should not change under you.
+    """
     # forge helpers imported lazily so this module has no import-time dependency on forge (forge imports
     # forge_json at its top for make_forge_tools — a top-level import back would be a cycle).
     from crewaimeat.forge import _fname, _project_root, _rel
@@ -129,12 +140,19 @@ def write_json_crew(doc: Any, *, request: str | None = None) -> tuple[bool, str,
     doc_path = defs_dir / f"{base}.json"
     doc_path.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     loader_path = crews_dir / _fname(agent_name)
-    loader_path.write_text(render_loader(agent_name), encoding="utf-8")
-    return (
-        True,
-        f"VALID: {len(agents)} agents, {len(tasks)} tasks -> {_rel(doc_path)} + {_rel(loader_path)}",
-        loader_path,
-    )
+    if node_backed:
+        from crewaimeat.json_agent import loader_source
+
+        loader_path.write_text(loader_source(agent_name), encoding="utf-8")
+        where = (
+            f"{_rel(doc_path)} (staged) + {_rel(loader_path)} (node-backed: the agent publishes the "
+            f"staged definition as itself on its first start, and from then on it is edited in AIMEAT "
+            f"under profile > agents > {agent_name} > Crew)"
+        )
+    else:
+        loader_path.write_text(render_loader(agent_name), encoding="utf-8")
+        where = f"{_rel(doc_path)} + {_rel(loader_path)}"
+    return (True, f"VALID: {len(agents)} agents, {len(tasks)} tasks -> {where}", loader_path)
 
 
 def render_schema_brief() -> str:

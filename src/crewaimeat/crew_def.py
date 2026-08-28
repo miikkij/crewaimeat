@@ -58,8 +58,12 @@ class CrewDocError(ValueError):
     """Raised when a crew doc fails validation. Carries the full ``errors`` list so the caller sees
     EVERY problem at once, not just the first."""
 
-    def __init__(self, errors: list[str]):
+    def __init__(self, errors: list[str], *, missing: bool = False):
         self.errors = list(errors)
+        # `missing` separates "the key holds nothing" from "the document is wrong". They read alike
+        # in a log and mean opposite things: an empty key is an agent that has never been defined and
+        # may legitimately be seeded; a bad document is somebody's mistake that seeding would bury.
+        self.missing = bool(missing)
         super().__init__("invalid crew doc:\n  - " + "\n  - ".join(self.errors))
 
 
