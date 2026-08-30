@@ -136,6 +136,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--apply", action="store_true", help="actually delete them (needs AIMEAT_OWNER_TOKEN)")
     ap.add_argument("--older-than", type=int, default=0, help="only those last seen more than N days ago")
     ap.add_argument("--root", default=".", help="repo root (default: cwd)")
+    ap.add_argument("--only", default="", help="comma-separated agent names: sweep ONLY these")
+    ap.add_argument(
+        "--except",
+        dest="excluded",
+        default="",
+        help="comma-separated names to spare — for an orphan HERE that another repo still backs",
+    )
     args = ap.parse_args(argv)
 
     root = Path(args.root).resolve()
@@ -151,8 +158,27 @@ def main(argv: list[str] | None = None) -> int:
         print("orphans: the node returned no agent roster (run with the fleet attached)", file=sys.stderr)
         return 2
 
-    keep = [o for o in orphans if args.older_than and (o.age_days or 0) <= args.older_than]
-    targets = [o for o in orphans if not args.older_than or (o.age_days or 0) > args.older_than]
+    # WHY A NAME LIST AND NOT JUST AN AGE. "No crew file HERE" is not "nobody runs it": this
+    # machine holds sibling checkouts and other products against the SAME owner, and their agents
+    # look like orphans from in here. Two of them belong to a live Company Brain and are 59 days
+    # cold — the same age as a real leftover, so `--older-than` cannot tell them apart. Sweeping by
+    # age alone would have taken them.
+    only = {n.strip() for n in (args.only or "").split(",") if n.strip()}
+    spared = {n.strip() for n in (args.excluded or "").split(",") if n.strip()}
+    unknown = (only | spared) - {o.name for o in orphans}
+    if unknown:
+        print(f"error: not an orphan on this node: {', '.join(sorted(unknown))}", file=sys.stderr)
+        return 2
+
+    def _wanted(o) -> bool:  # noqa: ANN001
+        if o.name in spared:
+            return False
+        if only:
+            return o.name in only
+        return not args.older_than or (o.age_days or 0) > args.older_than
+
+    targets = [o for o in orphans if _wanted(o)]
+    keep = [o for o in orphans if not _wanted(o)]
 
     print(f"agents on the node with no crew file here: {len(orphans)}\n")
     width = max((len(o.name) for o in orphans), default=10)
@@ -161,7 +187,10 @@ def main(argv: list[str] | None = None) -> int:
         by = f"  registered by {o.registered_by}" if o.registered_by else ""
         print(f"  {o.name:<{width}}  created {o.created}  last seen {age:>5}{by}")
     if keep:
-        print(f"\n  {len(keep)} skipped by --older-than {args.older_than}")
+        why = (
+            "--only" if only else ("--except" if spared and not args.older_than else f"--older-than {args.older_than}")
+        )
+        print(f"\n  {len(keep)} left alone by {why}: {', '.join(o.name for o in keep)}")
     if tools:
         print(f"\n  {len(tools)} interactive tool session(s) left alone — those are you, not leftovers:")
         print(f"    {', '.join(tools)}")

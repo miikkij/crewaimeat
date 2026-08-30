@@ -265,10 +265,13 @@ _VERIFY_URL_RE = re.compile(r"(https?://\S*(?:verif|activate|device|connect|auth
 # aimeat.io 2026-08-01 — see the aimeat-crewai note in pyproject.toml). Bumped 2026-08-22 from 2.0.0,
 # which sat BELOW that documented floor: every agent crew-forge registered went through a connector
 # that could not carry provenance.
-AIMEAT_CONNECTOR = "aimeat@3.9.0"  # bumped 2026-08-28 (npm latest); the fleet's global install follows.
-#   3.9.0 is the floor for the Crew tab: it is where `aimeat connect serve` grew the invoke queue
-#   (/local/invoke/next + /local/invoke/<id>/result). An older daemon leaves Validate and Try
-#   unreachable — reported once by the listener, and everything else about the agent still works.
+AIMEAT_CONNECTOR = "aimeat@3.10.0"  # bumped 2026-08-30 (npm latest); the fleet's global install follows.
+#   3.10.0 carries `vars` and `target` through the connector's workflow tool defs. Below it a
+#   workflow that takes input can only be run on its defaults, which makes a tool a constant — the
+#   whole point of a recipe is the argument. 3.9.0 remains the floor for the Crew tab: it is where
+#   `aimeat connect serve` grew the invoke queue (/local/invoke/next + /local/invoke/<id>/result).
+#   An older daemon leaves Validate and Try unreachable — reported once by the listener, and
+#   everything else about the agent still works.
 AIMEAT_CONNECTOR_FLOOR = "2.6.1"  # below this the provenance block is dropped silently
 
 

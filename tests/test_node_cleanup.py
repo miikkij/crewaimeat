@@ -157,3 +157,61 @@ def test_an_unreadable_roster_is_an_error_not_an_empty_sweep(tmp_path, monkeypat
     root = _repo(tmp_path, crews=["mine"], served=["mine"])
     monkeypatch.setattr("crewaimeat.aimeat_crew._aimeat_call", lambda *_a, **_k: {})
     assert node_cleanup.main(["--root", str(root)]) == 2
+
+
+# ── choosing WHICH orphans go ────────────────────────────────────────────────────────────────────
+def _orphans(monkeypatch, names_ages):
+    """Stand in for the node roster: [(name, age_days), …] with no crew file here."""
+    from crewaimeat import node_cleanup as nc
+
+    made = [
+        nc.Orphan(
+            name=n, created="2026-01-01", age_days=a, registered_by=None, mode="task-runner", last_seen="2026-08-01"
+        )
+        for n, a in names_ages
+    ]
+    monkeypatch.setattr(nc, "find", lambda root, probe: (made, []))
+    monkeypatch.setattr(nc, "owner_token", lambda: None)
+    return made
+
+
+ROSTER = [("mroom-digger", 0), ("research-crew", 59), ("doc-fact-reader", 59), ("ledger-reader", 59)]
+
+
+def test_except_spares_an_orphan_another_repo_still_backs(monkeypatch, capsys):
+    """THE ONE THAT MATTERS. "No crew file HERE" is not "nobody runs it": this machine holds sibling
+    checkouts and other products against the SAME owner. doc-fact-reader and ledger-reader belong to
+    a live Company Brain and are 59 days cold — the SAME age as a real leftover, so `--older-than`
+    cannot separate them and a sweep by age would have deleted them."""
+    from crewaimeat import node_cleanup as nc
+
+    _orphans(monkeypatch, ROSTER)
+    nc.main(["--except", "doc-fact-reader,ledger-reader"])
+    out = capsys.readouterr().out
+
+    assert "2 left alone by --except: doc-fact-reader, ledger-reader" in out
+    for spared in ("doc-fact-reader", "ledger-reader"):
+        assert f"  {spared}  created" not in out, "a spared agent must not be listed as a target"
+    assert "mroom-digger" in out and "research-crew" in out
+
+
+def test_only_sweeps_nothing_else(monkeypatch, capsys):
+    from crewaimeat import node_cleanup as nc
+
+    _orphans(monkeypatch, ROSTER)
+    nc.main(["--only", "mroom-digger"])
+    out = capsys.readouterr().out
+
+    assert "3 left alone by --only" in out
+    assert "research-crew" in out  # named in the left-alone line, not offered for deletion
+
+
+def test_a_name_that_is_not_an_orphan_is_refused(monkeypatch, capsys):
+    """A typo in a delete list must not silently widen the sweep to everything else."""
+    from crewaimeat import node_cleanup as nc
+
+    _orphans(monkeypatch, ROSTER)
+    rc = nc.main(["--except", "doc-fact-readr"])
+
+    assert rc == 2
+    assert "not an orphan on this node: doc-fact-readr" in capsys.readouterr().err
