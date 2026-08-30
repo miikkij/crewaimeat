@@ -92,6 +92,16 @@ def default_analysis_llm(agent_name: str, embedder_tag: str) -> Any:
             temperature=0.1,
             base_url="https://openrouter.ai/api/v1",
             api_key=key,
+            # Naming the model is not enough: OpenRouter serves ONE model id from MANY endpoints, and
+            # by default it silently DROPS a parameter the chosen endpoint does not support. Measured
+            # 2026-08-30 on openai/gpt-oss-120b: 20 endpoints, of which DigitalOcean, SambaNova and
+            # both Amazon Bedrock ones advertise neither `response_format` nor `structured_outputs`.
+            # Land on one of those and crewai's strict MemoryAnalysis schema is thrown away silently,
+            # the model improvises ("entities": {"companies": [...], "provinces": [...]}, "dates" as a
+            # date->label MAP), and pydantic raises list_type on extracted_metadata.entities/dates --
+            # or, unconstrained, the reply runs away (one observed at 55 567 lines). Same model id,
+            # same position: `require_parameters` only removes the endpoints that cannot do the job.
+            extra_body={"provider": {"require_parameters": True}},
             # No output cap: a guessed ceiling on a cloud model is how a reply comes back empty,
             # and the caller cannot tell that from the model failing. See crewaimeat.llm.
         )

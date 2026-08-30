@@ -134,3 +134,25 @@ def test_prior_art_block_formats_dates_and_min_score(store):
     assert "..." in block and len(block) < 2000  # long entries truncated
     fake.recall_result = []
     assert store.prior_art_block("anything") == ""  # empty -> safe to concatenate unconditionally
+
+
+# --- the encode-analysis LLM ----------------------------------------------------
+def test_cloud_analysis_llm_only_routes_to_schema_capable_endpoints(monkeypatch):
+    """OpenRouter serves one model id from many endpoints and DROPS a parameter the chosen one does
+    not support -- so a strict MemoryAnalysis schema silently vanishes and pydantic raises list_type
+    on entities/dates (fleet, 2026-08-30). Naming the model is not enough; the request must refuse
+    endpoints that cannot honour it."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    monkeypatch.delenv("AIMEAT_MEMORY_ANALYSIS_MODEL", raising=False)
+    llm = pm.default_analysis_llm("sanomat-test", "openrouter-openai-text-embedding-3-small")
+    assert llm.additional_params["extra_body"]["provider"]["require_parameters"] is True
+    assert llm.max_tokens is None  # no invented ceiling on a cloud model
+
+
+def test_local_analysis_llm_stays_on_ollama(monkeypatch):
+    """The ollama tier keeps its local model (free, private) -- provider routing is an OpenRouter
+    concept and must not leak onto it."""
+    monkeypatch.delenv("AIMEAT_MEMORY_ANALYSIS_MODEL", raising=False)
+    llm = pm.default_analysis_llm("sanomat-test", "ollama-nomic")
+    assert llm.provider == "ollama" and "gemma" in llm.model
+    assert "extra_body" not in llm.additional_params
