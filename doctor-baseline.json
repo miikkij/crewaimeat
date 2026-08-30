@@ -23,8 +23,6 @@
     "route.node.direct_http::src/crewaimeat/ledger_report.py::report_llm_usage",
     "route.node.direct_http::src/crewaimeat/mail_contract.py::_storage_image",
     "route.node.direct_http::src/crewaimeat/map_snapshot.py::upload_public",
-    "route.node.direct_http::src/crewaimeat/mroom.py::_public_memory",
-    "route.node.direct_http::src/crewaimeat/mroom.py::_room_write_rest",
     "route.node.direct_http::src/crewaimeat/offers.py::publish_meta_offer",
     "route.node.direct_http::src/crewaimeat/offers.py::publish_offers_any",
     "route.node.direct_http::src/crewaimeat/seedream_gen.py::_upload_public",
