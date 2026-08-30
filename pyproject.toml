@@ -5,7 +5,7 @@ description = "AIMEAT × CrewAI integration: a validated crew template (liaison 
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
 dependencies = [
-    "crewai[tools]>=1.15.6",  # 1.15.6: execution_end hook fires on FAILED crews/flows + strict tool schema names. 1.15.3: fixed after_llm_call hooks breaking native tool execution + per-call usage metrics on kickoff results + token usage under both names (all directly help our hook-based ledger metering). 1.14.7: per-run state isolation (concurrent daemons), custom-BaseLLM
+    "crewai[tools]>=1.15.18",  # 1.15.18 (2026-08-27): Anthropic default max_tokens for large tool calls + tool-result preserved when the final answer is empty + Claude Sonnet 4.6 -> 1M context mapping + crew_memory no longer recorded as a bare string + task-failure/kickoff message-role fixes. The bulk of the release (conversational flows to stable) we do not use. 1.15.6: execution_end hook fires on FAILED crews/flows + strict tool schema names. 1.15.3: fixed after_llm_call hooks breaking native tool execution + per-call usage metrics on kickoff results + token usage under both names (all directly help our hook-based ledger metering). 1.14.7: per-run state isolation (concurrent daemons), custom-BaseLLM
     #                           restore fix, aiohttp/docling CVE fixes, faster import
     # 0.20.0: DATA PACKAGES — read_package / to_dataframe / to_parquet / publish_package /
     # package_versions + QualityGateRefused. The `data` extra brings pandas (to_dataframe), `parquet`
