@@ -63,6 +63,24 @@ status cells, append decisions), so the two sides stay synced without drifting p
   `offers` and the routing map are DERIVED. This replaced three central lists that nothing required
   you to update — which is how 13 crews ended up with no identity, 13 with no offer and 20 with no
   routing decision (audit 2026-08-22). Never re-add an agent to a central list; put it in the crew.
+- **Agent, or AIMEAT-side tool? The default is a TOOL.** Build a crewaimeat AGENT only when at least
+  one is TRUE: (1) it acts without being called — a schedule, a record/DM trigger, or it orchestrates
+  other agents; (2) it PLANS ITS OWN STEPS — an open loop where the next action depends on the real
+  result of the last (ReAct tool-use, hierarchical delegation), not a shape fixed in advance; (3) it
+  is a federated party — receives DMs, holds offers, carries a reputation; (4) it runs long and
+  unattended, retrying and recovering itself. If NONE hold, it belongs on the AIMEAT side as an
+  **app-tool** (AI-authored code the user describes; can call the model, a node capability, an
+  external API, or a workflow) or a **workflow** (fixed ai-step fan-out). Three things that used to
+  imply "agent" no longer do — an app-tool absorbed them, which is how 22 of 55 crews ended up
+  agents that should not have been: it USES A TOOL (app-tools are code and can call any API — mail,
+  image, calendar and search are node capabilities or an API call, so the capability is NEVER the
+  discriminator), it is MULTI-STEP (workflows are), its OUTPUT IS STRUCTURED for apps (app-tools do
+  that natively). The only thing that flips it to an agent is the LOOP: does it decide its own next
+  step from a real result. An agent costs a registration, a token, onboarding, a fleet slot on every
+  start and a doctor line; a tool costs one call — so the burden of proof is on "agent". Worked
+  example: extracting `{vendor,lines,vat,total}` from an invoice image is an app-tool (fixed shape);
+  investigating the invoice — decide the doc type, look up a missing PO/VAT-id, flag anomalies — is
+  an agent (criterion 2). Full rule + table: `docs/internal/2026-08-30-agentti-vai-aimeat-kriteerit.md`.
 - **New agent? Give it a real identity** — don't ship the generic Hello-Integration defaults. The
   scaffold sets tags (`aimeat_agent_tags_set`) + reports capabilities (`aimeat_agent_capabilities_report`)
   on every start, and `run_crew` REJECTS a malformed capabilities payload at the boundary (a bare string
