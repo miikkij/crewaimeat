@@ -816,7 +816,14 @@ def _aimeat_call(
 
 
 def _aimeat_rest(
-    agent_name: str, method: str, path: str, body: dict | None = None, *, retries: int = 3, backoff: float = 1.5
+    agent_name: str,
+    method: str,
+    path: str,
+    body: dict | None = None,
+    *,
+    retries: int = 3,
+    backoff: float = 1.5,
+    raw: bool = False,
 ) -> dict | None:
     """Deterministic REST call on the agent's behalf (a `/v1/...` node route). No LLM.
 
@@ -866,7 +873,7 @@ def _aimeat_rest(
         except ValueError:
             print(f"[{agent_name}] {method} {path} returned non-JSON (HTTP {r.status_code})", file=sys.stderr)
             return None
-        if r.status_code >= 400 or not (isinstance(env, dict) and env.get("ok")):
+        if r.status_code >= 400 or (not raw and not (isinstance(env, dict) and env.get("ok"))):
             err = (env or {}).get("error") if isinstance(env, dict) else None
             # A 5xx / tunnel hiccup is worth another try; a 400/403 (malformed patch, missing scope)
             # is the node's verdict and must fail fast and LOUD — it is a bug in us, not weather.
@@ -879,7 +886,7 @@ def _aimeat_rest(
                 continue
             print(f"[{agent_name}] {method} {path} failed: HTTP {r.status_code} {err or ''}", file=sys.stderr)
             return None
-        return env.get("data")
+        return env if raw else env.get("data")
     return None
 
 

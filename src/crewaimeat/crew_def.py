@@ -137,6 +137,14 @@ def _tools_article_fetch(agent_name: str, ctx: Any) -> list:
     return [fetch_article_text]
 
 
+def _tools_app_tools(agent_name: str, ctx: Any) -> list:
+    # C from doc-mtgwbuadi9wo: find + call app-tools hosted on the node. Same-owner tools run free;
+    # a foreign priced tool is reported as needing payment rather than pretended to have run.
+    from crewaimeat.app_tools import make_app_tools
+
+    return list(make_app_tools(agent_name, ctx))
+
+
 def _tools_exchange(agent_name: str, ctx: Any) -> list:
     # The AIMEAT EXCHANGE tools (browse/accept/run/needs/bids/proposals/agent-work) + the deterministic
     # band + I/O-match gates. Called on the agent's own token; the accepted contract authorises metered
@@ -156,6 +164,7 @@ TOOL_REGISTRY: dict[str, Any] = {
     "app_build": _tools_app_build,
     "local_memory": _tools_local_memory,
     "article_fetch": _tools_article_fetch,
+    "app_tools": _tools_app_tools,
     "exchange": _tools_exchange,
 }
 
@@ -172,6 +181,7 @@ TOOL_PURPOSES: dict[str, str] = {
     "app_build": "author, install, publish and verify a real AIMEAT app / cortex / extension",
     "local_memory": "keep raw findings in LOCAL memory (remember/recall/search) and publish only the refined result upward (publish_memory)",
     "article_fetch": "fetch + extract the readable article text behind result URLs (read sources, not snippets)",
+    "app_tools": "find and CALL app-tools hosted on AIMEAT (list_app_tools reads how each is called; call_app_tool invokes one) — your own family's tools run free",
     "exchange": "trade on the AIMEAT EXCHANGE — browse/accept/run offerings, post needs + bid, renegotiate, run agent-work; plus deterministic band + I/O-match gates",
 }
 
