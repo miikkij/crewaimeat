@@ -1080,7 +1080,9 @@ def _memory_key(agent_name: str, prefix: str | None, task: dict) -> str:
     text = task.get("description") or task.get("title") or ""
     slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:32].strip("-")
     token = f"{slug}-{short}" if slug else short
-    base = prefix or f"crews.{agent_name}"
+    from crewaimeat.agent_manifest import agent_local_name
+
+    base = prefix or f"crews.{agent_local_name(agent_name)}"
     return f"{base}.{token}.latest_output"
 
 

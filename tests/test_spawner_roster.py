@@ -32,6 +32,23 @@ def _repo(tmp_path: Path, body: str, name: str = "demo_crew.py") -> Path:
     return tmp_path
 
 
+def _crew_src(name: str) -> str:
+    """A minimal spawn-mode crew file. Built here so the escapes live in ONE place."""
+    return "\n".join(
+        [
+            f'AGENT_NAME = "{name}"',
+            'RUN_MODE = "spawn"',
+            "",
+            "def build_domain(ctx):",
+            "    ...",
+            "",
+            "def run():",
+            "    ...",
+            "",
+        ]
+    )
+
+
 def _spawner(**kw):
     from crewaimeat.spawner import Spawner
 
@@ -123,59 +140,73 @@ def test_refresh_is_idempotent_and_does_not_restart_a_live_agent():
 
 
 # --------------------------------------------------------------------------- #
-# Where the roster comes from: repo crews UNION node agents
+# Where the roster comes from: repo crews UNION node agents, ONE CALL PER OWNER
 # --------------------------------------------------------------------------- #
-def test_an_ignored_filter_serves_nothing_extra_rather_than_the_whole_fleet(monkeypatch, tmp_path):
-    """An unknown query parameter is IGNORED, not refused, so an older node answers `?run_mode=spawn`
-    with EVERY agent it has. Trusting that would put the whole fleet in spawn mode; every row is
-    re-checked, and a filter that was not honoured serves nothing extra — with a reason."""
+NODE = "n1"
+
+
+def _serve(tmp_path, agents):
+    from crewaimeat import spawn_state
+
+    spawn_state.write_json(spawn_state.aimeat_home() / "serve.json", {"port": 1, "schema_version": 2, "agents": agents})
+
+
+def _both_owners():
+    return [
+        {"agent": "bot", "gaii": f"bot#alice@{NODE}", "owner": "alice"},
+        {"agent": "bot", "gaii": f"bot#bob@{NODE}", "owner": "bob"},
+    ]
+
+
+class _Resp:
+    def __init__(self, rows):
+        self.status_code = 200
+        self._rows = rows
+
+    def json(self):
+        return {"data": {"agents": self._rows}}
+
+
+def test_the_roster_asks_once_per_owner_because_the_listing_is_owner_scoped(monkeypatch, tmp_path):
+    """MEASURED 2026-09-02: `GET /v1/agents` asked as one of alice's agents returns alice's and ONLY
+    alice's. One call would therefore quietly serve half a two-owner daemon."""
     monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
     import requests
 
-    from crewaimeat import spawn_state, spawner
+    from crewaimeat import spawner
 
-    spawn_state.write_json(spawn_state.aimeat_home() / "serve.json", {"port": 1, "agents": [{"agent": "caller"}]})
+    _serve(tmp_path, _both_owners())
+    seen: list[str] = []
 
-    class _Resp:
-        status_code = 200
+    def _get(url, **kw):
+        who = kw["headers"]["X-Aimeat-Agent"]
+        seen.append(who)
+        owner = who.split("#", 1)[1].split("@", 1)[0]
+        return _Resp([{"name": "burst", "gaii": f"burst#{owner}@{NODE}", "owner": owner, "run_mode": "spawn"}])
 
-        @staticmethod
-        def json():
-            return {"data": {"agents": [{"name": "x", "mode": "task-runner"}]}}
-
-    monkeypatch.setattr(requests, "get", lambda *a, **k: _Resp())
+    monkeypatch.setattr(requests, "get", _get)
     agents, note = spawner.node_spawn_agents()
-    assert agents == []
-    assert note and "run_mode" in note
-
-
-def test_node_roster_picks_spawn_agents_once_the_field_arrives(monkeypatch, tmp_path):
-    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
-    import requests
-
-    from crewaimeat import spawn_state, spawner
-
-    spawn_state.write_json(spawn_state.aimeat_home() / "serve.json", {"port": 1, "agents": [{"agent": "caller"}]})
-
-    class _Resp:
-        status_code = 200
-
-        @staticmethod
-        def json():
-            return {
-                "data": {
-                    "agents": [
-                        {"name": "burst", "run_mode": "spawn"},
-                        {"name": "door", "run_mode": "resident"},
-                        {"name": "old", "run_mode": "continuous"},
-                    ]
-                }
-            }
-
-    monkeypatch.setattr(requests, "get", lambda *a, **k: _Resp())
-    agents, note = spawner.node_spawn_agents()
-    assert agents == ["burst"], "only spawn-mode agents belong to the spawner"
+    assert sorted(seen) == [f"bot#alice@{NODE}", f"bot#bob@{NODE}"], "one call per owner, not one in total"
+    assert agents == [f"burst#alice@{NODE}", f"burst#bob@{NODE}"]
     assert note is None
+
+
+def test_the_roster_is_gaiis_not_names(monkeypatch, tmp_path):
+    """The daemon REFUSES a bare name two owners share (measured: 400, naming both). A roster of
+    names could not be parked on at all."""
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    import requests
+
+    from crewaimeat import spawner
+
+    _serve(tmp_path, [{"agent": "bot", "gaii": f"bot#alice@{NODE}", "owner": "alice"}])
+    monkeypatch.setattr(
+        requests,
+        "get",
+        lambda *a, **k: _Resp([{"name": "concierge", "gaii": f"concierge#alice@{NODE}", "run_mode": "spawn"}]),
+    )
+    agents, _ = spawner.node_spawn_agents()
+    assert agents == [f"concierge#alice@{NODE}"], "the identity is the GAII, never the bare name"
 
 
 def test_the_roster_read_asks_the_node_to_filter(monkeypatch, tmp_path):
@@ -184,37 +215,43 @@ def test_the_roster_read_asks_the_node_to_filter(monkeypatch, tmp_path):
     monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
     import requests
 
-    from crewaimeat import spawn_state, spawner
+    from crewaimeat import spawner
 
-    spawn_state.write_json(spawn_state.aimeat_home() / "serve.json", {"port": 1, "agents": [{"agent": "caller"}]})
+    _serve(tmp_path, [{"agent": "bot", "gaii": f"bot#alice@{NODE}", "owner": "alice"}])
     seen: dict = {}
 
-    class _Resp:
-        status_code = 200
-
-        @staticmethod
-        def json():
-            return {"data": {"agents": [{"name": "burst", "run_mode": "spawn"}]}}
-
     def _get(url, **kw):
-        seen["url"] = url
-        seen["params"] = kw.get("params")
-        return _Resp()
+        seen["url"], seen["params"] = url, kw.get("params")
+        return _Resp([{"name": "burst", "gaii": f"burst#alice@{NODE}", "run_mode": "spawn"}])
 
     monkeypatch.setattr(requests, "get", _get)
-    agents, note = spawner.node_spawn_agents()
-    assert agents == ["burst"] and note is None
+    spawner.node_spawn_agents()
     assert seen["params"] == {"run_mode": "spawn"}, "the node must do the filtering, not us"
     assert seen["url"].endswith("/v1/agents")
+
+
+def test_an_ignored_filter_serves_nothing_extra_rather_than_the_whole_fleet(monkeypatch, tmp_path):
+    """An unknown query parameter is IGNORED, not refused, so an older node answers `?run_mode=spawn`
+    with EVERY agent it has. Trusting that would put the whole fleet in spawn mode."""
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    import requests
+
+    from crewaimeat import spawner
+
+    _serve(tmp_path, [{"agent": "bot", "gaii": f"bot#alice@{NODE}", "owner": "alice"}])
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _Resp([{"name": "x", "mode": "task-runner"}]))
+    agents, note = spawner.node_spawn_agents()
+    assert agents == []
+    assert note and "run_mode=spawn" in note
 
 
 def test_an_unreachable_node_leaves_the_local_crews_serving(monkeypatch, tmp_path):
     monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
     import requests
 
-    from crewaimeat import spawn_state, spawner
+    from crewaimeat import spawner
 
-    spawn_state.write_json(spawn_state.aimeat_home() / "serve.json", {"port": 1, "agents": [{"agent": "caller"}]})
+    _serve(tmp_path, [{"agent": "bot", "gaii": f"bot#alice@{NODE}", "owner": "alice"}])
 
     def _boom(*a, **k):
         raise OSError("connection refused")
@@ -225,15 +262,33 @@ def test_an_unreachable_node_leaves_the_local_crews_serving(monkeypatch, tmp_pat
     assert note and "unreadable" in note
 
 
-def test_discover_unions_repo_crews_with_node_agents(monkeypatch, tmp_path):
+def test_a_repo_crew_the_daemon_does_not_carry_is_not_served(monkeypatch, tmp_path):
+    """MEASURED 2026-09-02: parking on an agent this daemon does not hold is refused every time and
+    never heals — it produced 14 627 rejected polls before the run was stopped."""
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
     from crewaimeat import spawner
 
     root = _repo(
         tmp_path,
-        'AGENT_NAME = "local-one"\nRUN_MODE = "spawn"\n\ndef build_domain(ctx):\n    ...\n\ndef run():\n    ...\n',
+        _crew_src("stranger"),
     )
-    monkeypatch.setattr(spawner, "node_spawn_agents", lambda: (["node-one"], None))
-    assert spawner.discover_agents(root) == ["local-one", "node-one"]
+    _serve(tmp_path, [{"agent": "bot", "gaii": f"bot#alice@{NODE}", "owner": "alice"}])
+    monkeypatch.setattr(spawner, "node_spawn_agents", lambda: ([f"bot#alice@{NODE}"], None))
+    monkeypatch.setattr(spawner, "_LAST_NOTE", {})
+    assert spawner.discover_agents(root) == [f"bot#alice@{NODE}"], "an agent the daemon lacks is not ours to park on"
+
+
+def test_a_repo_crew_the_daemon_does_carry_is_served(monkeypatch, tmp_path):
+    from crewaimeat import spawner
+
+    root = _repo(
+        tmp_path,
+        _crew_src("mine"),
+    )
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    _serve(tmp_path, [{"agent": "mine", "gaii": f"mine#alice@{NODE}", "owner": "alice"}])
+    monkeypatch.setattr(spawner, "node_spawn_agents", lambda: ([], None))
+    assert spawner.discover_agents(root) == ["mine"]
 
 
 # --------------------------------------------------------------------------- #

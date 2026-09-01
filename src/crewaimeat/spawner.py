@@ -123,6 +123,7 @@ class Spawner:
         self._port: int | None = None
         self._threads: dict[str, list[threading.Thread]] = {}
         self._roster_note: str | None = None  # last roster complaint, printed once per change
+        self._last_invoke_complaint: dict[str, float] = {}
 
     # ---------------------------------------------------------------- wake --- #
     def _serve_port(self) -> int | None:
@@ -218,10 +219,16 @@ class Spawner:
             time.sleep(2.0)
             return None
         if resp.status_code != 200:
-            if resp.status_code not in (204, 404):
-                # 404 = this connector predates the invoke surface; back off rather than spin on it.
-                print(f"[spawner] {agent}: invoke poll HTTP {resp.status_code}", file=sys.stderr)
-            if resp.status_code == 404:
+            if resp.status_code != 204:
+                # ANY refusal backs off. 404 is a connector predating the invoke surface; 400 is an
+                # agent this daemon does not carry. Neither fixes itself by asking again at once, and
+                # a long-poll that returns instantly is a tight loop: MEASURED 2026-09-02, one agent
+                # the daemon did not carry produced 14 627 HTTP 400s against shared infrastructure
+                # before the run was stopped. Say it once per minute, not once per millisecond.
+                now = time.monotonic()
+                if now - self._last_invoke_complaint.get(agent, 0.0) > 60.0:
+                    self._last_invoke_complaint[agent] = now
+                    print(f"[spawner] {agent}: invoke poll HTTP {resp.status_code} — backing off", file=sys.stderr)
                 time.sleep(30.0)
             return None
         return (resp.json() or {}).get("data") or None
@@ -682,57 +689,91 @@ def local_spawn_agents(root: Path) -> list[str]:
 
 
 def node_spawn_agents() -> tuple[list[str], str | None]:
-    """Agents the NODE says are spawn-mode. Returns (agents, note) — the note is a reason, not a crash.
+    """Agents the NODE says are spawn-mode, as GAIIs. Returns (agents, note) — a reason, not a crash.
 
-    An agent created by the node's basic-agents button never touches this disk: its definition lives
-    at `crews.registry.<agent>` and its run mode is a field on the agent record. So the roster cannot
-    come from crew files alone, or the button's agents would be invisible here.
+    ONE CALL PER OWNER, and the identity is the GAII, not the name. Both follow from one connector
+    home now serving more than one owner:
 
-    The node filters server-side — `GET /v1/agents?run_mode=spawn` is exactly this read — and carries
-    `run_mode` on every agent, on a v2 agent from the moment of enrolment. So the 30-second refresh
-    asks for the handful it wants instead of fetching everything and sorting it out here.
+    * `GET /v1/agents` is owner-scoped — asked as one of alice's agents it returns alice's and only
+      alice's — so a single call would quietly serve half the daemon.
+    * the same NAME exists under both owners, and the daemon REFUSES a shared bare name (measured:
+      400 UNKNOWN_AGENT naming both GAIIs). A roster of names could not be parked on at all.
+
+    The node filters server-side (`?run_mode=spawn`), so the 30-second refresh asks for the handful
+    it wants instead of fetching everything and sorting it out here.
     """
     doc = _serve_doc()
     port = doc.get("port")
-    caller = next((a.get("agent") for a in (doc.get("agents") or []) if a.get("agent")), None)
-    if not isinstance(port, int) or not caller:
+    if not isinstance(port, int):
         return [], "no serve daemon in serve.json — node roster skipped"
+    # One caller per owner: whichever of that owner's agents the daemon carries.
+    callers: dict[str, str] = {}
+    for a in doc.get("agents") or []:
+        owner, ident = a.get("owner"), (a.get("gaii") or a.get("agent"))
+        if owner and ident and owner not in callers:
+            callers[owner] = ident
+    if not callers:
+        return [], "serve.json names no agents — node roster skipped"
     import requests
 
-    try:
-        resp = requests.get(
-            f"http://127.0.0.1:{port}/v1/agents",
-            params={"run_mode": agent_manifest.RUN_SPAWN},
-            headers={"X-Aimeat-Agent": caller},
-            timeout=30,
-        )
-        rows = ((resp.json() or {}).get("data") or {}).get("agents") or []
-    except Exception as exc:  # noqa: BLE001 — an unreachable node must not empty the roster
-        return [], f"node roster unreadable ({type(exc).__name__}) — local crews only"
-    out = sorted(
-        str(r.get("name"))
-        for r in rows
-        if isinstance(r, dict)
-        and r.get("name")
-        and agent_manifest.normalise_run_mode(r.get("run_mode") or r.get("runMode")) == agent_manifest.RUN_SPAWN
-    )
-    if rows and not out:
-        # An unknown query parameter is IGNORED, not refused, so a node that does not know this
-        # filter answers with every agent it has. Taking that on trust would put the whole fleet in
-        # spawn mode. Every row is therefore re-checked here, and a filter that was not honoured is
-        # a reason to serve nothing extra — loudly.
-        return [], f"node returned {len(rows)} agent(s), none marked run_mode=spawn — local crews only"
-    return out, None
+    out: list[str] = []
+    notes: list[str] = []
+    for owner, caller in sorted(callers.items()):
+        try:
+            resp = requests.get(
+                f"http://127.0.0.1:{port}/v1/agents",
+                params={"run_mode": agent_manifest.RUN_SPAWN},
+                headers={"X-Aimeat-Agent": caller},
+                timeout=30,
+            )
+            rows = ((resp.json() or {}).get("data") or {}).get("agents") or []
+        except Exception as exc:  # noqa: BLE001 — an unreachable node must not empty the roster
+            notes.append(f"{owner}: unreadable ({type(exc).__name__})")
+            continue
+        picked = [
+            str(r.get("gaii") or r.get("name"))
+            for r in rows
+            if isinstance(r, dict)
+            and (r.get("gaii") or r.get("name"))
+            and agent_manifest.normalise_run_mode(r.get("run_mode") or r.get("runMode")) == agent_manifest.RUN_SPAWN
+        ]
+        if rows and not picked:
+            # An unknown query parameter is IGNORED, not refused, so a node that does not know this
+            # filter answers with every agent it has. Taking that on trust would put the whole fleet
+            # in spawn mode, so every row is re-checked and an unhonoured filter serves nothing.
+            notes.append(f"{owner}: {len(rows)} agent(s), none marked run_mode=spawn")
+            continue
+        out.extend(picked)
+    note = "; ".join(notes) + " — local crews only" if notes and not out else ("; ".join(notes) or None)
+    return sorted(set(out)), note
+
+
+def _daemon_carries() -> set[str]:
+    """Identities the running daemon actually holds — GAIIs and their bare names."""
+    out: set[str] = set()
+    for a in _serve_doc().get("agents") or []:
+        for v in (a.get("gaii"), a.get("agent")):
+            if v:
+                out.add(str(v))
+    return out
 
 
 def discover_agents(root: Path) -> list[str]:
     """Every agent this spawner should serve: repo crews declaring spawn, PLUS node agents whose
     run_mode says spawn. A repo crew wins a name collision — a hand-written crew is the more specific
     statement, and the node cannot know it exists."""
-    local = local_spawn_agents(root)
     node, note = node_spawn_agents()
     if note:
         _note_once(note)
+    # A repo crew is only OURS TO SERVE if this daemon carries that agent. The two sets are no longer
+    # the same thing: one home holds one node's agents, and a checkout holds whatever crews it holds.
+    # Parking on an agent the daemon does not carry is refused every time and never heals — MEASURED
+    # 2026-09-02: it produced 14 627 rejected polls before the run was stopped.
+    carried = _daemon_carries()
+    local = [a for a in local_spawn_agents(root) if not carried or a in carried]
+    skipped = [a for a in local_spawn_agents(root) if carried and a not in carried]
+    if skipped:
+        _note_once(f"repo crews this daemon does not carry, not served: {', '.join(sorted(skipped))}")
     return sorted(set(local) | set(node))
 
 

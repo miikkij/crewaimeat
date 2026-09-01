@@ -53,7 +53,10 @@ RUNTIME_PREFIX = "crews.runtime."
 
 
 def runtime_key(agent_name: str) -> str:
-    return f"{RUNTIME_PREFIX}{agent_name}"
+    """Keyed by the agent NAME, never a GAII — see crew_registry.registry_key."""
+    from crewaimeat.agent_manifest import agent_local_name
+
+    return f"{RUNTIME_PREFIX}{agent_local_name(agent_name)}"
 
 
 def _errors_of(exc: CrewDocError) -> list[str]:

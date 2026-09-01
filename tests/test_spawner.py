@@ -116,7 +116,11 @@ def test_crew_def_validator_rejects_bad_run_mode_and_concurrency():
     assert any("max_concurrent" in e for e in validate_crew_doc({**base, "max_concurrent": True}))
 
 
-def test_select_agents_only_picks_spawn_mode(tmp_path):
+def test_select_agents_only_picks_spawn_mode(tmp_path, monkeypatch):
+    # Own AIMEAT_HOME, or the roster reads the developer's REAL serve.json and answers about their
+    # live daemon instead of this fixture — which is how this test started failing for a reason that
+    # had nothing to do with what it checks.
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path / "home"))
     from crewaimeat.spawner import select_agents
 
     root = _repo(

@@ -59,6 +59,21 @@ _RUN_ALIASES = {RUN_CONTINUOUS: RUN_RESIDENT}
 RUN_MODES_ACCEPTED = (*RUN_MODES, *_RUN_ALIASES)
 
 
+def agent_local_name(identity: str) -> str:
+    """The agent NAME out of an identity that may be a full GAII (`<agent>#<owner>@<node>`).
+
+    IDENTITY AND NAME PARTED WAYS when one connector home started serving more than one owner. The
+    credential header must carry the GAII — a bare name that two owners share is REFUSED, naming
+    both — but a memory key must not: `crews.registry.<agent>` lives in that agent's OWN namespace,
+    which the token already decides, so putting the owner in the key too would file the definition
+    somewhere nobody reads. Measured 2026-09-02: an unqualified key built from a GAII produced
+    `crews.registry.crew-forge#isoalice@aimeat-iso-001-a`, and the node answered NOT_FOUND.
+
+    A bare name is returned unchanged, so every existing caller is untouched.
+    """
+    return str(identity or "").split("#", 1)[0].strip()
+
+
 def normalise_run_mode(value: object) -> str | None:
     """The canonical run mode for `value`, or None when it is not a run mode at all.
 

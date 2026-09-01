@@ -20,6 +20,7 @@ import sys
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from crewaimeat.agent_manifest import agent_local_name
 from crewaimeat.aimeat_crew import _aimeat_call
 from crewaimeat.crew_def import CrewDocError, load_crew_doc, validate_crew_doc
 
@@ -27,9 +28,12 @@ REGISTRY_PREFIX = "crews.registry."  # crews.registry.<agent_name> — mirrors a
 _ENVELOPE_VERSION = 1
 
 
-def registry_key(agent_name: str) -> str:
-    """The memory key a crew def lives at in the registry."""
-    return f"{REGISTRY_PREFIX}{agent_name}"
+def registry_key(agent_name: str) -> str:  # noqa: D401 — see agent_local_name for the GAII rule
+    """The memory key a crew def lives at in the registry.
+
+    Keyed by the agent NAME even when handed a full GAII: the owner is already decided by the token
+    that does the write, so repeating it in the key files the definition where nobody reads it."""
+    return f"{REGISTRY_PREFIX}{agent_local_name(agent_name)}"
 
 
 def _now_iso() -> str:
@@ -62,7 +66,7 @@ def publish_crew_def(
     if visibility not in ("owner", "public"):
         return False, "", f"visibility must be 'owner' or 'public' (got {visibility!r})."
     name = doc["agent_name"]
-    if name != agent and not allow_foreign_namespace:
+    if agent_local_name(name) != agent_local_name(agent) and not allow_foreign_namespace:
         return (
             False,
             "",
