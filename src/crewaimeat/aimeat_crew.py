@@ -512,21 +512,38 @@ def _rate_task(
 
 
 def _token_exists(agent_name: str, owner: str | None) -> bool:
-    """True if the connector has written a token file for this agent yet.
+    """True if the connector holds a CREDENTIAL for this agent yet — a v1 token or a v2 key.
 
-    Mirrors aimeat_crewai's keychain layout (~/.aimeat/tokens/{agent}@{owner}.token). Before
-    the owner approves a freshly-registered agent there is no token, so the daemon's
-    _read_token would raise at startup — we use this to wait for registration/approval first.
+    Mirrors aimeat_crewai's keychain layout: `tokens/{agent}@{owner}.token` for the long-lived agent
+    JWT, and `keys/{agent}@{owner}.key` for an Agent v2 identity, which holds a key and signs a short
+    assertion per call instead of keeping a bearer on disk. Before the owner approves a freshly
+    registered agent there is neither, so the daemon's own read would raise at startup — this is what
+    lets the crew wait for approval instead of crash-looping.
+
+    BOTH FAMILIES OR NONE. MEASURED 2026-09-02 against a two-owner daemon: six key-enrolled v2 agents
+    sat at "waiting for approval: no token yet" forever, because only `tokens/` was consulted. They
+    were fully authorised — the daemon was holding their sockets at that moment.
+
+    `agent_name` may be a full GAII. The keychain filenames are `<name>@<owner>`, so the name is
+    matched locally and the owner is taken from the GAII when the caller did not pass one — one
+    connector home now holds more than one owner, and the same NAME appears under each.
     """
     from crewaimeat._home import aimeat_home
+    from crewaimeat.agent_manifest import agent_local_name
 
-    # Read the token store's real filenames and compare, rather than interpolating agent_name into a
-    # path or a glob pattern. Same answer as before for every legal name, and a crafted one now has no
-    # path to steer — it simply matches nothing.
-    for tokf in (aimeat_home() / "tokens").glob("*.token"):
-        tok_agent, _, tok_owner = tokf.name[: -len(".token")].partition("@")
-        if tok_agent == agent_name and (not owner or tok_owner == owner):
-            return True
+    name = agent_local_name(agent_name)
+    if not owner and "#" in str(agent_name):
+        owner = str(agent_name).split("#", 1)[1].split("@", 1)[0] or None
+
+    home = aimeat_home()
+    # Read the store's real filenames and compare, rather than interpolating agent_name into a path
+    # or a glob pattern. Same answer as before for every legal name, and a crafted one has no path to
+    # steer — it simply matches nothing.
+    for folder, suffix in (("tokens", ".token"), ("keys", ".key")):
+        for f in (home / folder).glob(f"*{suffix}"):
+            f_agent, _, f_owner = f.name[: -len(suffix)].partition("@")
+            if f_agent == name and (not owner or f_owner == owner):
+                return True
     return False
 
 
@@ -626,7 +643,21 @@ def _serve_attach_bridge(agent_name: str) -> None:
         doc = ensure_serve(auto_start=False)  # discovery only — never spawns
     except AimeatServeError:
         return  # no live daemon: the next spawn (start_fleet / supervisor) loads all tokens anyway
-    if agent_name in {a.get("agent") for a in (doc.get("agents") or [])}:
+    # Match on the IDENTITY the daemon actually publishes. serve.json schema 2 carries a `gaii` beside
+    # the name, and one home now holds more than one owner, so a bare-name comparison against a GAII
+    # matches nothing — and "nothing" here means RESTART THE SHARED DAEMON. That is what happened on
+    # 2026-09-02: a worker started with a full GAII, this line found no match, and a daemon serving two
+    # owners' eight principals was reloaded underneath them. A restart is the most expensive thing in
+    # this file; it may never be reached by a string comparison that is merely the wrong shape.
+    from crewaimeat.agent_manifest import agent_local_name
+
+    attached: set[str] = set()
+    for a in doc.get("agents") or []:
+        for v in (a.get("gaii"), a.get("agent")):
+            if v:
+                attached.add(str(v))
+                attached.add(agent_local_name(str(v)))
+    if agent_name in attached or agent_local_name(agent_name) in attached:
         return
     print(
         f"[{agent_name}] approved, but the serve daemon predates my token (it serves "

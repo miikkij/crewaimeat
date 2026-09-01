@@ -276,6 +276,13 @@ def run_json_agent(agent_name: str, **overrides: Any) -> None:
         doc, revision = seeded
 
     live = Definition(agent_name, doc, revision)
+    # THE IDENTITY WINS OVER THE DOCUMENT'S NAME. `doc["agent_name"]` is the bare name, and when one
+    # connector home serves more than one owner a bare name is REFUSED — the daemon answers
+    # UNKNOWN_AGENT and lists both GAIIs. So when the caller named this agent by its full identity,
+    # that is what every node call must carry. The registry and deliverable keys strip it back to the
+    # name themselves (agent_manifest.agent_local_name), so nothing is filed under a GAII.
+    if "#" in str(agent_name):
+        overrides.setdefault("agent_name", agent_name)
     spec = crewspec_from_json(doc, **overrides)
     spec.build_domain = live.build  # the work half follows the node; the identity half was set above
 
