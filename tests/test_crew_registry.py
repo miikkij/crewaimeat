@@ -217,11 +217,17 @@ def _run_tool(tool, **kwargs) -> str:
     return fn(**kwargs) if fn is not None else tool.run(kwargs)
 
 
+def _tool(agent: str, name: str):
+    """Pick a registry tool BY NAME. Positional unpacking broke the moment a third tool was added,
+    which is a test failing for a reason that has nothing to do with what it checks."""
+    return next(t for t in reg.make_registry_tools(agent) if t.name == name)
+
+
 def test_publish_crew_tool_reads_local_file(tmp_root, monkeypatch):
     forge_json.write_json_crew(_good_doc())  # a crew def exists locally (as after /build-json)
     fake = _FakeCall({"aimeat_memory_write": {"ok": True}})
     monkeypatch.setattr(reg, "_aimeat_call", fake)
-    publish_crew, _install = reg.make_registry_tools("crew-forge")
+    publish_crew = _tool("crew-forge", "publish_crew")
     out = _run_tool(publish_crew, target_agent="release-notes-writer", visibility="owner")
     # The forge SHARES a def under its own GAII — the use `install_crew --from <gaii>` is built on —
     # so this one deliberately writes outside the target's namespace. The agent's OWN definition, the
@@ -232,13 +238,13 @@ def test_publish_crew_tool_reads_local_file(tmp_root, monkeypatch):
 
 def test_publish_crew_tool_missing_local_file(tmp_root, monkeypatch):
     monkeypatch.setattr(reg, "_aimeat_call", _FakeCall({}))
-    publish_crew, _install = reg.make_registry_tools("crew-forge")
+    publish_crew = _tool("crew-forge", "publish_crew")
     out = _run_tool(publish_crew, target_agent="never-built")
     assert "No crew def at" in out and "build it first" in out.lower()
 
 
 def test_install_crew_tool_reports_missing_registry(tmp_root, monkeypatch):
     monkeypatch.setattr(reg, "_aimeat_call", _FakeCall({}))  # nothing in the registry
-    _publish, install_crew = reg.make_registry_tools("crew-forge")
+    install_crew = _tool("crew-forge", "install_crew")
     out = _run_tool(install_crew, target_agent="ghost", gaii="")
     assert "INSTALL FAILED" in out and "no crew def in the registry" in out

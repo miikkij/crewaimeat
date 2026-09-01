@@ -91,6 +91,48 @@ def publish_crew_def(
     return True, key, f"published crew def '{name}' -> {key} (visibility={visibility})"
 
 
+def publish_crew_def_live(doc: dict, *, agent: str) -> tuple[bool, str, str]:
+    """Make ``doc`` the LIVE definition through the NODE's publish route. Returns ``(ok, key, detail)``.
+
+    THE DIFFERENCE FROM `publish_crew_def`. That one writes the registry key directly with the agent's
+    token, which works from a repo checkout and is deliberately outside the numbered history. This one
+    hands the document to `aimeat_crew_publish`, and the node then does four things a memory write
+    cannot: it asks the agent's OWN RUNTIME to validate (so a definition that would fail at run time is
+    never written), it numbers the revision, it keeps `.version.N` restorable, and it wakes the runtime
+    with `crew.def_updated` so the change is in force in seconds instead of at the next task.
+
+    It also needs NO FILE, which is the point: an agent created by the node's basic-agents button has
+    no repo on disk, so the file-reading publish path could never have served it.
+
+    THE ONE THING IT CANNOT DO. The node refuses with AGENT_OFFLINE when the target's runtime is not
+    up — MEASURED 2026-09-01 against a stopped daemon. So this cannot give a brand-new agent its FIRST
+    definition: an agent with no definition cannot start (`json_agent.load_def` says so in as many
+    words), and one that cannot start cannot validate its own first definition. That bootstrap belongs
+    to whoever creates the agent; `seed_from_staged` keeps using the direct write for exactly that
+    reason, and must not be routed here.
+    """
+    errors = validate_crew_doc(doc)
+    if errors:
+        # Locally first: the same validator the runtime would run, but with a message now rather than
+        # after a round trip, and without spending the node's time on a document we know is wrong.
+        return False, "", "INVALID crew def — not published:\n  - " + "\n  - ".join(errors)
+    name = str(doc.get("agent_name") or "")
+    key = registry_key(name)
+    r = _aimeat_call(agent, "aimeat_crew_publish", {"target_agent_name": name, "doc": doc})
+    if r is None:
+        return (
+            False,
+            key,
+            f"FAILED to publish '{name}' through the node. The commonest cause is that {name!r}'s "
+            f"runtime is not up: the node asks it to validate the definition and answers AGENT_OFFLINE "
+            f"when nobody is there. Start it and publish again.",
+        )
+    rev = None
+    if isinstance(r, dict):
+        rev = r.get("revision") or (r.get("data") or {}).get("revision")
+    return True, key, f"published crew def '{name}' -> {key}" + (f" (revision {rev})" if rev else "")
+
+
 def _unwrap(value: Any) -> dict | None:
     """Pull the crew doc out of a registry envelope (accepting a bare doc for forward-compat)."""
     if isinstance(value, str):
@@ -203,6 +245,31 @@ def make_registry_tools(agent_name: str) -> list:
         _ok, _key, detail = publish_crew_def(doc, agent=agent_name, visibility=visibility, allow_foreign_namespace=True)
         return detail
 
+    @tool("publish_crew_doc")
+    def publish_crew_doc(target_agent: str, doc_json: str) -> str:
+        """Make a crew definition LIVE for `target_agent` by passing the definition itself as JSON — no
+        file, no repo, nothing on disk. This is how an agent gives ANOTHER agent its behaviour. The
+        node validates it against that agent's own runtime first and nothing is written if it fails, so
+        `target_agent` must be connected; a brand-new agent that has never started cannot be given its
+        FIRST definition this way. Returns the registry key and revision, or the reason it was refused."""
+        import json as _json
+
+        try:
+            doc = _json.loads(doc_json)
+        except ValueError as exc:
+            return f"doc_json is not valid JSON: {exc}"
+        if not isinstance(doc, dict):
+            return "doc_json must be a JSON object — the crew definition itself."
+        doc.setdefault("agent_name", target_agent.strip())
+        if doc.get("agent_name") != target_agent.strip():
+            return (
+                f"The definition names {doc.get('agent_name')!r} but you are publishing it for "
+                f"{target_agent.strip()!r}. A definition filed under the wrong agent is one the Crew tab "
+                f"never shows and the runtime never loads."
+            )
+        _ok, _key, detail = publish_crew_def_live(doc, agent=agent_name)
+        return detail
+
     @tool("install_crew")
     def install_crew(target_agent: str, gaii: str = "") -> str:
         """Fetch a crew def from the AIMEAT registry and install it on THIS machine: materialize its files,
@@ -214,7 +281,7 @@ def make_registry_tools(agent_name: str) -> list:
         except CrewDocError as exc:
             return f"INSTALL FAILED: {exc}"
 
-    tools = [publish_crew, install_crew]
+    tools = [publish_crew, publish_crew_doc, install_crew]
     for _t in tools:  # live registry I/O — never serve a cached result
         try:
             _t.cache_function = lambda *_a, **_k: False

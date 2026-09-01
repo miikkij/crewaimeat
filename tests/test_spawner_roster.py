@@ -125,9 +125,10 @@ def test_refresh_is_idempotent_and_does_not_restart_a_live_agent():
 # --------------------------------------------------------------------------- #
 # Where the roster comes from: repo crews UNION node agents
 # --------------------------------------------------------------------------- #
-def test_node_roster_is_skipped_with_a_reason_when_run_mode_is_not_served(monkeypatch, tmp_path):
-    """MEASURED 2026-08-31: this node does not serve `run_mode` yet (the field is built, not deployed).
-    That must read as 'nothing extra to serve', WITH a reason — not as an empty roster or a crash."""
+def test_an_ignored_filter_serves_nothing_extra_rather_than_the_whole_fleet(monkeypatch, tmp_path):
+    """An unknown query parameter is IGNORED, not refused, so an older node answers `?run_mode=spawn`
+    with EVERY agent it has. Trusting that would put the whole fleet in spawn mode; every row is
+    re-checked, and a filter that was not honoured serves nothing extra — with a reason."""
     monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
     import requests
 
@@ -175,6 +176,36 @@ def test_node_roster_picks_spawn_agents_once_the_field_arrives(monkeypatch, tmp_
     agents, note = spawner.node_spawn_agents()
     assert agents == ["burst"], "only spawn-mode agents belong to the spawner"
     assert note is None
+
+
+def test_the_roster_read_asks_the_node_to_filter(monkeypatch, tmp_path):
+    """The point of the filter is that a 30-second refresh does not drag every agent across the wire
+    to keep a handful. If the request stops carrying it, this fails."""
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    import requests
+
+    from crewaimeat import spawn_state, spawner
+
+    spawn_state.write_json(spawn_state.aimeat_home() / "serve.json", {"port": 1, "agents": [{"agent": "caller"}]})
+    seen: dict = {}
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"data": {"agents": [{"name": "burst", "run_mode": "spawn"}]}}
+
+    def _get(url, **kw):
+        seen["url"] = url
+        seen["params"] = kw.get("params")
+        return _Resp()
+
+    monkeypatch.setattr(requests, "get", _get)
+    agents, note = spawner.node_spawn_agents()
+    assert agents == ["burst"] and note is None
+    assert seen["params"] == {"run_mode": "spawn"}, "the node must do the filtering, not us"
+    assert seen["url"].endswith("/v1/agents")
 
 
 def test_an_unreachable_node_leaves_the_local_crews_serving(monkeypatch, tmp_path):

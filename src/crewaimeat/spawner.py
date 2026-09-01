@@ -688,9 +688,9 @@ def node_spawn_agents() -> tuple[list[str], str | None]:
     at `crews.registry.<agent>` and its run mode is a field on the agent record. So the roster cannot
     come from crew files alone, or the button's agents would be invisible here.
 
-    MEASURED 2026-08-31: `run_mode` is NOT yet in this node's `GET /v1/agents` (the field is built but
-    not deployed). Absent means we serve nothing extra — which is correct, because today nothing on
-    the node is spawn-mode — and the note says so once rather than pretending the roster is complete.
+    The node filters server-side — `GET /v1/agents?run_mode=spawn` is exactly this read — and carries
+    `run_mode` on every agent, on a v2 agent from the moment of enrolment. So the 30-second refresh
+    asks for the handful it wants instead of fetching everything and sorting it out here.
     """
     doc = _serve_doc()
     port = doc.get("port")
@@ -700,20 +700,29 @@ def node_spawn_agents() -> tuple[list[str], str | None]:
     import requests
 
     try:
-        resp = requests.get(f"http://127.0.0.1:{port}/v1/agents", headers={"X-Aimeat-Agent": caller}, timeout=30)
+        resp = requests.get(
+            f"http://127.0.0.1:{port}/v1/agents",
+            params={"run_mode": agent_manifest.RUN_SPAWN},
+            headers={"X-Aimeat-Agent": caller},
+            timeout=30,
+        )
         rows = ((resp.json() or {}).get("data") or {}).get("agents") or []
     except Exception as exc:  # noqa: BLE001 — an unreachable node must not empty the roster
         return [], f"node roster unreadable ({type(exc).__name__}) — local crews only"
-    if not any(("run_mode" in r or "runMode" in r) for r in rows if isinstance(r, dict)):
-        return [], f"node serves no run_mode field yet ({len(rows)} agents) — local crews only"
-    out = [
+    out = sorted(
         str(r.get("name"))
         for r in rows
         if isinstance(r, dict)
         and r.get("name")
         and agent_manifest.normalise_run_mode(r.get("run_mode") or r.get("runMode")) == agent_manifest.RUN_SPAWN
-    ]
-    return sorted(out), None
+    )
+    if rows and not out:
+        # An unknown query parameter is IGNORED, not refused, so a node that does not know this
+        # filter answers with every agent it has. Taking that on trust would put the whole fleet in
+        # spawn mode. Every row is therefore re-checked here, and a filter that was not honoured is
+        # a reason to serve nothing extra — loudly.
+        return [], f"node returned {len(rows)} agent(s), none marked run_mode=spawn — local crews only"
+    return out, None
 
 
 def discover_agents(root: Path) -> list[str]:

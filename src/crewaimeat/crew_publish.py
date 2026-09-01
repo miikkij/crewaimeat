@@ -43,8 +43,8 @@ def _identity(explicit: str | None, doc: dict | None, name: str | None) -> str:
     return who
 
 
-def cmd_publish(path: str, as_agent: str | None, public: bool) -> int:
-    from crewaimeat.crew_registry import publish_crew_def
+def cmd_publish(path: str, as_agent: str | None, public: bool, offline: bool = False) -> int:
+    from crewaimeat.crew_registry import publish_crew_def, publish_crew_def_live
 
     try:
         doc = _load(path)
@@ -53,7 +53,17 @@ def cmd_publish(path: str, as_agent: str | None, public: bool) -> int:
         return 2
     who = _identity(as_agent, doc, None)
 
-    ok, key, detail = publish_crew_def(doc, agent=who, visibility="public" if public else "owner")
+    # THE AGENT'S OWN LIVE DEFINITION goes through the node's publish route: it validates against
+    # that agent's runtime, numbers the revision, keeps the last ten restorable, and wakes the
+    # runtime so the change is in force in seconds. `--public` is a different act — a template for
+    # somebody else to install by GAII, which no runtime of ours validates — so it keeps the direct
+    # write, and `--offline` is the deliberate way to say the agent is not up and you meant it.
+    if public or offline:
+        ok, key, detail = publish_crew_def(doc, agent=who, visibility="public" if public else "owner")
+    else:
+        ok, key, detail = publish_crew_def_live(doc, agent=who)
+        if not ok and "AGENT_OFFLINE" not in detail and "runtime is not up" in detail:
+            detail += "\n  Publish it anyway with --offline (writes the key directly, outside the numbered history)."
     if not ok:
         print(detail, file=sys.stderr)
         # The commonest cause of a failed publish is not a bad document but an identity with no token.
@@ -136,6 +146,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("path")
     p.add_argument("--as", dest="as_agent", default=None, help="agent whose token calls the node")
     p.add_argument("--public", action="store_true", help="any owner may install it by your GAII")
+    p.add_argument(
+        "--offline",
+        action="store_true",
+        help="write the registry key directly instead of through the node (use when the agent's runtime is down)",
+    )
 
     i = sub.add_parser("install", help="materialise a def from the registry")
     i.add_argument("name")
@@ -150,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
     try:
         if a.cmd == "publish":
-            return cmd_publish(a.path, a.as_agent, a.public)
+            return cmd_publish(a.path, a.as_agent, a.public, getattr(a, "offline", False))
         if a.cmd == "install":
             return cmd_install(a.name, a.as_agent, a.gaii, a.node_backed, not a.no_register)
         return cmd_defs(a.as_agent)
