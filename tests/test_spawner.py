@@ -348,6 +348,17 @@ def test_doctor_flags_a_connector_runner_block(tmp_path):
     assert "spawn.connector_runner_set" in _doctor_rules(root)
 
 
+def test_doctor_finds_the_runner_block_at_the_per_owner_path(tmp_path):
+    """The settings file moved to agents/<owner>/<agent>/config.yaml when one daemon started serving
+    more than one owner. A rule that looks only where the file NO LONGER IS reports clean forever,
+    which is worse than the error it exists to catch."""
+    root = _spawn_repo(tmp_path)
+    d = root / ".aimeat" / "agents" / "alice" / "sp"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "config.yaml").write_text("runner:\n  command: python\n", encoding="utf-8")
+    assert "spawn.connector_runner_set" in _doctor_rules(root)
+
+
 def test_doctor_flags_undeclared_concurrency_on_a_spawn_crew(tmp_path):
     crews = tmp_path / "crews"
     crews.mkdir(parents=True)

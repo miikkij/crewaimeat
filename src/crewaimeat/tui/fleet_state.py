@@ -196,15 +196,33 @@ def build_rows(
 
 
 def serve_tunnel_agents(serve_doc: dict) -> set[str]:
-    """Agent ids attached to the shared serve tunnel, from serve.json (agents[] or principals[])."""
+    """Agent NAMES attached to the shared serve tunnel, from serve.json.
+
+    `agents[].agent` is the name and always has been. `principals[].id` is NOT: from
+    schema_version 2 it carries the GAII it was always documented to carry (`<agent>#<owner>@<node>`),
+    so reading it as a bare name silently stopped matching anything. Take the name from `agent` /
+    `gaii` where they exist and split the GAII otherwise — one daemon now serves more than one owner,
+    and two owners may hold the same agent NAME, so the name alone is no longer an identity.
+    """
     out: set[str] = set()
     for a in (serve_doc or {}).get("agents") or []:
         if a.get("agent"):
             out.add(a["agent"])
+        elif a.get("gaii"):
+            out.add(_name_of_gaii(a["gaii"]))
     for p in (serve_doc or {}).get("principals") or []:
-        if p.get("type") == "agent" and p.get("id"):
-            out.add(p["id"])
+        if p.get("type") != "agent":
+            continue
+        ident = p.get("gaii") or p.get("id")
+        if ident:
+            out.add(_name_of_gaii(ident))
     return out
+
+
+def _name_of_gaii(ident: str) -> str:
+    """The agent name out of `<agent>#<owner>@<node>`. A bare name is returned unchanged, so this
+    reads both schema versions without asking which one it is looking at."""
+    return str(ident).split("#", 1)[0]
 
 
 # ── impure collectors (the OS/network edges; defaults overridable for tests) ──

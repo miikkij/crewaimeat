@@ -355,7 +355,13 @@ def _run_mode(inv: Inventory, report: Report) -> None:
                     "holds this crew's own poller",
                 )
             )
-        cfg = inv.root / ".aimeat" / "agents" / crew.agent / "config.yaml"
+        # The per-agent settings file lives at agents/<owner>/<agent>/config.yaml since the connector
+        # started serving more than one owner from one daemon; it used to be agents/<agent>/. Both are
+        # checked, because a rule that looks only where the file NO LONGER IS reports "clean" forever —
+        # a false green is worse than the error it was written to catch.
+        agents_dir = inv.root / ".aimeat" / "agents"
+        candidates = [agents_dir / crew.agent / "config.yaml", *agents_dir.glob(f"*/{crew.agent}/config.yaml")]
+        cfg = next((c for c in candidates if c.is_file()), candidates[0])
         try:
             cfg_text = cfg.read_text(encoding="utf-8", errors="replace") if cfg.is_file() else ""
         except OSError:
