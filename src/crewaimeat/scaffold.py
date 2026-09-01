@@ -28,6 +28,8 @@ def _usage() -> str:
         "  crewaimeat publish <def.json> --as A   validate + publish a def to the node's crew registry\n"
         "  crewaimeat install <agent> --as A      materialise a def from the registry (--node-backed)\n"
         "  crewaimeat defs --as A                 what the crew registry holds\n"
+        "  crewaimeat spawner [--agents ...]      run spawn-mode agents on demand (idle costs nothing)\n"
+        "  crewaimeat run-once <agent>            one cycle for one agent, then exit and free the memory\n"
         "  crewaimeat doctor [--live] [--strict]  reconcile registries + routes (and the node)\n"
         "  crewaimeat retire <agent> [--apply]    stop an agent participating (the opposite of forging one)\n"
         "  crewaimeat costs [--days N]            model spend per agent + is the routing still priced right\n"
@@ -160,6 +162,14 @@ def main(argv: list[str] | None = None) -> int:
         from crewaimeat.crew_publish import main as publish_main
 
         return publish_main(argv)
+    if argv and argv[0] == "spawner":
+        from crewaimeat.spawner import main as spawner_main
+
+        return spawner_main(argv[1:])
+    if argv and argv[0] == "run-once":
+        from crewaimeat.run_once import main as run_once_main
+
+        return run_once_main(argv[1:])
     if argv and argv[0] == "doctor":
         from crewaimeat.doctor.cli import main as doctor_main
 

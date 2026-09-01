@@ -167,6 +167,13 @@ class CrewSpec:
     #   AIMEAT >= 1.16.2 + aimeat-crewai >= 0.3.8); 1 = serial (unchanged); >1 = a bounded thread pool
     #   with a SEPARATE liaison+MCP per task (a shared stdio MCP can't run parallel kickoffs). Best for
     #   I/O-bound crews (mostly waiting on the LLM). PROPOSE + inbox stay serial on the shared liaison.
+    one_shot: bool = False  # SPAWNED mode: run ONE daemon cycle (PROPOSE -> EXECUTE -> messages ->
+    #   records -> dms) and return, instead of looping forever. The spawner starts this process on a
+    #   tunnel wake and the process exits when the cycle is done, so an idle agent costs nothing at all
+    #   — it is data on the node, not a thread here. Every byte of the ~225 MB a run peaks at is
+    #   returned to the OS on exit. False (default) = today's forever-loop; nothing changes for the
+    #   crews that do not ask for it. The single-instance lock still applies, so a spawned worker can
+    #   never double-dispatch against a continuous daemon for the same agent.
     memory_key_prefix: str | None = None  # default: crews.<agent_name>
     manager_agent: Any = None  # only for Process.hierarchical
     memory: bool = False  # opt-in CrewAI crew memory (remember across runs). OFF by default so crews stay
@@ -2864,6 +2871,7 @@ def run_crew(spec: CrewSpec) -> None:
                 owner=spec.owner,
                 on_idle=_on_idle,
                 max_concurrent_tasks=spec.max_concurrent_tasks,  # None = read owner-set value from AIMEAT
+                one_shot=spec.one_shot,  # spawned mode: one cycle, then exit and give the memory back
                 serve_options={"auto_start": False},  # crews never spawn the daemon — only start_fleet does
             )
             return

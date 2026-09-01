@@ -41,6 +41,7 @@ def check(inv: Inventory, report: Report) -> None:
     _crew_shape(inv, report)
     _connector(inv, report)
     _skills_exist(inv, report)
+    _run_mode(inv, report)
     report.note(
         f"crews: {len(inv.live)} live, {len(inv.crews) - len(inv.live)} parked · "
         f"serve.json: {len(inv.served)} registered · "
@@ -288,6 +289,87 @@ def _crew_shape(inv: Inventory, report: Report) -> None:
                     where,
                     "no build_domain and no run_brain — this crew builds nothing",
                     "add build_domain(ctx), or make it a brain stub",
+                )
+            )
+
+
+def _run_mode(inv: Inventory, report: Report) -> None:
+    """The spawned run mode: is what the crew declares actually runnable, and is it running ALONE?
+
+    Three things can only be caught here, and each one fails SILENTLY in production:
+      * a typo in RUN_MODE reads as "continuous" (deliberately — a typo must not relocate an agent),
+        so the crew keeps working and the author never learns the spawn declaration did nothing;
+      * a CUSTOM `on_invoke` handler never runs under spawn: the spawner holds the invoke poll (which
+        is what stops the node answering NO_HANDLER after 90 s) and answers crew.validate / crew.try
+        in a worker of its own, so the crew's handler is bypassed silently;
+      * a `runner` block in the connector's per-agent config makes the SERVE DAEMON start its own
+        worker for the same task alongside ours. The agent lock then kills one of the two with a clean
+        exit 0, and the only symptom is "the task did nothing".
+    """
+    from crewaimeat.agent_manifest import RUN_MODES, RUN_SPAWN, normalise_run_mode
+
+    for crew in inv.live:
+        if crew.agent is None:
+            continue
+        where = crew.path.as_posix()
+        if crew.run_mode is not None and normalise_run_mode(crew.run_mode) is None:
+            report.add(
+                Finding(
+                    "runmode.unknown",
+                    ERROR,
+                    where,
+                    f"RUN_MODE = {crew.run_mode!r} is not a run mode, so it reads as "
+                    f"{RUN_MODES[0]!r} and the declaration does nothing",
+                    f"use one of {RUN_MODES}, or drop the constant to stay {RUN_MODES[0]}",
+                )
+            )
+        if crew.effective_run_mode != RUN_SPAWN:
+            continue
+
+        if crew.max_concurrent is None:
+            report.add(
+                Finding(
+                    "concurrency.undeclared",
+                    WARN,
+                    where,
+                    "spawn-mode crew declares no MAX_CONCURRENT, so its concurrency is read from the "
+                    "node once at worker start — invisible here and different per machine",
+                    "declare MAX_CONCURRENT = 1 (single-flight) or the parallelism this crew can take",
+                )
+            )
+        try:
+            source = crew.path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            source = ""
+        if "on_invoke=" in source:
+            report.add(
+                Finding(
+                    "runmode.spawn.custom_invoke",
+                    ERROR,
+                    where,
+                    "spawn mode + a CUSTOM on_invoke handler: the spawner holds the invoke poll for its "
+                    "agents (so the node never sees NO_HANDLER) and answers crew.validate / crew.try "
+                    "itself in a worker — it does NOT route to this crew's own handler, so the handler "
+                    "would simply never run",
+                    'either drop the custom on_invoke, or declare RUN_MODE = "resident" so fleet_host '
+                    "holds this crew's own poller",
+                )
+            )
+        cfg = inv.root / ".aimeat" / "agents" / crew.agent / "config.yaml"
+        try:
+            cfg_text = cfg.read_text(encoding="utf-8", errors="replace") if cfg.is_file() else ""
+        except OSError:
+            cfg_text = ""
+        if re.search(r"^\s*runner\s*:", cfg_text, re.MULTILINE):
+            report.add(
+                Finding(
+                    "spawn.connector_runner_set",
+                    ERROR,
+                    where,
+                    f"{cfg.as_posix()} declares a `runner` block, so the SERVE DAEMON starts its own "
+                    "subprocess for each task beside our worker; the agent lock then kills one of them "
+                    "with exit 0 and the task looks like it silently did nothing",
+                    "remove the `runner:` block — crewaimeat's spawner owns the worker lifecycle",
                 )
             )
 

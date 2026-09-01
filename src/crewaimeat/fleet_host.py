@@ -112,12 +112,44 @@ def _load_module(path: Path):
     return mod
 
 
+def _spawn_mode_files() -> set[Path]:
+    """Crew files that declare RUN_MODE = "spawn" — the spawner owns these, not the host.
+
+    The host must skip them or BOTH runtimes would start the same agent: the OS lock would then pick a
+    winner arbitrarily and the loser would exit 0, so the agent would appear to be running while the
+    wrong half of the system held it. Read statically (ast), never by importing — the host must not pay
+    a crew's import cost just to decide it is not going to run it.
+    """
+    from crewaimeat import agent_manifest
+
+    try:
+        return {
+            m.path.resolve()
+            for m in agent_manifest.all_manifests(Path.cwd(), refresh=True)
+            if m.live and m.effective_run_mode == agent_manifest.RUN_SPAWN
+        }
+    except Exception as exc:  # noqa: BLE001 — an unreadable manifest must not stop the whole fleet
+        print(f"[host] could not read run modes ({exc!r}); starting every crew as continuous", file=sys.stderr)
+        return set()
+
+
 def _select_crews(agents: list[str] | None) -> list[Path]:
     """The crew files to run: all of crews/*_crew.py, optionally restricted to `agents` (by AGENT_NAME
-    or by filename stem). Reuses forge's roster so discovery matches the per-process fleet exactly."""
+    or by filename stem). Reuses forge's roster so discovery matches the per-process fleet exactly.
+
+    Crews declaring RUN_MODE = "spawn" are EXCLUDED even when named explicitly: they are started per
+    wake by `crewaimeat spawner`, and running them here too would defeat the point (an always-on
+    thread for an agent whose whole purpose is to cost nothing while idle)."""
     from crewaimeat.forge import _agent_name_of, _crew_files
 
-    files = _crew_files()
+    spawn_files = _spawn_mode_files()
+    files = [p for p in _crew_files() if p.resolve() not in spawn_files]
+    if spawn_files:
+        print(
+            f"[host] skipping {len(spawn_files)} spawn-mode crew(s) — run them with "
+            f"`crewaimeat spawner`: {', '.join(sorted(p.stem for p in spawn_files))}",
+            file=sys.stderr,
+        )
     if not agents:
         return files  # default = EVERY crew, crew-forge included (its reconcile no-ops under the host env)
     want = {a.strip().lower() for a in agents if a.strip()}

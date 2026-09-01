@@ -44,6 +44,9 @@ from typing import Any
 
 from aimeat_crewai.workflow_spec import SignalError, validate_signal
 
+from crewaimeat.agent_manifest import RUN_MODES as _RUN_MODES
+from crewaimeat.agent_manifest import normalise_run_mode as _norm_run_mode
+
 # The only ctx.* attributes a task description may template. `directives` is auto-prepended by
 # run_crew, so it's here only for authors who want finer placement; `prompt`/`today` are the
 # common ones (a missing ctx.prompt is the classic "agent drifts to a guessed target" bug —
@@ -90,6 +93,12 @@ def _tools_schedule(agent_name: str, ctx: Any) -> list:
     from crewaimeat.scheduler import make_schedule_tools
 
     return list(make_schedule_tools(agent_name))
+
+
+def _tools_crew_registry(agent_name: str, ctx: Any) -> list:
+    from crewaimeat.crew_registry import make_registry_tools
+
+    return list(make_registry_tools(agent_name))
 
 
 def _tools_dm(agent_name: str, ctx: Any) -> list:
@@ -165,6 +174,7 @@ TOOL_REGISTRY: dict[str, Any] = {
     "local_memory": _tools_local_memory,
     "article_fetch": _tools_article_fetch,
     "app_tools": _tools_app_tools,
+    "crew_registry": _tools_crew_registry,
     "exchange": _tools_exchange,
 }
 
@@ -387,6 +397,15 @@ def validate_crew_doc(doc: Any) -> list[str]:
     if proc is not None and proc not in ("sequential", "hierarchical"):
         errors.append("process: must be 'sequential' or 'hierarchical'")
 
+    rm = doc.get("run_mode")
+    if rm is not None and _norm_run_mode(rm) is None:
+        errors.append(f"run_mode: must be one of {_RUN_MODES} (omit it for {_RUN_MODES[0]!r})")
+
+    mc = doc.get("max_concurrent")
+    if mc is not None and (isinstance(mc, bool) or not isinstance(mc, int) or mc < 1):
+        # bool is an int in Python; True would silently read as 1 and hide a typo.
+        errors.append("max_concurrent: must be an integer >= 1 (1 = single-flight)")
+
     for flag in ("discover", "memory"):
         if doc.get(flag) is not None and not isinstance(doc[flag], bool):
             errors.append(f"{flag}: must be a boolean")
@@ -566,6 +585,9 @@ def crewspec_from_json(doc: dict, **overrides: Any):
         kwargs["discover"] = bool(doc["discover"])
     if doc.get("memory") is not None:
         kwargs["memory"] = bool(doc["memory"])
+    if doc.get("max_concurrent") is not None:
+        # THE same knob as CrewSpec.max_concurrent_tasks — no second concurrency concept.
+        kwargs["max_concurrent_tasks"] = int(doc["max_concurrent"])
     if doc.get("listen_for") is not None:
         kwargs["listen_for"] = tuple(doc["listen_for"])
     if doc.get("skills") is not None:

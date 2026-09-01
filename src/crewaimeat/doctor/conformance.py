@@ -38,6 +38,12 @@ DISPATCHER_MODULES = {
     # an agent token is not enough (requireRoleOrScope + a registeredBy match). Routing this
     # through _aimeat_rest would send the one credential that is guaranteed to be refused.
     "src/crewaimeat/node_cleanup.py",
+    # Talks to the LOOPBACK daemon only, and must not import the dispatcher to do it: `_aimeat_rest`
+    # lives in aimeat_crew, which imports crewai — MEASURED to take this process from ~30 MB to
+    # ~194 MB. An idle spawner that costs nothing is the entire point of the spawned run mode, so it
+    # would be paying the exact import it exists to avoid. Same shape as wake_spin/serve_watchdog:
+    # 127.0.0.1 only, never the node over the network.
+    "src/crewaimeat/spawner.py",
 }
 HTTP_VERBS = {"get", "post", "put", "patch", "delete", "request", "head", "stream"}
 HTTP_LIBS = {"requests", "httpx", "urllib"}

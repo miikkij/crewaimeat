@@ -37,6 +37,41 @@ from pathlib import Path
 # floor all resolve "is this crew live?" through here so they can never disagree.
 PARKED_PREFIX = "_"
 
+# --- Run mode -------------------------------------------------------------------------------- #
+# HOW an agent is run, declared by the crew itself (RUN_MODE / "run_mode"). THE one vocabulary:
+# crew_def's validator, the doctor rules, fleet_host and the spawner all resolve through here so they
+# can never disagree about what a valid mode is.
+#   resident — the agent is held up: a thread in fleet_host, parked in the tunnel itself. For anything
+#              that must answer AT ONCE (a front door taking DMs and chat, an on_invoke agent) — a
+#              spawned run pays ~4 s of cold start before the model is even called.
+#   spawn    — the agent is DATA while idle. The spawner parks on its wake and starts ONE worker
+#              PROCESS when work arrives; the process exits and every byte is returned. Memory then
+#              scales with what is RUNNING, not with how many agents are defined.
+# The names are the NODE's (`run_mode` on the agent record, spawn | resident) — it is the public
+# surface, so two words for one thing is not worth maintaining. `continuous` is the name crewaimeat
+# used first and is still accepted as an alias for `resident`.
+# Undeclared means RESIDENT: adding this field must not change what any existing crew does.
+RUN_SPAWN = "spawn"
+RUN_RESIDENT = "resident"
+RUN_CONTINUOUS = "continuous"  # accepted alias for RUN_RESIDENT
+RUN_MODES = (RUN_RESIDENT, RUN_SPAWN)  # canonical — what doctor and the validator advertise
+_RUN_ALIASES = {RUN_CONTINUOUS: RUN_RESIDENT}
+RUN_MODES_ACCEPTED = (*RUN_MODES, *_RUN_ALIASES)
+
+
+def normalise_run_mode(value: object) -> str | None:
+    """The canonical run mode for `value`, or None when it is not a run mode at all.
+
+    Returning None rather than a guess is the point: the caller decides whether an unrecognised
+    value is a typo to shout about (doctor) or a field to fall back from (`effective_run_mode`).
+    """
+    if not isinstance(value, str):
+        return None
+    v = value.strip().lower()
+    v = _RUN_ALIASES.get(v, v)
+    return v if v in RUN_MODES else None
+
+
 # Module-level constants a Python crew may declare, and the Manifest field each becomes.
 _CONSTANTS = {
     "LLM_PROFILE": "llm_profile",
@@ -46,6 +81,8 @@ _CONSTANTS = {
     "SKILLS": "skills",
     "PROMPT_INDEPENDENT": "prompt_independent",
     "SCHEDULE": "schedule",
+    "RUN_MODE": "run_mode",
+    "MAX_CONCURRENT": "max_concurrent",
 }
 # The same fields as a JSON crew doc names them.
 _JSON_KEYS = {
@@ -55,6 +92,8 @@ _JSON_KEYS = {
     "offers": "offers",
     "skills": "skills",
     "schedule": "schedule",
+    "run_mode": "run_mode",
+    "max_concurrent": "max_concurrent",
 }
 
 
@@ -73,6 +112,10 @@ class Manifest:
     skills: list | None = None
     prompt_independent: str | None = None
     schedule: dict | None = None
+    run_mode: str | None = None  # "continuous" (thread in fleet_host) | "spawn" (process per wake).
+    #   None = undeclared -> `effective_run_mode` reads CONTINUOUS, today's behaviour for all 49 crews.
+    max_concurrent: int | None = None  # static value for CrewSpec.max_concurrent_tasks. 1 = single-flight;
+    #   >1 = a bounded pool INSIDE one worker. None = ask the node at daemon start (today's behaviour).
     has_build_domain: bool = False
     has_run: bool = False
     is_brain_stub: bool = False
@@ -80,6 +123,26 @@ class Manifest:
     @property
     def live(self) -> bool:
         return not self.parked
+
+    @property
+    def effective_run_mode(self) -> str:
+        """The mode this agent actually runs in — never None, so no caller has to guess.
+
+        An undeclared or unrecognised value reads RESIDENT. That is deliberate: a typo must not
+        silently move an agent to a different runtime. The doctor rule `runmode.unknown` is what
+        makes the typo LOUD; this property is what keeps the fleet running while it is fixed.
+        """
+        return normalise_run_mode(self.run_mode) or RUN_RESIDENT
+
+    @property
+    def single_flight(self) -> bool:
+        """True when this agent may run only ONE task at a time.
+
+        `max_concurrent` is the SAME knob as CrewSpec.max_concurrent_tasks (the owner's decision: no
+        second concurrency concept). None means the value is read from the node at daemon start, so
+        it cannot be known statically — report False and let `concurrency.undeclared` say so.
+        """
+        return self.max_concurrent == 1
 
 
 def _literals(tree: ast.Module) -> dict:
