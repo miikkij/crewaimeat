@@ -273,7 +273,11 @@ class CrewSpec:
     #   agent receives text it already advertised, and its LLM interprets the filled params (no rigid
     #   parse). May be a CALLABLE(agent_name)->list so an agent can GENERATE commands from LIVE state (e.g.
     #   one "Ask <specialist>" command per live agent it can delegate to — the menu reflects who's up now).
-    mode: str | None = None  # AIMEAT agent MODE, set on every start via aimeat_agent_mode_set (self). One
+    mode: str | None = None  # AIMEAT agent MODE this crew EXPECTS. Declared, never sent: the mode is a
+    #   standing instruction the OWNER gave the node (a queued task is auto-activated only for a
+    #   task-runner), so a runtime that stamped it on every start rewrote the owner's choice from a
+    #   process nobody was watching. Kept so doctor can say when the declared mode and the node's
+    #   disagree. One
     #   of autonomous|interactive|task-runner|coordinator|workstation. None -> DERIVED: dm_serviceable /
     #   self_monitor crews keep the interactive message surface; every other crewaimeat crew is a
     #   "task-runner". WHY it matters: the node defaults a device-authed agent with no mode to 'interactive',
@@ -2306,16 +2310,16 @@ def run_crew(spec: CrewSpec) -> None:
     #      serve.json read) when already attached — the steady state of every normal restart.
     _serve_attach_bridge(spec.agent_name)
 
-    # 0b) Set the agent's MODE (idempotent, every start, BEFORE onboarding so the node serves the mode's
-    #     step list). crewaimeat crews are task-runners; the node otherwise defaults a device-authed agent
-    #     with no mode to 'interactive', which gates every created task behind a manual 'Start this task' in
-    #     the dashboard. task-runner mode makes the node AUTO-ACTIVATE tasks on create — test runs and real
-    #     work just run. (The connector dropped device-auth's --mode flag, so we set it here, not at register.)
-    _mode = _effective_mode(spec)
-    _mres = _aimeat_call(
-        spec.agent_name, "aimeat_agent_mode_set", {"target_agent_name": spec.agent_name, "mode": _mode}
-    )
-    print(f"[{spec.agent_name}] set agent mode = {_mode}: {bool(_mres)}", file=sys.stderr)
+    # 0b) THE MODE IS THE OWNER'S, AND THIS RUNTIME NO LONGER TOUCHES IT.
+    #     `mode` is a behavioural switch on the node: a queued task is activated without the owner if
+    #     and only if the target is `task-runner`, and the node's own words for setting it are "the
+    #     person saying start without asking me each time". Stamping it on every start therefore
+    #     rewrote a standing instruction the owner gave, from a process the owner is not watching —
+    #     and it did: on 2026-09-02 a start overwrote `coordinator`, deliberately chosen for two
+    #     agents, with `task-runner`, and nothing told anybody.
+    #     A crew that needs its tasks auto-activated asks the OWNER to set the mode once. What this
+    #     code can honestly do is SAY so when the mode will keep the crew idle, which `doctor --live`
+    #     reports; it may not decide it. (`CrewSpec.mode` stays for the declaration; nothing sends it.)
 
     # 1) Ensure Hello Integration before the daemon (best-effort). SELF-HEALING: re-invoke the driver
     #    whenever onboarding is incomplete AND at least one pending REQUIRED step is drivable (has a
