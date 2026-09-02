@@ -2893,8 +2893,21 @@ def run_crew(spec: CrewSpec) -> None:
     _serve_attempt = 0
     while True:
         try:
+            # THE PACKAGE WANTS THE NAME, NOT THE IDENTITY — and it is right to. From 0.24.0 it
+            # resolves one AgentIdentity(name, owner, gaii): the NAME finds the credential file
+            # (`keys/<name>@<owner>.key`) and the GAII, READ out of that credential, does the
+            # routing. Handing it a GAII makes it hunt for `keys/<gaii>@*.key`, which is the same
+            # conflation this repo carries one layer up: `spec.agent_name` drives our own node calls,
+            # where a bare name two owners share is refused. So the split happens HERE, at the one
+            # boundary between the two — and the owner comes from the identity when it has one,
+            # because in a two-owner home the name alone cannot say which credential is meant.
+            from crewaimeat.agent_manifest import agent_local_name
+
+            _ident = str(spec.agent_name)
+            _daemon_name = agent_local_name(_ident)
+            _daemon_owner = spec.owner or (_ident.split("#", 1)[1].split("@", 1)[0] if "#" in _ident else None)
             run_crew_daemon(
-                agent_name=spec.agent_name,
+                agent_name=_daemon_name,
                 build_crew=_build,
                 build_propose_crew=_propose,
                 poll_interval_seconds=spec.poll_seconds,
@@ -2905,7 +2918,7 @@ def run_crew(spec: CrewSpec) -> None:
                 on_dm=_on_dm,  # federated-inbox DM wake: caller's on_dm, else the dm_serviceable generic, else None
                 on_invoke=spec.on_invoke,  # the node ASKING this agent something and waiting (Crew tab)
                 llm=get_llm(agent_name=spec.agent_name),
-                owner=spec.owner,
+                owner=_daemon_owner,
                 on_idle=_on_idle,
                 max_concurrent_tasks=spec.max_concurrent_tasks,  # None = read owner-set value from AIMEAT
                 one_shot=spec.one_shot,  # spawned mode: one cycle, then exit and give the memory back
