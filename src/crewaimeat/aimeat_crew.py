@@ -872,6 +872,7 @@ def _aimeat_rest(
     retries: int = 3,
     backoff: float = 1.5,
     raw: bool = False,
+    return_error: bool = False,
 ) -> dict | None:
     """Deterministic REST call on the agent's behalf (a `/v1/...` node route). No LLM.
 
@@ -886,7 +887,14 @@ def _aimeat_rest(
     (the connector tool surface returns empty off-fleet; a direct authed call really works or really
     fails).
 
-    Returns the envelope's `data` on success, None on failure (logged loud)."""
+    Returns the envelope's `data` on success, None on failure (logged loud).
+
+    `return_error=True` hands the caller the node's own ENVELOPE on a verdict (a 4xx, or `ok:false`)
+    instead of None, transport failures still being None. Use it where the caller must SAY what the
+    node said rather than infer it: `call_app_tool` used to read None, look at the tool's price, and
+    announce a payment wall — so the app's own owner was told their tool was priced and foreign when
+    the node had actually answered TOOL_NOT_INVOKABLE (measured 2026-09-03). The retry policy is
+    unchanged; only what a settled failure gives back."""
     for attempt in range(retries):
         last = attempt + 1 >= retries
         api = _serve_api()
@@ -933,6 +941,8 @@ def _aimeat_rest(
                 time.sleep(backoff * (2**attempt))
                 continue
             print(f"[{agent_name}] {method} {path} failed: HTTP {r.status_code} {err or ''}", file=sys.stderr)
+            if return_error and isinstance(env, dict):
+                return dict(env, http_status=r.status_code)
             return None
         return env if raw else env.get("data")
     return None

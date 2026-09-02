@@ -30,14 +30,62 @@ from typing import Any
 _CATALOG_PATH = "/v1/commerce/tools"
 
 
+def _invoke_via_mcp(agent_name: str, owner: str, app: str, tool: str, payload: dict) -> dict:
+    """Call `aimeat_app_tool_invoke` through the CONNECTOR'S MCP door (`POST /v1/mcp`).
+
+    This is the door the platform designates for this act, and it is designated deliberately: the tool
+    is not in the shell dispatch (`/local/call` answers 404 UNKNOWN_TOOL) because a two-sided act under
+    a metered contract needs a server-side session, and a loopback door would be a second, weaker copy
+    of the metering. `serve_params` puts the identity in `X-Aimeat-Agent`, so the session says who it
+    is before a tool is named.
+
+    Returns `{"text": …}` with whatever the door said — the node's own envelope on a refusal. The MCP
+    client is async and a crewai tool is not, so the session runs in its own thread with its own loop
+    rather than assuming this one has none.
+    """
+    import asyncio
+    import concurrent.futures
+
+    from aimeat_crewai.mcp_client import serve_params
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamablehttp_client
+
+    async def _go() -> dict:
+        p = serve_params(agent_name=agent_name, auto_start=False)
+        async with (
+            streamablehttp_client(p["url"], headers=p["headers"]) as (r, w, _),
+            ClientSession(r, w) as session,
+        ):
+            await session.initialize()
+            res = await session.call_tool(
+                "aimeat_app_tool_invoke", {"owner": owner, "app": app, "tool": tool, "input": payload}
+            )
+            text = "\n".join(getattr(c, "text", "") or "" for c in res.content).strip()
+            return {"is_error": bool(res.isError), "text": text}
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(lambda: asyncio.run(_go())).result()
+
+
 def _owner_of(agent_name: str) -> str:
-    """This agent's owner GHII, from its token filename `<agent>@<owner>.token`. Deterministic and
-    always present in-fleet; empty string if it cannot be found (the free hint then just abstains)."""
+    """This agent's owner GHII. The IDENTITY answers first, then the credential file.
+
+    A GAII (`<agent>#<owner>@<node>`) carries the owner in the middle, and that is both cheaper and
+    surer than any file. Falling through to disk covers a bare name — and it must look in `keys/` as
+    well as `tokens/`: agent v2 stores an Ed25519 key, not a bearer, so a v2 home has no `tokens/`
+    entry for the agent at all. Measured 2026-09-03 on a two-owner v2 home: this returned `''` for
+    every agent, so `free_for_you` read False even for the owner of the tool. An abstaining hint
+    that says "not yours" is not abstaining."""
+    ident = str(agent_name or "")
+    if "#" in ident:
+        return ident.split("#", 1)[1].split("@", 1)[0]
     try:
         from crewaimeat._home import aimeat_home
 
-        for f in (aimeat_home() / "tokens").glob(f"{agent_name}@*.token"):
-            return f.stem.split("@", 1)[1]
+        home = aimeat_home()
+        for sub, ext in (("keys", ".key"), ("tokens", ".token")):
+            for f in (home / sub).glob(f"{ident}@*{ext}"):
+                return f.stem.split("@", 1)[1]
     except Exception:  # noqa: BLE001 — the hint is a convenience, never a hard dependency
         pass
     return ""
@@ -138,17 +186,59 @@ def make_app_tools(agent_name: str, ctx: Any = None) -> list:
 
         from crewaimeat.aimeat_crew import _aimeat_rest
 
-        data = _aimeat_rest(agent_name, "POST", path, payload)
+        data = _aimeat_rest(agent_name, "POST", path, payload, return_error=True)
         if data is None:
-            priced = not _free_for(entry, owner) and entry.get("price")
-            if priced:
-                return (
-                    f"{entry.get('sku')} is priced ({entry.get('price')}) and owned by "
-                    f"{_tool_owner(entry)!r}, not your family — it requires payment (checkout), which "
-                    f"this tool does not do yet. It did not run."
+            return (
+                f"{entry.get('sku')} could not be reached (the call never got an answer — see the "
+                f"fleet log). It did not run."
+            )
+        # SAY WHAT THE NODE SAID. This used to read a bare None, look at the price field and announce
+        # a payment wall — so on 2026-09-03 the app's OWN owner was told their tool was priced and
+        # belonged to someone else, when the node had answered TOOL_NOT_INVOKABLE: nothing is wired to
+        # it. Two consumers of one gate reporting different reasons for the same call is precisely the
+        # divergence this scenario exists to catch, and the divergence was ours.
+        if isinstance(data, dict) and data.get("ok") is False:
+            err = data.get("error") or {}
+            line = f"{entry.get('sku')} did NOT run. The node answered {err.get('code') or 'an error'}"
+            status = data.get("http_status")
+            if status:
+                line += f" (HTTP {status})"
+            msg = str(err.get("message") or "").strip()
+            if msg:
+                line += f": {msg}"
+            pay = data.get("payment") or {}
+            if pay.get("required"):
+                line += (
+                    f" — the price is {json.dumps(pay.get('price'), ensure_ascii=False)} and paying IS "
+                    f"the call: open and complete a checkout session. I do not do that yet."
                 )
-            return f"{entry.get('sku')} returned no result (it failed — see the fleet log for the node's reason)."
+            return line
         result = data.get("result", data) if isinstance(data, dict) else data
         return json.dumps(result, ensure_ascii=False)
 
-    return [list_app_tools, call_app_tool]
+    @tool("invoke_app_tool")
+    def invoke_app_tool(sku: str, input_json: str = "{}") -> str:
+        """Call an app-tool through the connector's MCP door, the platform's own route for this act.
+        Same arguments as call_app_tool — a `sku` from list_app_tools and a JSON input object. Use this
+        when call_app_tool cannot reach the tool; it returns the node's answer verbatim, including the
+        checkout terms when the tool is priced."""
+        try:
+            payload = json.loads(input_json) if input_json.strip() else {}
+        except ValueError as exc:
+            return f"input_json is not valid JSON: {exc}"
+        if not isinstance(payload, dict):
+            return 'input_json must be a JSON object (e.g. {"text": "..."}).'
+        entry = _find(_catalog(agent_name), sku)
+        if entry is None:
+            return f"No single app-tool matches {sku!r}. Call list_app_tools to see the exact sku to use."
+        app_ref = str(entry.get("app") or "")  # "<owner>/<appId>"
+        tool_owner, _, app_id = app_ref.partition("/")
+        if not tool_owner or not app_id:
+            return f"{entry.get('sku')} has no usable app reference ({app_ref!r})."
+        try:
+            out = _invoke_via_mcp(agent_name, tool_owner, app_id, str(entry.get("name")), payload)
+        except Exception as exc:  # noqa: BLE001 — the crew needs the real cause, not a stack in a log
+            return f"{entry.get('sku')}: the MCP door could not be reached ({type(exc).__name__}: {exc})."
+        return out["text"] or ("(the door answered with no content)" if out["is_error"] else "(no content)")
+
+    return [list_app_tools, call_app_tool, invoke_app_tool]

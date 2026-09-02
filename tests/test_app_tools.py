@@ -56,17 +56,31 @@ CATALOG = {
 @pytest.fixture
 def node(monkeypatch):
     """Fake `_aimeat_rest`: GET raw returns the catalog; POST returns a result for family tools and
-    None (a 402/failure) for the stranger's priced one — exactly what the live node does."""
+    the node's OWN refusal envelope for the rest — which is what `return_error=True` asks for."""
     calls: list = []
 
-    def _rest(agent, method, path, body=None, *, retries=3, backoff=1.5, raw=False):
+    def _rest(agent, method, path, body=None, *, retries=3, backoff=1.5, raw=False, return_error=False):
         calls.append((method, path, body))
         if method == "GET" and raw:
             return CATALOG
-        if method == "POST" and "/apps/me/" in path:
+        if method == "POST" and "/apps/me/laake.html/" in path:
             return {"app": "me", "metered": False, "result": {"ok": True, "n": 3}}
         if method == "POST" and "/apps/stranger/" in path:
-            return None  # the node answered 402; _aimeat_rest turns that into None
+            env = {
+                "ok": False,
+                "http_status": 402,
+                "error": {"code": "PAYMENT_REQUIRED", "message": 'Tool "run" is priced'},
+                "payment": {"required": True, "price": {"morsels": 20, "unit": "per-call"}},
+            }
+            return env if return_error else None
+        if method == "POST" and "/apps/me/sanomat.html/" in path:
+            # The owner's OWN tool, refused for a reason that has nothing to do with money.
+            env = {
+                "ok": False,
+                "http_status": 422,
+                "error": {"code": "TOOL_NOT_INVOKABLE", "message": "This tool is not wired to anything."},
+            }
+            return env if return_error else None
         return None
 
     monkeypatch.setattr("crewaimeat.aimeat_crew._aimeat_rest", _rest)
@@ -113,9 +127,22 @@ def test_call_runs_a_family_tool_and_returns_its_result(node):
 
 
 def test_a_strangers_priced_tool_is_reported_not_faked(node):
-    """The honest failure: it did not run, and the reason is payment — not a made-up result."""
+    """The honest failure: it did not run, and the reason is the NODE'S, not one we inferred."""
     out = _tools(node)["call_app_tool"].run(sku="app-tool:stranger/audit:run", input_json='{"text": "x"}')
-    assert "requires payment" in out and "did not run" in out.lower()
+    assert "PAYMENT_REQUIRED" in out and "402" in out and "did NOT run" in out
+    assert "checkout" in out  # and what it would take, since the node offered terms
+
+
+def test_a_refusal_that_is_not_about_money_is_not_reported_as_money(node):
+    """The reason comes from the node, never from the price column.
+
+    Measured 2026-09-03 against the live two-owner node: the app's OWN owner called their own tool,
+    the node answered TOOL_NOT_INVOKABLE — nothing is wired to it — and the crew announced a payment
+    wall and a foreign owner instead, because it read a bare None and guessed from `price`.
+    """
+    out = _tools(node)["call_app_tool"].run(sku="app-tool:me/sanomat.html:getEdition", input_json="{}")
+    assert "TOOL_NOT_INVOKABLE" in out and "not wired" in out
+    assert "payment" not in out.lower() and "checkout" not in out.lower()
 
 
 def test_bad_input_json_is_caught_before_any_call(node):
@@ -135,3 +162,19 @@ def test_free_for_helper_reads_the_owner_out_of_a_gaii():
     assert at._tool_owner({"ownerName": "session-x#me"}) == "me"
     assert at._tool_owner({"ownerName": "me"}) == "me"
     assert at._free_for({"ownerName": "stranger"}, "me") is False
+
+
+def test_the_calling_agents_owner_comes_out_of_its_own_identity(tmp_path, monkeypatch):
+    """A GAII carries the owner; a v2 home has no `tokens/` entry to read it from.
+
+    Live 2026-09-03: `_owner_of` looked only in `tokens/` and only for a bare name, so on a two-owner
+    agent-v2 home it returned '' for every agent — and `free_for_you` then read False for the owner of
+    the tool. A hint that abstains by saying "not yours" is not abstaining.
+    """
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    assert at._owner_of("concierge#isobob@aimeat-iso-001-a") == "isobob"
+
+    (tmp_path / "keys").mkdir()
+    (tmp_path / "keys" / "concierge@isobob.key").write_text("x", encoding="utf-8")
+    assert at._owner_of("concierge") == "isobob"  # a bare name still resolves, from keys/ as well
+    assert at._owner_of("nobody") == ""
