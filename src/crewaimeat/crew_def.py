@@ -498,7 +498,14 @@ def build_domain_from_json(doc: dict, ctx: Any) -> tuple[list, list]:
 
     from crewai import Agent, Task
 
-    agent_name = doc["agent_name"]
+    # WHO CALLS THE NODE IS THE RUNNING IDENTITY, NOT THE DOCUMENT'S NAME. `doc["agent_name"]` is the
+    # bare name, and rightly so — one seeded document serves every owner who has this agent. But the
+    # tools built below call the node AS somebody, and a bare name is REFUSED where a connector home
+    # holds two owners: the daemon answers UNKNOWN_AGENT and names both GAIIs. Measured against the
+    # two-owner node 2026-09-02: workflow-manager's `discover_crews` and every `delegate_subtask` came
+    # back empty for BOTH owners, and the run still reported success — it had simply found nobody to
+    # delegate to. `crew_invoke` already passes the invoke's identity for the same reason.
+    agent_name = str(getattr(ctx, "identity", None) or doc["agent_name"])
     # Use ctx.llm as-is — exactly like a hand-written build_domain. run_crew always supplies the routed
     # LLM (get_llm(agent_name=...)) at run time; it is only None during OFFLINE validation
     # (crewaimeat._validate_crew passes llm=None), where crewai builds its default lazily at kickoff so

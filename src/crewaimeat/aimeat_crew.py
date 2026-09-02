@@ -147,6 +147,12 @@ class BuildContext:
     #   prompt as a <skills> block. None when the crew declares none (crewai rejects an EMPTY skills
     #   list, so None keeps the pass-through safe); per-agent selection is yours (give different
     #   agents different subsets if you want).
+    identity: str | None = None  # WHICH agent is running — the full identity (a GAII when the
+    #   connector home serves more than one owner), not the crew's declared name. A JSON crew's
+    #   `doc["agent_name"]` is the bare name on purpose: the SAME document is seeded for every
+    #   owner. But a bare name is REFUSED by a multi-owner connector (UNKNOWN_AGENT, listing the
+    #   GAIIs), so every tool that calls the node needs this instead. None off a live daemon
+    #   (offline validation), where nothing calls the node anyway.
 
 
 # build_domain returns (agents, tasks). Tasks run in `process` order; the LAST
@@ -2572,6 +2578,7 @@ def run_crew(spec: CrewSpec) -> None:
             directives=directives,
             offer=_resolve_offer(spec.agent_name, task),
             skills=_task_skills(),
+            identity=spec.agent_name,
         )
         agents, tasks = spec.build_domain(ctx)
 
@@ -2819,6 +2826,7 @@ def run_crew(spec: CrewSpec) -> None:
                 llm=get_llm(agent_name=spec.agent_name),
                 today=_now_context(),
                 skills=_task_skills(),
+                identity=spec.agent_name,
             )
             # Build memory BEFORE the try so a missing-embedder RuntimeError fails LOUD (a memory
             # misconfiguration must surface, not hide behind the generic per-DM apology below). Memory on

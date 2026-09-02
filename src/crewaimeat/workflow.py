@@ -23,6 +23,7 @@ from typing import Any
 
 from crewai.tools import tool
 
+from crewaimeat.agent_manifest import agent_local_name
 from crewaimeat.aimeat_crew import _GROUNDING_RULE, _aimeat_call, _rate_task
 
 POLL_SECONDS = 15
@@ -277,11 +278,30 @@ def _mem_value(d: dict | None):
     return (d.get("data") or {}).get("value")
 
 
-def _gaii_map(coordinator_name: str) -> dict:
-    """{agent_name: gaii} for the owner's agents (one call), so we can read another agent's public stats."""
+def _peer_rows(coordinator_name: str) -> list[dict]:
+    """The owner's agents as the NODE holds them (one call) — the authority on who exists."""
     data = _aimeat_call(coordinator_name, "aimeat_agents_list", {})
     agents = (data or {}).get("agents") or (data or {}).get("data", {}).get("agents") or []
-    return {a.get("name"): a.get("gaii") for a in agents if isinstance(a, dict) and a.get("name") and a.get("gaii")}
+    return [a for a in agents if isinstance(a, dict) and a.get("name") and a.get("gaii")]
+
+
+def _gaii_map(coordinator_name: str) -> dict:
+    """{agent_name: gaii} for the owner's agents (one call), so we can read another agent's public stats."""
+    return {a["name"]: a["gaii"] for a in _peer_rows(coordinator_name)}
+
+
+def _can_take_delegated_work(row: dict) -> bool:
+    """Only a task-runner can ACT on a delegated task, so only a task-runner is worth delegating to.
+
+    A task is auto-activated by the node when `queued && mode == 'task-runner'`; every other mode waits
+    for the OWNER to start it, and there is no tool that lets an agent start one. So a subtask sent to
+    an interactive peer sits queued for as long as the coordinator is willing to wait — measured
+    2026-09-02, isoalice's workflow-manager delegated step 1 to its interactive concierge and burned
+    the whole 1800 s timeout on a task nobody could start. A mode we cannot read is offered anyway;
+    the node is the one adding fields, and refusing on an unknown value would hide a working peer.
+    """
+    mode = row.get("mode")
+    return mode is None or str(mode) == "task-runner"
 
 
 # Exploration cadence: roughly 1 in N delegation rounds is steered to an under-sampled crew so a
@@ -401,7 +421,9 @@ def make_workflow_tools(
     <tag> must be assigned (Data Access -> Shared tags) to the coordinator AND every worker it uses.
     `exclude` agents are hidden from discovery and refused as targets. `task_id` (the coordinator's
     own task) is used to append "Delegated to X" / "Received from X" events to its timeline."""
-    blocked = set(exclude or []) | {coordinator_name}
+    # `coordinator_name` may be a full identity (a GAII in a multi-owner connector home); peers are
+    # named by their LOCAL name everywhere else, so block both spellings of self.
+    blocked = set(exclude or []) | {coordinator_name, agent_local_name(coordinator_name)}
     state: dict = {"jobs": [], "seq": 0, "clarifications": 0}
     directive_sigs = _directive_signatures(directives)  # strip these if the model leaks them into a worker
 
@@ -420,13 +442,44 @@ def make_workflow_tools(
         live field score (from real-task ratings) + lab benchmark (A/B test result). Call this first to
         decide which crew should do each subtask. When two crews do the same thing (e.g. an agent and an
         evolved variant), use the reputation to choose."""
-        roster = [c for c in _crew_roster() if c["agent"] not in blocked]
+        # THE NODE SAYS WHO EXISTS; the local checkout only supplies the one-line summary. A crew file
+        # in `crews/` is not an agent — it is an agent HERE, in this repo, for whoever last started a
+        # fleet from it. Delegating by that list offered isoalice's workflow-manager 49 peers from the
+        # crewaimeat checkout on 2026-09-02, none of which existed on its node, while the three agents
+        # that DID exist for that owner were invisible: they are defined on the node and have no local
+        # file at all. `aimeat_agents_list` answers for exactly one owner, which is the right roster.
+        rows = state.get("peer_rows")
+        if rows is None:
+            rows = state["peer_rows"] = _peer_rows(coordinator_name)
+        gaii_map = state["gaii_map"] = {r["name"]: r["gaii"] for r in rows}
+        local = {c["agent"]: c["summary"] for c in _crew_roster()}
+        waiting = sorted(r["name"] for r in rows if r["name"] not in blocked and not _can_take_delegated_work(r))
+        if rows:
+            roster = [
+                {"agent": r["name"], "summary": local.get(r["name"]) or "(defined on the node — no local crew file)"}
+                for r in sorted(rows, key=lambda r: r["name"])
+                if r["name"] not in blocked and _can_take_delegated_work(r)
+            ]
+        else:
+            # The node could not be asked (it prints the reason). Fall back to the checkout rather than
+            # delegate to nobody — and SAY which list this is, so a wrong target reads as unverified
+            # rather than as "that agent is broken".
+            roster = [c for c in _crew_roster() if c["agent"] not in blocked]
         if not roster:
+            if waiting:
+                return (
+                    "No delegable crews found. These exist but cannot act on a delegated task — their "
+                    f"owner starts their work by hand: {', '.join(waiting)}. Do the work yourself and "
+                    "say which part you could not hand off."
+                )
             return "No delegable crews found."
-        gaii_map = state.get("gaii_map")
-        if gaii_map is None:
-            gaii_map = state["gaii_map"] = _gaii_map(coordinator_name)
         lines = []
+        if not rows:
+            lines.append("(Could not reach the node's agent list — these are the local crew files, unverified.)")
+        if waiting:
+            lines.append(
+                f"(Exists but cannot be delegated to — their owner starts their work by hand: {', '.join(waiting)}.)"
+            )
         under: list[tuple[str, int]] = []  # under-sampled-but-plausible crews → explore candidates
         for c in roster:
             suffix, sel, bench = _reputation(coordinator_name, c["agent"], gaii_map.get(c["agent"]))
@@ -475,6 +528,15 @@ def make_workflow_tools(
             return None, f"Refused: subtask cap ({max_subtasks}) reached. Gather what you have instead."
         if target_agent in blocked:
             return None, f"Refused: '{target_agent}' is not a delegable crew. Call discover_crews to see valid targets."
+        # Refuse a peer whose tasks only its OWNER can start, rather than create one and wait out the
+        # whole timeout on it. Checked here as well as in discovery because the model can name a target
+        # it never saw listed.
+        _row = next((r for r in (state.get("peer_rows") or []) if r.get("name") == target_agent), None)
+        if _row is not None and not _can_take_delegated_work(_row):
+            return None, (
+                f"Refused: '{target_agent}' runs in {_row.get('mode')!r} mode — its owner starts its work by "
+                "hand, so a subtask sent there would sit unstarted. Pick another crew or do this part yourself."
+            )
         instruction = _strip_leaked_directives(instruction, directive_sigs)  # the worker applies its own
         state["seq"] += 1
         pub_key = f"agents.tag.{tag}.{run_id}.{target_agent}.{state['seq']}"
@@ -483,6 +545,14 @@ def make_workflow_tools(
         # a null/HTML (non-JSON) response for a moment; a real "agent missing" error repeats, a transient
         # blip clears on retry. Retrying here stops a coordinator from forging a REDUNDANT specialist over
         # a momentary null when the target crew actually exists and is reachable.
+        # WHAT IS ALREADY UNDER THIS KEY IS NOT OUR ANSWER. `run_id` is the coordinator's TASK id on the
+        # node-backed path, so a task run a SECOND time (a retry, or a worker the spawner reaped) rebuilds
+        # the very same key — and the wait would return the previous attempt's deliverable the instant it
+        # started, while the subtask it just queued runs on with nobody reading it. Measured 2026-09-02:
+        # `delegate_and_wait` answered in 0 s from a 37-minute-old write and abandoned a live subtask.
+        prior = _aimeat_call(coordinator_name, "aimeat_memory_read", {"key": pub_key, "owner_scope": True})
+        stale = next((d.get("value") for d in _walk(prior) if isinstance(d, dict) and "value" in d), None)
+
         tid, resp = None, None
         for _attempt in range(3):
             resp = _aimeat_call(
@@ -497,7 +567,14 @@ def make_workflow_tools(
                 time.sleep(3)
         if not tid:
             return None, f"Failed to create subtask for {target_agent} after 3 attempts: {json.dumps(resp)[:200]}"
-        job = {"agent": target_agent, "tid": tid, "title": title, "pub_key": pub_key, "instruction": instruction}
+        job = {
+            "agent": target_agent,
+            "tid": tid,
+            "title": title,
+            "pub_key": pub_key,
+            "instruction": instruction,
+            "stale": stale,  # what sat under the key before we asked; the wait must see a CHANGE
+        }
         state["jobs"].append(job)
         _event(f"Delegated to {target_agent}: {title}")
         return job, None
@@ -514,8 +591,9 @@ def make_workflow_tools(
                 {"owner_scope": True, "prefix": prefix, "tags": [tag]},
             )
             found = {it.get("key"): it.get("value") for it in _items_of(listing)}
-            if found.get(job["pub_key"]) is not None:
-                job["result"] = str(found[job["pub_key"]])
+            fresh = found.get(job["pub_key"])
+            if fresh is not None and fresh != job.get("stale"):
+                job["result"] = str(fresh)
                 job["evalctx"] = _parse_evalctx(found.get(f"{job['pub_key']}.evalctx"))
                 _event(f"Received result from {job['agent']}")
                 return True

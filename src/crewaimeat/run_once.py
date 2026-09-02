@@ -82,6 +82,48 @@ def _run_node_backed(agent: str, *, quiet: bool = False) -> int:
     return 0
 
 
+RSS_HEARTBEAT_S = 30  # how often a running worker records its own peak memory
+
+
+def _start_rss_heartbeat(agent: str, started: float) -> None:
+    """Write this worker's peak memory into the audit WHILE it runs, not only when it finishes.
+
+    A worker the spawner reaps (the run timeout) never reaches `_finish`, so the number is lost for
+    exactly the run that most needs one: on 2026-09-02 a worker was killed at 3601.8 s and its audit
+    record read `peak_rss_mb: null`. The manager holds the Popen handle but cannot read the child's
+    peak reliably — on Windows the venv launcher is a SHIM whose child holds the real memory — while
+    the worker always knows its own. So the worker says so as it goes.
+    """
+    import threading
+
+    run_id = os.environ.get("AIMEAT_SPAWN_RUN_ID")
+    if not run_id:  # run by hand, not by the spawner: nothing is reading an audit record
+        return
+
+    def _beat() -> None:
+        while True:
+            time.sleep(RSS_HEARTBEAT_S)
+            if not _record_rss(agent, run_id, started):
+                return
+
+    threading.Thread(target=_beat, name="rss-heartbeat", daemon=True).start()
+
+
+def _record_rss(agent: str, run_id: str, started: float) -> bool:
+    """One heartbeat write. False when it failed, which stops the beating."""
+    from crewaimeat import spawn_state
+
+    try:
+        spawn_state.merge_audit(
+            agent,
+            run_id,
+            {"peak_rss_mb": spawn_state.peak_rss_mb(), "worker_seconds": round(time.monotonic() - started, 1)},
+        )
+    except Exception:  # noqa: BLE001 — bookkeeping must never change a run's outcome
+        return False
+    return True
+
+
 def _finish(agent: str, started: float, code: int) -> int:
     """Record what only the worker knows (its own peak memory) and say how it went."""
     seconds = round(time.monotonic() - started, 1)
@@ -108,6 +150,7 @@ def run_once(agent: str, *, root: Path | None = None, quiet: bool = False) -> in
     """Run one cycle for `agent`. Returns the process exit code (see the module docstring)."""
     root = root or Path.cwd()
     started = time.monotonic()
+    _start_rss_heartbeat(agent, started)
 
     man = _find_crew(agent, root)
     if man is None:

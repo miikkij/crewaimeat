@@ -87,6 +87,7 @@ class AgentState:
     runs: int = 0
     last_exit: int | None = None
     last_seconds: float | None = None
+    killed_last: bool = False  # the previous run hit the timeout -> a second one does not get a retry
     trigger: str = "wake"
     wakes: int = 0
     last_wake_at: float = 0.0
@@ -484,6 +485,16 @@ class Spawner:
             )
             st.dirty = False
             return
+        if killed and not st.killed_last:
+            # A reaped worker leaves its task ACTIVE on the node, and the only thing that starts a
+            # worker is a PUSH — which already happened, for the task that is still sitting there. So
+            # without this the work waits for an unrelated event, indefinitely: on 2026-09-02 a worker
+            # was killed at the hour mark and its task stayed active with nothing left to trigger it.
+            # ONE retry, then stop: a run that times out twice is not transient, and re-spawning an
+            # hour at a time forever is how a stuck agent becomes a bill.
+            print(f"[spawner] {agent}: run was killed — ONE re-run, then it waits for a person.", file=sys.stderr)
+            st.dirty = True
+        st.killed_last = killed
         if st.dirty:
             st.dirty = False
             if self._live_workers() < self.max_workers:

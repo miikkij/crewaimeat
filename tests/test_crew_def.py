@@ -189,6 +189,34 @@ def test_interpreter_injects_ctx_prompt_and_today():
     assert "2026-06-05" in tasks[1].description  # {{ctx.today}} substituted
 
 
+def test_interpreter_calls_the_node_as_the_running_identity_not_the_document_name(monkeypatch):
+    """ctx.identity wins over doc["agent_name"] for the tools that call the node.
+
+    One seeded document serves every owner who has the agent, so its ``agent_name`` is the bare name
+    by design. But a bare name two owners share is REFUSED by the connector, and the tools built here
+    call the node AS somebody. Measured against the two-owner node 2026-09-02: workflow-manager's
+    ``discover_crews`` and every delegation came back empty for BOTH owners, and the run still
+    reported success — it had simply found nobody to delegate to.
+    """
+    from crewaimeat import crew_def
+
+    seen: list[str] = []
+    monkeypatch.setitem(crew_def.TOOL_REGISTRY, "memory", lambda agent_name, ctx: seen.append(agent_name) or [])
+
+    doc = _minimal_doc()
+    doc["agents"][0]["tools"] = ["memory"]
+
+    ctx = make_ctx()
+    ctx.identity = "demo#alice@node-a"
+    build_domain_from_json(doc, ctx)
+    assert seen == ["demo#alice@node-a"]  # the identity, not doc["agent_name"] == "demo"
+
+    seen.clear()
+    ctx.identity = None  # off a live daemon (offline validation) the document's name is all there is
+    build_domain_from_json(doc, ctx)
+    assert seen == ["demo"]
+
+
 def test_interpreter_resolves_tool_names_to_factories():
     doc = _minimal_doc()
     doc["agents"][0]["tools"] = ["memory"]

@@ -7,6 +7,7 @@ policy can be driven step by step instead of raced against wall-clock.
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import pytest
@@ -206,7 +207,28 @@ def test_overdue_worker_is_terminated():
     sp.state["a"].started_at -= 31
     sp.reap()
     assert proc.terminated is True
-    assert sp.state["a"].busy is False
+    assert sp.state["a"].last_exit is not None  # the overdue run was settled, its slot released
+    assert len(spawned) == 2  # ...and handed straight to the one retry a reaped run gets
+
+
+def test_a_reaped_run_is_retried_once_then_left_for_a_person():
+    """A killed worker's task stays ACTIVE, and the push that would start one already happened.
+
+    Live 2026-09-02: a worker was reaped at the hour mark and its task sat active with nothing left
+    to trigger it. One retry covers the transient case; a second timeout is not transient, and
+    re-spawning an hour at a time forever is how a stuck agent becomes a bill.
+    """
+    sp, spawned = make_spawner(["a"], run_timeout_s=30)
+    sp.on_wake("a")
+    sp.state["a"].started_at -= 31
+    sp.reap()
+    assert len(spawned) == 2  # reaped, then re-run once
+
+    spawned[1][2].terminated = True  # the retry times out too
+    sp.state["a"].started_at -= 31
+    sp.reap()
+    assert len(spawned) == 2  # ...and THAT one is left alone
+    assert sp.state["a"].dirty is False
 
 
 def test_auth_failure_exit_2_does_not_respawn():
@@ -381,3 +403,35 @@ def test_doctor_is_quiet_on_a_well_formed_spawn_crew(tmp_path):
     assert "concurrency.undeclared" not in rules
     assert "spawn.connector_runner_set" not in rules
     assert "runmode.spawn.custom_invoke" not in rules
+
+
+def test_a_killed_worker_still_has_a_memory_number(tmp_path, monkeypatch):
+    """The heartbeat is the ONLY thing that measures a run the spawner reaps.
+
+    A worker killed at the run timeout never reaches `_finish`, so its own closing write never
+    happens: on 2026-09-02 a real worker was terminated at 3601.8 s and its audit record read
+    `peak_rss_mb: null` — the one run whose cost anybody would want to look up.
+    """
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    from crewaimeat import spawn_state
+    from crewaimeat.run_once import _record_rss
+
+    spawn_state.merge_audit("a", "r1", {"trigger": "wake", "pid": 7})
+    assert _record_rss("a", "r1", 0.0) is True
+    # ...the worker is now killed; only the spawner's settle write follows.
+    spawn_state.merge_audit("a", "r1", {"exit_code": -1, "killed": True})
+
+    doc = spawn_state.read_json(spawn_state.audit_file("a", "r1"))
+    assert doc["killed"] is True
+    assert doc["peak_rss_mb"] is not None and doc["peak_rss_mb"] > 1.0
+    assert doc["worker_seconds"] > 0
+
+
+def test_the_heartbeat_stays_quiet_when_nobody_spawned_this_worker(monkeypatch):
+    """`crewaimeat run-once <agent>` by hand has no audit record to write into."""
+    monkeypatch.delenv("AIMEAT_SPAWN_RUN_ID", raising=False)
+    from crewaimeat.run_once import _start_rss_heartbeat
+
+    before = threading.active_count()
+    _start_rss_heartbeat("a", 0.0)
+    assert threading.active_count() == before  # no thread, no writes
