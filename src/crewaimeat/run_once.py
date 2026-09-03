@@ -37,11 +37,21 @@ from pathlib import Path
 
 
 def _find_crew(agent: str, root: Path):
-    """The manifest for `agent`, or None. Static (ast) — importing every crew to find one is absurd."""
+    """The manifest for `agent`, or None. Static (ast) — importing every crew to find one is absurd.
+
+    MATCHED ON THE LOCAL NAME. The spawner hands identities as GAIIs (its roster comes from the node,
+    which names agents that way), while a crew file declares the bare `AGENT_NAME = "web-researcher"`.
+    Comparing the two whole strings never matches, and the miss is SILENT in the worst way: it looks
+    like "no crew file", so run_once falls through to the node-backed path and reports that the agent
+    has no definition published — naming a real defect that is not the one in front of it. Measured
+    2026-09-03 on the first spawn-mode agent that actually has a Python crew: every ISO agent before
+    it was node-backed, so nothing had exercised this comparison.
+    """
     from crewaimeat import agent_manifest
 
+    want = agent_manifest.agent_local_name(agent)
     for m in agent_manifest.all_manifests(root, refresh=True):
-        if m.agent == agent:
+        if m.agent == want:
             return m
     return None
 

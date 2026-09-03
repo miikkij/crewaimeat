@@ -216,6 +216,37 @@ def test_overdue_worker_is_terminated():
     assert len(spawned) == 2  # ...and handed straight to the one retry a reaped run gets
 
 
+def test_a_worker_finds_the_crew_file_when_handed_a_gaii(tmp_path, monkeypatch):
+    """The spawner hands GAIIs; a crew file declares a bare name. They must still meet.
+
+    Measured 2026-09-03 on the first spawn-mode agent that actually had a Python crew: comparing the
+    whole strings never matched, so run_once decided there was no crew file, fell through to the
+    node-backed path, and reported that the agent had no definition published — naming a real defect
+    that was not the one in front of it. Every agent before it was node-backed, so nothing had
+    exercised the comparison.
+    """
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path / "home"))
+    from crewaimeat.run_once import _find_crew
+
+    src = "\n".join(
+        [
+            'AGENT_NAME = "web-researcher"',
+            'RUN_MODE = "spawn"',
+            "",
+            "def build_domain(ctx):",
+            "    ...",
+            "",
+            "def run():",
+            "    ...",
+            "",
+        ]
+    )
+    root = _repo(tmp_path, src, "web_researcher_crew.py")
+    assert _find_crew("web-researcher#happydude500001@a-node", root).path.name == "web_researcher_crew.py"
+    assert _find_crew("web-researcher", root).path.name == "web_researcher_crew.py"
+    assert _find_crew("someone-else", root) is None
+
+
 def test_a_reaped_run_is_retried_once_then_left_for_a_person():
     """A killed worker's task stays ACTIVE, and the push that would start one already happened.
 

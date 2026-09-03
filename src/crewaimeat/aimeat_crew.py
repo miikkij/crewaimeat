@@ -422,12 +422,59 @@ def _runtime_max_execution_time() -> int | None:
     return v if v > 0 else None
 
 
+def _credential_kind(agent_name: str, owner: str | None) -> str | None:
+    """ "key" (Agent v2), "token" (v1 bearer), or None when the connector holds neither.
+
+    A key wins when both are present: that is what the migration leaves behind — it writes the key and
+    does NOT delete the token it replaced, so the old bearer sits there expired. Reading the token in
+    that state answers a question nobody asked."""
+    from crewaimeat._home import aimeat_home
+    from crewaimeat.agent_manifest import agent_local_name
+
+    name = agent_local_name(agent_name)
+    if not owner and "#" in str(agent_name):
+        owner = str(agent_name).split("#", 1)[1].split("@", 1)[0] or None
+    home = aimeat_home()
+    for folder, suffix, kind in (("keys", ".key", "key"), ("tokens", ".token", "token")):
+        for f in (home / folder).glob(f"*{suffix}"):
+            f_agent, _, f_owner = f.name[: -len(suffix)].partition("@")
+            if f_agent == name and (not owner or f_owner == owner):
+                return kind
+    return None
+
+
+def _auth_alive_via_daemon(agent_name: str) -> bool | None:
+    """Ask the loopback daemon, which holds the key and can sign. None when there is no daemon."""
+    api = _serve_api()  # discovery only — never spawns one
+    if api is None:
+        return None
+    base, session = api
+    try:
+        r = session.get(f"{base}/v1/agents/me/directives", headers={"X-Aimeat-Agent": agent_name}, timeout=15)
+    except requests.RequestException:
+        return None
+    if r.status_code in (401, 403):
+        return False
+    return True if r.status_code == 200 else None
+
+
 def _auth_alive(agent_name: str, owner: str | None) -> bool | None:
     """Probe whether the agent's stored token still authenticates with the node.
 
     Returns True (accepted), False (rejected 401/403 -> needs re-approval), or None
     (unknown / transient network or 5xx -> do not act on it). Light: one GET, reusing
-    the connector's stored token (no subprocess, no LLM)."""
+    the connector's stored token (no subprocess, no LLM).
+
+    AN AGENT V2 IDENTITY HAS NO BEARER TO PROBE WITH. It holds an Ed25519 key and the DAEMON mints a
+    short assertion per call, so a direct `Authorization: Bearer <key material>` is refused and the
+    answer means nothing about whether the agent is approved. Measured 2026-09-03, minutes after
+    web-researcher migrated to a key: the node had accepted it (identity_version 2, last_seen current,
+    attached to the shared socket) while this probe answered 401 and the crew sat at "the token is not
+    accepted" forever. So a key is probed THROUGH the daemon, which is the only party that can sign for
+    it; with no daemon the honest answer is None — unknown, proceed — not False.
+    """
+    if _credential_kind(agent_name, owner) == "key":
+        return _auth_alive_via_daemon(agent_name)
     if _aimeat_read_token is None:
         return None
     try:
