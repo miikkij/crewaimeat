@@ -770,22 +770,31 @@ def _daemon_carries() -> set[str]:
 
 
 def discover_agents(root: Path) -> list[str]:
-    """Every agent this spawner should serve: repo crews declaring spawn, PLUS node agents whose
-    run_mode says spawn. A repo crew wins a name collision — a hand-written crew is the more specific
-    statement, and the node cannot know it exists."""
+    """The agents this spawner serves: THE NODE'S ROSTER, and nothing else.
+
+    A crew file's `RUN_MODE = "spawn"` is a REQUEST, not a fact. It used to be added to this roster
+    directly, and that is the same mistake as listing `crews/*.py` as an owner's delegable peers: a
+    checkout holds whatever the developer is working on, and a connector home is somebody's real
+    fleet. On a real machine (2026-09-03, 58 crews / 68 node agents / one owner) the difference is
+    not academic — the repo's own demo crew would have been served as if the owner had asked for it.
+
+    `fleet_host` reads the SAME source to decide which crews it must not thread, so the two runtimes
+    cannot both claim an agent. When the node cannot be asked, this is empty and every crew stays a
+    fleet thread: work still happens, in the other half, which is the safe direction to fail.
+    """
     node, note = node_spawn_agents()
     if note:
         _note_once(note)
-    # A repo crew is only OURS TO SERVE if this daemon carries that agent. The two sets are no longer
-    # the same thing: one home holds one node's agents, and a checkout holds whatever crews it holds.
-    # Parking on an agent the daemon does not carry is refused every time and never heals — MEASURED
-    # 2026-09-02: it produced 14 627 rejected polls before the run was stopped.
-    carried = _daemon_carries()
-    local = [a for a in local_spawn_agents(root) if not carried or a in carried]
-    skipped = [a for a in local_spawn_agents(root) if carried and a not in carried]
-    if skipped:
-        _note_once(f"repo crews this daemon does not carry, not served: {', '.join(sorted(skipped))}")
-    return sorted(set(local) | set(node))
+    # Said out loud, because a crew declaring spawn and NOT getting it is otherwise invisible: it
+    # simply runs as a thread, which looks like nothing happened.
+    asked = set(local_spawn_agents(root))
+    unmet = sorted(asked - {agent_manifest.agent_local_name(a) for a in node})
+    if unmet:
+        _note_once(
+            f"crew(s) declaring RUN_MODE=spawn that the node does not list as spawn, left to the "
+            f"fleet host: {', '.join(unmet)}"
+        )
+    return sorted(set(node))
 
 
 _LAST_NOTE: dict[str, str] = {}

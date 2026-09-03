@@ -113,20 +113,30 @@ def _load_module(path: Path):
 
 
 def _spawn_mode_files() -> set[Path]:
-    """Crew files that declare RUN_MODE = "spawn" — the spawner owns these, not the host.
+    """Crew files the SPAWNER owns, so the host does not thread them too.
 
-    The host must skip them or BOTH runtimes would start the same agent: the OS lock would then pick a
-    winner arbitrarily and the loser would exit 0, so the agent would appear to be running while the
-    wrong half of the system held it. Read statically (ast), never by importing — the host must not pay
-    a crew's import cost just to decide it is not going to run it.
+    The host must skip exactly those or BOTH runtimes would start the same agent: the OS lock would
+    then pick a winner arbitrarily and the loser would exit 0, so the agent would appear to be running
+    while the wrong half of the system held it. Read statically (ast), never by importing — the host
+    must not pay a crew's import cost just to decide it is not going to run it.
     """
     from crewaimeat import agent_manifest
 
     try:
+        # THE NODE DECIDES, and the spawner reads the same answer — otherwise the two runtimes can
+        # disagree about who owns an agent. A crew file's RUN_MODE is only a request: a crew that
+        # asks for spawn while the node does not list it as spawn is served by NOBODY if we skip it
+        # here, so it stays a thread. When the node cannot be asked the set is empty and every crew
+        # runs here, which is the safe direction — the spawner's roster is empty in exactly that case.
+        from crewaimeat.spawner import node_spawn_agents
+
+        node_spawn = {agent_manifest.agent_local_name(a) for a in node_spawn_agents()[0]}
+        if not node_spawn:
+            return set()
         return {
             m.path.resolve()
             for m in agent_manifest.all_manifests(Path.cwd(), refresh=True)
-            if m.live and m.effective_run_mode == agent_manifest.RUN_SPAWN
+            if m.live and m.agent in node_spawn
         }
     except Exception as exc:  # noqa: BLE001 — an unreadable manifest must not stop the whole fleet
         print(f"[host] could not read run modes ({exc!r}); starting every crew as continuous", file=sys.stderr)

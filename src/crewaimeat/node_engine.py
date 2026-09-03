@@ -56,8 +56,21 @@ def npm_bin() -> str | None:
 
 
 def aimeat_cli() -> str | None:
-    """The globally npm-installed `aimeat` connector CLI (bare name when on PATH, else the npm -g shim
-    dir %APPDATA%\\npm), or None when not installed."""
+    """The connector CLI to run: `AIMEAT_CLI` when set, else the globally npm-installed `aimeat`
+    (bare name when on PATH, else the npm -g shim dir %APPDATA%\\npm). None when nothing is found.
+
+    `AIMEAT_CLI` EXISTS BECAUSE THE PUBLISHED CONNECTOR CAN LAG THE NODE. Measured 2026-09-03 on the
+    developer's own machine: agent v2 asks the daemon to generate an Ed25519 key per agent, and that
+    code (`connect/agent-key.js`, `connect/enrolment.js`) was in a local build only — neither the
+    installed 3.10.0 nor the PUBLISHED 3.11.0 contained either file, though the local build calls
+    itself 3.11.0 too. With no override there was no way to point a fleet at a connector that could
+    do the thing the node was offering, and the version number could not tell you which you had.
+    Setting this is the owner's decision and it is deliberately not inferred: pointing a live fleet
+    at an unreleased binary is a choice somebody makes on purpose.
+    """
+    override = os.environ.get("AIMEAT_CLI", "").strip()
+    if override:
+        return override
     if shutil.which("aimeat"):
         return "aimeat"
     if os.name == "nt":
@@ -70,10 +83,16 @@ def serve_command() -> str | list[str]:
     """What to pass ensure_serve() as `aimeat_command`. Bare "aimeat" when the CLI resolves normally
     (ensure_serve's own Windows .cmd shim handling applies); a full-path `cmd /c` argv when the CLI is
     installed but not yet on this process's PATH (fresh install, no relaunch). Falls back to "aimeat"
-    when nothing is found — the spawn then fails with the connector's own clear error."""
+    when nothing is found — the spawn then fails with the connector's own clear error.
+
+    An `AIMEAT_CLI` pointing at a `.js` entry point is run with `node`: that is the shape a connector
+    build has before it is packaged (`<repo>/aimeat/dist/bin/aimeat.js`), and `cmd /c` on a .js path
+    hands it to the shell's file association instead of to node."""
     cli = aimeat_cli()
     if cli is None or cli == "aimeat":
         return "aimeat"
+    if str(cli).lower().endswith(".js"):
+        return [node_bin() or "node", cli]
     if os.name == "nt":  # CreateProcess can't exec a .cmd shim directly; wrap it
         return ["cmd", "/c", cli]
     return cli

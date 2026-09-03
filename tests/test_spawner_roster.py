@@ -278,17 +278,59 @@ def test_a_repo_crew_the_daemon_does_not_carry_is_not_served(monkeypatch, tmp_pa
     assert spawner.discover_agents(root) == [f"bot#alice@{NODE}"], "an agent the daemon lacks is not ours to park on"
 
 
-def test_a_repo_crew_the_daemon_does_carry_is_served(monkeypatch, tmp_path):
+def test_a_repo_crew_is_not_served_just_because_it_asks(monkeypatch, tmp_path, capsys):
+    """A crew file's RUN_MODE is a REQUEST; the node's roster is the fact.
+
+    A checkout holds whatever the developer is working on and a connector home is somebody's real
+    fleet — so a repo crew declaring spawn must not appear as if its owner had asked for it. This is
+    the same principle as not offering `crews/*.py` as an owner's delegable peers. It must also be
+    SAID: a crew that asks for spawn and does not get it just runs as a thread, which looks like
+    nothing happened.
+    """
     from crewaimeat import spawner
 
-    root = _repo(
-        tmp_path,
-        _crew_src("mine"),
-    )
+    root = _repo(tmp_path, _crew_src("mine"))
     monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
     _serve(tmp_path, [{"agent": "mine", "gaii": f"mine#alice@{NODE}", "owner": "alice"}])
     monkeypatch.setattr(spawner, "node_spawn_agents", lambda: ([], None))
-    assert spawner.discover_agents(root) == ["mine"]
+    monkeypatch.setattr(spawner, "_LAST_NOTE", {})
+
+    assert spawner.discover_agents(root) == []
+    assert "mine" in capsys.readouterr().err  # and the reason was printed, not swallowed
+
+
+def test_the_node_is_the_only_source_of_the_roster(monkeypatch, tmp_path):
+    """What the node lists is served, whether or not this checkout has a crew file for it."""
+    from crewaimeat import spawner
+
+    root = _repo(tmp_path, _crew_src("mine"))
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    _serve(tmp_path, [{"agent": "bot", "gaii": f"bot#alice@{NODE}", "owner": "alice"}])
+    monkeypatch.setattr(spawner, "node_spawn_agents", lambda: ([f"bot#alice@{NODE}"], None))
+    monkeypatch.setattr(spawner, "_LAST_NOTE", {})
+    assert spawner.discover_agents(root) == [f"bot#alice@{NODE}"]
+
+
+def test_the_fleet_host_skips_exactly_what_the_spawner_serves(monkeypatch, tmp_path):
+    """The two runtimes must read ONE source, or they disagree about who owns an agent.
+
+    If the host skipped a crew the spawner does not serve, that agent would run NOWHERE — which is
+    why the host now asks the node too, and why an unreachable node leaves every crew to the host.
+    """
+    from crewaimeat import agent_manifest, fleet_host
+
+    root = _repo(tmp_path, _crew_src("mine"))
+    monkeypatch.chdir(root)
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    agent_manifest.all_manifests(root, refresh=True)
+
+    monkeypatch.setattr("crewaimeat.spawner.node_spawn_agents", lambda: ([], None))
+    assert fleet_host._spawn_mode_files() == set(), "nothing on the node -> the host runs it"
+
+    monkeypatch.setattr("crewaimeat.spawner.node_spawn_agents", lambda: ([f"mine#alice@{NODE}"], None))
+    # The crew file is `demo_crew.py`; the AGENT it declares is `mine`. The node names AGENTS, so the
+    # match is by agent name and the filename is beside the point.
+    assert fleet_host._spawn_mode_files() == {(root / "crews" / "demo_crew.py").resolve()}
 
 
 # --------------------------------------------------------------------------- #

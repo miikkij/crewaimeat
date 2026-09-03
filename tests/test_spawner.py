@@ -132,6 +132,11 @@ def test_select_agents_only_picks_spawn_mode(tmp_path, monkeypatch):
         'AGENT_NAME = "spawny"\nRUN_MODE = "spawn"\n\ndef build_domain(ctx):\n    ...\n\ndef run():\n    ...\n',
         "b_crew.py",
     )
+    # THE NODE'S ROSTER IS THE SET. A crew file's RUN_MODE is a request; without the node agreeing,
+    # nobody is served and the fleet host keeps every crew — the safe direction, and it is said aloud.
+    assert select_agents(root) == []
+
+    monkeypatch.setattr("crewaimeat.spawner.node_spawn_agents", lambda: (["spawny"], None))
     assert select_agents(root) == ["spawny"]
     # asking for a continuous agent is refused, not silently served
     assert select_agents(root, ["cont"]) == []
