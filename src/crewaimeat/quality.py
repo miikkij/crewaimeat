@@ -176,7 +176,12 @@ def collect(agent: str, days: int = DEFAULT_DAYS, edition: str = DEFAULT_EDITION
     articles: list[Article] = []
     problems: list[str] = []
     for date in _dates(days):
-        listing = paced("GET", f"/v1/memory?prefix=news.{date}.{edition}.article.&owner_scope=true&limit=60")
+        # `include=meta` because this loop reads every value one key at a time below anyway: without
+        # it the REST listing ships the whole edition twice. Measured on 2026-08-31 (21 articles):
+        # 82,273 B -> 6,675 B. The tool door sends it by default; the REST route does not.
+        listing = paced(
+            "GET", f"/v1/memory?prefix=news.{date}.{edition}.article.&owner_scope=true&limit=60&include=meta"
+        )
         if listing is None:
             problems.append(f"{date}: could not list keys")
             continue
