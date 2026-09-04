@@ -18,15 +18,11 @@
     "route.node.direct_http::src/crewaimeat/author_tool.py::make_author_tools.read_app_stack",
     "route.node.direct_http::src/crewaimeat/author_tool.py::make_author_tools.revert_app",
     "route.node.direct_http::src/crewaimeat/dm.py::dm_attach_bytes",
-    "route.node.direct_http::src/crewaimeat/evolve.py::_read_reviews",
     "route.node.direct_http::src/crewaimeat/image_contract.py::_upload_public",
     "route.node.direct_http::src/crewaimeat/ledger_report.py::report_llm_usage",
     "route.node.direct_http::src/crewaimeat/mail_contract.py::_storage_image",
     "route.node.direct_http::src/crewaimeat/map_snapshot.py::upload_public",
     "route.node.direct_http::src/crewaimeat/seedream_gen.py::_upload_public",
-    "route.node.direct_http::src/crewaimeat/skills_registry.py::fetch_agent_skills",
-    "route.node.direct_http::src/crewaimeat/skills_registry.py::fetch_workspace_skills",
-    "route.node.direct_http::src/crewaimeat/storage.py::fetch_bytes",
-    "route.node.direct_http::src/crewaimeat/workflow.py::_read_agent_messages"
+    "route.node.direct_http::src/crewaimeat/storage.py::fetch_bytes"
   ]
 }

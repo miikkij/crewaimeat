@@ -34,8 +34,6 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-import requests
-
 from crewaimeat.skills import SkillLoadError, load_skills
 
 _TIMEOUT = 30
@@ -95,23 +93,27 @@ def fetch_agent_skills(agent_name: str, owner: str | None = None) -> list:
     if not tok or not url:
         _log(agent_name, "no token/url — registry skills skipped (is the agent registered + approved?)")
         return []
+    # THROUGH THE DAEMON, not a direct Bearer. `_token` returns the STORED credential, which for a
+    # migrated agent is the v1 token the enrolment replaced and did not delete — and those expire one
+    # by one. The daemon holds the key and signs per call.
+    from crewaimeat.aimeat_crew import _aimeat_rest
+
     try:
-        r = requests.get(
-            f"{url.rstrip('/')}/v1/agents/{agent_name}/skills",
-            headers={"Authorization": f"Bearer {tok}"},
-            timeout=_TIMEOUT,
-        )
+        env = _aimeat_rest(agent_name, "GET", f"/v1/agents/{agent_name}/skills", retries=1, return_error=True)
     except Exception as exc:  # noqa: BLE001 — environment failure: loud, crew keeps local skills
         _log(agent_name, f"fetch FAILED ({exc!r}) — running WITHOUT registry skills this task")
         return []
-    if r.status_code == 404:
-        _log(agent_name, "node has no skills registry (404) — registry skills skipped")
+    if isinstance(env, dict) and env.get("ok") is False:
+        status = env.get("http_status")
+        if status == 404:
+            _log(agent_name, "node has no skills registry (404) — registry skills skipped")
+        else:
+            _log(agent_name, f"fetch HTTP {status} — running WITHOUT registry skills this task")
         return []
-    if r.status_code != 200:
-        _log(agent_name, f"fetch HTTP {r.status_code} — running WITHOUT registry skills this task")
+    if env is None:
+        _log(agent_name, "fetch got no answer — running WITHOUT registry skills this task")
         return []
-    payload = r.json() or {}
-    data = payload.get("data") or payload
+    data = env
 
     for u in data.get("unresolved") or []:
         _log(
@@ -185,27 +187,28 @@ def fetch_workspace_skills(agent_name: str, owner: str | None, organism_id: str,
     if not tok or not url:
         _log(agent_name, "no token/url — workspace skills skipped")
         return []
-    base_url = url.rstrip("/")
-    headers = {"Authorization": f"Bearer {tok}"}
     where = f"workspace {organism_id}/{ws}"
+    # Through the daemon, for the reason at the other fetch above: the stored bearer is the one the
+    # enrolment replaced, and it expires.
+    from crewaimeat.aimeat_crew import _aimeat_rest
+
+    qs = f"scope=workspace&organism={organism_id}&ws={ws}"
     try:
-        r = requests.get(
-            f"{base_url}/v1/skills",
-            params={"scope": "workspace", "organism": organism_id, "ws": ws},
-            headers=headers,
-            timeout=_TIMEOUT,
-        )
+        env = _aimeat_rest(agent_name, "GET", f"/v1/skills?{qs}", retries=1, return_error=True)
     except Exception as exc:  # noqa: BLE001 — environment failure: loud, crew keeps other skills
         _log(agent_name, f"{where}: listing FAILED ({exc!r}) — workspace skills skipped this task")
         return []
-    if r.status_code == 400:
-        _log(agent_name, f"{where}: node rejects the workspace scope (400 — 2c not deployed?) — skipped")
+    if isinstance(env, dict) and env.get("ok") is False:
+        status = env.get("http_status")
+        if status == 400:
+            _log(agent_name, f"{where}: node rejects the workspace scope (400 — 2c not deployed?) — skipped")
+        else:
+            _log(agent_name, f"{where}: listing HTTP {status} — workspace skills skipped this task")
         return []
-    if r.status_code != 200:
-        _log(agent_name, f"{where}: listing HTTP {r.status_code} — workspace skills skipped this task")
+    if env is None:
+        _log(agent_name, f"{where}: listing got no answer — workspace skills skipped this task")
         return []
-    payload = r.json() or {}
-    manifests = (payload.get("data") or payload).get("skills") or []
+    manifests = env.get("skills") or []
     if not manifests:
         return []
 
@@ -214,19 +217,15 @@ def fetch_workspace_skills(agent_name: str, owner: str | None, organism_id: str,
     for m in manifests:
         name = str(m.get("name") or "")
         try:
-            rr = requests.get(
-                f"{base_url}/v1/skills/{name}",
-                params={"scope": "workspace", "organism": organism_id, "ws": ws},
-                headers=headers,
-                timeout=_TIMEOUT,
-            )
+            got = _aimeat_rest(agent_name, "GET", f"/v1/skills/{name}?{qs}", retries=1, return_error=True)
         except Exception as exc:  # noqa: BLE001
             _log(agent_name, f"{where}: resolve '{name}' FAILED ({exc!r}) — skill skipped")
             continue
-        if rr.status_code != 200:
-            _log(agent_name, f"{where}: resolve '{name}' HTTP {rr.status_code} — skill skipped")
+        if got is None or (isinstance(got, dict) and got.get("ok") is False):
+            status = (got or {}).get("http_status") if isinstance(got, dict) else "no answer"
+            _log(agent_name, f"{where}: resolve '{name}' HTTP {status} — skill skipped")
             continue
-        entry = ((rr.json() or {}).get("data") or {}).get("skill") or {}
+        entry = got.get("skill") or {}
         dirs.append(materialize_skill(entry, base))
     if not dirs:
         return []

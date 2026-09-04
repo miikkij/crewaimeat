@@ -27,10 +27,9 @@ from pathlib import Path
 from statistics import mean, pstdev
 from types import SimpleNamespace
 
-import requests
 from crewai import Crew, Process
 
-from crewaimeat.aimeat_crew import _aimeat_call, _aimeat_read_token
+from crewaimeat.aimeat_crew import _aimeat_call
 from crewaimeat.llm import get_llm
 
 MIN_N = 10  # never propose on thin data (the n=3 lesson — see doc 20)
@@ -70,15 +69,16 @@ def record_evolution(parent: str, ctx: str, signal: str, variant: str, mode: str
 
 
 def _read_reviews(agent: str, owner: str | None) -> dict:
-    """The agent's own reputation rollup (GET /v1/agents/:agent/statistics with its own token)."""
-    if _aimeat_read_token is None:
-        return {}
+    """The agent's own reputation rollup (GET /v1/agents/:agent/statistics), through the daemon.
+
+    NOT a direct Bearer call. `_aimeat_read_token` hands back the STORED credential, which for a
+    migrated agent is the v1 token the enrolment replaced and did not delete — expired, and expiring
+    for the rest one at a time. The daemon holds the Ed25519 key and signs per call."""
+    from crewaimeat.aimeat_crew import _aimeat_rest
+
     try:
-        tok, url = _aimeat_read_token(agent, owner=owner)
-        r = requests.get(
-            f"{url.rstrip('/')}/v1/agents/{agent}/statistics", headers={"Authorization": f"Bearer {tok}"}, timeout=20
-        )
-        return r.json().get("data", {}).get("reviews", {}) if r.status_code == 200 else {}
+        data = _aimeat_rest(agent, "GET", f"/v1/agents/{agent}/statistics", retries=1)
+        return (data or {}).get("reviews", {}) if isinstance(data, dict) else {}
     except Exception:  # noqa: BLE001 — monitoring is best-effort, never break the task
         return {}
 

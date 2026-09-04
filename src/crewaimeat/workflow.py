@@ -24,7 +24,7 @@ from typing import Any
 from crewai.tools import tool
 
 from crewaimeat.agent_manifest import agent_local_name
-from crewaimeat.aimeat_crew import _GROUNDING_RULE, _aimeat_call, _rate_task
+from crewaimeat.aimeat_crew import _GROUNDING_RULE, _aimeat_call, _aimeat_rest, _rate_task
 
 POLL_SECONDS = 15
 DEFAULT_TIMEOUT = 1800  # default per collect_results / delegate_and_wait / wait_for_crew (30 min).
@@ -181,26 +181,16 @@ def _find_thread_id(resp) -> str | None:
 
 
 def _read_agent_messages(agent_name: str) -> dict | None:
-    """Read this agent's message history via REST. The `aimeat` connector CLI exposes NO
-    message_history tool (it answers "Unknown CLI-callable tool: aimeat_message_history"), so the
-    owner's prompt answer is read straight from GET /v1/agents/<agent>/messages with the agent's own
-    token. Returns the parsed JSON (e.g. {"messages":[...]}) or None."""
-    try:
-        import os as _os
+    """Read this agent's message history. The `aimeat` connector CLI exposes NO message_history tool
+    (it answers "Unknown CLI-callable tool: aimeat_message_history"), so the owner's prompt answer is
+    read from GET /v1/agents/<agent>/messages — THROUGH THE DAEMON, which holds the agent's key and
+    signs each call. Reading the stored token here instead is how the offers route came to 401 in
+    silence: an enrolment replaces the v1 token file without deleting it, and the dead copy keeps
+    being handed out until it expires. Returns the envelope's data (e.g. {"messages":[...]}) or None.
 
-        import requests as _requests
-        from aimeat_crewai.daemon import _read_token as _rt
-
-        token, node = _rt(agent_name, owner=_os.environ.get("AIMEAT_OWNER") or None)
-        r = _requests.get(
-            f"{node.rstrip('/')}/v1/agents/{agent_name}/messages",
-            headers={"Authorization": f"Bearer {token}"},
-            params={"per_page": 50},
-            timeout=20,
-        )
-        return r.json() if r.status_code == 200 else None
-    except Exception:  # noqa: BLE001
-        return None
+    A None here means the answer never arrived, so a workflow prompt stays unanswered rather than
+    being read as a refusal — `_aimeat_rest` has already said WHY on stderr."""
+    return _aimeat_rest(agent_name, "GET", f"/v1/agents/{agent_name}/messages?per_page=50", retries=2)
 
 
 def _find_prompt_answer(resp, prompt_id: str):

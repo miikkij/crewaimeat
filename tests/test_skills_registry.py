@@ -1,7 +1,7 @@
 """Skills-registry consumer (crewaimeat.skills_registry) — offline, deterministic, no network.
 
-The node fetch is monkeypatched at the module's requests seam; token discovery at the
-generator_tool seam. Covers the layout guard (traversal/escape rejection), materialization,
+The node fetch is monkeypatched at the `_aimeat_rest` seam it really goes through (the daemon
+signs per call, so there is no bearer to fake); token discovery at the generator_tool seam. Covers the layout guard (traversal/escape rejection), materialization,
 the loud-vs-raise failure boundary (unreachable → loud+continue; malformed content → raise),
 merge precedence (local wins), and the empty→None contract (crewai rejects Agent(skills=[])).
 """
@@ -9,7 +9,6 @@ merge precedence (local wins), and the empty→None contract (crewai rejects Age
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -27,13 +26,26 @@ def _entry(name: str = "reg-skill", files: dict | None = None, ref: str | None =
     }
 
 
-def _fake_get(payload: dict | None = None, status: int = 200, exc: Exception | None = None):
-    def fake(url, headers=None, timeout=None, **kw):
+def _fake_rest(payload: dict | None = None, status: int = 200, exc: Exception | None = None):
+    """Stand in for `_aimeat_rest`: the envelope's `data` on success, and — because the module asks
+    for `return_error=True` — the node's OWN envelope on a verdict, so the caller can say what the
+    node said instead of guessing from None."""
+
+    def fake(agent, method, path, body=None, **kw):
         if exc is not None:
             raise exc
-        return SimpleNamespace(status_code=status, json=lambda: {"ok": True, "data": payload or {}})
+        if status >= 400:
+            return {"ok": False, "http_status": status, "error": {"code": "HTTP_ERROR"}}
+        return payload or {}
 
     return fake
+
+
+def _patch_rest(monkeypatch, fake):
+    """`skills_registry` imports `_aimeat_rest` at call time, so the seam is the SOURCE module."""
+    from crewaimeat import aimeat_crew
+
+    monkeypatch.setattr(aimeat_crew, "_aimeat_rest", fake)
 
 
 def _patch_auth(monkeypatch):
@@ -79,7 +91,7 @@ def test_materialize_nameless_entry_raises(tmp_path):
 # ── fetch: the loud-vs-raise boundary ─────────────────────────────────────────
 def test_fetch_happy_path(monkeypatch):
     _patch_auth(monkeypatch)
-    monkeypatch.setattr(reg.requests, "get", _fake_get({"skills": [_entry()], "unresolved": []}))
+    _patch_rest(monkeypatch, _fake_rest({"skills": [_entry()], "unresolved": []}))
     (skill,) = reg.fetch_agent_skills("joker")
     assert skill.name == "reg-skill"
     assert skill.instructions  # activated — prompt-ready
@@ -88,7 +100,7 @@ def test_fetch_happy_path(monkeypatch):
 def test_fetch_unresolved_is_loud_but_continues(monkeypatch, capsys):
     _patch_auth(monkeypatch)
     payload = {"skills": [_entry()], "unresolved": [{"ref": "node:gone", "error": "not found"}]}
-    monkeypatch.setattr(reg.requests, "get", _fake_get(payload))
+    _patch_rest(monkeypatch, _fake_rest(payload))
     skills = reg.fetch_agent_skills("joker")
     assert [s.name for s in skills] == ["reg-skill"]
     err = capsys.readouterr().err
@@ -97,14 +109,14 @@ def test_fetch_unresolved_is_loud_but_continues(monkeypatch, capsys):
 
 def test_fetch_404_is_loud_empty(monkeypatch, capsys):
     _patch_auth(monkeypatch)
-    monkeypatch.setattr(reg.requests, "get", _fake_get(status=404))
+    _patch_rest(monkeypatch, _fake_rest(status=404))
     assert reg.fetch_agent_skills("joker") == []
     assert "no skills registry" in capsys.readouterr().err
 
 
 def test_fetch_transport_failure_is_loud_empty(monkeypatch, capsys):
     _patch_auth(monkeypatch)
-    monkeypatch.setattr(reg.requests, "get", _fake_get(exc=ConnectionError("node down")))
+    _patch_rest(monkeypatch, _fake_rest(exc=ConnectionError("node down")))
     assert reg.fetch_agent_skills("joker") == []
     assert "WITHOUT registry skills" in capsys.readouterr().err
 
@@ -122,14 +134,14 @@ def test_fetch_malformed_content_raises(monkeypatch):
     """A skill that FETCHES but fails validation = contract drift → raise, never warn-skip."""
     _patch_auth(monkeypatch)
     bad = _entry(files={"SKILL.md": "no frontmatter at all"})
-    monkeypatch.setattr(reg.requests, "get", _fake_get({"skills": [bad], "unresolved": []}))
+    _patch_rest(monkeypatch, _fake_rest({"skills": [bad], "unresolved": []}))
     with pytest.raises(SkillLoadError):
         reg.fetch_agent_skills("joker")
 
 
 def test_fetch_empty_is_empty(monkeypatch):
     _patch_auth(monkeypatch)
-    monkeypatch.setattr(reg.requests, "get", _fake_get({"skills": [], "unresolved": []}))
+    _patch_rest(monkeypatch, _fake_rest({"skills": [], "unresolved": []}))
     assert reg.fetch_agent_skills("joker") == []
 
 
@@ -168,7 +180,7 @@ def test_fetch_with_ws_ref_entry(monkeypatch):
     refs are opaque to the consumer; only name + fileContents matter."""
     _patch_auth(monkeypatch)
     entry = _entry("ws-sourced-skill", ref="ws:org-123/ws-abc/ws-sourced-skill")
-    monkeypatch.setattr(reg.requests, "get", _fake_get({"skills": [entry], "unresolved": []}))
+    _patch_rest(monkeypatch, _fake_rest({"skills": [entry], "unresolved": []}))
     (skill,) = reg.fetch_agent_skills("joker")
     assert skill.name == "ws-sourced-skill"
     assert skill.instructions
@@ -204,19 +216,20 @@ def _ws_router(listing=None, resolves=None, list_status=200, resolve_status=200,
     """URL-routing fake for the two-step workspace fetch."""
     resolves = resolves or {}
 
-    def fake(url, params=None, headers=None, timeout=None, **kw):
-        if url.endswith("/v1/skills"):
+    def fake(agent, method, path, body=None, **kw):
+        head = path.split("?", 1)[0]  # the scope query rides the path now, not a params dict
+        if head == "/v1/skills":
             if list_exc is not None:
                 raise list_exc
-            return SimpleNamespace(
-                status_code=list_status, json=lambda: {"ok": True, "data": {"skills": listing or []}}
-            )
-        name = url.rsplit("/", 1)[-1]
-        entry = resolves.get(name)
-        return SimpleNamespace(
-            status_code=resolve_status if entry is not None else 404,
-            json=lambda: {"ok": True, "data": {"skill": entry or {}}},
-        )
+            if list_status >= 400:
+                return {"ok": False, "http_status": list_status}
+            return {"skills": listing or []}
+        entry = resolves.get(head.rsplit("/", 1)[-1])
+        if entry is None:
+            return {"ok": False, "http_status": 404}
+        if resolve_status >= 400:
+            return {"ok": False, "http_status": resolve_status}
+        return {"skill": entry}
 
     return fake
 
@@ -224,7 +237,7 @@ def _ws_router(listing=None, resolves=None, list_status=200, resolve_status=200,
 def test_ws_fetch_happy_path(monkeypatch):
     _patch_auth(monkeypatch)
     entry = _entry("ws-skill", ref="ws:org-1/ws-a/ws-skill")
-    monkeypatch.setattr(reg.requests, "get", _ws_router(listing=[{"name": "ws-skill"}], resolves={"ws-skill": entry}))
+    _patch_rest(monkeypatch, _ws_router(listing=[{"name": "ws-skill"}], resolves={"ws-skill": entry}))
     (skill,) = reg.fetch_workspace_skills("joker", "owner", "org-1", "ws-a")
     assert skill.name == "ws-skill"
     assert skill.instructions
@@ -232,14 +245,14 @@ def test_ws_fetch_happy_path(monkeypatch):
 
 def test_ws_fetch_400_not_deployed_is_loud_empty(monkeypatch, capsys):
     _patch_auth(monkeypatch)
-    monkeypatch.setattr(reg.requests, "get", _ws_router(list_status=400))
+    _patch_rest(monkeypatch, _ws_router(list_status=400))
     assert reg.fetch_workspace_skills("joker", "owner", "org-1", "ws-a") == []
     assert "2c not deployed" in capsys.readouterr().err
 
 
 def test_ws_fetch_listing_failure_is_loud_empty(monkeypatch, capsys):
     _patch_auth(monkeypatch)
-    monkeypatch.setattr(reg.requests, "get", _ws_router(list_exc=ConnectionError("down")))
+    _patch_rest(monkeypatch, _ws_router(list_exc=ConnectionError("down")))
     assert reg.fetch_workspace_skills("joker", "owner", "org-1", "ws-a") == []
     assert "workspace skills skipped" in capsys.readouterr().err
 
@@ -248,7 +261,7 @@ def test_ws_fetch_single_resolve_failure_skips_loudly(monkeypatch, capsys):
     _patch_auth(monkeypatch)
     good = _entry("good-skill", ref="ws:org-1/ws-a/good-skill")
     router = _ws_router(listing=[{"name": "gone-skill"}, {"name": "good-skill"}], resolves={"good-skill": good})
-    monkeypatch.setattr(reg.requests, "get", router)
+    _patch_rest(monkeypatch, router)
     skills = reg.fetch_workspace_skills("joker", "owner", "org-1", "ws-a")
     assert [s.name for s in skills] == ["good-skill"]
     assert "resolve 'gone-skill' HTTP 404" in capsys.readouterr().err
@@ -257,7 +270,7 @@ def test_ws_fetch_single_resolve_failure_skips_loudly(monkeypatch, capsys):
 def test_ws_fetch_malformed_content_raises(monkeypatch):
     _patch_auth(monkeypatch)
     bad = {"ref": "ws:org-1/ws-a/bad-skill", "name": "bad-skill", "fileContents": {"SKILL.md": "no frontmatter"}}
-    monkeypatch.setattr(reg.requests, "get", _ws_router(listing=[{"name": "bad-skill"}], resolves={"bad-skill": bad}))
+    _patch_rest(monkeypatch, _ws_router(listing=[{"name": "bad-skill"}], resolves={"bad-skill": bad}))
     with pytest.raises(SkillLoadError):
         reg.fetch_workspace_skills("joker", "owner", "org-1", "ws-a")
 
@@ -311,7 +324,7 @@ def test_fetch_with_pinned_ref_entry(monkeypatch):
     name + fileContents."""
     _patch_auth(monkeypatch)
     entry = _entry("pinned-skill", ref="user:owner/pinned-skill@1.0.0")
-    monkeypatch.setattr(reg.requests, "get", _fake_get({"skills": [entry], "unresolved": []}))
+    _patch_rest(monkeypatch, _fake_rest({"skills": [entry], "unresolved": []}))
     (skill,) = reg.fetch_agent_skills("joker")
     assert skill.name == "pinned-skill"
     assert skill.instructions
@@ -321,7 +334,7 @@ def test_unretained_pin_surfaces_as_unresolved(monkeypatch, capsys):
     """A pin older than the newest-10 retention comes back in `unresolved` — loud, no crash."""
     _patch_auth(monkeypatch)
     payload = {"skills": [], "unresolved": [{"ref": "user:owner/old-skill@0.0.1", "error": "not retained"}]}
-    monkeypatch.setattr(reg.requests, "get", _fake_get(payload))
+    _patch_rest(monkeypatch, _fake_rest(payload))
     assert reg.fetch_agent_skills("joker") == []
     err = capsys.readouterr().err
     assert "UNRESOLVED" in err and "old-skill@0.0.1" in err
