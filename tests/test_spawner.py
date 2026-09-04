@@ -16,6 +16,19 @@ import pytest
 # --------------------------------------------------------------------------- #
 # Test doubles
 # --------------------------------------------------------------------------- #
+@pytest.fixture(autouse=True)
+def _own_home(tmp_path, monkeypatch):
+    """EVERY test in this module gets its own AIMEAT_HOME.
+
+    `spawn_state.pid_file()` resolves under AIMEAT_HOME, so a test that drives the spawner without
+    setting it writes into whatever home the developer's machine is using. Found on 2026-09-04 in the
+    live connector home: `spawn/running/b.pid` and `c.pid`, pids 9001 and 9002 — this module's own
+    FakeProc numbers, left where a real orphan sweep would later read them as real workers. Eight
+    tests could do it, so the isolation belongs to the module rather than to each of them.
+    """
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path / "spawner-test-home"))
+
+
 class FakeProc:
     """A Popen-like the spawner can poll. Mirrors the real signature it depends on."""
 

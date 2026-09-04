@@ -910,6 +910,72 @@ def _aimeat_call(
     return None
 
 
+# Per-agent verdict from `_identity_guard`: True = the node answered as this agent, False = it
+# answered as somebody else, None = could not be asked (no daemon, transport error) and therefore
+# no opinion. Checked ONCE per agent per process; a worker is one agent for its whole life.
+_IDENTITY_VERDICT: dict[str, bool | None] = {}
+_IDENTITY_SAID: set[str] = set()
+_WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def _identity_guard(agent_name: str, method: str) -> bool:
+    """Refuse a WRITE the node would attribute to somebody else. True = go ahead.
+
+    WHY THIS IS PERMANENT AND NOT A WORKAROUND. The loopback proxy forwards a frame that names whose
+    call it is; on a shared socket a missing stamp silently makes every call the socket-opener's.
+    That went wrong twice in different places (the REST proxy and `/local/subscribe`), and both times
+    the symptom was not an error but a WRONG ANSWER: on 2026-09-04 a fleet of 62 had every REST call
+    attributed to `activity-reporter`, so 22 agents were refused their own task lists, one read
+    another's, and the whole Sanomat edition stalled while every log line said success. The mistake is
+    cheap to make and expensive to see, so it is worth one call at the boundary.
+
+    Asymmetric on purpose. A WRITE under the wrong name is damage that outlives the run — a DELETE on
+    someone else's memory key cannot be argued with afterwards — so a proven mismatch refuses. A READ
+    is recoverable and refusing it would take a fleet down over a diagnosis, so it proceeds and says
+    so once. And the check only ever blocks on PROOF: no daemon, a transport error or an unreadable
+    answer all mean 'unknown', which proceeds.
+    """
+    verdict = _IDENTITY_VERDICT.get(agent_name, "unset")
+    if verdict == "unset":
+        verdict = _check_identity(agent_name)
+        _IDENTITY_VERDICT[agent_name] = verdict
+    if verdict is not False:  # True or None (unknown) — proceed
+        return True
+    if agent_name not in _IDENTITY_SAID:
+        _IDENTITY_SAID.add(agent_name)
+        print(
+            f"[{agent_name}] IDENTITY MISMATCH on the loopback proxy: the node answers /v1/agents/me "
+            f"as somebody else, so every /v1 call made as {agent_name} lands under the wrong agent. "
+            "Reads continue; writes are refused. Fix the connector's forward stamp, then restart.",
+            file=sys.stderr,
+        )
+    if method.upper() in _WRITE_METHODS:
+        print(f"[{agent_name}] REFUSED {method} — it would be recorded as another agent.", file=sys.stderr)
+        return False
+    return True
+
+
+def _check_identity(agent_name: str) -> bool | None:
+    """Ask the proxy who it thinks we are. None when it cannot be asked — never a guess."""
+    api = _serve_api()  # discovery only; no daemon -> no opinion
+    if api is None:
+        return None
+    base, session = api
+    try:
+        r = session.get(f"{base}/v1/agents/me", headers={"X-Aimeat-Agent": agent_name}, timeout=15)
+        if r.status_code != 200:
+            return None
+        data = (r.json() or {}).get("data") or {}
+    except Exception:  # noqa: BLE001 — transport trouble is not evidence of anything
+        return None
+    from crewaimeat.agent_manifest import agent_local_name
+
+    who = str(data.get("gaii") or data.get("name") or "")
+    if not who:
+        return None
+    return agent_local_name(who) == agent_local_name(agent_name)
+
+
 def _aimeat_rest(
     agent_name: str,
     method: str,
@@ -942,6 +1008,8 @@ def _aimeat_rest(
     announce a payment wall — so the app's own owner was told their tool was priced and foreign when
     the node had actually answered TOOL_NOT_INVOKABLE (measured 2026-09-03). The retry policy is
     unchanged; only what a settled failure gives back."""
+    if not _identity_guard(agent_name, method):
+        return None
     for attempt in range(retries):
         last = attempt + 1 >= retries
         api = _serve_api()
