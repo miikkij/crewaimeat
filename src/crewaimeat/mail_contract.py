@@ -596,10 +596,16 @@ def _extra_sections(now: datetime.datetime) -> str:
 
     parts: list[str] = []
     try:
+        from crewaimeat.memory_tools import owner_scope_values
+
         items = _items_of(_call("aimeat_memory_list", {"owner_scope": True, "prefix": "mail.morning.sections."}))
-        for it in sorted(items, key=lambda x: x.get("key", "")):
-            val = it.get("value") or {}
-            md = (val.get("markdown") or "").strip()
+        # Keys from the listing, values from a read — since connector 3.13.0 (include=meta) a listing
+        # carries no value, and reading one here would build a morning mail with every section
+        # silently missing rather than an empty one that says so.
+        values = owner_scope_values(AGENT, [it.get("key") for it in items])
+        for key in sorted(values):
+            val = values[key] or {}
+            md = (val.get("markdown") or "").strip() if isinstance(val, dict) else ""
             if not md:
                 continue
             try:
@@ -607,9 +613,9 @@ def _extra_sections(now: datetime.datetime) -> str:
             except (KeyError, ValueError):
                 age_h = None
             if age_h is not None and age_h > 48:
-                print(f"[{AGENT}] morning section {it.get('key')} stale ({age_h:.0f} h) -> skipped", file=sys.stderr)
+                print(f"[{AGENT}] morning section {key} stale ({age_h:.0f} h) -> skipped", file=sys.stderr)
                 continue
-            title = (val.get("title") or it.get("key", "")).strip()
+            title = str(val.get("title") or key).strip()
             parts.append(f"## {title}\n\n{md}\n")
     except Exception as exc:  # noqa: BLE001
         print(f"[{AGENT}] extra sections failed: {exc!r}", file=sys.stderr)

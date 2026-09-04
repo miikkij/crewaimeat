@@ -590,7 +590,12 @@ def make_workflow_tools(
                 "aimeat_memory_list",
                 {"owner_scope": True, "prefix": prefix, "tags": [tag]},
             )
-            found = {it.get("key"): it.get("value") for it in _items_of(listing)}
+            # The listing says WHICH keys are there; the values come from a read. A listing stopped
+            # carrying values in connector 3.13.0 (include=meta), which turned "the worker answered"
+            # into "the worker never answered" without a single error line.
+            from crewaimeat.memory_tools import owner_scope_values
+
+            found = owner_scope_values(coordinator_name, [it.get("key") for it in _items_of(listing)])
             fresh = found.get(job["pub_key"])
             if fresh is not None and fresh != job.get("stale"):
                 job["result"] = str(fresh)
@@ -791,7 +796,12 @@ def make_workflow_tools(
                 "aimeat_memory_list",
                 {"owner_scope": True, "prefix": prefix, "tags": [tag]},
             )
-            found = {it.get("key"): it.get("value") for it in _items_of(listing)}
+            # The listing says WHICH keys are there; the values come from a read. A listing stopped
+            # carrying values in connector 3.13.0 (include=meta), which turned "the worker answered"
+            # into "the worker never answered" without a single error line.
+            from crewaimeat.memory_tools import owner_scope_values
+
+            found = owner_scope_values(coordinator_name, [it.get("key") for it in _items_of(listing)])
             for job in pending:
                 if found.get(job["pub_key"]) is not None:
                     job["result"] = str(found[job["pub_key"]])

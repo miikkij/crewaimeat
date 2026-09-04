@@ -97,18 +97,22 @@ def _looks_like_junk(value: str) -> bool:
 
 def gather_deliverables(agent_name: str, prefix: str | None = None) -> list[dict]:
     """Every owner-visible deliverable entry: [{key, agent, slug, value}]. Reads with owner_scope so
-    one call spans all same-owner agents (values included in the listing)."""
+    one call spans all same-owner agents; the values are then read per key (a listing carries none)."""
     payload: dict = {"owner_scope": True}
     if prefix:
         payload["prefix"] = prefix
     items = _items_of(_aimeat_call(agent_name, "aimeat_memory_list", payload))
+    # Keys from the listing, values from a read — a listing carries no value since connector 3.13.0
+    # (include=meta), and every deliverable would index as empty text.
+    from crewaimeat.memory_tools import owner_scope_values
+
+    matched = [(it.get("key") or "", _DELIVERABLE_KEY.match(it.get("key") or "")) for it in items]
+    values = owner_scope_values(agent_name, [k for k, m in matched if m])
     out = []
-    for it in items:
-        key = it.get("key") or ""
-        m = _DELIVERABLE_KEY.match(key)
+    for key, m in matched:
         if not m:
             continue
-        out.append({"key": key, "agent": m.group(1), "slug": m.group(2), "value": _as_text(it.get("value"))})
+        out.append({"key": key, "agent": m.group(1), "slug": m.group(2), "value": _as_text(values.get(key))})
     return out
 
 

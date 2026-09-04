@@ -107,19 +107,22 @@ def _read_edition_raw(agent_name: str, date: str, edition: str) -> dict | None:
     Raises RawReadError on a transport-level failure, for the same reason `_read_raw` does: a tunnel
     drop that reads as 'no raw' silently drops the whole desk."""
     key = f"news.{date}.{edition}.raw"
-    # quiet=True for the same reason as in _read_raw: news-fetcher wrote it, so the writer's own-gaii
-    # probe is DESIGNED to miss and its NOT_FOUND line reads like a failure mid-healthy-edition.
-    r = _aimeat_call(agent_name, "aimeat_memory_read", {"key": key}, quiet=True)
+    # owner_scope=True IS THE READ. news-fetcher wrote this key, so it is never under the writer's own
+    # GAII and a bare read is DESIGNED to miss. It used to miss and then recover the value from the
+    # owner-scope LISTING — until the listing stopped carrying values (connector 3.13.0's include=meta,
+    # shipped 2026-09-04 to stop a 25 MB reply blocking a shared socket, which was the right fix).
+    # Measured the same day, on the stuck edition: bare read -> NOT_FOUND; owner_scope read -> 414601
+    # characters; exact-key listing -> one hit whose fields are key/owner_gaii/bytes/visibility/... and
+    # no `value` at all. Both desks then reported "no/thin raw, 0 chars" for every category, marked
+    # their tasks done, and the edition stopped at four steps of six with nothing saying why.
+    r = _aimeat_call(agent_name, "aimeat_memory_read", {"key": key, "owner_scope": True}, quiet=True)
     value = r.get("value") if isinstance(r, dict) else None
     if value is None:
+        # A listing still answers "does this key exist", which is what separates an absent edition
+        # (fall back to the pre-consolidation keys) from a transport failure (raise).
         lr = _aimeat_call(agent_name, "aimeat_memory_list", {"owner_scope": True, "prefix": key})
         if lr is None:
             raise RawReadError(f"raw read failed for {date} {edition} ({key}) — tunnel/transport down")
-        for it in (lr.get("items") or []) if isinstance(lr, dict) else []:
-            # An exact-key match: the prefix also matches the OLD news.<date>.<edition>.raw.<cat> keys.
-            if it.get("key") == key and it.get("value") is not None:
-                value = it.get("value")
-                break
     if value is None:
         return None
     if isinstance(value, str):
@@ -145,17 +148,16 @@ def _read_raw(agent_name: str, category: str, date: str, edition: str) -> list:
     # written by news-fetcher, so it is never under the writer's own GAII, and the owner-scope list
     # below is the real source. Logging it printed a NOT_FOUND line per category per edition that
     # reads like a failure while the edition is publishing perfectly.
-    r = _aimeat_call(agent_name, "aimeat_memory_read", {"key": key}, quiet=True)
+    # owner_scope=True IS THE READ, for the reason spelled out in `_read_edition_raw`: a sibling wrote
+    # it, and the listing that used to recover the value no longer carries one.
+    r = _aimeat_call(agent_name, "aimeat_memory_read", {"key": key, "owner_scope": True}, quiet=True)
     if isinstance(r, dict) and r.get("value") is not None:
         return _coerce_list(r.get("value"))
-    # Authoritative: news-fetcher (a sibling) wrote the raw with owner visibility → owner-scope list.
+    # The listing still answers existence, which is what tells an absent key from a transport failure.
     lr = _aimeat_call(agent_name, "aimeat_memory_list", {"owner_scope": True, "prefix": key})
     if lr is None:
         # Transport failure that survived the dispatcher's retries — do NOT pretend the raw is empty.
         raise RawReadError(f"raw read failed for '{category}' ({key}) — tunnel/transport down")
-    for it in (lr.get("items") or []) if isinstance(lr, dict) else []:
-        if it.get("key") == key and it.get("value") is not None:
-            return _coerce_list(it.get("value"))
     return []  # the list call SUCCEEDED but the key is genuinely absent/empty
 
 

@@ -181,12 +181,19 @@ def list_crew_defs(*, agent: str) -> list[dict]:
     """The registry entries visible to ``agent`` (own + same-owner). Returns
     ``[{agent_name, key, publishedAt, gaii}]`` — enough to show a menu and install one."""
     lr = _aimeat_call(agent, "aimeat_memory_list", {"owner_scope": True, "prefix": REGISTRY_PREFIX})
+    # Keys from the listing, values from a read: a listing carries no value since connector 3.13.0
+    # (include=meta), so `publishedAt` read off one would be None for every crew — a registry that
+    # looks present but undated.
+    from crewaimeat.memory_tools import owner_scope_values
+
+    rows = [it for it in (((lr or {}).get("items") if isinstance(lr, dict) else None) or []) if isinstance(it, dict)]
+    values = owner_scope_values(agent, [it.get("key") for it in rows])
     out: list[dict] = []
-    for it in ((lr or {}).get("items") if isinstance(lr, dict) else None) or []:
-        key = it.get("key") if isinstance(it, dict) else None
+    for it in rows:
+        key = it.get("key")
         if not key or not key.startswith(REGISTRY_PREFIX):
             continue
-        val = it.get("value")
+        val = values.get(key)
         out.append(
             {
                 "agent_name": key[len(REGISTRY_PREFIX) :],

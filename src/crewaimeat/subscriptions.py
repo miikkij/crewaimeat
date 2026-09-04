@@ -133,11 +133,14 @@ def list_subscribers(*, active_only: bool = True, agent: str = AGENT) -> list[di
     """Every order we hold. This is the loop the morning run walks."""
     r = _aimeat_call(agent, "aimeat_memory_list", {"owner_scope": True, "prefix": "aamukatsaus.", "limit": 500})
     items = (r.get("items") or []) if isinstance(r, dict) else []
+    # The listing names the keys; the values come from a read. A listing stopped carrying values in
+    # connector 3.13.0 (include=meta), so reading `it["value"]` here would silently find no orders at
+    # all — a morning run over an empty subscriber list, with nothing saying it was empty by accident.
+    from crewaimeat.memory_tools import owner_scope_values
+
+    values = owner_scope_values(agent, [it.get("key") for it in items if (it.get("key") or "").endswith(".prefs")])
     out = []
-    for it in items:
-        if not (it.get("key") or "").endswith(".prefs"):
-            continue
-        val = it.get("value")
+    for val in values.values():
         if isinstance(val, dict) and val.get("subscriber") and (val.get("active", True) or not active_only):
             out.append(val)
     return sorted(out, key=lambda v: v.get("subscriber", ""))

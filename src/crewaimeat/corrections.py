@@ -118,10 +118,16 @@ def recent_headlines(agent: str, *, days: int = 3) -> list[tuple[str, str]]:
     for _ in range(days):
         prefix = f"news.{day.isoformat()}.evening.article."
         lr = _aimeat_call(agent, "aimeat_memory_list", {"owner_scope": True, "prefix": prefix})
-        for it in (lr.get("items") or []) if isinstance(lr, dict) else []:
-            val = str(it.get("value") or "")
+        # Keys from the listing, values from a read — a listing carries no value since connector
+        # 3.13.0 (include=meta), so reading it here would offer the desk an empty list of articles
+        # to correct and look exactly like a day with nothing published.
+        from crewaimeat.memory_tools import owner_scope_values
+
+        keys = [it.get("key") for it in ((lr.get("items") or []) if isinstance(lr, dict) else [])]
+        for key, raw in owner_scope_values(agent, keys).items():
+            val = str(raw or "")
             if val:
-                out.append((str(it.get("key")), val.strip().split("\n", 1)[0][:120]))
+                out.append((key, val.strip().split("\n", 1)[0][:120]))
         day -= datetime.timedelta(days=1)
     return out
 

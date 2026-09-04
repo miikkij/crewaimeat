@@ -26,14 +26,40 @@ from crewaimeat.aimeat_crew import _aimeat_call
 def owner_scope_value(agent_name: str, key: str):
     """The value a SIBLING agent wrote at an exact key. Cross-agent read: memory is namespaced by the
     WRITING agent's GAII, so a value written by a sibling (e.g. the fetcher's raw keys) is NOT under
-    this agent's own GAII. owner_scope=true lists across ALL same-owner agents (the pattern
-    workflow.py uses to collect workers' deliverables)."""
-    r = _aimeat_call(agent_name, "aimeat_memory_list", {"owner_scope": True, "prefix": key})
-    items = (r or {}).get("items") if isinstance(r, dict) else None
-    for it in items or []:
-        if isinstance(it, dict) and it.get("key") == key and it.get("value") is not None:
-            return it.get("value")
-    return None
+    this agent's own GAII. owner_scope=true reaches across ALL same-owner agents.
+
+    A LISTING NO LONGER CARRIES VALUES. It used to, and this read took the value straight off the
+    matching item — until connector 3.13.0 sent `include=meta` (2026-09-04, so one agent's 25 MB reply
+    could not block a socket 61 others were waiting on; the right fix, and we asked for it). The
+    listing's fields are now key/owner_gaii/bytes/visibility/version/... and no `value` at all, so
+    every caller that read one silently began seeing None. That is what stopped the Sanomat edition:
+    both desks read "0 chars" for all 17 categories, wrote nothing, and marked their tasks done.
+    `aimeat_memory_read` with `owner_scope=True` returns the sibling's value directly — measured the
+    same day, 414601 characters where the listing gave nothing."""
+    r = _aimeat_call(agent_name, "aimeat_memory_read", {"key": key, "owner_scope": True}, quiet=True)
+    return r.get("value") if isinstance(r, dict) else None
+
+
+def owner_scope_values(agent_name: str, keys) -> dict:
+    """{key: value} for keys a LISTING found. One read per key, and that is not an inefficiency.
+
+    A listing answers WHICH KEYS EXIST; it stopped answering what is in them. Connector 3.13.0 sends
+    `include=meta` (2026-09-04) so one agent's huge reply cannot block a socket 61 others share — the
+    right fix, and we asked for it — and the items now carry key/owner_gaii/bytes/visibility/version
+    and no `value`. Every caller that read `it["value"]` off a listing silently began seeing None.
+
+    Use this wherever a listing was the source of values. The keys come from the listing, the values
+    come from `aimeat_memory_read` with `owner_scope=True`, which reaches a sibling's namespace — the
+    thing the listing was standing in for.
+    """
+    out: dict = {}
+    for k in keys or []:
+        if not k:
+            continue
+        v = owner_scope_value(agent_name, str(k))
+        if v is not None:
+            out[str(k)] = v
+    return out
 
 
 def read_owner_key(agent_name: str, key: str):
