@@ -673,25 +673,31 @@ def publish_offers_any(agent: str, with_samples: bool = True) -> bool:
     n_wf = sum(1 for o in doc["offers"] if is_workflow_compatible(o))  # package's node-mirrored check
     if n_wf:
         print(f"[offers] {agent}: {n_wf}/{len(doc['offers'])} offer(s) workflow-compatible")
+    # THROUGH THE DAEMON, NOT A BEARER OF OUR OWN. `_token()` hands back the STORED credential, which
+    # for a migrated agent is the v1 token the enrolment replaced and did not delete — so this PUT went
+    # to the node holding a bearer that expired days ago. Measured 2026-09-04 on the live fleet: five
+    # agents answered 401 AUTH_REQUIRED at startup, and which five is simply which tokens had lapsed
+    # (news-fetcher's on 09-01, workflow-manager's on 08-29, activity-reporter's still valid until
+    # 09-07 and therefore still working). It gets worse one agent at a time as the rest expire.
+    # `_aimeat_rest` goes through the loopback daemon, which holds the Ed25519 key and signs per call.
     try:
-        import requests
+        from crewaimeat.aimeat_crew import _aimeat_rest
 
-        from crewaimeat.generator_tool import _discover_owner, _token
-
-        tok, url = _token(agent, _discover_owner(agent))
-        r = requests.put(
-            f"{url.rstrip('/')}/v1/agents/{agent}/offers",
-            json={"offers": doc["offers"]},
-            headers={"Authorization": f"Bearer {tok}"},
-            timeout=60,
+        res = _aimeat_rest(
+            agent, "PUT", f"/v1/agents/{agent}/offers", {"offers": doc["offers"]}, retries=1, return_error=True
         )
-        if r.status_code == 200:
+        if isinstance(res, dict) and res.get("ok") is False:
+            status = res.get("http_status")
+            if status != 404:  # validation/auth errors are REAL failures — surface, don't mask
+                err = (res.get("error") or {}).get("code") or f"HTTP {status}"
+                print(f"[offers] {agent}: route FAILED {err}", file=sys.stderr)
+                return False
+            print(f"[offers] {agent}: route 404 (node without offers) -> direct memory write", file=sys.stderr)
+        elif res is not None:
             print(f"[offers] {agent}: {len(doc['offers'])} offer(s) published via route")
             return True
-        if r.status_code != 404:  # validation/auth errors are REAL failures — surface, don't mask
-            print(f"[offers] {agent}: route FAILED HTTP {r.status_code}: {r.text[:200]}", file=sys.stderr)
-            return False
-        print(f"[offers] {agent}: route 404 (node without offers) -> direct memory write", file=sys.stderr)
+        else:
+            print(f"[offers] {agent}: route unreachable -> direct memory write", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001
         print(f"[offers] {agent}: route unreachable ({exc!r}) -> direct memory write", file=sys.stderr)
     ok = bool(
@@ -710,26 +716,26 @@ def publish_meta_offer(agent: str, meta: dict, with_sample: bool = False) -> tup
     token (registered + approved). Returns (ok, detail) so the caller can show the REAL reason on failure
     (e.g. the node's validation message) rather than guessing."""
     offer = crew_offer(agent, dict(meta), with_sample=with_sample)
+    # Through the daemon, for the reason spelled out at the other PUT above: the stored bearer is the
+    # one the enrolment replaced, and it expires.
     try:
-        import requests
+        from crewaimeat.aimeat_crew import _aimeat_rest
 
-        from crewaimeat.generator_tool import _discover_owner, _token
-
-        tok, url = _token(agent, _discover_owner(agent))
-        r = requests.put(
-            f"{url.rstrip('/')}/v1/agents/{agent}/offers",
-            json={"offers": [offer]},
-            headers={"Authorization": f"Bearer {tok}"},
-            timeout=60,
+        res = _aimeat_rest(
+            agent, "PUT", f"/v1/agents/{agent}/offers", {"offers": [offer]}, retries=1, return_error=True
         )
-        if r.status_code == 200:
+        if isinstance(res, dict) and res.get("ok") is False:
+            status = res.get("http_status")
+            detail = str((res.get("error") or {}).get("message") or "")[:300]
+            if status != 404:  # validation/auth errors are REAL — surface, don't mask
+                print(f"[offers] {agent}: offer route FAILED HTTP {status}: {detail}", file=sys.stderr)
+                return False, f"node rejected the offer (HTTP {status}): {detail}"
+            print(f"[offers] {agent}: offer route 404 -> direct memory write", file=sys.stderr)
+        elif res is not None:
             print(f"[offers] {agent}: advertised offer '{offer['id']}' via route")
             return True, f"advertised '{offer['id']}'"
-        if r.status_code != 404:  # validation/auth errors are REAL — surface, don't mask
-            detail = r.text[:300]
-            print(f"[offers] {agent}: offer route FAILED HTTP {r.status_code}: {detail}", file=sys.stderr)
-            return False, f"node rejected the offer (HTTP {r.status_code}): {detail}"
-        print(f"[offers] {agent}: offer route 404 -> direct memory write", file=sys.stderr)
+        else:
+            return False, "could not reach the node — is the agent approved + the fleet up?"
     except Exception as exc:  # noqa: BLE001
         return False, f"could not reach the node ({exc!r}) — is the agent approved + the fleet up?"
     ok = bool(
