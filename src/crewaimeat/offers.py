@@ -476,7 +476,9 @@ def fetch_crew_sample(agent: str) -> str:
         last = items[-1]
         v = last.get("value")
         if not v:
-            v = (_aimeat_call(agent, "aimeat_memory_read", {"key": last.get("key")}) or {}).get("value")
+            v = (_aimeat_call(agent, "aimeat_memory_read", {"key": last.get("key"), "owner_scope": True}) or {}).get(
+                "value"
+            )
         if not v:
             return "untested"
         text = v if isinstance(v, str) else str(v)
@@ -508,7 +510,9 @@ def fetch_deliverable_sample(agent: str, key_pattern: str):
         last = items[-1]
         v = last.get("value")
         if not v:
-            v = (_aimeat_call(agent, "aimeat_memory_read", {"key": last.get("key")}) or {}).get("value")
+            v = (_aimeat_call(agent, "aimeat_memory_read", {"key": last.get("key"), "owner_scope": True}) or {}).get(
+                "value"
+            )
         if not v:
             return "untested"
         if isinstance(v, dict):

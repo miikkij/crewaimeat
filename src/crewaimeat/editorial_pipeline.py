@@ -87,7 +87,10 @@ def _build_editorial_and_index(agent_name: str, date: str, edition: str) -> str:
         cat = it.get("key", "").rsplit(".", 1)[-1]
         if cat in _EXCL:
             continue
-        v = it.get("value") or (_aimeat_call(agent_name, "aimeat_memory_read", {"key": it.get("key")}) or {}).get(
+        # owner_scope because the listing above asks for it — these articles belong to the owner's
+        # family, and a read without the scope answers None for every one of them (measured
+        # 2026-09-04: 21 present, 0 seen). The front page would then be built from nothing.
+        v = (_aimeat_call(agent_name, "aimeat_memory_read", {"key": it.get("key"), "owner_scope": True}) or {}).get(
             "value"
         )
         txt = v if isinstance(v, str) else ""

@@ -160,9 +160,14 @@ def fetch_crew_def(agent_name: str, *, agent: str, gaii: str | None = None) -> d
     if value is None:  # a same-owner sibling may have published it (namespaced by that GAII)
         lr = _aimeat_call(agent, "aimeat_memory_list", {"owner_scope": True, "prefix": key})
         for it in ((lr or {}).get("items") if isinstance(lr, dict) else None) or []:
-            if isinstance(it, dict) and it.get("key") == key and it.get("value") is not None:
-                value = it["value"]
-                break
+            # The listing NAMES the sibling's key; the value comes from a scoped read. Taking it from
+            # the listing item was this fallback's whole body, and a listing stopped carrying values —
+            # so a def a same-owner sibling published looked like no def at all.
+            if isinstance(it, dict) and it.get("key") == key:
+                sr = _aimeat_call(agent, "aimeat_memory_read", {"key": key, "owner_scope": True}, quiet=True)
+                value = (sr.get("value") if isinstance(sr, dict) else sr) if sr is not None else None
+                if value is not None:
+                    break
     if value is None and gaii:  # a PUBLIC def published by another owner — read by their GAII
         pr = _aimeat_call(agent, "aimeat_memory_read_public", {"gaii": gaii, "key": key}, quiet=True)
         value = (pr.get("value") if isinstance(pr, dict) else pr) if pr is not None else None

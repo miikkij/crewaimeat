@@ -216,7 +216,9 @@ def _recent_seen_urls(agent_name: str, category: str, limit_keys: int = 3) -> se
         for k in keys:
             if k.endswith(".raw"):  # consolidated record — read once per run, dig out this category
                 if k not in _RAW_RECORD_CACHE:
-                    v = (_aimeat_call(agent_name, "aimeat_memory_read", {"key": k}) or {}).get("value")
+                    v = (_aimeat_call(agent_name, "aimeat_memory_read", {"key": k, "owner_scope": True}) or {}).get(
+                        "value"
+                    )
                     if isinstance(v, str):
                         try:
                             v = json.loads(v)
@@ -226,7 +228,9 @@ def _recent_seen_urls(agent_name: str, category: str, limit_keys: int = 3) -> se
                 rec = _RAW_RECORD_CACHE[k]
                 _add((rec.get("categories") or {}).get(category) if rec else None)
             else:
-                _add((_aimeat_call(agent_name, "aimeat_memory_read", {"key": k}) or {}).get("value"))
+                _add(
+                    (_aimeat_call(agent_name, "aimeat_memory_read", {"key": k, "owner_scope": True}) or {}).get("value")
+                )
     except Exception as exc:  # noqa: BLE001 — an incomplete `seen` only costs a re-fetch
         print(f"[feeds] recent-URL dedup read failed; a story may be re-fetched: {exc!r}", file=sys.stderr)
     return seen

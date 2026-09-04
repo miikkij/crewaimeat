@@ -42,7 +42,9 @@ def _default_reader(agent: str) -> Callable[[str], list[dict]]:
         for it in items:
             v = it.get("value")
             if v is None:
-                v = (_aimeat_call(agent, "aimeat_memory_read", {"key": it.get("key")}) or {}).get("value")
+                v = (_aimeat_call(agent, "aimeat_memory_read", {"key": it.get("key"), "owner_scope": True}) or {}).get(
+                    "value"
+                )
             out.append({"key": it.get("key"), "value": v})
         return out
 

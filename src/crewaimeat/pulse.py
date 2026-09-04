@@ -64,7 +64,9 @@ def edition_health(date: str, edition: str = "evening", agent: str = AGENT) -> d
         # 2026-08-10). Read it only if the listing did not already carry the value.
         val = raw.get("value")
         if val is None:
-            val = (_aimeat_call(agent, "aimeat_memory_read", {"key": raw["key"]}, quiet=True) or {}).get("value")
+            val = (
+                _aimeat_call(agent, "aimeat_memory_read", {"key": raw["key"], "owner_scope": True}, quiet=True) or {}
+            ).get("value")
         if isinstance(val, str):
             try:
                 import json

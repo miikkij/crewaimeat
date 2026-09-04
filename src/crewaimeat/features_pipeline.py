@@ -144,19 +144,26 @@ def build_quiz(agent_name: str, date: str, edition: str) -> str:
 
 
 def _build_quiz(agent_name: str, date: str, edition: str) -> str:
+    from crewaimeat.memory_tools import owner_scope_values
+
     arts = []
     r = _aimeat_call(
         agent_name, "aimeat_memory_list", {"owner_scope": True, "prefix": f"news.{date}.{edition}.article."}
     )
-    for it in (r or {}).get("items") or []:
-        cat = it.get("key", "").rsplit(".", 1)[-1]
-        if cat in _QUIZ_EXCL:
-            continue
-        v = it.get("value") or (_aimeat_call(agent_name, "aimeat_memory_read", {"key": it.get("key")}) or {}).get(
-            "value"
-        )
+    keys = [
+        k
+        for it in ((r or {}).get("items") or [])
+        if (k := it.get("key", "")) and k.rsplit(".", 1)[-1] not in _QUIZ_EXCL
+    ]
+    # The listing names the keys; the values come from a read, and that read needs `owner_scope` — the
+    # SAME scope the listing above asks for. There used to be a fallback read here without it, which
+    # answers nothing for a key the owner scope holds: on 2026-09-04 all 21 articles of a finished
+    # edition were present and this loop saw none of them, so the quiz refused a whole paper as
+    # "0 readable articles". A refusal that cannot tell an empty edition from an unreadable one is
+    # not a safe refusal.
+    for key, v in owner_scope_values(agent_name, keys).items():
         if isinstance(v, str) and v.strip():
-            arts.append(f"[{cat}] {v[:500]}")
+            arts.append(f"[{key.rsplit('.', 1)[-1]}] {v[:500]}")
     if len(arts) < _MIN_QUIZ_ARTICLES:
         import sys
 

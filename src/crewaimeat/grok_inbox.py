@@ -56,7 +56,9 @@ def pending(agent: str = AGENT) -> list[dict]:
     for it in items:
         v = it.get("value")
         if v is None:
-            v = (_aimeat_call(agent, "aimeat_memory_read", {"key": it.get("key")}, quiet=True) or {}).get("value")
+            v = (
+                _aimeat_call(agent, "aimeat_memory_read", {"key": it.get("key"), "owner_scope": True}, quiet=True) or {}
+            ).get("value")
         if isinstance(v, dict) and v.get("status") == "pending":
             out.append({"key": it.get("key"), **v})
     out.sort(key=lambda x: x.get("pasted_at") or "")
