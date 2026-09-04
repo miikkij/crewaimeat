@@ -353,6 +353,118 @@ def languages_for(valinta: dict, channel: str, default: str) -> list[str]:
     return [want] if want in ("fi", "en") else [default]
 
 
+# Rough on purpose: these decide whether a LINE IS PRINTED, never what language is written. Stems,
+# so the inflections come along.
+_LANGUAGE_WORDS = {
+    "fi": ("suomeks", "suomen kielell", "suomenkielis", "in finnish", "finnish"),
+    "en": ("englanniks", "englannin kielell", "englanninkielis", "in english", "english"),
+    "sv": ("ruotsiks", "ruotsin kielell", "ruotsinkielis", "in swedish", "swedish"),
+}
+
+
+def language_conflict(order: dict, channel: str, langs: list[str]) -> str:
+    """The warning for an order whose free text asks for a language the language FIELD never got.
+
+    `languages_for` does what it promises, but nothing tells a subscriber the field exists. One order
+    said "KAIKKI julkaistava teksti ENGLANNIKSI" in `lisaohje` — which the brief hands over under a
+    heading whose own words are "this beats the house defaults" — and it beat nothing, because the
+    language is decided somewhere else entirely. Three languages in one package.
+
+    A warning, never a correction: switching language on a guessed reading of prose is the same
+    defect the other way round. And ONLY when `kielet[channel]` is unset — an order that named the
+    language has decided, and a check that fires on those runs is noise, and noise gets switched off.
+    """
+    kielet = order.get("kielet")
+    if isinstance(kielet, dict) and str(kielet.get(channel) or "").strip():
+        return ""
+    text = str(order.get("lisaohje") or "").casefold()
+    asked = sorted(code for code, words in _LANGUAGE_WORDS.items() if any(w in text for w in words))
+    if not asked or set(asked) <= set(langs):
+        return ""
+    return (
+        f"KIELIRISTIRIITA {channel}: kirjoitetaan kielellä {'/'.join(langs)} (kirjoittajan oletus, "
+        f"koska kielet[{channel!r}] on asettamatta), mutta lisäohje näyttää pyytävän: "
+        f"{'/'.join(asked)}. Lisäohje ei ratkaise kieltä eikä kieltä vaihdeta sen perusteella — "
+        f"aseta tilaukseen kielet[{channel!r}] = {asked[0]!r} (tai 'both') jos se oli tarkoitus."
+    )
+
+
+# How much of ONE entry a WRITER sees. `entries_block`'s own 2500 is sized for the researcher, who
+# reads for the gist. Handed to a writer that limit is the very defect being fixed here: a script cut
+# mid-scene does not look broken, it looks short, and the model writes the missing ending itself.
+_WRITER_BODY_CHARS = 12000
+_TRUNCATED = "\n[aineisto katkaistu tähän]"
+
+
+def _subscriber_material(order: dict) -> str:
+    """The subscriber's OWN material — their entries and their product — as facts, not as background.
+
+    `merkinnat` was read only where the researcher builds its search queries, and `tuote` only in the
+    grok step, which runs AFTER the video writer. The angle carried the CONTENT, so briefs looked
+    complete right up to the first order whose material had to survive VERBATIM: a finished 60-second
+    script came back as a new 12-scene story, and a writer that had never been given an address
+    invented pwademo.fi while `tilaus.tuote.osoite` said aimeat.io.
+    """
+    from crewaimeat.julkaisu_brief import entries_block
+
+    marked, cut = [], False
+    for e in order.get("merkinnat") or []:
+        if not isinstance(e, dict):
+            continue
+        body = str(e.get("body") or "")
+        if len(body) > _WRITER_BODY_CHARS:
+            body, cut = body[:_WRITER_BODY_CHARS] + _TRUNCATED, True
+        marked.append({**e, "body": body})
+
+    parts = []
+    # The shared renderer still renders; marking the cut ABOVE is what makes it visible, so the limit
+    # handed on here is one the marked bodies can no longer hit.
+    entries = entries_block({"merkinnat": marked}, _WRITER_BODY_CHARS + len(_TRUNCATED))
+    if entries.strip():
+        parts.append(
+            "TILAAJAN OMA AINEISTO — tämä on työn LÄHTÖKOHTA, ei tausta-aineistoa jonka pohjalta "
+            "kirjoitetaan uusi.\nValmis teksti, käsikirjoitus, repliikki ja aikakoodi säilyvät "
+            "SANATARKASTI: älä kirjoita omaa versiota, älä tiivistä, älä numeroi kohtauksia "
+            "uudelleen. Täydennä ympärille, älä korvaa.\n\n" + entries
+        )
+        if cut:
+            parts.append(
+                "HUOM: aineistoa jouduttiin katkaisemaan pituuden vuoksi, ja katkaisukohta on "
+                "merkitty tekstiin. Olet vajaan lähteen varassa — älä kirjoita puuttuvaa loppua itse."
+            )
+
+    tuote = order.get("tuote") if isinstance(order.get("tuote"), dict) else {}
+    rows = [
+        (label, str(tuote.get(field) or "").strip())
+        for field, label in (("nimi", "NIMI"), ("osoite", "OSOITE"), ("mika", "MIKÄ SE ON"))
+    ]
+    rows = [(label, value) for label, value in rows if value]
+    if rows:
+        # `julkaisu_grok` says this on its own side already. The rule belongs here too: this is where
+        # an address first reaches a written line, which is why the invented one ever got that far.
+        only = " — tämä on AINOA osoite jota tässä työssä käytetään. Älä keksi toista."
+        lines = [f"  - {label}: {value}" + (only if label == "OSOITE" else "") for label, value in rows]
+        parts.append("TILAAJAN TUOTE (faktoja, ei taustaa — nämä kirjoitetaan oikein):\n" + "\n".join(lines))
+
+    return "\n\n".join(parts)
+
+
+def subscriber_names(order: dict) -> str:
+    """The subscriber's own material as PLAIN TEXT, for the leak check's allowed-names set.
+
+    Deliberately the DATA rather than the rendered block: the block carries house boilerplate whose
+    capitalised words would quietly join the allowed set and widen a check that only works by being
+    narrow.
+    """
+    parts = []
+    for e in order.get("merkinnat") or []:
+        if isinstance(e, dict):
+            parts += [str(e.get("title") or ""), str(e.get("body") or "")]
+    tuote = order.get("tuote") if isinstance(order.get("tuote"), dict) else {}
+    parts += [str(tuote.get(f) or "") for f in ("nimi", "osoite", "mika")]
+    return "\n".join(p for p in parts if p.strip())
+
+
 def story_block(
     valinta: dict,
     tausta: dict,
@@ -397,7 +509,11 @@ def story_block(
     for field, label in (
         ("ajankohtaisuus", "AJANKOHTAISUUS"),
         ("vastavaite", "VASTAVÄITE (älä ohita tätä)"),
-        ("ei_loytynyt", "EI LÖYTYNYT (älä väitä näitä)"),
+        (
+            "ei_loytynyt",
+            "EI LÖYTYNYT VERKOSTA (älä esitä näitä ulkopuolisesti varmennettuina — mutta jos "
+            "TILAAJAN OMA AINEISTO sanoo ne, ne ovat totta ja ne saa kertoa)",
+        ),
     ):
         if str(tausta.get(field) or "").strip():
             rows.append(f"{label}: {tausta[field]}")
@@ -423,6 +539,11 @@ def story_block(
             "Kentässä TEKSTI lukee miten hän kirjoittaa — se on tämän palan tärkein rivi. "
             "Älä kuvaile ohjaajaa, kirjoita hänen rytmissään."
         )
+    # Anything the subscriber wrote themselves comes before LISÄOHJE, which stays last because it is
+    # a boundary: a boundary is read against the material, not in place of it.
+    material = _subscriber_material(valinta)
+    if material:
+        block += "\n\n" + material
     if str(valinta.get("lisaohje") or "").strip():
         block += f"\n\nLISÄOHJE TILAAJALTA (tämä voittaa talon oletukset): {valinta['lisaohje']}"
     return block
@@ -450,8 +571,12 @@ def excluded_leak(text: str, brief: dict) -> list[str]:
     need two. A looser rule would block good prose for sharing an ordinary word with an excluded
     sentence, and a check that cries wolf gets switched off.
     """
+    # `oma_aineisto` is the subscriber's OWN material, and it is a separate source on purpose: a name
+    # the customer gave for their own product cannot have been invented by the writer, whatever the
+    # open web said about it. Folding it in with the research would lose exactly that distinction —
+    # which is how a product the researcher could not find became a word its own owner may not write.
     allowed = set()
-    for field in (*STORY_FIELDS, "varmuus"):
+    for field in (*STORY_FIELDS, "varmuus", "oma_aineisto"):
         allowed |= set(_NAMED.findall(str(brief.get(field) or "")))
     out = []
     for item in brief.get("ei_kerrota") or []:
@@ -793,6 +918,7 @@ def write_julkaisu(agent_name: str, channel: str, task: dict | None = None, task
     brief = {
         "kulma": str((valinta.get("kulma") or {}).get("kulma") or ""),
         "ei_kerrota": [tausta.get("ei_loytynyt")] if tausta.get("ei_loytynyt") else [],
+        "oma_aineisto": subscriber_names(order),
         "block": block,
     }
     llm = get_llm(for_tool_use=False, temperature=spec["temperature"], agent_name=agent_name)
@@ -859,6 +985,11 @@ def write_julkaisu(agent_name: str, channel: str, task: dict | None = None, task
     # How many pieces this order wants, and in which languages. `both` produces the piece twice; the
     # product is capped so an order cannot quietly turn into six paid generations.
     langs = languages_for(order, channel, spec["lang"])
+    # `languages_for` has decided by now; if the order ASKED for something else in prose, that is a
+    # field nobody knew about, not a language setting. Say it — and do not act on it.
+    conflict = language_conflict(order, channel, langs)
+    if conflict:
+        print(f"[{agent_name}] {conflict}", file=sys.stderr)
     try:
         want_versions = max(1, min(3, int(order.get("versioita") or 1)))
     except (TypeError, ValueError):
@@ -949,8 +1080,8 @@ def write_julkaisu(agent_name: str, channel: str, task: dict | None = None, task
 
 # ── the images ───────────────────────────────────────────────────────────────────────────────────
 def read_kuvapyynnot(agent_name: str, ref: str) -> list[dict]:
-    """The script's image requests. Raises when the script is missing — this agent generates only
-    what the script asked for, and invents no prompts of its own."""
+    """The script's image requests, possibly none. Raises when the SCRIPT is missing — this agent
+    generates only what the script asked for, and invents no prompts of its own."""
     key = PIECE_KEY.format(ref=ref, channel="video")
     value = read_owner_key(agent_name, key)
     if isinstance(value, str):
@@ -961,11 +1092,8 @@ def read_kuvapyynnot(agent_name: str, ref: str) -> list[dict]:
     if not isinstance(value, dict):
         raise LookupError(f"script '{key}' is missing — the video step has not run. Nothing was generated.")
     reqs = [r for r in (value.get("kuvapyynnot") or []) if isinstance(r, dict) and str(r.get("prompt") or "").strip()]
-    if not reqs:
-        raise LookupError(
-            f"script '{key}' asks for no images (every shot is a screen recording). Nothing was "
-            "generated — that is the script's decision, not a failure to carry out."
-        )
+    # An empty list is a real answer to "what did the script ask for", and the message this used to
+    # raise said so in its own words. A missing SCRIPT is still a LookupError: that step never ran.
     return reqs
 
 
@@ -1003,7 +1131,11 @@ def tee_kuvat(agent_name: str, task: dict | None = None, task_id: str | None = N
             failed.append(f"nro {r.get('nro')}: uploaded but returned no storage key — it cannot be attached")
             continue
         kuvat.append({"nro": r.get("nro"), "url": res["url"], "storage_key": res["key"], "prompt": prompt})
-    if not kuvat:
+    # Zero images is TWO different runs. Zero REQUESTS is a finished one — every shot is a screen
+    # recording — and its record still has to be written, or the next step reads a hole where an
+    # answer belongs. Zero images out of requests that existed is a broken one. `reqs` tells them
+    # apart and it is right here in hand.
+    if reqs and not kuvat:
         return (
             f"FAILED: no image was generated for {key} — " + "; ".join(failed or ["no requests succeeded"]) + inferred
         )
@@ -1029,8 +1161,18 @@ def tee_kuvat(agent_name: str, task: dict | None = None, task_id: str | None = N
     if written is None:
         return f"FAILED to write '{key}' (tunnel/transport) — {len(kuvat)} image(s) were uploaded but not recorded.{inferred}"
     record_deliverable_key(task_id, key)
+    if not reqs:
+        return (
+            f"OK: the script asks for no images (every shot is a screen recording), and {key} "
+            f"records that as an empty list.{inferred}"
+        )
     note = f" {len(failed)} request(s) failed: {'; '.join(failed)}." if failed else ""
-    return f"OK: {len(kuvat)}/{len(reqs)} image(s) -> {key}, each with its public URL and storage key.{note}{inferred}"
+    # The success signal is `exists` now, so it passes a run that asked for five and made one. That
+    # check did not disappear — it moved here, where both numbers are known.
+    head = "OK" if len(kuvat) == len(reqs) else "PARTIAL"
+    return (
+        f"{head}: {len(kuvat)}/{len(reqs)} image(s) -> {key}, each with its public URL and storage key.{note}{inferred}"
+    )
 
 
 # ── crew tools ───────────────────────────────────────────────────────────────────────────────────

@@ -290,6 +290,79 @@ def test_picked_angles_are_material_not_a_second_subject():
     assert "EIVÄT ole toinen aihe" in block
 
 
+# ── the subscriber's OWN material reaches the writers ────────────────────────────────
+# The defect these pin: `merkinnat` was read only when BUILDING the research queries, and `tuote`
+# only at the grok step, AFTER the video writer. So a finished 60-second script came back as a new
+# 12-scene story, and the writer invented pwademo.fi while `tilaus.tuote.osoite` said aimeat.io.
+# The angle carried the CONTENT, which is why this looked fine until material had to survive
+# word for word.
+ORDER_WITH_MATERIAL = {
+    **VALINTA,
+    "merkinnat": [
+        {
+            "date": "2026-08-30",
+            "title": "Valmis käsikirjoitus",
+            "body": "0-3 s: ruudulla lukee KAHDEKSANTOISTA SEKUNTIA. 3-9 s: sama valikko kahdesti.",
+        }
+    ],
+    "tuote": {"nimi": "AIMEAT", "osoite": "https://aimeat.io", "mika": "Agenttien substraatti."},
+    "lisaohje": "Älä mainitse hinnoittelua.",
+}
+
+
+def test_the_subscribers_own_entries_reach_the_writer_and_the_order_of_the_brief_holds():
+    """A finished script is the STARTING POINT, not background to write a new one from. It only
+    reaches the writer if the brief carries it, and LISÄOHJE stays last because it is the boundary
+    that beats the house defaults — material comes before the boundary, not after it."""
+    block = jp.story_block(ORDER_WITH_MATERIAL, TAUSTA, OHJAAJAT)
+
+    assert "KAHDEKSANTOISTA SEKUNTIA" in block, "the subscriber's own text must reach the writer"
+    assert "Valmis käsikirjoitus" in block and "2026-08-30" in block
+    assert "TILAAJAN OMA AINEISTO" in block
+    assert "SANATARKASTI" in block, "the writer must be told this is kept, not rewritten"
+
+    # nothing the brief already carried was displaced
+    assert ANGLE["kulma"] in block and "Artikla 50 alkaa 2.8.2026" in block
+    assert "David Fincher" in block and "LISÄOHJE TILAAJALTA" in block
+    assert block.index("TILAAJAN OMA AINEISTO") < block.index("LISÄOHJE TILAAJALTA")
+    assert block.rstrip().endswith("Älä mainitse hinnoittelua."), "LISÄOHJE is last"
+
+
+def test_a_truncated_entry_says_so_rather_than_looking_short():
+    """The researcher's 2500-character cut is sized for reading the gist. Handed to a writer it is
+    the very defect being fixed here: a script cut mid-scene does not look broken, it looks short,
+    and the model completes the ending itself."""
+    long_body = "kohtaus. " * 3000
+    order = {**ORDER_WITH_MATERIAL, "merkinnat": [{"date": "d", "title": "t", "body": long_body}]}
+    block = jp.story_block(order, TAUSTA, OHJAAJAT)
+
+    assert len(long_body) > 2500, "the fixture must exceed the researcher's own limit"
+    assert block.count("kohtaus.") > 300, "a writer gets far more than the researcher's 2500 chars"
+    assert "[aineisto katkaistu tähän]" in block, "a cut the model cannot see is a cut it writes over"
+
+
+def test_the_ordered_product_and_its_address_reach_the_writer():
+    """pwademo.fi again (2026-08-27): the writer invented an address because it was never given one.
+    The nameserver check in the grok step is the second layer; this is the cause."""
+    block = jp.story_block(ORDER_WITH_MATERIAL, TAUSTA, OHJAAJAT)
+
+    assert "https://aimeat.io" in block and "AIMEAT" in block
+    assert "Agenttien substraatti" in block
+    assert "AINOA osoite" in block, "the address is a fact and the only one, not background colour"
+
+
+def test_an_absent_product_leaves_no_empty_heading():
+    """A heading with nothing under it reads as a field the writer failed to fill.
+
+    Asserted on the rendered section rather than on the words: EI LÖYTYNYT names the material's
+    heading on purpose, so a bare substring search finds that cross-reference instead."""
+    order = {**VALINTA, "merkinnat": []}
+    assert jp._subscriber_material(order) == "", "no material, no section"
+    block = jp.story_block(order, TAUSTA, OHJAAJAT)
+    assert "TILAAJAN TUOTE" not in block
+    assert "TILAAJAN OMA AINEISTO —" not in block, "the heading itself, not the reference to it"
+
+
 # ── house rules, enforced in code ────────────────────────────────────────────────────────────────
 GOOD_LINKEDIN = (
     "Yhteys valmistuu nyt vasta kun olet päättänyt, mitä agentti saa tehdä. " * 4
@@ -468,6 +541,62 @@ def test_a_violation_is_handed_back_and_the_rewrite_is_what_lands(stubbed, monke
     jp.write_julkaisu("julkaisu-linkedin", "linkedin", TASK)
 
     assert "innoissani" in llm.prompts[1], "the violation must be fed back into the rewrite"
+
+
+# ── the language field decides the language; the free text does not ──────────────────────────────
+# Kalle's order said "KAIKKI julkaistava teksti ENGLANNIKSI" in `lisaohje`, and the brief hands that
+# over under a heading whose own words are "this beats the house defaults". It beat nothing:
+# `languages_for` reads `kielet`, a field nothing told him about. Three languages in one package.
+def _reading(monkeypatch, tilaus: dict, valinta: dict):
+    def _read(agent, key):
+        if key.endswith(".valinta"):
+            return dict(valinta)
+        if key.endswith(".tausta"):
+            return dict(TAUSTA)
+        if key.endswith(".kulmat"):
+            return {"kulmat": []}
+        if key.endswith(".tilaus"):
+            return dict(tilaus)
+        return None
+
+    llm = _StubLLM([_piece(GOOD_LINKEDIN)] * 4)
+    monkeypatch.setattr(jp, "read_owner_key", _read)
+    monkeypatch.setattr(jp, "get_llm", lambda **k: llm)
+    monkeypatch.setattr(jp, "record_deliverable_key", lambda tid, key: None)
+    return llm
+
+
+ASKS_ENGLISH = {**VALINTA, "lisaohje": "KAIKKI julkaistava teksti ENGLANNIKSI."}
+
+
+def test_a_language_asked_for_in_the_free_text_is_said_out_loud(stubbed, monkeypatch, capsys):
+    """The writer's own default decided, and the subscriber asked for something else in prose. That
+    is not a language setting, so it is reported — with the field that would have worked."""
+    _reading(monkeypatch, {}, ASKS_ENGLISH)
+    jp.write_julkaisu("julkaisu-linkedin", "linkedin", TASK)
+
+    err = capsys.readouterr().err
+    assert "KIELIRISTIRIITA" in err
+    assert "kielet" in err and "linkedin" in err, "the warning must name the field that decides"
+    assert "[julkaisu-linkedin]" in err, "same shape as every other line this run prints"
+
+
+def test_a_language_the_order_actually_set_is_not_warned_about(stubbed, monkeypatch, capsys):
+    """The same free text, but the order named the language. The subscriber decided; a warning here
+    would fire on every run until someone switched the check off."""
+    _reading(monkeypatch, {"kielet": {"linkedin": "en"}}, ASKS_ENGLISH)
+    jp.write_julkaisu("julkaisu-linkedin", "linkedin", TASK)
+
+    assert "KIELIRISTIRIITA" not in capsys.readouterr().err
+
+
+def test_the_free_text_never_silently_changes_the_language(stubbed, monkeypatch, capsys):
+    """A quiet switch on a guessed reading is the same defect the other way round: warn, do not fix."""
+    llm = _reading(monkeypatch, {}, ASKS_ENGLISH)
+    jp.write_julkaisu("julkaisu-linkedin", "linkedin", TASK)
+
+    assert "kielellä 'fi'" in llm.prompts[0], "the resolved language still governs the writing"
+    assert "kielellä 'en'" not in llm.prompts[0], "prose in lisaohje must not switch the language"
     write = next(w for w in stubbed if w["tool"] == "aimeat_memory_write")
     assert not write["value"]["text"].lower().startswith("olen innoissani")
 
@@ -536,10 +665,133 @@ def test_an_image_without_a_storage_key_is_not_usable(monkeypatch):
 
 
 def test_a_script_that_asks_for_no_images_is_not_a_failure_to_carry_out(monkeypatch):
+    """Every shot a screen recording is a CORRECT script, so the image step has nothing to do — and
+    a step with nothing to do is done, not broken. It used to raise, and the raise carried a message
+    that said in its own words this was "not a failure to carry out"."""
+    writes: list[dict] = []
     monkeypatch.setattr(jp, "read_owner_key", lambda agent, key: _script())
-    monkeypatch.setattr(jp, "_aimeat_call", lambda a, tool, payload: {"ok": True})
+    monkeypatch.setattr(
+        jp, "_aimeat_call", lambda a, tool, payload: writes.append({"tool": tool, **payload}) or {"ok": True}
+    )
+    monkeypatch.setattr(jp, "record_deliverable_key", lambda tid, key: None)
+
     out = jp.tee_kuvat("julkaisu-kuva", TASK)
-    assert "asks for no images" in out and "script's decision" in out
+
+    assert not out.startswith("FAILED"), out
+    write = next(w for w in writes if w["tool"] == "aimeat_memory_write")
+    assert write["key"] == "julkaisu.2026-08-24.kuvat"
+    assert write["value"] == {"kuvat": []}, "the record has to exist, or the next step reads a hole"
+
+
+def test_read_kuvapyynnot_returns_empty_and_still_raises_for_a_missing_script(monkeypatch):
+    monkeypatch.setattr(jp, "read_owner_key", lambda agent, key: _script())
+    assert jp.read_kuvapyynnot("julkaisu-kuva", "2026-08-24") == []
+
+    monkeypatch.setattr(jp, "read_owner_key", lambda agent, key: None)
+    with pytest.raises(LookupError) as exc:
+        jp.read_kuvapyynnot("julkaisu-kuva", "2026-08-24")
+    assert "missing" in str(exc.value), "a script that never ran is a different thing from one asking for nothing"
+
+
+def test_every_request_failing_is_still_a_failure(monkeypatch):
+    """Zero images out of zero requests is a finished run. Zero out of three is a broken one, and
+    collapsing the two would turn a step that generated nothing green."""
+    script = _script(kuvapyynnot=[{"nro": i, "prompt": f"p{i}"} for i in (2, 4, 6)])
+    monkeypatch.setattr(jp, "read_owner_key", lambda agent, key: script)
+    monkeypatch.setattr(jp, "_aimeat_call", lambda a, tool, payload: {"ok": True})
+    monkeypatch.setattr(jp, "record_deliverable_key", lambda tid, key: None)
+    monkeypatch.setattr(
+        "crewaimeat.seedream_gen.generate_image", lambda agent, prompt, **kw: {"ok": False, "error": "429"}
+    )
+
+    out = jp.tee_kuvat("julkaisu-kuva", TASK)
+    assert out.startswith("FAILED"), out
+
+
+def test_a_partial_run_says_so_because_the_signal_no_longer_can(monkeypatch):
+    """`exists` passes a run that asked for three images and made one. The check that used to live in
+    the success signal moves into the step's own answer, with both numbers in it."""
+    script = _script(kuvapyynnot=[{"nro": i, "prompt": f"p{i}"} for i in (2, 4, 6)])
+    monkeypatch.setattr(jp, "read_owner_key", lambda agent, key: script)
+    monkeypatch.setattr(jp, "_aimeat_call", lambda a, tool, payload: {"ok": True})
+    monkeypatch.setattr(jp, "record_deliverable_key", lambda tid, key: None)
+    calls = {"n": 0}
+
+    def _gen(agent, prompt, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"ok": True, "url": "https://x/a.png", "key": "images/a.png"}
+        return {"ok": False, "error": "429"}
+
+    monkeypatch.setattr("crewaimeat.seedream_gen.generate_image", _gen)
+
+    out = jp.tee_kuvat("julkaisu-kuva", TASK)
+    assert "1/3" in out, "both numbers, so the reader knows which is which"
+    assert "PARTIAL" in out and not out.startswith("FAILED"), out
+
+
+def test_the_image_step_gates_on_the_script_not_on_the_request_count():
+    """The step needs a SCRIPT to read. How many images that script asks for is the step's own
+    business — as an entry condition it kept a correct run from ever starting."""
+    from crewaimeat.offers import offers_doc_any
+
+    offer = offers_doc_any("julkaisu-kuva", with_samples=False)["offers"][0]
+    assert offer["required_to_function"]["op"] == "exists"
+    assert offer["required_to_function"]["key"] == "julkaisu.{ref}.video"
+    assert offer["success_signal"]["op"] == "exists"
+    assert offer["success_signal"]["key"] == "julkaisu.{ref}.kuvat"
+
+
+# ── a name the subscriber gave is not a name the writer invented ─────────────────────────────────
+# The research failed to find the product on the open web, so its name and address landed in
+# `ei_loytynyt` -> `ei_kerrota`, and the leak check — whose only allowed source was the one-sentence
+# angle — treated the subscriber's own product name as a forbidden word. An order that named the
+# product produced a piece that never named it.
+def test_a_name_the_subscriber_gave_is_not_a_leak():
+    brief = {
+        "kulma": "Yhteys valmistuu vasta kun olet päättänyt.",
+        "ei_kerrota": ["AIMEAT ei löytynyt hakukoneesta."],
+        "oma_aineisto": "NIMI: AIMEAT\nOSOITE: https://aimeat.io",
+    }
+    assert jp.excluded_leak("AIMEAT tekee tämän näkyväksi.", brief) == []
+
+
+def test_a_name_only_the_research_could_not_find_is_still_a_leak():
+    """The narrow check still does its job: without the subscriber saying it, an unverified name in
+    the piece was invented by the writer."""
+    brief = {
+        "kulma": "Yhteys valmistuu vasta kun olet päättänyt.",
+        "ei_kerrota": ["AIMEAT ei löytynyt hakukoneesta."],
+        "oma_aineisto": "",
+    }
+    assert jp.excluded_leak("AIMEAT tekee tämän näkyväksi.", brief) != []
+
+
+def test_the_writers_brief_carries_the_subscribers_own_material(stubbed, monkeypatch):
+    """The helper being right is not the fix; the brief has to actually carry the field. Without the
+    wiring, `excluded_leak` reads an absent `oma_aineisto` and rejects the name all over again."""
+    tausta = {**TAUSTA, "ei_loytynyt": "AIMEAT ei löytynyt hakukoneesta."}
+    valinta = {**VALINTA, "tuote": {"nimi": "AIMEAT", "osoite": "https://aimeat.io"}}
+
+    def _read(agent, key):
+        if key.endswith(".valinta"):
+            return dict(valinta)
+        if key.endswith(".tausta"):
+            return dict(tausta)
+        if key.endswith(".kulmat"):
+            return {"kulmat": []}
+        return None
+
+    monkeypatch.setattr(jp, "read_owner_key", _read)
+    monkeypatch.setattr(jp, "record_deliverable_key", lambda tid, key: None)
+    llm = _StubLLM([_piece(GOOD_LINKEDIN + " AIMEAT on tässä nimeltä.")])
+    monkeypatch.setattr(jp, "get_llm", lambda **k: llm)
+
+    out = jp.write_julkaisu("julkaisu-linkedin", "linkedin", TASK)
+
+    assert "poissuljettua aihetta" not in out, "the subscriber's own product name is not a leak"
+    assert out.startswith("OK:"), out
+    assert len(llm.prompts) == 1, "no rewrite was demanded, so no attempt was spent on it"
 
 
 def test_generate_image_returns_the_key_it_uploaded_under():

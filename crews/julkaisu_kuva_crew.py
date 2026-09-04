@@ -55,19 +55,20 @@ OFFERS = [
         "dataHandling": "third-party",  # the prompt goes to OpenRouter/Seedream
         "json": True,
         "consequences": [{"type": "publishes-public", "note": "the image files themselves are uploaded public"}],
+        # The step needs a SCRIPT to read. How many images that script asks for is the step's own
+        # business: as an entry condition it kept a CORRECT run — every shot a screen recording, so
+        # no image requests — from ever starting, and reported it as input-red.
         "required_to_function": {
             "kind": "deterministic",
-            "op": "count_nonempty",
+            "op": "exists",
             "key": "julkaisu.{ref}.video",
-            "path": "kuvapyynnot",
-            "min": 1,
         },
+        # An empty list is a finished run, so the record EXISTING is the signal. The partial case
+        # this used to catch (five asked for, one made) is reported by the step itself.
         "success_signal": {
             "kind": "deterministic",
-            "op": "count_nonempty",
+            "op": "exists",
             "key": "julkaisu.{ref}.kuvat",
-            "path": "kuvat",
-            "min": 1,
         },
         "deliverable_location": {"key": "julkaisu.{ref}.kuvat"},
         "sample": {
