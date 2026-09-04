@@ -108,8 +108,28 @@ def make_memory_tools(agent_name: str) -> list:
         The GAII matters: it is what a public viewer / getPublic(gaii, key) needs to read a sibling's key,
         and what you put in a front-page index entry. If the SAME key appears under several GAIIs (e.g. a
         category written by one agent and copied by another), they are SEPARATE entries — pick the one
-        from the agent that actually produced the content. Use to discover what exists before reading."""
-        r = _aimeat_call(agent_name, "aimeat_memory_list", {"owner_scope": True, "prefix": prefix or ""})
+        from the agent that actually produced the content. Use to discover what exists before reading.
+
+        A broad prefix can be REFUSED for size — that is not the same as empty, and this says which."""
+        # "NOTHING THERE" AND "THE ANSWER NEVER ARRIVED" ARE DIFFERENT ANSWERS. `aimeat_memory_list`
+        # returns every matching key WITH ITS VALUE, so a prefix covering a long archive exceeds the
+        # node's per-identity response cap on a shared socket. Measured 2026-09-04: prefix 'news.' —
+        # about 26 keys and 0.53 MB per day, so roughly seven weeks of archive — came back
+        # TUNNEL_RESPONSE_TOO_LARGE, and this tool reported "No memory keys found". A model reads that
+        # as the upstream stage not having run, which is precisely how a fetch failure becomes a
+        # fabricated article. Passing `limit` does NOT help: measured at limit=1 on both the tool door
+        # and the REST route, the node accepts the parameter and refuses the answer anyway.
+        r = _aimeat_call(
+            agent_name, "aimeat_memory_list", {"owner_scope": True, "prefix": prefix or ""}, return_error=True
+        )
+        if isinstance(r, dict) and r.get("ok") is False:
+            code = ((r.get("error") or {}).get("code")) or "an error"
+            hint = (
+                f" — that prefix covers too much; narrow it (add the date, e.g. '{prefix}2026-09-04.') and try again"
+                if code == "TUNNEL_RESPONSE_TOO_LARGE"
+                else ""
+            )
+            return f"COULD NOT LIST '{prefix}': the node answered {code}{hint}. This is NOT 'no keys exist'."
         items = ((r or {}).get("items") if isinstance(r, dict) else None) or []
         rows = []
         for it in items:

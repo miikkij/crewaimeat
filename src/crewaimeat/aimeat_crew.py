@@ -841,7 +841,14 @@ def _warn_if_provenance_dropped(agent_name: str, tool: str, data: object) -> Non
 
 
 def _aimeat_call(
-    agent_name: str, tool: str, payload: dict, *, retries: int = 3, backoff: float = 1.5, quiet: bool = False
+    agent_name: str,
+    tool: str,
+    payload: dict,
+    *,
+    retries: int = 3,
+    backoff: float = 1.5,
+    quiet: bool = False,
+    return_error: bool = False,
 ) -> dict | None:
     """Deterministic AIMEAT tool call (no LLM).
 
@@ -852,7 +859,13 @@ def _aimeat_call(
     RESILIENCE: a transient TRANSPORT failure (tunnel reconnecting, connection dropped, 5xx) is
     RETRIED up to `retries` times with exponential backoff — the serve daemon is reset between tries
     so the next attempt re-discovers/re-establishes it. Tool-level errors (e.g. a key that isn't
-    there yet) are NOT retried — they return None immediately so "not found yet" polls stay cheap."""
+    there yet) are NOT retried — they return None immediately so "not found yet" polls stay cheap.
+
+    `return_error=True` hands back the node's own envelope on a settled tool error instead of None, so
+    a caller can tell "there is nothing there" apart from "the answer never arrived". Without it the
+    two are indistinguishable: `list_memory` reported "No memory keys found under prefix 'news.'" when
+    the node had in fact refused a 25 MB answer, and a model reads that as the upstream stage not
+    having run — which is how a fetch failure turns into a fabricated article."""
     for attempt in range(retries):
         api = _serve_api()
         if api is None:
@@ -896,6 +909,8 @@ def _aimeat_call(
                 continue
             if not quiet:  # quiet=True for EXPECTED probe failures (e.g. listing an org you don't serve)
                 print(f"[{agent_name}] {tool} failed: {err or f'HTTP {r.status_code}'}", file=sys.stderr)
+            if return_error and isinstance(body, dict):
+                return dict(body, http_status=r.status_code)
             return None
         # NB we return `data` and DISCARD `body["meta"]` — the same envelope-carrier discard that cost
         # the connector its inbound provenance (it unwrapped `resp.data ?? resp`, binning the envelope
