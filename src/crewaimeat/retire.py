@@ -80,8 +80,12 @@ def plan(root: Path, agent: str, *, purge_node: bool) -> list[Step]:
     else:
         steps.append(Step("serve.json: not found"))
 
-    tok = _home() / "tokens" / f"{agent}@*.token"
-    steps.append(Step(f"token file: move {tok.name} aside (kept, so re-registering is easy)"))
+    steps.append(
+        Step(
+            f"credential: move {agent}@*.token and {agent}@*.key aside (kept, so re-registering is "
+            "easy) — this is what actually retires it; serve.json is rebuilt from the credential store"
+        )
+    )
     steps.append(Step("registries: remove entries from fleet_identity / offers / llm_providers.json crews"))
     if purge_node:
         steps.append(Step(f"node: disable every schedule whose target is '{agent}'"))
@@ -125,17 +129,37 @@ def _drop_registration(agent: str) -> Step:
 
 
 def _stash_token(agent: str) -> Step:
-    tokens = _home() / "tokens"
-    if not tokens.is_dir():
-        return Step("token", True, "no tokens directory")
-    hits = list(tokens.glob(f"{agent}@*.token"))
-    if not hits:
-        return Step("token", True, "no token file")
-    retired = tokens / "retired"
-    retired.mkdir(exist_ok=True)
-    for h in hits:
-        h.rename(retired / h.name)
-    return Step("token", True, f"moved {len(hits)} token file(s) to tokens/retired/ (kept, not deleted)")
+    """Move the agent's CREDENTIAL aside — a v1 bearer in `tokens/`, a v2 key in `keys/`, or both.
+
+    THE CREDENTIAL IS WHAT RETIREMENT ACTUALLY REMOVES. serve.json is a discovery file the daemon
+    REGENERATES from the credential store on every start, so editing it alone is undone by the next
+    restart. Measured 2026-09-04: four agents were retired, each reported "registration removed", and
+    all four were back in serve.json minutes later because only `tokens/` was consulted and their
+    credential was a key. A step that says ok and does not hold is worse than one that refuses.
+    """
+    home = _home()
+    moved: list[str] = []
+    looked: list[str] = []
+    for folder, suffix in (("tokens", ".token"), ("keys", ".key")):
+        d = home / folder
+        if not d.is_dir():
+            continue
+        looked.append(folder)
+        hits = list(d.glob(f"{agent}@*{suffix}"))
+        if not hits:
+            continue
+        retired = d / "retired"
+        retired.mkdir(exist_ok=True)
+        for h in hits:
+            h.rename(retired / h.name)
+            moved.append(f"{folder}/{h.name}")
+    if not looked:
+        return Step("credential", True, "no tokens/ or keys/ directory")
+    if not moved:
+        return Step("credential", True, f"no credential file (looked in {', '.join(looked)}/)")
+    return Step(
+        "credential", True, f"moved {len(moved)} aside to <store>/retired/ (kept, not deleted): {', '.join(moved)}"
+    )
 
 
 def _clean_routing(root: Path, agent: str) -> Step:

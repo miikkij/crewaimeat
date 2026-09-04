@@ -112,3 +112,44 @@ def test_build_snapshot_with_cached_node_index_skips_network(monkeypatch):
     assert snap.serve_pid == 99648 and snap.serve_port == 52813
     assert snap.n_connectors == 1 and snap.n_locks == 1
     assert len(snap.rows) == 1 and snap.rows[0].status == "running"
+
+
+def test_an_attached_agent_with_no_runtime_is_not_reported_down():
+    """`in_tunnel` used to be taken and never read.
+
+    Measured 2026-09-04, with the fleet on keys and every principal attaching: 50 rows, 50 in_tunnel,
+    and all 50 reported "down (stale lock)" — the monitor could not tell an agent that is attached and
+    idle from one that is absent, and blamed lock files for it. That is the resting state of a
+    spawn-mode agent, not a fault.
+    """
+    from crewaimeat.tui.fleet_state import derive_status
+
+    attached = dict(watchdog=0, daemon=0, lock=True, age_s=None)
+    assert derive_status(in_tunnel=True, **attached) == "attached (no runtime)"
+    assert derive_status(in_tunnel=False, **attached) == "down (stale lock)"
+    assert derive_status(in_tunnel=False, watchdog=0, daemon=0, lock=False, age_s=None) == "down"
+
+    # A live runtime still outranks it — being on the tunnel says nothing about the local process.
+    assert derive_status(in_tunnel=True, watchdog=1, daemon=1, lock=True, age_s=1.0) == "running"
+    assert derive_status(in_tunnel=True, watchdog=2, daemon=1, lock=True, age_s=1.0) == "DUPLICATE"
+    assert derive_status(in_tunnel=True, watchdog=0, daemon=1, lock=True, age_s=1.0) == "orphan"
+
+
+def test_a_spare_agent_is_not_a_ghost(tmp_path):
+    """A chat client registers exactly like a crew and has no file here — it never had one.
+
+    `registry.serve.ghost` is for a crew whose file VANISHED. Fourteen chat clients and probes became
+    visible to it at once when the daemon began carrying all 66 principals instead of 50, and the
+    rule's own advice (`crewaimeat retire goose`) would have been the wrong fix, loudly given.
+    """
+    import json as _json
+
+    from crewaimeat.doctor.inventory import _read_spare
+
+    assert _read_spare(tmp_path) == set()  # no file -> no opinion
+
+    (tmp_path / "serve-spare-agents.json").write_text(_json.dumps({"spare": ["goose", "grok"]}), encoding="utf-8")
+    assert _read_spare(tmp_path) == {"goose", "grok"}
+
+    (tmp_path / "serve-spare-agents.json").write_text("{ not json", encoding="utf-8")
+    assert _read_spare(tmp_path) == set()  # unreadable -> no opinion, never a crash

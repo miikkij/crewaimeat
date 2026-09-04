@@ -24,6 +24,7 @@ class Inventory:
     root: Path
     crews: list[Manifest]  # every crew file's own declaration, parked ones included
     served: dict[str, dict]  # agent -> serve.json entry (token NEVER read)
+    spare: set[str]  # registered here, but its runtime is not a crew file (chat clients, probes)
     routing: dict  # parsed llm_providers.json ({} when absent)
     connector_pin: str | None  # forge.AIMEAT_CONNECTOR, e.g. "aimeat@3.5.0"
     connector_floor: str | None
@@ -108,6 +109,27 @@ def _read_routing(root: Path) -> dict:
         return {}
 
 
+def _read_spare(root: Path) -> set[str]:
+    """Agents registered here whose runtime is somebody else's program, not a crew file.
+
+    A chat client (Goose, Claude Desktop, VS Code) registers exactly like a crew and has no file in
+    this checkout, so `registry.serve.ghost` — which exists to catch a crew whose file VANISHED —
+    shouts about it. They became visible all at once on 2026-09-04, when the connector moved to keys
+    and the daemon began carrying all 66 principals instead of the 50 it could authenticate.
+
+    A list rather than baseline entries: the baseline may only shrink, and the next chat client will
+    arrive the same way. `crewaimeat orphans --exclude` already uses this shape.
+    """
+    p = Path(os.getenv("SERVE_SPARE_AGENTS_FILE") or (root / "serve-spare-agents.json"))
+    if not p.exists():
+        return set()
+    try:
+        doc = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    return {str(a) for a in (doc.get("spare") or []) if a}
+
+
 def gather(root: Path) -> Inventory:
     try:
         from crewaimeat.fleet_identity import FLEET_IDENTITY
@@ -125,6 +147,7 @@ def gather(root: Path) -> Inventory:
         root=root,
         crews=all_manifests(root, refresh=True),
         served=_read_serve(root),
+        spare=_read_spare(root),
         routing=_read_routing(root),
         connector_pin=pin,
         connector_floor=floor,

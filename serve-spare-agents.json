@@ -1,0 +1,18 @@
+{
+  "_comment": "Agents registered in this connector home whose RUNTIME IS NOT A CREW FILE HERE — a chat client (Goose, Claude Desktop, VS Code) or an external integration. They are not orphans and must not be retired: `registry.serve.ghost` exists to catch a crew whose file vanished, and these never had one. Kept as a list rather than a baseline entry because the baseline may only shrink, while the next chat client appears the same way and should be added here in one line. Same shape as `crewaimeat orphans --exclude`.",
+  "_added": "2026-09-04, after the connector moved to keys and the daemon began carrying all 66 principals instead of 50 — the migration working, not something breaking. Four were retired instead (dify, openhands, scope-probe2, secretary); these twelve stay, and every one of them is an agent whose runtime is somebody else's chat program.",
+  "spare": [
+    "analyst",
+    "claude-desktop-home-mcp",
+    "claude-desktop-home-mcp-appdev",
+    "claude-mcp-work",
+    "crewaimeat-claude",
+    "doc-fact-reader",
+    "goose",
+    "grok",
+    "hermes-agent",
+    "ledger-reader",
+    "openhands-prod",
+    "vscode-claude"
+  ]
+}

@@ -79,3 +79,33 @@ def test_watchdog_never_spawns_under_pytest():
 
     fleet_ops._WATCHDOG_STARTED = False  # reset the per-process latch
     assert fleet_ops.ensure_serve_watchdog() is False
+
+
+def test_retire_moves_the_credential_not_only_a_token(tmp_path, monkeypatch):
+    """The credential is what retirement actually removes.
+
+    serve.json is a discovery file the daemon REGENERATES from the credential store on every start,
+    so editing it alone is undone by the next restart. Measured 2026-09-04: four agents were retired,
+    each reported "registration removed", and all four were back in serve.json minutes later because
+    only `tokens/` was consulted and their credential was a v2 key. A step that says ok and does not
+    hold is worse than one that refuses.
+    """
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    from crewaimeat.retire import _stash_token
+
+    (tmp_path / "keys").mkdir()
+    (tmp_path / "tokens").mkdir()
+    (tmp_path / "keys" / "goner@alice.key").write_text("k", encoding="utf-8")
+    (tmp_path / "tokens" / "goner@alice.token").write_text("t", encoding="utf-8")
+    (tmp_path / "keys" / "stayer@alice.key").write_text("k", encoding="utf-8")
+
+    step = _stash_token("goner")
+    assert step.done
+    assert not (tmp_path / "keys" / "goner@alice.key").exists()
+    assert not (tmp_path / "tokens" / "goner@alice.token").exists()
+    assert (tmp_path / "keys" / "retired" / "goner@alice.key").exists()  # kept, never deleted
+    assert (tmp_path / "tokens" / "retired" / "goner@alice.token").exists()
+    assert (tmp_path / "keys" / "stayer@alice.key").exists()  # nobody else is touched
+
+    # An agent with no credential at all is a truthful no-op, not a failure.
+    assert _stash_token("nobody").done

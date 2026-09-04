@@ -112,7 +112,14 @@ def derive_status(
 ) -> str:
     """The single source of truth for an agent's status. Precedence matters: a duplicated watchdog is
     the loudest problem; a locally-running daemon the node hasn't heard from recently is
-    'stale-heartbeat' (the silent-failure case), not 'running'."""
+    'stale-heartbeat' (the silent-failure case), not 'running'.
+
+    `in_tunnel` USED TO BE TAKEN AND NEVER READ. With the fleet on keys and every principal attaching,
+    that made all fifty rows say "down (stale lock)" while all fifty were on the tunnel — the monitor
+    could not tell an agent that is attached-but-idle from one that is simply absent, and blamed lock
+    files for it. Measured 2026-09-04: 50 rows, 50 in_tunnel, 50 reported down. A parameter that
+    exists and changes nothing is the same class of defect this repo's own audit is about.
+    """
     if watchdog > 1:
         return "DUPLICATE"
     if daemon >= 1 and watchdog == 0:
@@ -121,6 +128,10 @@ def derive_status(
         if age_s is not None and age_s > stale_after_s:
             return "stale-heartbeat"
         return "running"
+    # No local process. The node still holds this agent's socket, so it can receive work the moment a
+    # runtime comes up — which is the normal resting state of a spawn-mode agent, not a fault.
+    if in_tunnel:
+        return "attached (no runtime)"
     if lock:
         return "down (stale lock)"
     return "down"

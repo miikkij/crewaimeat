@@ -54,6 +54,15 @@ Write-Host "[start_fleet] starting the serve-daemon supervisor (auto-restarts th
 Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',"$root\scripts\serve_watchdog.ps1" `
     -WorkingDirectory $root -WindowStyle Hidden -RedirectStandardOutput "$root\logs\serve_watchdog.log" -RedirectStandardError "$root\logs\serve_watchdog.err.log"
 
+# Start the SPAWNER before the host. It serves the agents the NODE lists as run_mode=spawn, and the
+# host deliberately skips exactly those — otherwise both runtimes would start the same agent and the
+# OS lock would pick a winner arbitrarily, so the agent would look up while the wrong half held it.
+# The consequence of leaving this out is silent: a spawn-mode agent would run NOWHERE and nothing
+# would say so. An empty roster is normal and costs nothing (nobody has said `spawn` yet).
+Write-Host "[start_fleet] starting the spawner (agents the node marks run_mode=spawn) ..."
+Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',"$root\scripts\spawner_watchdog.ps1" `
+    -WorkingDirectory $root -WindowStyle Hidden -RedirectStandardOutput "$root\logs\spawner_watchdog.log" -RedirectStandardError "$root\logs\spawner_watchdog.err.log"
+
 # Run the fleet HOST: every agent as a thread in ONE Python process (crewai imported once), instead
 # of one OS process per crew. ~20x less RAM for I/O-bound work (poll, shuffle text, call an LLM API);
 # see scripts/start_host.ps1 / README "Fleet host". crew-forge is excluded (its job is launching the

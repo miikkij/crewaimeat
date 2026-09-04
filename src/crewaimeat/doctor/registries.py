@@ -72,7 +72,10 @@ def _crews_vs_serve(inv: Inventory, report: Report) -> None:
                 f"--owner <owner> --agent {agent}, then restart the fleet",
             )
         )
-    known = inv.live_agents | inv.parked_agents
+    # A spare agent's runtime is somebody else's program (a chat client, a probe), so it has no crew
+    # file here and never had one. This rule is for a crew whose file VANISHED; retiring a chat client
+    # because it looks the same from here would be the wrong fix, loudly given.
+    known = inv.live_agents | inv.parked_agents | inv.spare
     for agent in sorted(served - known):
         report.add(
             Finding(

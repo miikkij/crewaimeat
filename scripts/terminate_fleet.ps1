@@ -50,7 +50,13 @@ $total = 0
 # 1 + 2: serve-watchdog, then the fleet HOST (the 0.5.0 memory-light model — every agent is a thread
 # in ONE process), then crew watchdogs (the legacy per-process model). Repo-scoped, tree-killed (/T
 # removes the child trees, incl. the host's venv-shim -> c:\python child).
+# The SPAWNER GOES FIRST, before anything it supervises: it restarts a worker whose run ends, so
+# killing workers while it is up just makes more of them. Its own watchdog goes with it for the same
+# reason — that restarts the spawner.
 foreach ($grp in @(
+    @{ name = 'spawner-watchdog'; pat = 'spawner_watchdog' },
+    @{ name = 'spawner';          pat = 'scaffold\s+spawner|crewaimeat[\. ]spawner' },
+    @{ name = 'spawn-worker';     pat = 'crewaimeat[\. ]run_once' },
     @{ name = 'serve-watchdog'; pat = 'serve_watchdog' },
     @{ name = 'fleet-host';     pat = 'fleet_host' },
     @{ name = 'watchdog';       pat = 'scripts[\\/]watchdog\.ps1' }

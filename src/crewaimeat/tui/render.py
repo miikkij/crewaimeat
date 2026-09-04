@@ -13,6 +13,9 @@ _STATUS_STYLE = {
     "orphan": "dark_orange",
     "DUPLICATE": "bold red",
     "zombie": "magenta",
+    # Attached to the node with no local runtime: the resting state of a spawn-mode agent, and not a
+    # fault — dimmer than running, brighter than down, because work can reach it the moment one starts.
+    "attached (no runtime)": "cyan",
     "down": "dim",
     "down (stale lock)": "dim",
 }
