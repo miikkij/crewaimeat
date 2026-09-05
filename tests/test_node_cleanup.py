@@ -160,8 +160,13 @@ def test_an_unreadable_roster_is_an_error_not_an_empty_sweep(tmp_path, monkeypat
 
 
 # ── choosing WHICH orphans go ────────────────────────────────────────────────────────────────────
-def _orphans(monkeypatch, names_ages):
-    """Stand in for the node roster: [(name, age_days), …] with no crew file here."""
+def _orphans(monkeypatch, names_ages, tmp_path=None):
+    """Stand in for the node roster: [(name, age_days), …] with no crew file here.
+
+    Returns (orphans, root). The ROOT matters: `main` looks up a probe identity in the repo's
+    serve.json BEFORE it ever calls `find`, so a test that patches `find` and then runs against the
+    real cwd is answered by the developer's own machine — and on a fresh checkout (CI) by
+    "nothing registered in serve.json", never reaching the behaviour under test."""
     from crewaimeat import node_cleanup as nc
 
     made = [
@@ -172,21 +177,21 @@ def _orphans(monkeypatch, names_ages):
     ]
     monkeypatch.setattr(nc, "find", lambda root, probe: (made, []))
     monkeypatch.setattr(nc, "owner_token", lambda: None)
-    return made
+    return made, (_repo(tmp_path, crews=[], served=["probe"]) if tmp_path is not None else None)
 
 
 ROSTER = [("mroom-digger", 0), ("research-crew", 59), ("doc-fact-reader", 59), ("ledger-reader", 59)]
 
 
-def test_except_spares_an_orphan_another_repo_still_backs(monkeypatch, capsys):
+def test_except_spares_an_orphan_another_repo_still_backs(tmp_path, monkeypatch, capsys):
     """THE ONE THAT MATTERS. "No crew file HERE" is not "nobody runs it": this machine holds sibling
     checkouts and other products against the SAME owner. doc-fact-reader and ledger-reader belong to
     a live Company Brain and are 59 days cold — the SAME age as a real leftover, so `--older-than`
     cannot separate them and a sweep by age would have deleted them."""
     from crewaimeat import node_cleanup as nc
 
-    _orphans(monkeypatch, ROSTER)
-    nc.main(["--except", "doc-fact-reader,ledger-reader"])
+    _, root = _orphans(monkeypatch, ROSTER, tmp_path)
+    nc.main(["--root", str(root), "--except", "doc-fact-reader,ledger-reader"])
     out = capsys.readouterr().out
 
     assert "2 left alone by --except: doc-fact-reader, ledger-reader" in out
@@ -195,23 +200,23 @@ def test_except_spares_an_orphan_another_repo_still_backs(monkeypatch, capsys):
     assert "mroom-digger" in out and "research-crew" in out
 
 
-def test_only_sweeps_nothing_else(monkeypatch, capsys):
+def test_only_sweeps_nothing_else(tmp_path, monkeypatch, capsys):
     from crewaimeat import node_cleanup as nc
 
-    _orphans(monkeypatch, ROSTER)
-    nc.main(["--only", "mroom-digger"])
+    _, root = _orphans(monkeypatch, ROSTER, tmp_path)
+    nc.main(["--root", str(root), "--only", "mroom-digger"])
     out = capsys.readouterr().out
 
     assert "3 left alone by --only" in out
     assert "research-crew" in out  # named in the left-alone line, not offered for deletion
 
 
-def test_a_name_that_is_not_an_orphan_is_refused(monkeypatch, capsys):
+def test_a_name_that_is_not_an_orphan_is_refused(tmp_path, monkeypatch, capsys):
     """A typo in a delete list must not silently widen the sweep to everything else."""
     from crewaimeat import node_cleanup as nc
 
-    _orphans(monkeypatch, ROSTER)
-    rc = nc.main(["--except", "doc-fact-readr"])
+    _, root = _orphans(monkeypatch, ROSTER, tmp_path)
+    rc = nc.main(["--root", str(root), "--except", "doc-fact-readr"])
 
     assert rc == 2
     assert "not an orphan on this node: doc-fact-readr" in capsys.readouterr().err

@@ -60,6 +60,26 @@ def check(inv: Inventory, report: Report) -> None:
 
 def _crews_vs_serve(inv: Inventory, report: Report) -> None:
     served = set(inv.served)
+    if not inv.serve_found:
+        # There is no serve.json AT ALL. That is ONE fact about the checkout, not one fault per
+        # crew: saying it 53 times turns "this tree has no fleet" into a wall that hides whatever
+        # else the lens found, and it is what made CI red on every commit from 2026-08-30 on (a
+        # fresh clone has no `.aimeat/`, by design — the directory holds tokens).
+        # A serve.json that EXISTS and lists no agents is NOT this case: that home was set up and
+        # left every crew out, which is a real per-crew fault and still reported as one below.
+        # WARN, not ERROR: the lens is saying it could not compare, rather than passing.
+        report.add(
+            Finding(
+                "registry.serve.absent",
+                WARN,
+                "serve.json",
+                f"nothing is registered in this checkout, so the {len(inv.live_agents)} live crew(s) "
+                "cannot be compared against it — this lens made no judgement about them",
+                f"npx {inv.connector_pin or 'aimeat@<pinned>'} connect --url https://aimeat.io "
+                "--owner <owner> --agent <name> for each crew that should run here",
+            )
+        )
+        return
     for agent in sorted(inv.live_agents - served):
         report.add(
             Finding(

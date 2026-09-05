@@ -24,6 +24,7 @@ class Inventory:
     root: Path
     crews: list[Manifest]  # every crew file's own declaration, parked ones included
     served: dict[str, dict]  # agent -> serve.json entry (token NEVER read)
+    serve_found: bool  # was there a serve.json AT ALL — absent is a different fact from empty
     spare: set[str]  # registered here, but its runtime is not a crew file (chat clients, probes)
     routing: dict  # parsed llm_providers.json ({} when absent)
     connector_pin: str | None  # forge.AIMEAT_CONNECTOR, e.g. "aimeat@3.5.0"
@@ -69,6 +70,25 @@ class Inventory:
         return c.llm_profile if c else None
 
 
+def serve_path(root: Path) -> Path | None:
+    """Where the serve.json for this tree is, or None when there is none to read.
+
+    Split out from :func:`_read_serve` because ABSENT and EMPTY are different facts: a checkout with
+    no `.aimeat/` was never connected (a fresh clone, by design — the directory holds tokens), while
+    a serve.json that lists no agents is a home that exists and left every crew out. Only the second
+    is a fault per crew."""
+    p = root / ".aimeat" / "serve.json"
+    if p.exists():
+        return p
+    try:
+        from crewaimeat._home import aimeat_home
+
+        p = Path(aimeat_home()) / "serve.json"
+    except Exception:  # noqa: BLE001 — doctor must work even when the package import path is odd
+        return None
+    return p if p.exists() else None
+
+
 def _read_serve(root: Path) -> dict[str, dict]:
     """serve.json's agent list, WITHOUT tokens.
 
@@ -77,15 +97,8 @@ def _read_serve(root: Path) -> dict[str, dict]:
     answer — resolving through the ambient env instead would make `doctor --root <other-checkout>`
     silently report THIS machine's fleet.
     """
-    p = root / ".aimeat" / "serve.json"
-    if not p.exists():
-        try:
-            from crewaimeat._home import aimeat_home
-
-            p = Path(aimeat_home()) / "serve.json"
-        except Exception:  # noqa: BLE001 — doctor must work even when the package import path is odd
-            return {}
-    if not p.exists():
+    p = serve_path(root)
+    if p is None:
         return {}
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
@@ -147,6 +160,7 @@ def gather(root: Path) -> Inventory:
         root=root,
         crews=all_manifests(root, refresh=True),
         served=_read_serve(root),
+        serve_found=serve_path(root) is not None,
         spare=_read_spare(root),
         routing=_read_routing(root),
         connector_pin=pin,

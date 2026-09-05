@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from crewaimeat import agent_manifest
 
 PY_CREW = '''\
@@ -206,7 +208,15 @@ def test_the_central_routing_map_holds_overrides_only():
     """llm_providers.json's `crews` map is now an OVERRIDE list, not the registry. An entry that
     merely repeats what the crew already declares is a second source of truth waiting to drift."""
     root = Path(__file__).resolve().parent.parent
-    cfg = json.loads((root / "llm_providers.json").read_text(encoding="utf-8"))
+    providers = root / "llm_providers.json"
+    if not providers.exists():
+        # The routing file is PER MACHINE and deliberately untracked, so a fresh checkout has none
+        # and there is no override list to check against. Skipping is the honest answer here: the
+        # drift this guards against is drift in a developer's own file, and a synthetic stand-in
+        # would assert nothing while looking green. Reading it unconditionally is what made CI red
+        # on every commit since 2026-08-30.
+        pytest.skip("llm_providers.json is per-machine and untracked — no override list in this checkout")
+    cfg = json.loads(providers.read_text(encoding="utf-8"))
     declared = {m.agent: m.llm_profile for m in agent_manifest.all_manifests(root) if m.agent}
     redundant = [
         agent
