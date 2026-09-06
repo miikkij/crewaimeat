@@ -202,6 +202,13 @@ class CrewSpec:
     #   (promote the FREE nvidia tier ahead of paid qwen). None -> the EMBEDDER_BIAS env default ("privacy").
     owner: str | None = None  # AIMEAT owner; set only if the agent name is ambiguous
     max_idle_auth_failures: int = 10  # idle cycles with a rejected token before exiting for re-auth
+    on_task: Any = None  # DETERMINISTIC task handler: (task) -> str. When set, EXECUTE calls THIS
+    #   instead of kicking off the domain crew, and the model is never asked anything. For a crew whose
+    #   build_domain is one Agent wrapping one tool call, that Agent's only real job is parsing arguments
+    #   out of a sentence — the expensive way to compute a date (see CLAUDE.md, "THE MODEL WRITES AND
+    #   JUDGES"). The deliverable path is UNCHANGED: the same publish and finalize callbacks run on the
+    #   returned text, so the deliverable key, the todo completion, the verify gate and the auto-revert
+    #   all still happen. Going around them is the trap the connector's own `runner.command` falls into.
     idle_hook: Any = None  # optional DETERMINISTIC callable run on idle cycles (throttled to
     #   idle_hook_seconds) while the token is alive — e.g. a workspace-contract poll. The call itself uses
     #   NO LLM (any LLM is in the work it triggers, only when there's something to do); exceptions are
@@ -2968,6 +2975,22 @@ def run_crew(spec: CrewSpec) -> None:
         # cascade, storage = per-instance scoped path). Fails loud if no embedder is reachable.
         if spec.memory:
             crew_kwargs["memory"] = _build_crew_memory(spec, task)
+        if spec.on_task is not None:
+            # DETERMINISTIC EXECUTE. Everything above still ran — the domain was built, the directives
+            # applied, and both callback chains wired — because those chains ARE the deliverable
+            # semantics and this path must go through them, not around them. What is skipped is the
+            # kickoff, i.e. the only part that costs tokens. `_make_complete_cb` ignores its argument
+            # and `_make_publish_cb` takes `.raw` or `str()`, so a plain string is what they want.
+            result = str(spec.on_task(task) or "")
+            print(
+                f"[{spec.agent_name}] EXECUTE ran deterministically ({len(result)} chars, NO model call)",
+                file=sys.stderr,
+            )
+            if tasks:
+                tasks[-1].callback(result)  # publish -> author -> library, unguarded on purpose
+            finalize.callback(result)  # complete -> self-monitor; this is what closes the task
+            return _DeterministicPhase(result)
+
         crew = Crew(**crew_kwargs)
         _crew_holder["crew"] = crew  # so the publish callback can read usage_metrics after kickoff
         return crew

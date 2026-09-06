@@ -111,6 +111,32 @@ status cells, append decisions), so the two sides stay synced without drifting p
   was a 1:1 id swap that kept the POSITION and changed the BEHAVIOUR: the replacement was a reasoning
   model, and it broke three separate things across the fleet before anyone connected them to a routing
   change nobody had approved.
+- **THE MODEL WRITES AND JUDGES. EVERYTHING ELSE IS CODE.** Parsing, fetching, formatting, sending,
+  checking and reporting are not model work, however much easier they are to express as a prompt. The
+  line is sharp: a model is needed only when the next step depends on the REAL result of the last one,
+  or when the output is prose a person will read. Three rules follow, and each came from a measurement.
+  (1) **A plan nobody reads before the work starts is not worth a model call.** One AIMEAT task costs
+  TWO crew runs — PROPOSE then EXECUTE, both ReAct loops. A task-runner's task is auto-activated, so
+  its TODO plan reaches no one in time to change anything and `_mark_todos_done` flips every todo on
+  completion regardless; it is proposed deterministically (`_propose_deterministically`). An
+  interactive agent's task waits at `queued` for a PERSON, and that plan is what they read when they
+  decide — it keeps the model. (2) **Parameters arrive as STRUCTURE, not as a sentence.** If a
+  schedule knows the date and the edition, it writes them into the task machine-readably.
+  `news-fetcher` spends a whole crew run deducing `date` and `edition` from a Finnish sentence in
+  order to make one deterministic tool call — that is a very expensive argument parser, and it can
+  also get the date wrong. (3) **A crew that never calls the model must not pay for one.** If
+  `build_domain` is one Agent wrapping one tool call, the work is a TOOL and belongs on the
+  deterministic path. `workflow_inspector.py` contains no model call at all, yet the agent burned
+  $0.56 and 1.39M tokens in 30 days on the wrapper around it. For scale: the whole fleet spent $22.92
+  over 30 days, 59% of it on the writing that is genuinely the model's job. The point of this rule is
+  NOT the money — it is that a model on top of deterministic work is also slower, less reliable, and
+  free to invent a wrong date. The failed front page of 2026-09-04 was exactly that.
+  **The deterministic seam:** the daemon's `_dispatch` only ever does `builder(task, liaison).kickoff()`,
+  so ANY object with `kickoff()` satisfies it — `_DeterministicPhase`, no agent, no tokens. Do not use
+  `_make_noop_crew` for this: it builds a real Agent on a real model to say "ok". A deterministic
+  EXECUTE must still go THROUGH `_make_complete_cb` / `_make_publish_cb`, never around them, or the
+  deliverable key, the todo completion, the verify gate and the auto-revert vanish silently — the same
+  trap the connector's own `runner.command` falls into.
 - **`crewaimeat doctor` before you claim anything is fine.** Three lenses: registries (do the crew
   files, serve.json and the node agree), conformance (a call-graph route check — node calls go through
   `_aimeat_call`/`_aimeat_rest`, a crew's model comes from routing not a constructor, a failure on the

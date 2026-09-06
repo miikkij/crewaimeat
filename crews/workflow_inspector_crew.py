@@ -15,6 +15,7 @@ Register + run:
 from __future__ import annotations
 
 import datetime
+import re
 from zoneinfo import ZoneInfo
 
 from crewai import Agent, Task
@@ -111,20 +112,57 @@ def build_domain(ctx: BuildContext):
     return ([reader], [task])
 
 
+_DATE_RE = re.compile(r"(20\d{2}-\d{2}-\d{2})")
+
+
+def _params_from(text: str) -> dict:
+    """date + edition, read out of the request WITHOUT a model.
+
+    This is the whole reason the domain crew existed: an LLM agent whose one real job was turning a
+    Finnish sentence into `{date, edition}`. A regex does it exactly, for free, and cannot invent a
+    date that is not there — which a model can, and which is how a wrong edition gets inspected."""
+    m = _DATE_RE.search(text or "")
+    date = m.group(1) if m else datetime.datetime.now(_TZ).date().isoformat()
+    low = (text or "").lower()
+    edition = "morning" if ("aamu" in low or "morning" in low) else "evening"
+    return {"date": date, "edition": edition}
+
+
+def _run_inspection(params: dict) -> dict:
+    """Inspect + publish. The one place the work happens, whether a schedule or a task asks for it."""
+    res = inspect("laimeat-sanomat-evening", params)
+    publish_inspection(res)
+    if res["overall"] != "GREEN" or res["actions"]:
+        print(
+            f"[{AGENT_NAME}] {res['date']}: {res['overall']} — fixed={res['fixed']} still_red={res['still_red']}",
+            flush=True,
+        )
+    return res
+
+
+def handle_task(task: dict) -> str:
+    """DETERMINISTIC EXECUTE (CrewSpec.on_task). No model is asked anything.
+
+    `inspect()` contains no model call and never did; the crew around it was a reporter restating
+    what the code produced — its own task description said so. Over 30 days that wrapper cost $0.56
+    and 1.39M tokens for zero judgement. The report below is the inspection's own markdown, which is
+    what the deliverable was supposed to be all along."""
+    text = f"{task.get('title') or ''} {task.get('description') or ''}"
+    res = _run_inspection(_params_from(text))
+    return res.get("report_md") or (
+        f"{res['workflow']} {res['date']} {res['edition']}: {res['overall']} "
+        f"(fixed={res['fixed']}, still red={res['still_red']})"
+    )
+
+
 def run() -> None:
     def _poll() -> None:
-        # After the evening deadline, inspect today's Sanomat workflow; auto-repair + report.
+        # After the evening deadline, inspect today's Sanomat workflow; auto-repair + report. Under
+        # the spawner this runs once per worker run (run_once), so the cadence is the schedule's.
         now = datetime.datetime.now(_TZ)
         if (now.hour, now.minute) < (18, 30):
             return
-        date = now.date().isoformat()
-        res = inspect("laimeat-sanomat-evening", {"date": date, "edition": "evening"})
-        publish_inspection(res)
-        if res["overall"] != "GREEN" or res["actions"]:
-            print(
-                f"[{AGENT_NAME}] {date}: {res['overall']} — fixed={res['fixed']} still_red={res['still_red']}",
-                flush=True,
-            )
+        _run_inspection({"date": now.date().isoformat(), "edition": "evening"})
 
     run_crew(
         CrewSpec(
@@ -133,6 +171,7 @@ def run() -> None:
             readme_md=README,
             temperature=0.2,
             skills=SKILLS,
+            on_task=handle_task,
             idle_hook=_poll,
             idle_hook_seconds=300,
         )
