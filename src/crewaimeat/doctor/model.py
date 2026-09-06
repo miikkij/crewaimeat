@@ -21,6 +21,14 @@ from pathlib import Path
 ERROR = "error"
 WARN = "warn"
 
+# Rules that describe THE MACHINE, not the repo: files that are deliberately untracked (they hold
+# tokens, or they are per-machine routing) and are therefore absent in every fresh checkout. They are
+# worth PRINTING — a developer whose fleet is not connected wants to know — but they must not fail
+# `--strict`, because a CI runner is never a connected machine and never can be. Failing on them means
+# the gate can only pass on somebody's laptop, which is the same fault that kept CI red from
+# 2026-08-30 to 2026-09-06 in five tests.
+ENVIRONMENT_RULES = frozenset({"registry.serve.absent", "registry.routing.absent"})
+
 BASELINE_FILE = "doctor-baseline.json"
 
 
@@ -59,6 +67,12 @@ class Report:
     @property
     def warnings(self) -> list[Finding]:
         return [f for f in self.findings if f.severity == WARN]
+
+    @property
+    def strict_warnings(self) -> list[Finding]:
+        """The warnings a gate may fail on — everything except what only says this machine is not
+        set up. Reported either way; see ENVIRONMENT_RULES."""
+        return [f for f in self.warnings if f.rule not in ENVIRONMENT_RULES]
 
     def by_rule(self) -> dict[str, list[Finding]]:
         out: dict[str, list[Finding]] = {}

@@ -71,12 +71,17 @@ def _render(report: Report, stale: list[str], *, strict: bool, colour: bool) -> 
     for lens, why in sorted(report.lenses_skipped.items()):
         out.append(f"    lens '{lens}' SKIPPED — {why}")
     n_err, n_warn, n_stale = len(report.errors), len(report.warnings), len(stale)
+    n_env = n_warn - len(report.strict_warnings)
     # A stale baseline entry FAILS under --strict, so it has to count towards the verdict too. It did
     # not, which produced the one output a checker must never produce: "PASS" printed above a non-zero
     # exit code. A gate that says one thing and does another is how people learn to ignore the gate.
-    verdict = "FAIL" if (n_err or (strict and (n_warn or n_stale))) else "PASS"
+    verdict = "FAIL" if (n_err or (strict and (len(report.strict_warnings) or n_stale))) else "PASS"
     tone = "31" if verdict == "FAIL" else "32"
     tally = f"{n_err} error(s), {n_warn} warning(s)"
+    if n_env:
+        # Say it, rather than quietly discounting them: a tally that does not add up to the verdict is
+        # the thing that teaches people to stop reading the tally.
+        tally += f" ({n_env} about this machine, not the repo — not counted)"
     if n_stale:
         tally += f", {n_stale} stale baseline entr{'y' if n_stale == 1 else 'ies'}"
     out.append("")
@@ -118,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             json.dumps(
                 {
-                    "verdict": "fail" if (report.errors or (args.strict and report.warnings)) else "pass",
+                    "verdict": "fail" if (report.errors or (args.strict and report.strict_warnings)) else "pass",
                     "errors": len(report.errors),
                     "warnings": len(report.warnings),
                     "baselined": len(accepted),
@@ -138,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"    baseline: {len(accepted)} pre-existing finding(s) accepted (doctor-baseline.json)")
         print(_render(report, stale, strict=args.strict, colour=colour))
 
-    failed = bool(report.errors) or (args.strict and bool(report.warnings)) or (args.strict and bool(stale))
+    failed = bool(report.errors) or (args.strict and bool(report.strict_warnings)) or (args.strict and bool(stale))
     return 1 if failed else 0
 
 
