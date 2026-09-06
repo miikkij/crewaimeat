@@ -137,9 +137,17 @@ import crewaimeat.offers as _off  # noqa: E402
 
 
 def _no_live_samples(monkeypatch):
-    """Simulate an agent that has never run: no live sample, so authored examples must fill in."""
+    """Simulate an agent that has never run: no live sample, so authored examples must fill in.
+
+    ALL THREE fetchers, not two. `offers_doc_any` takes a third route for an offer whose
+    deliverable_location key is templated — `fetch_deliverable_sample` — and leaving that one live
+    made this test read whatever the fleet last produced. It passed in CI, where there is no node to
+    answer, and failed on a developer's machine against a real 8,328-char run: the assertion about
+    an AUTHORED sample was being made about a live one. Same fault as the five tests fixed on
+    2026-09-06, in the mirror: green only where the fleet is absent."""
     monkeypatch.setattr(_off, "fetch_crew_sample", lambda agent: "untested")
     monkeypatch.setattr(_off, "fetch_sample", lambda agent, out: "untested")
+    monkeypatch.setattr(_off, "fetch_deliverable_sample", lambda agent, key: "untested")
 
 
 def test_golden_sample_never_untested(monkeypatch):

@@ -1569,6 +1569,56 @@ def _is_onboarding_smoke(task: dict) -> bool:
     )
 
 
+class _DeterministicPhase:
+    """A phase whose work ALREADY HAPPENED, in the shape the daemon's dispatch expects.
+
+    `_dispatch` does exactly ``builder(task, liaison).kickoff()`` and prints the result — it never
+    requires a crewai ``Crew``. `_make_noop_crew` satisfied that with a real Agent on a real model
+    asked to "Output exactly: ok", which is a paid model call for ceremony. This is the same
+    ceremony for nothing: no agent, no model, no tokens."""
+
+    def __init__(self, result: str) -> None:
+        self._result = result
+
+    def kickoff(self, *_args, **_kwargs) -> str:
+        return self._result
+
+
+def _task_runner_plan(task: dict) -> list[dict]:
+    """The TODO plan for a TASK-RUNNER, written from what a task-runner actually does.
+
+    A task-runner's task is auto-activated by the node, so NOBODY reads this plan before the work
+    starts — there is no approval gate for it to inform. The LLM propose crew therefore spends a
+    full ReAct loop writing three lines of boilerplate that only ever get read afterwards, if at
+    all, and `_mark_todos_done` flips them all on completion regardless of what they say. These
+    three are the truth for every task-runner run, and they cost nothing."""
+    title = (str(task.get("title") or "").strip() or "this task")[:120]
+    return [
+        {"title": f"Run the crew for: {title}", "verification": "the crew returns its output"},
+        {"title": "Write the deliverable to memory", "verification": "the deliverable key holds this run's output"},
+        {"title": "Report the outcome and complete the task", "verification": "the task carries the result"},
+    ]
+
+
+def _propose_deterministically(agent_name: str, task: dict, todos: list[dict], label: str) -> _DeterministicPhase:
+    """Send a TODO plan the code wrote, and hand the daemon a phase that costs nothing.
+
+    Module-level on purpose: the failure path below is the interesting one, and a test can only
+    reach it if the function is reachable. Raising is right — `_dispatch` treats a PROPOSE crash as
+    recoverable and leaves the task queued, so the next poll retries. Returning quietly would record
+    the phase as done and leave the task with no plan and nothing to notice it."""
+    tid = task.get("id")
+    res = _aimeat_call(agent_name, "aimeat_task_propose_todos", {"task_id": tid, "todos": todos})
+    print(
+        f"[{agent_name}] {label} {tid} -> deterministic todo proposal, {len(todos)} step(s), "
+        f"NO model call: {bool(res)}",
+        file=sys.stderr,
+    )
+    if res is None:
+        raise RuntimeError(f"propose_todos failed for task {tid} — the node has no plan for it")
+    return _DeterministicPhase(f"proposed {len(todos)} todo(s) deterministically")
+
+
 def _make_noop_crew(agent_name: str, role: str, note: str) -> Crew:
     """The trivial one-agent 'Output exactly: ok' crew — ceremony the daemon's dispatch requires when
     the real work already happened deterministically."""
@@ -3014,23 +3064,25 @@ def run_crew(spec: CrewSpec) -> None:
     # (the node's accept_test_task step passes on exactly this call — leaving it to the LLM propose crew
     # made the step hostage to provider health/model quality). Every other task keeps the package's
     # LLM propose crew.
-    def _propose(task: dict, liaison: Agent) -> Crew:
-        if _is_onboarding_smoke(task):
-            _ptid = task.get("id")
-            res = _aimeat_call(
-                spec.agent_name,
-                "aimeat_task_propose_todos",
-                {"task_id": _ptid, "todos": [dict(t) for t in _TEST_TASK_TODOS]},
-            )
-            print(
-                f"[{spec.agent_name}] onboarding smoke test task {_ptid} -> deterministic todo proposal "
-                f"(no LLM): {bool(res)}",
-                file=sys.stderr,
-            )
-            return _make_noop_crew(
-                spec.agent_name, "Onboarding Test", "You do nothing; the TODO plan is already proposed."
-            )
-        return _default_propose_crew(task, liaison)
+    def _propose(task: dict, liaison: Agent):
+        """PROPOSE without a model wherever the plan is not a decision anybody makes.
+
+        A task costs TWO crew runs, PROPOSE and EXECUTE, and both are ReAct loops. The second one
+        does the work. The first one writes a plan — and whether that plan is worth a model call
+        depends entirely on WHO READS IT BEFORE THE WORK STARTS:
+
+          task-runner  the node auto-activates the task, so the plan is read by nobody in time to
+                       change anything. Deterministic, and the run is halved.
+          otherwise    an interactive/coordinator agent's task waits at `queued` until a PERSON
+                       starts it, and this plan is what they are looking at when they decide.
+                       That plan is a real deliverable and keeps the model.
+        """
+        smoke = _is_onboarding_smoke(task)
+        if not smoke and _effective_mode(spec) != "task-runner":
+            return _default_propose_crew(task, liaison)
+        todos = [dict(t) for t in _TEST_TASK_TODOS] if smoke else _task_runner_plan(task)
+        label = "onboarding smoke test task" if smoke else "task-runner task"
+        return _propose_deterministically(spec.agent_name, task, todos, label)
 
     # Wait for the supervisor's shared serve daemon to be live before binding the daemon loop. A crew
     # never spawns it (single-spawner discipline), but riding out a transient restart/tunnel-drop beats
