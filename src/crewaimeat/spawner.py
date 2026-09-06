@@ -69,6 +69,19 @@ STATUS_INTERVAL_S = 2.0
 # would never serve them. 30 s is well inside "press the button and it works".
 ROSTER_INTERVAL_S = 30.0
 
+# HOW OFTEN THE SPAWNER TELLS THE NODE ITS PARKED AGENTS ARE REACHABLE. A workflow asks the node
+# whether an agent is alive before dispatching a step, and the node answers from `last_seen` — which
+# for a spawn agent only moves while a worker RUNS. That closes a loop with no way out: last_seen
+# goes stale -> the node calls the agent offline -> it does not push the task -> nothing wakes ->
+# nothing runs -> last_seen stays stale. Measured 2026-09-07: 22 minutes was already too stale, the
+# Sanomat run reported `fetch: agent-offline` for six steps, and the three tasks it created carry
+# zero events and zero todos to this day — nobody was ever handed them.
+#
+# The spawner is the one thing that KNOWS: it holds a wake park per agent, so reachability is not an
+# inference, it is the thing it is doing. This says so. Five minutes against a threshold measured
+# under twenty-two, on the tool door because the REST door does NOT move last_seen (measured both).
+HEARTBEAT_S = float(os.environ.get("SPAWN_HEARTBEAT_S", "300"))
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -173,6 +186,46 @@ class Spawner:
         print(f"[spawner] {agent}: wake refused HTTP {resp.status_code} {resp.text[:160]}", file=sys.stderr)
         time.sleep(10.0)
         return False
+
+    def _heartbeat(self, agent: str) -> bool:
+        """One cheap call as this agent, purely so the node's `last_seen` says what is true.
+
+        Deliberately the TOOL door (`/local/call/...`), not `/v1/...`: measured 2026-09-07, a REST
+        call as the agent left last_seen untouched while a tool call moved it. No model, no process,
+        no crewai — a listing of a prefix that holds nothing, costing one keep-alive request on a
+        socket that is already open."""
+        if "pytest" in sys.modules:
+            return False
+        port = self._port or self._serve_port()
+        if port is None:
+            return False
+        self._port = port
+        import requests
+
+        try:
+            r = requests.post(
+                f"http://127.0.0.1:{port}/local/call/aimeat_memory_list",
+                json={"prefix": "agents.heartbeat.none.", "limit": 1},
+                headers={"X-Aimeat-Agent": agent},
+                timeout=20,
+            )
+        except Exception as exc:  # noqa: BLE001 — a missed beat is weather; the next one is 5 min away
+            print(f"[spawner] {agent}: heartbeat failed ({type(exc).__name__})", file=sys.stderr)
+            self._port = None
+            return False
+        if r.status_code != 200:
+            print(f"[spawner] {agent}: heartbeat HTTP {r.status_code} {r.text[:120]}", file=sys.stderr)
+            return False
+        return True
+
+    def _heartbeat_loop(self, agent: str) -> None:
+        """Beat while this agent is parked. A RUNNING worker is already talking to the node, so the
+        beat would be noise — and the run is what refreshes last_seen in the first place."""
+        while not self._stop.is_set():
+            st = self.state.get(agent)
+            if st is not None and not st.busy and not st.retired:
+                self._heartbeat(agent)
+            self._stop.wait(HEARTBEAT_S)
 
     def _wake_loop(self, agent: str) -> None:
         while not self._stop.is_set():
@@ -583,6 +636,7 @@ class Spawner:
         threads = [
             threading.Thread(target=self._wake_loop, args=(agent,), name=f"wake:{agent}", daemon=True),
             threading.Thread(target=self._invoke_loop, args=(agent,), name=f"invoke:{agent}", daemon=True),
+            threading.Thread(target=self._heartbeat_loop, args=(agent,), name=f"beat:{agent}", daemon=True),
         ]
         self._threads[agent] = threads
         for t in threads:
