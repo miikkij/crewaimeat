@@ -5,6 +5,14 @@ This repo is **crewaimeat**: a toolkit + patterns for running CrewAI agents on t
 
 ---
 
+## Lifecycle Central
+
+This repository is project `crewaimeat` in organism AIMEAT CODING CENTRAL (da438a5f-609b-41e5-ad9f-8dd2cc76cbe1), read and written through the Lifecycle Central app (lifecycle-central.apps.aimeat.io) and its tools. It serves the shared goal goal-toimiva-kauppapaikka beside the other projects attached there.
+
+Every session: read skill `aimeat-dev-session` on the node (`aimeat_skill_get`), name itself with `AIMEAT_SESSION=cc-<owner>-<tag>` and `AIMEAT_PROJECT=crewaimeat`, and call `board_read { project: "crewaimeat" }` before editing anything: it returns this project's claims and every incident, ruling and wish of the goals this project serves, so a session here sees what the neighbouring projects have broken, decided and asked for. Claim before editing (`claim_open`, with `project`), heartbeat hourly, release or hand off when stopping. A wish is written into a goal (`wish_add`) and gets its project when someone takes it to build.
+
+---
+
 ## AIMEAT organism workspace — our coordination surface (dogfooding)
 
 The project has a coordination workspace on aimeat.io (organism `crewaimeat`,
