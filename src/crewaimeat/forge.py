@@ -545,10 +545,15 @@ def reconcile_fleet() -> str:
     # spawn a per-process daemon per crew — that's exactly the duplication the host exists to avoid
     # (and it double-dispatches + fights the per-agent locks). crew-forge calls this on startup, so
     # when it runs inside the host this guard makes reconcile a no-op.
-    if os.getenv("AIMEAT_FLEET_HOST"):
+    managed = (
+        "AIMEAT_FLEET_HOST"
+        if os.getenv("AIMEAT_FLEET_HOST")
+        else ("AIMEAT_SPAWN_WORKER" if os.getenv("AIMEAT_SPAWN_WORKER") else "")
+    )
+    if managed:
         return (
-            "Host mode (AIMEAT_FLEET_HOST set): agents run as threads in the fleet host; "
-            "skipping per-process reconcile so the host isn't shadowed by a duplicate per-crew fleet."
+            f"Managed runtime ({managed} set): agents are already run by the host or the spawner; "
+            "skipping per-process reconcile so neither is shadowed by a duplicate per-crew fleet."
         )
 
     from crewaimeat.aimeat_crew import _token_exists  # local import avoids any import cycle

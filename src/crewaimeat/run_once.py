@@ -162,6 +162,15 @@ def run_once(agent: str, *, root: Path | None = None, quiet: bool = False) -> in
     started = time.monotonic()
     _start_rss_heartbeat(agent, started)
 
+    # I AM A MANAGED RUNTIME, SAY SO. `forge.reconcile_fleet` launches one watchdog process per crew
+    # and no-ops only when it sees AIMEAT_FLEET_HOST — a guard written when the host was the only
+    # managed runtime. crew-forge calls reconcile on startup, so the first time crew-forge ran as a
+    # SPAWN worker it launched the whole per-process fleet beside the spawner: 52 watchdogs, 100
+    # daemons, every spawn worker then dying in 3 s on the per-agent lock with `another daemon for
+    # this agent already holds the single-instance lock`. The migration looked done and did nothing.
+    # Measured 2026-09-06. The runtime marker belongs here, where the runtime is.
+    os.environ["AIMEAT_SPAWN_WORKER"] = "1"
+
     man = _find_crew(agent, root)
     if man is None:
         # NO LOCAL CREW FILE. That is not an error any more: an agent created by the node's
