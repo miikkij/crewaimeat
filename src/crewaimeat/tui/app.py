@@ -187,7 +187,7 @@ class FleetApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.query_one("#agents", DataTable).add_columns(*render.columns(self.lang))
+        self._col_keys = self.query_one("#agents", DataTable).add_columns(*render.columns(self.lang))
         if self._auto_node:
             self.refresh_node()  # initial node fetch (worker)
             self.refresh_versions()  # version check (worker; cached, infrequent)
@@ -223,7 +223,7 @@ class FleetApp(App):
         self.lang = i18n.next_lang(self.lang)
         table = self.query_one("#agents", DataTable)
         table.clear(columns=True)
-        table.add_columns(*render.columns(self.lang))
+        self._col_keys = table.add_columns(*render.columns(self.lang))
         tc = self.query_one("#detail", TabbedContent)
         for pid, key in (
             ("tab-overview", "tab.overview"),
@@ -417,19 +417,52 @@ class FleetApp(App):
         self.refresh_node()  # reflect the new state
 
     # ── rendering ─────────────────────────────────────────────────────────────
+    @staticmethod
+    def _cells_for(r) -> list:
+        cells = list(render.row_cells(r))
+        cells[1] = Text.from_markup(render.status_markup(r.status))  # color the status cell
+        return cells
+
     def _apply(self, snap) -> None:
+        """Refresh the table WITHOUT rebuilding it while the roster is unchanged.
+
+        `DataTable.clear()` drops every row, and with them the scroll offset — so a poll every two
+        seconds yanked the view back to the top and refilled it, under the hand of whoever was
+        trying to pick an agent. Restoring `cursor_row` afterwards did not help: the cursor came
+        back, the SCROLL did not, and by index rather than by agent, so a roster change moved the
+        selection to a different agent. Updating cells in place touches neither.
+
+        A rebuild is kept for the case that genuinely needs one — an agent appearing or leaving —
+        and even then the cursor returns to the AGENT it was on, not to the row number."""
         self._snap = snap
         self.query_one("#statusbar", Static).update(render.statusbar_text(snap, self.lang))
         table = self.query_one("#agents", DataTable)
-        prev = table.cursor_row
+        agents = [r.agent for r in snap.rows]
+        cols = getattr(self, "_col_keys", None)
+
+        if cols and agents == getattr(self, "_row_order", None):
+            for r in snap.rows:  # same rows, same order: only the values can have moved
+                for col, value in zip(cols, self._cells_for(r), strict=False):
+                    table.update_cell(r.agent, col, value, update_width=False)
+            self._update_detail()
+            return
+
+        selected = self._cursor_agent(table)
         table.clear()
         for r in snap.rows:
-            cells = list(render.row_cells(r))
-            cells[1] = Text.from_markup(render.status_markup(r.status))  # color the status cell
-            table.add_row(*cells, key=r.agent)
+            table.add_row(*self._cells_for(r), key=r.agent)
+        self._row_order = agents
         if table.row_count:
-            table.move_cursor(row=min(prev or 0, table.row_count - 1))
+            row = agents.index(selected) if selected in agents else min(table.cursor_row or 0, len(agents) - 1)
+            table.move_cursor(row=max(0, row))
         self._update_detail()
+
+    def _cursor_agent(self, table) -> str | None:
+        """The AGENT under the cursor, not its row number — the only identity that survives a roster
+        change. Returns None when the table is empty or the cursor is nowhere."""
+        idx = table.cursor_row
+        order = getattr(self, "_row_order", None) or []
+        return order[idx] if idx is not None and 0 <= idx < len(order) else None
 
     def on_data_table_row_highlighted(self, _event) -> None:
         self._update_detail()

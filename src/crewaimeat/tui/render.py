@@ -16,12 +16,13 @@ _STATUS_STYLE = {
     # Attached to the node with no local runtime: the resting state of a spawn-mode agent, and not a
     # fault — dimmer than running, brighter than down, because work can reach it the moment one starts.
     "attached (no runtime)": "cyan",
+    "parked": "cyan",
     "down": "dim",
     "down (stale lock)": "dim",
 }
 
-_COL_KEYS = ("col.agent", "col.status", "col.wd_dae", "col.lock", "col.tun", "col.last_seen")
-COLUMNS = ("agent", "status", "wd/dae", "lock", "tun", "last_seen")  # english default (tests/back-compat)
+_COL_KEYS = ("col.agent", "col.status", "col.runtime", "col.lock", "col.tun", "col.last_seen")
+COLUMNS = ("agent", "status", "runtime", "lock", "tun", "last_seen")  # english default (tests/back-compat)
 
 
 def columns(lang: str = "en") -> tuple[str, ...]:
@@ -49,13 +50,28 @@ def format_age(age_s: float | None) -> str:
     return f"{age_s / 86400:.1f}d"
 
 
+def _runtime_cell(r: AgentRow) -> str:
+    """WHO is running this agent, in one word — the question the old `wd/dae` count could not answer
+    once the fleet stopped being one-process-per-crew. `0/0` said nothing about a parked agent the
+    spawner wakes in seconds, and read as absence."""
+    if r.hosted:
+        return "host"
+    if r.workers:
+        return f"spawn x{r.workers}"
+    if r.parked:
+        return "spawn"
+    if r.watchdog_procs or r.daemon_procs:
+        return f"proc {r.watchdog_procs}/{r.daemon_procs}"
+    return "-"
+
+
 def row_cells(r: AgentRow) -> tuple[str, ...]:
     """One table row, all PLAIN strings (status colored separately by the app via status_markup). A
     host-threaded agent has no per-crew process, so its wd/dae cell shows 'host' instead of '0/0'."""
     return (
         r.agent,
         r.status,
-        "host" if r.hosted else f"{r.watchdog_procs}/{r.daemon_procs}",
+        _runtime_cell(r),
         "✓" if r.lock else "·",
         "✓" if r.in_tunnel else "·",
         format_age(r.last_seen_age_s),
@@ -88,7 +104,12 @@ def detail_lines(r: AgentRow | None, lang: str = "en") -> list[str]:
         f"{t('d.status', lang)}:     {status_markup(r.status)}",
         f"{t('d.crew_file', lang)}:  {r.crew_file or t('sec.no_readme', lang)}",
         f"{t('d.mode', lang)}:       {r.mode or '—'}",
-        f"{t('d.watchdog', lang)}:   {r.watchdog_procs}    {t('d.daemon', lang)}: {r.daemon_procs}",
+        f"{t('d.runtime', lang)}:    {_runtime_cell(r)}"
+        + (
+            f"    {t('d.watchdog', lang)}: {r.watchdog_procs}  {t('d.daemon', lang)}: {r.daemon_procs}"
+            if (r.watchdog_procs or r.daemon_procs)
+            else ""
+        ),
         f"{t('d.lock', lang)}:       {'yes' if r.lock else 'no'}    {t('d.tunnel', lang)}: {'yes' if r.in_tunnel else 'no'}",
         f"{t('d.last_seen', lang)}:  {r.last_seen or '—'}  ({format_age(r.last_seen_age_s)} {t('d.ago', lang)})",
     ]

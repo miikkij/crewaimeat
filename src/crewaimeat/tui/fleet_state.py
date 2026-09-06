@@ -32,6 +32,8 @@ _CONNECT_RE = re.compile(r"connect\s+serve")
 
 _LOCKS_DIR = Path("logs/.locks")
 _HOST_STATUS_FILE = Path("logs/.host_status.json")  # heartbeat written by fleet_host (threaded model)
+_SPAWN_STATUS_REL = Path("spawn/.spawner_status.json")  # heartbeat written by the spawner, under AIMEAT_HOME
+_SPAWN_STALE_S = 90  # the spawner rewrites it every ~20s; older than this means the spawner is gone
 _HOST_STALE_S = 15  # the host rewrites it every ~2s; older than this means the host is gone
 
 # Node last_seen older than this WHILE the local daemon is up = the daemon isn't heartbeating to the
@@ -52,6 +54,8 @@ class AgentRow:
     mode: str | None
     status: str
     hosted: bool = False  # running as a THREAD inside the fleet host (one process), not its own daemon
+    parked: bool = False  # the SPAWNER holds a wake park for it: no process now, one within seconds
+    workers: int = 0  # spawn workers running for it right now (0 while parked is the resting state)
 
 
 @dataclass
@@ -109,6 +113,8 @@ def derive_status(
     in_tunnel: bool,
     age_s: float | None,
     stale_after_s: float = STALE_AFTER_S,
+    parked: bool = False,
+    workers: int = 0,
 ) -> str:
     """The single source of truth for an agent's status. Precedence matters: a duplicated watchdog is
     the loudest problem; a locally-running daemon the node hasn't heard from recently is
@@ -122,6 +128,18 @@ def derive_status(
     """
     if watchdog > 1:
         return "DUPLICATE"
+    # A SPAWN-MODE AGENT AND A PER-PROCESS DAEMON MUST NOT BOTH EXIST. Whichever loses the per-agent
+    # OS lock exits with SystemExit 0, so the fleet looks up while the wrong half holds it — measured
+    # 2026-09-06, when reconcile_fleet started 50 watchdogs beside the spawner and every spawn worker
+    # died in 3 s. It reads as the duplication it is, above every other verdict.
+    if parked and (watchdog or daemon):
+        return "DUPLICATE"
+    if workers:
+        return f"running {workers}" if workers > 1 else "running"
+    # Parked is the RESTING STATE of a spawn agent, not an absence. Idle costs nothing and a wake
+    # reaches a worker in ~2.6 s; calling it "down" is what made the whole fleet read red.
+    if parked:
+        return "parked"
     if daemon >= 1 and watchdog == 0:
         return "orphan"
     if daemon >= 1:  # watchdog >= 1 by elimination
@@ -147,17 +165,23 @@ def build_rows(
     now: datetime.datetime,
     stale_after_s: float = STALE_AFTER_S,
     host_agents: set | None = None,
+    spawn_workers: dict | None = None,
+    spawn_parked: set | None = None,
 ) -> list[AgentRow]:
     """Assemble one AgentRow per local crew (roster = {agent: crew_fname}) plus a row for every
     zombie (a running crew filename absent from the roster). Pure — all I/O already resolved. An agent
     in `host_agents` runs as a THREAD in the fleet host (no per-crew process), so it reads as running."""
     host_agents = host_agents or set()
+    spawn_workers = spawn_workers or {}
+    spawn_parked = spawn_parked or set()
     rows: list[AgentRow] = []
     for agent, fname in sorted(roster.items()):
         counts = tally.get(fname, {"watchdog": 0, "daemon": 0})
         node = node_index.get(agent) or {}
         age = age_seconds(node.get("last_seen"), now)
         hosted = agent in host_agents
+        parked = agent in spawn_parked
+        workers = int(spawn_workers.get(agent) or 0)
         status = (
             "running"
             if hosted
@@ -168,6 +192,8 @@ def build_rows(
                 in_tunnel=agent in tunnel,
                 age_s=age,
                 stale_after_s=stale_after_s,
+                parked=parked,
+                workers=workers,
             )
         )
         rows.append(
@@ -183,6 +209,8 @@ def build_rows(
                 mode=node.get("mode"),
                 status=status,
                 hosted=hosted,
+                parked=parked,
+                workers=workers,
             )
         )
     known = set(roster.values())
@@ -298,10 +326,65 @@ def collect_roster() -> dict[str, str]:
 
 
 def collect_locks() -> set[str]:
+    """Agents whose single-instance lock is ACTUALLY HELD — not merely whose lock file exists.
+
+    The OS releases the lock when the holder dies; the FILE stays. Counting files reported "locked"
+    for every agent nothing was running: 83 files on disk against 4 live processes (2026-09-06), so
+    the monitor showed a stale padlock beside fifty parked agents. A lock we can take is a lock
+    nobody holds — we take it, release it, and report it free."""
+    held: set[str] = set()
     try:
-        return {p.stem for p in _LOCKS_DIR.glob("*.lock")}
+        paths = list(_LOCKS_DIR.glob("*.lock"))
     except OSError:
-        return set()
+        return held
+    for path in paths:
+        try:
+            with open(path, "a+b") as fh:
+                if _lock_is_held(fh):
+                    held.add(path.stem)
+        except OSError:
+            held.add(path.stem)  # cannot open it at all -> assume held rather than claim it is free
+    return held
+
+
+def _lock_is_held(fh) -> bool:
+    """True when another process holds this file's lock. Non-blocking probe, released immediately."""
+    try:
+        import msvcrt
+
+        try:
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return True
+        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        return False
+    except ImportError:
+        import fcntl
+
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return True
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        return False
+
+
+def collect_spawn_status() -> tuple[int | None, dict[str, int]]:
+    """(spawner_pid, {agent: workers running}) from the spawner's heartbeat. Empty when no spawner is
+    running. Read exactly like the host's heartbeat — a file the manager rewrites, no network call —
+    so the monitor's fast tier stays offline. The keys are GAIIs; the bare name is what a row uses."""
+    try:
+        from crewaimeat._home import aimeat_home
+
+        path = Path(aimeat_home()) / _SPAWN_STATUS_REL
+        if not path.exists() or time.time() - path.stat().st_mtime > _SPAWN_STALE_S:
+            return None, {}
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, ImportError):
+        return None, {}
+    agents = data.get("agents") or {}
+    out = {str(a).split("#")[0]: (1 if (v or {}).get("busy") else 0) for a, v in agents.items()}
+    return data.get("manager_pid"), out
 
 
 def collect_host_status() -> tuple[int | None, set[str]]:
@@ -351,6 +434,7 @@ def build_snapshot(
     serve = collect_serve()
     tunnel = serve_tunnel_agents(serve)
     host_pid, host_agents = collect_host_status()
+    _spawn_pid, spawn_workers = collect_spawn_status()
     if node_index is None:
         node_index = collect_node_index(caller_agent)
     rows = build_rows(
@@ -361,6 +445,8 @@ def build_snapshot(
         node_index=node_index,
         now=now,
         host_agents=host_agents,
+        spawn_workers=spawn_workers,
+        spawn_parked=set(spawn_workers),
     )
     return FleetSnapshot(
         serve_pid=serve.get("pid"),

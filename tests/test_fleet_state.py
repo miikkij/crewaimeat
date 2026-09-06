@@ -101,6 +101,12 @@ def test_build_snapshot_with_cached_node_index_skips_network(monkeypatch):
         fs, "collect_serve", lambda: {"pid": 99648, "port": 52813, "agents": [{"agent": "news-fetcher"}]}
     )
 
+    # No spawner in THIS scenario: the fixture describes a per-process fleet. Without this the test
+    # reads the developer's own running spawner and the row flips to DUPLICATE — a test that only
+    # passes on a machine with no fleet is the mirror of one that needs a live fleet, and both were
+    # fixed on 2026-09-06.
+    monkeypatch.setattr(fs, "collect_spawn_status", lambda: (None, {}))
+
     def _boom(_caller):  # must NOT be called when node_index is provided
         raise AssertionError("collect_node_index called despite cached node_index")
 

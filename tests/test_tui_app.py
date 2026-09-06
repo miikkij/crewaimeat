@@ -210,3 +210,52 @@ def test_restart_key_opens_confirm_modal_and_cancels():
             assert not isinstance(app.screen, ConfirmScreen)
 
     asyncio.run(go())
+
+
+def test_a_poll_with_the_same_roster_never_clears_the_table():
+    """THE LIST MUST NOT JUMP. `DataTable.clear()` drops the scroll offset with the rows, so a
+    two-second poll yanked the view to the top and refilled it under the hand of whoever was
+    picking an agent. Same roster -> update cells in place, no clear, no cursor move."""
+
+    async def go():
+        app = FleetApp(auto_node=False, snapshot_fn=lambda ni: _snap(), node_index_fn=lambda c: {})
+        async with app.run_test() as pilot:
+            table = app.query_one("#agents", DataTable)
+            await pilot.pause()
+            table.move_cursor(row=1)
+            cleared = {"n": 0}
+            original = table.clear
+
+            def _counting_clear(*a, **kw):
+                cleared["n"] += 1
+                return original(*a, **kw)
+
+            table.clear = _counting_clear
+            app._apply(_snap())  # the poll
+            await pilot.pause()
+            assert cleared["n"] == 0, "an unchanged roster must not rebuild the table"
+            assert table.cursor_row == 1, "the selection must stay where the user put it"
+
+    asyncio.run(go())
+
+
+def test_a_roster_change_rebuilds_and_keeps_the_SELECTED_AGENT():
+    """When a rebuild is unavoidable the cursor returns to the AGENT, not the row number — a row
+    number points at a different agent the moment the roster shrinks."""
+
+    async def go():
+        app = FleetApp(auto_node=False, snapshot_fn=lambda ni: _snap(), node_index_fn=lambda c: {})
+        async with app.run_test() as pilot:
+            table = app.query_one("#agents", DataTable)
+            await pilot.pause()
+            table.move_cursor(row=1)  # image-maker
+            await pilot.pause()
+
+            snap = _snap()
+            snap.rows.insert(0, AgentRow("aaa-new", "aaa_crew.py", 0, 0, False, True, None, None, None, "parked"))
+            app._apply(snap)
+            await pilot.pause()
+            assert table.row_count == 3
+            assert app._row_order[table.cursor_row] == "image-maker", "followed the agent, not the index"
+
+    asyncio.run(go())

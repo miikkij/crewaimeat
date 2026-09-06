@@ -22,7 +22,8 @@ STRINGS: dict[str, dict[str, str]] = {
     # table columns
     "col.agent": {"en": "agent", "fi": "agentti"},
     "col.status": {"en": "status", "fi": "tila"},
-    "col.wd_dae": {"en": "wd/dae", "fi": "vahti/dae"},
+    "col.runtime": {"en": "runtime", "fi": "ajaja"},
+    "d.runtime": {"en": "runtime", "fi": "ajaja"},
     "col.lock": {"en": "lock", "fi": "lukko"},
     "col.tun": {"en": "tun", "fi": "tun"},
     "col.last_seen": {"en": "last_seen", "fi": "nähty"},

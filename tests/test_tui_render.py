@@ -87,7 +87,9 @@ def test_row_cells_shape_is_plain():
     cells = render.row_cells(_row(status="stale-heartbeat"))
     assert len(cells) == len(render.COLUMNS)
     assert cells[0] == "x" and cells[1] == "stale-heartbeat"  # status PLAIN (app colors it)
-    assert cells[2] == "1/1" and cells[3] == "✓"
+    # The runtime cell names WHO runs it. A per-process pair is "proc 1/1" — the bare count could
+    # not distinguish a parked spawn agent from an absent one, which is why it was replaced.
+    assert cells[2] == "proc 1/1" and cells[3] == "✓"
 
 
 def test_statusbar_flags_duplicate_and_zombie():
