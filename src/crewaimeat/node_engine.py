@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
+from pathlib import Path
 
 
 def _win_candidates(*paths: str) -> str | None:
@@ -90,12 +92,32 @@ def serve_command() -> str | list[str]:
     hands it to the shell's file association instead of to node."""
     cli = aimeat_cli()
     if cli is None or cli == "aimeat":
-        return "aimeat"
+        # `aimeat` on Windows is a .cmd shim, and CreateProcess cannot exec one directly — the
+        # stamper spawns with Popen, so it needs the same `cmd /c` the full-path branch below uses.
+        return _stamped(["cmd", "/c", "aimeat"] if os.name == "nt" else ["aimeat"])
     if str(cli).lower().endswith(".js"):
-        return [node_bin() or "node", cli]
+        return _stamped([node_bin() or "node", cli])
     if os.name == "nt":  # CreateProcess can't exec a .cmd shim directly; wrap it
-        return ["cmd", "/c", cli]
-    return cli
+        return _stamped(["cmd", "/c", cli])
+    return _stamped([cli])
+
+
+def _stamped(argv: list[str]) -> list[str]:
+    """Put a date + time in front of every line the daemon prints.
+
+    The connector stamps its startup banner and nothing after it, so the console window that shows
+    the tunnel reconnecting, the token refreshing and each agent attaching gave no way to tell
+    whether a line was from five seconds ago or five hours ago. `scripts/stamp_stream.py` runs the
+    real command and prefixes each line; argv and exit code pass through unchanged, so ensure_serve
+    appends `connect serve --http` to this exactly as before.
+
+    Falls back to the bare command when the interpreter or the script cannot be found — a missing
+    timestamp is a nuisance, a fleet that will not start is not."""
+    script = Path(__file__).resolve().parent.parent.parent / "scripts" / "stamp_stream.py"
+    exe = sys.executable
+    if not script.is_file() or not exe:
+        return argv
+    return [exe, str(script), *argv]
 
 
 def engine_status() -> dict:
