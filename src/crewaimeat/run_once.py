@@ -220,6 +220,19 @@ def run_once(agent: str, *, root: Path | None = None, quiet: bool = False) -> in
             file=sys.stderr,
         )
 
+    # THE DETERMINISTIC PASS, ONCE PER RUN. `idle_hook` fires on the daemon's IDLE cycles — cycles
+    # where nothing arrived. A spawn worker only exists because something DID arrive, so under
+    # one_shot the hook would never run and the agent's clock-driven work (activity reports, feedback
+    # stats, queued mail, the Sanomat inspection) would stop the moment it moved to spawn, with
+    # nothing saying so. Here the contract becomes "once per worker run" and the node's schedule sets
+    # the cadence, which is where a cadence belongs — `idle_hook_seconds` cannot throttle a process
+    # that runs once. Failures are loud and do NOT stop the cycle: the task is the deliverable.
+    if spec.idle_hook is not None:
+        try:
+            spec.idle_hook()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[run-once] {agent}: idle_hook failed: {exc!r}", file=sys.stderr)
+
     code = 0
     try:
         real_run_crew(dataclasses.replace(spec, one_shot=True))
