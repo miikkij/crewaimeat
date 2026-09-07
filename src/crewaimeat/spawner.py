@@ -69,6 +69,30 @@ STATUS_INTERVAL_S = 2.0
 # would never serve them. 30 s is well inside "press the button and it works".
 ROSTER_INTERVAL_S = 30.0
 
+# HOW OFTEN THE SPAWNER LOOKS FOR WORK NOBODY TOLD IT ABOUT. A wake is a push, and a push that is
+# never sent cannot be retried: the task sits `active` on the node, the agent reads `online`, the
+# park stays empty, and nothing anywhere is in an error state. Measured on two consecutive nights
+# (2026-09-07 and 2026-09-08): the Sanomat workflow created its tasks at 00:17, the agents were
+# reachable the whole time, and thirty minutes later `GET /local/wake/next` still answered 204 with
+# the tasks untouched. A DM to the SAME agent in the SAME minute woke a worker in seconds, so the
+# channel and the park were both fine — a task simply produces no wake for a spawn agent.
+#
+# So the spawner asks. This is the difference between an edition that comes out and one that waits
+# for a person to notice: a lost push now costs at most this interval, instead of the work sitting
+# on the node until someone reads a failure mail and wakes the agent by hand.
+WORK_POLL_S = float(os.environ.get("SPAWN_WORK_POLL_S", "120"))
+
+
+def _say(msg: str) -> None:
+    """Every line this manager prints, with a date and a clock on it.
+
+    The spawner's log is where a person looks to find out what the fleet did last night, and a line
+    without a time cannot answer that: "news-fetcher: run ended exit=0" is the same sentence whether
+    it happened four minutes or four hours ago. Asked for repeatedly and worth more than any of the
+    detail in the lines themselves.
+    """
+    print(f"{datetime.now():%Y-%m-%d %H:%M:%S} {msg}", file=sys.stderr, flush=True)
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -160,7 +184,7 @@ class Spawner:
                 timeout=timeout_s + 10,
             )
         except Exception as exc:  # noqa: BLE001 — a dropped loopback connection is weather, not news
-            print(f"[spawner] {agent}: wake park failed ({type(exc).__name__}) — re-parking", file=sys.stderr)
+            _say(f"[spawner] {agent}: wake park failed ({type(exc).__name__}) — re-parking")
             self._port = None
             time.sleep(2.0)
             return False
@@ -170,9 +194,54 @@ class Spawner:
             return True
         # 400 UNKNOWN_AGENT means the serve daemon does not carry this agent: loud, and back off so a
         # misconfigured roster cannot turn into a request storm.
-        print(f"[spawner] {agent}: wake refused HTTP {resp.status_code} {resp.text[:160]}", file=sys.stderr)
+        _say(f"[spawner] {agent}: wake refused HTTP {resp.status_code} {resp.text[:160]}")
         time.sleep(10.0)
         return False
+
+    def _has_open_work(self, agent: str) -> bool:
+        """True when the node holds a task for this agent that nobody is running.
+
+        Deliberately the TOOL door, the same one a worker uses, so this sees exactly what the worker
+        would see when it polls. A refusal or an unreachable node returns False and the next round
+        tries again: this is a safety net, and a net that spawns on an error would be worse than the
+        gap it covers."""
+        if "pytest" in sys.modules:
+            return False
+        port = self._port or self._serve_port()
+        if port is None:
+            return False
+        self._port = port
+        import requests
+
+        try:
+            r = requests.post(
+                f"http://127.0.0.1:{port}/local/call/aimeat_task_list",
+                json={"status": "active"},
+                headers={"X-Aimeat-Agent": agent},
+                timeout=20,
+            )
+            if r.status_code != 200:
+                return False
+            data = (r.json() or {}).get("data") or {}
+        except Exception:  # noqa: BLE001 — a missed round is weather; the next one is WORK_POLL_S away
+            self._port = None
+            return False
+        tasks = data.get("tasks") or data.get("items") or []
+        return bool(tasks)
+
+    def _work_poll_loop(self, agent: str) -> None:
+        """Ask for work a push may never have announced. Skipped while a worker runs — it is already
+        draining the queue, and the wake it would get is the one it is answering."""
+        while not self._stop.is_set():
+            self._stop.wait(WORK_POLL_S)
+            if self._stop.is_set():
+                break
+            st = self.state.get(agent)
+            if st is None or st.busy or st.retired:
+                continue
+            if self._has_open_work(agent):
+                _say(f"[spawner] {agent}: open task with no wake — starting a worker")
+                self.on_wake(agent, trigger="poll")
 
     def _wake_loop(self, agent: str) -> None:
         while not self._stop.is_set():
@@ -229,7 +298,7 @@ class Spawner:
                 now = time.monotonic()
                 if now - self._last_invoke_complaint.get(agent, 0.0) > 60.0:
                     self._last_invoke_complaint[agent] = now
-                    print(f"[spawner] {agent}: invoke poll HTTP {resp.status_code} — backing off", file=sys.stderr)
+                    _say(f"[spawner] {agent}: invoke poll HTTP {resp.status_code} — backing off")
                 time.sleep(30.0)
             return None
         return (resp.json() or {}).get("data") or None
@@ -261,8 +330,8 @@ class Spawner:
                 timeout=30,
             )
         except Exception as exc:  # noqa: BLE001
-            print(f"[spawner] {agent}: could not post invoke result ({exc!r})", file=sys.stderr)
-        print(f"[spawner] {agent}: invoke {capability} answered ok={payload.get('ok')}", file=sys.stderr)
+            _say(f"[spawner] {agent}: could not post invoke result ({exc!r})")
+        _say(f"[spawner] {agent}: invoke {capability} answered ok={payload.get('ok')}")
 
     def _run_invoke_worker(self, agent: str, frame: dict) -> dict | None:
         """Hand the frame to a short-lived worker and read its answer back.
@@ -326,7 +395,7 @@ class Spawner:
                 # Single-flight: never a second process for the same agent. Not dropped — re-run on exit.
                 st.dirty = True
                 st.last_wake_at = now
-                print(f"[spawner] {agent}: wake while running -> queued behind the current run", file=sys.stderr)
+                _say(f"[spawner] {agent}: wake while running -> queued behind the current run")
                 return
             if st.queued_since:
                 st.last_wake_at = now
@@ -335,16 +404,15 @@ class Spawner:
                 # A burst (e.g. one wake per workspace record) is ONE unit of work: the worker re-lists
                 # everything anyway, so a second process would only race the first to the same batch.
                 st.last_wake_at = now
-                print(f"[spawner] {agent}: wake coalesced (within {self.debounce_s}s)", file=sys.stderr)
+                _say(f"[spawner] {agent}: wake coalesced (within {self.debounce_s}s)")
                 return
             st.last_wake_at = now
             if self._live_workers() >= self.max_workers:
                 st.queued_since = now
                 self._queue.append(agent)
-                print(
+                _say(
                     f"[spawner] {agent}: all {self.max_workers} worker slots busy -> QUEUED "
                     f"(position {len(self._queue)}). Nothing is dropped.",
-                    file=sys.stderr,
                 )
                 return
             self._start(st, trigger)
@@ -358,7 +426,7 @@ class Spawner:
         try:
             proc = self._spawn(st.agent, run_id)
         except Exception as exc:  # noqa: BLE001 — surface it; do not silently stop serving the agent
-            print(f"[spawner] {st.agent}: SPAWN FAILED {type(exc).__name__}: {exc}", file=sys.stderr)
+            _say(f"[spawner] {st.agent}: SPAWN FAILED {type(exc).__name__}: {exc}")
             return
         st.proc, st.run_id, st.started_at, st.trigger = proc, run_id, time.monotonic(), trigger
         st.dirty = False
@@ -377,7 +445,7 @@ class Spawner:
                 "log": str(spawn_state.log_file(st.agent, run_id)),
             },
         )
-        print(f"[spawner] {st.agent}: run {run_id} started (pid {proc.pid}, trigger={trigger})", file=sys.stderr)
+        _say(f"[spawner] {st.agent}: run {run_id} started (pid {proc.pid}, trigger={trigger})")
 
     def _spawn(self, agent: str, run_id: str):
         if self.spawn_fn is not None:
@@ -440,9 +508,8 @@ class Spawner:
 
     def _kill(self, st: AgentState) -> None:
         """Terminate an overdue worker. Runs OUTSIDE the lock — it blocks for up to 20 s."""
-        print(
+        _say(
             f"[spawner] {st.agent}: run {st.run_id} exceeded {self.run_timeout_s}s — terminating",
-            file=sys.stderr,
         )
         try:
             st.proc.terminate()
@@ -452,7 +519,7 @@ class Spawner:
                 st.proc.kill()
                 st.proc.wait(timeout=KILL_GRACE_S)
         except Exception as exc:  # noqa: BLE001
-            print(f"[spawner] {st.agent}: kill failed ({exc!r})", file=sys.stderr)
+            _say(f"[spawner] {st.agent}: kill failed ({exc!r})")
         # The caller settles it under the lock — this function must not touch shared state itself.
 
     def _settle(self, st: AgentState, code: int, *, killed: bool) -> None:
@@ -475,13 +542,12 @@ class Spawner:
                 agent, run_id, {"ended": _now(), "exit_code": code, "seconds": seconds, "killed": killed}
             )
         note = " KILLED" if killed else ""
-        print(f"[spawner] {agent}: run {run_id} ended exit={code} in {seconds}s{note}", file=sys.stderr)
+        _say(f"[spawner] {agent}: run {run_id} ended exit={code} in {seconds}s{note}")
         if code == 2:
             # The daemon's auth-failure exit. Re-running would hot-loop against a dead token.
-            print(
+            _say(
                 f"[spawner] {agent}: token rejected (exit 2) — NOT re-spawning. Re-approve with "
                 f"`npx aimeat@latest connect --agent {agent}`.",
-                file=sys.stderr,
             )
             st.dirty = False
             return
@@ -492,7 +558,7 @@ class Spawner:
             # was killed at the hour mark and its task stayed active with nothing left to trigger it.
             # ONE retry, then stop: a run that times out twice is not transient, and re-spawning an
             # hour at a time forever is how a stuck agent becomes a bill.
-            print(f"[spawner] {agent}: run was killed — ONE re-run, then it waits for a person.", file=sys.stderr)
+            _say(f"[spawner] {agent}: run was killed — ONE re-run, then it waits for a person.")
             st.dirty = True
         st.killed_last = killed
         if st.dirty:
@@ -512,7 +578,7 @@ class Spawner:
                 continue
             waited = round(time.monotonic() - st.queued_since, 1)
             st.queued_since = 0.0
-            print(f"[spawner] {agent}: slot free after {waited}s in queue -> starting", file=sys.stderr)
+            _say(f"[spawner] {agent}: slot free after {waited}s in queue -> starting")
             self._start(st, "queued")
 
     # --------------------------------------------------------------- status --- #
@@ -564,9 +630,9 @@ class Spawner:
                 pf.unlink(missing_ok=True)
                 continue
             if isinstance(mgr, int) and spawn_state.pid_alive(mgr) and mgr != os.getpid():
-                print(f"[spawner] {pf.stem}: worker pid {pid} has live manager {mgr} — leaving it", file=sys.stderr)
+                _say(f"[spawner] {pf.stem}: worker pid {pid} has live manager {mgr} — leaving it")
                 continue
-            print(f"[spawner] {pf.stem}: ORPHAN worker pid {pid} (manager {mgr} gone) — terminating", file=sys.stderr)
+            _say(f"[spawner] {pf.stem}: ORPHAN worker pid {pid} (manager {mgr} gone) — terminating")
             _terminate_pid(pid)
             killed.append(f"{pf.stem}:{pid}")
             pf.unlink(missing_ok=True)
@@ -583,6 +649,7 @@ class Spawner:
         threads = [
             threading.Thread(target=self._wake_loop, args=(agent,), name=f"wake:{agent}", daemon=True),
             threading.Thread(target=self._invoke_loop, args=(agent,), name=f"invoke:{agent}", daemon=True),
+            threading.Thread(target=self._work_poll_loop, args=(agent,), name=f"poll:{agent}", daemon=True),
         ]
         self._threads[agent] = threads
         for t in threads:
@@ -599,7 +666,7 @@ class Spawner:
             st.retired = True
             if agent in self._queue:
                 self._queue.remove(agent)
-        print(f"[spawner] {agent}: left the roster — no longer parking for it", file=sys.stderr)
+        _say(f"[spawner] {agent}: left the roster — no longer parking for it")
 
     def refresh_roster(self) -> None:
         """Re-read the roster and start/stop parks to match it.
@@ -611,12 +678,12 @@ class Spawner:
         try:
             wanted = list(self.roster_fn()) if self.roster_fn else discover_agents(self.root)
         except Exception as exc:  # noqa: BLE001 — a bad roster read must not stop the ones we serve
-            print(f"[spawner] roster refresh failed ({exc!r}); keeping the current set", file=sys.stderr)
+            _say(f"[spawner] roster refresh failed ({exc!r}); keeping the current set")
             return
         current = {a for a, st in self.state.items() if not st.retired}
         for agent in sorted(set(wanted) - current):
             if self._ensure_agent(agent):
-                print(f"[spawner] {agent}: joined the roster — parking for it now", file=sys.stderr)
+                _say(f"[spawner] {agent}: joined the roster — parking for it now")
         for agent in sorted(current - set(wanted)):
             self._retire_agent(agent)
 
@@ -629,11 +696,10 @@ class Spawner:
         for agent in self.agents:  # an explicit --agents list is served even if discovery missed it
             self._ensure_agent(agent)
         live = sorted(a for a, st in self.state.items() if not st.retired)
-        print(
+        _say(
             f"[spawner] parked on {len(live)} agent(s): {', '.join(live) or '(none yet)'} "
             f"(max {self.max_workers} concurrent workers, run timeout {self.run_timeout_s}s, "
             f"roster re-read every {self.roster_interval_s:.0f}s)",
-            file=sys.stderr,
         )
         next_roster = time.monotonic() + self.roster_interval_s
         try:
@@ -645,7 +711,7 @@ class Spawner:
                 spawn_state.write_json(spawn_state.status_file(), self.snapshot())
                 time.sleep(STATUS_INTERVAL_S)
         except KeyboardInterrupt:
-            print("[spawner] stopping (Ctrl+C) — waiting for running workers", file=sys.stderr)
+            _say("[spawner] stopping (Ctrl+C) — waiting for running workers")
         finally:
             self._stop.set()
             self._shutdown()
@@ -683,7 +749,7 @@ def _terminate_pid(pid: int) -> None:
         else:
             os.kill(pid, 15)
     except Exception as exc:  # noqa: BLE001
-        print(f"[spawner] could not terminate pid {pid} ({exc!r})", file=sys.stderr)
+        _say(f"[spawner] could not terminate pid {pid} ({exc!r})")
 
 
 def _serve_doc() -> dict:
@@ -804,7 +870,7 @@ def _note_once(note: str) -> None:
     """Say a roster limitation once per change, not every 30 s."""
     if _LAST_NOTE.get("roster") != note:
         _LAST_NOTE["roster"] = note
-        print(f"[spawner] roster: {note}", file=sys.stderr)
+        _say(f"[spawner] roster: {note}")
 
 
 def select_agents(root: Path, wanted: list[str] | None = None) -> list[str]:
@@ -820,10 +886,9 @@ def select_agents(root: Path, wanted: list[str] | None = None) -> list[str]:
             unknown.append(w)
     if unknown:
         # Loud: silently serving fewer agents than asked for is how a fleet goes quiet unnoticed.
-        print(
+        _say(
             f"[spawner] NOT spawn-mode (or not a live crew), refusing to park on: {', '.join(unknown)}. "
             'Declare RUN_MODE = "spawn" in the crew file.',
-            file=sys.stderr,
         )
     return sorted(chosen)
 
@@ -888,7 +953,7 @@ def main(argv: list[str] | None = None) -> int:
 
     lock = _acquire_singleton()
     if lock is None:
-        print("[spawner] another spawner already serves this AIMEAT_HOME — exiting.", file=sys.stderr)
+        _say("[spawner] another spawner already serves this AIMEAT_HOME — exiting.")
         return 0
     return Spawner(agents=agents, root=root, max_workers=a.max_workers, run_timeout_s=a.run_timeout).serve_forever()
 
