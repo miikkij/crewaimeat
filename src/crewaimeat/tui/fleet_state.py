@@ -138,6 +138,14 @@ def derive_status(
         return f"running {workers}" if workers > 1 else "running"
     # Parked is the RESTING STATE of a spawn agent, not an absence. Idle costs nothing and a wake
     # reaches a worker in ~2.6 s; calling it "down" is what made the whole fleet read red.
+    #
+    # THIS STAYS EVEN THOUGH THE NODE STOPPED LYING. Node 3.13.0 reads reachability from the
+    # connection itself and now answers `health.bucket: online` for a parked agent, which is what
+    # the spawner heartbeat was compensating for and why that heartbeat was deleted. This is a
+    # different question and no layer below can answer it: the node says whether IT can reach the
+    # agent; this says WHO ON THIS MACHINE IS RUNNING IT — parked under the spawner, a thread in
+    # the host, a per-process daemon, or nobody at all. An agent can be `online` to the node while
+    # nothing here would ever pick up its work, and that gap is the one this monitor exists for.
     if parked:
         return "parked"
     if daemon >= 1 and watchdog == 0:
