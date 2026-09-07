@@ -81,3 +81,23 @@ Write-Host "[start_fleet] while any agent is resident the host stays in THIS win
 uv run python -m crewaimeat.fleet_host
 Write-Host "[start_fleet] host returned. Serve daemon, its supervisor and the spawner keep running (detached)."
 Write-Host "[start_fleet] stop everything with: .\scripts\terminate_fleet.ps1"
+
+# THE WINDOW IS THE FLEET'S WINDOW, WHOEVER IS RUNNING IT. While any agent was resident the host
+# held this window and a person watched the fleet through it. With an all-spawn fleet the host has
+# no roster and returns in two seconds, so the window went quiet and handed the prompt back - the
+# one place anyone watched the fleet from stopped showing the fleet, while the spawner ran the
+# whole time and wrote every wake and every worker to its log with nobody looking at it.
+#
+# So follow the spawner instead: same window, same purpose - what woke, what started, what exited.
+# Ctrl+C here leaves the fleet running, the opposite of what it did while the host held the window,
+# so it is said out loud rather than left to an old habit.
+$spawnerLog = Join-Path $root ('logs' + [IO.Path]::DirectorySeparatorChar + 'spawner_watchdog.err.log')
+if (Test-Path $spawnerLog) {
+    Write-Host ""
+    Write-Host "[start_fleet] following the spawner - what wakes, what runs, what exits."
+    Write-Host "[start_fleet] Ctrl+C stops WATCHING only; the fleet keeps running."
+    Write-Host ""
+    Get-Content -Path $spawnerLog -Tail 20 -Wait
+} else {
+    Write-Host "[start_fleet] no spawner log yet - the fleet is up; watch logs\spawner_watchdog.err.log"
+}
