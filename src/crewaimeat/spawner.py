@@ -90,8 +90,18 @@ ROSTER_INTERVAL_S = 30.0
 # 20:15:13, nine and twenty-eight seconds later, with no wake having arrived first. So a task
 # created one way pushes instantly and a task created by the workflow engine does not, and the
 # difference is not visible from inside an agent: both are an ordinary `active` task on the node.
-# Reported to the node side; until a workflow-dispatched step wakes like a directly created one,
-# this loop is the only thing standing between a dispatched step and an edition that never runs.
+# Reported to the node side, and ANSWERED: the two paths really were different code. The wake the
+# connector fixed lives in `local-channel.ts`, which is why a directly created task woke instantly
+# once we installed 3.13.4 -- but a workflow step is created in the NODE's `engine-steps.ts`, and
+# aimeat.io was still running 3.13.3, started 05:14:16Z, before the fix commit existed. Upgrading
+# the connector on this machine could not touch it. aimeat.io reported 3.13.4 later the same
+# evening, so the fix should now be live and THIS COMMENT IS THE OPEN QUESTION: the next scheduled
+# Sanomat run is the measurement, and it costs nothing extra. Read the `trigger=` on each run in
+# logs/spawner_watchdog.err.log against the task's `created_at` on the node, exactly as the table
+# above was built. If a dispatched step now wakes in under a second, this loop goes back to being a
+# net. If it still does not, what is left is NOT what the node team fixed, and that is worth saying.
+# Either way the loop stays until a measurement says otherwise -- it started four steps out of four
+# on 2026-09-08, and a net removed on a theory is how an edition goes missing.
 WORK_POLL_S = float(os.environ.get("SPAWN_WORK_POLL_S", "120"))
 
 
