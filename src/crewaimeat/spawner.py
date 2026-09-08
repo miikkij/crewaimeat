@@ -95,13 +95,17 @@ ROSTER_INTERVAL_S = 30.0
 # once we installed 3.13.4 -- but a workflow step is created in the NODE's `engine-steps.ts`, and
 # aimeat.io was still running 3.13.3, started 05:14:16Z, before the fix commit existed. Upgrading
 # the connector on this machine could not touch it. aimeat.io reported 3.13.4 later the same
-# evening, so the fix should now be live and THIS COMMENT IS THE OPEN QUESTION: the next scheduled
-# Sanomat run is the measurement, and it costs nothing extra. Read the `trigger=` on each run in
-# logs/spawner_watchdog.err.log against the task's `created_at` on the node, exactly as the table
-# above was built. If a dispatched step now wakes in under a second, this loop goes back to being a
-# net. If it still does not, what is left is NOT what the node team fixed, and that is worth saying.
-# Either way the loop stays until a measurement says otherwise -- it started four steps out of four
-# on 2026-09-08, and a net removed on a theory is how an edition goes missing.
+# evening, and the measurement was then repeated rather than assumed. A one-step workflow
+# (`koe-tyonto-herays`, manual trigger, one agent step behind an offer whose required_to_function is
+# "none" so it cannot be skipped) dispatched at 21:24:19.717 and the worker started in the same
+# second with `trigger=wake`. So a workflow-dispatched step now wakes exactly like a directly
+# created task, and THIS LOOP IS A NET AGAIN rather than the thing carrying the edition.
+#
+# It still stays. A net costs one loopback call per idle agent per interval and buys the case
+# nobody can push at all: a push is sent once, so a serve daemon that dies holding one loses it,
+# and no retry exists anywhere for that. Measured that same evening: after the daemon was recycled,
+# this poll was what found news-writer's stranded task. Retire it against a measurement, never a
+# version number.
 WORK_POLL_S = float(os.environ.get("SPAWN_WORK_POLL_S", "120"))
 
 
