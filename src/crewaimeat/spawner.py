@@ -80,6 +80,18 @@ ROSTER_INTERVAL_S = 30.0
 # So the spawner asks. This is the difference between an edition that comes out and one that waits
 # for a person to notice: a lost push now costs at most this interval, instead of the work sitting
 # on the node until someone reads a failure mail and wakes the agent by hand.
+#
+# IT STAYS, AND CONNECTOR 3.13.4 IS THE REASON IT STAYS RATHER THAN THE REASON TO DROP IT. That
+# release fixed the connector half of the fault (`handleTask` returned before `signalWake()` for a
+# task id it had already seen), and the fix is real: measured 2026-09-08 on 3.13.4, a task created
+# through `aimeat_task_create` started a worker in UNDER ONE SECOND, `trigger=wake`. The same
+# afternoon, in the same daemon, a real `laimeat-sanomat-evening` run dispatched its two writer
+# steps at 20:14:45.000 and 20:14:45.064 — and BOTH were started by this poll, at 20:14:54 and
+# 20:15:13, nine and twenty-eight seconds later, with no wake having arrived first. So a task
+# created one way pushes instantly and a task created by the workflow engine does not, and the
+# difference is not visible from inside an agent: both are an ordinary `active` task on the node.
+# Reported to the node side; until a workflow-dispatched step wakes like a directly created one,
+# this loop is the only thing standing between a dispatched step and an edition that never runs.
 WORK_POLL_S = float(os.environ.get("SPAWN_WORK_POLL_S", "120"))
 
 
@@ -232,19 +244,37 @@ class Spawner:
     def _work_poll_loop(self, agent: str) -> None:
         """Ask for work a push may never have announced. Skipped while a worker runs — it is already
         draining the queue, and the wake it would get is the one it is answering."""
+        mine = self.state.get(agent)
         while not self._stop.is_set():
             self._stop.wait(WORK_POLL_S)
             if self._stop.is_set():
                 break
             st = self.state.get(agent)
-            if st is None or st.busy or st.retired:
+            if st is None or st.retired or st is not mine:
+                return  # this generation is over; a re-join started its own poll
+            if st.busy:
                 continue
             if self._has_open_work(agent):
                 _say(f"[spawner] {agent}: open task with no wake — starting a worker")
                 self.on_wake(agent, trigger="poll")
 
     def _wake_loop(self, agent: str) -> None:
+        """Hold this agent's wake park until the agent leaves the roster or is re-parked.
+
+        THE GENERATION IS THE IDENTITY, NOT THE NAME. This loop used to test only `self._stop`, so a
+        retired agent kept its park forever and `refresh_roster` re-added a SECOND one beside it —
+        and a `retired` test alone would not have been enough either, because `_ensure_agent` puts a
+        FRESH AgentState under the same name, which the old thread would read as perfectly alive.
+        Measured 2026-09-08 during a serve-daemon restart: `news-writer-b` left the roster at
+        20:13:06 and rejoined at 20:13:36, and the log then showed FOUR simultaneous re-park lines
+        for it in the same second — four threads, four long-polls, one agent, growing by one on
+        every churn. So the state object this thread was born with is what it serves; when the map
+        holds a different one, this generation is over.
+        """
+        mine = self.state.get(agent)
         while not self._stop.is_set():
+            if self.state.get(agent) is not mine or mine is None or mine.retired:
+                return
             if self._park(agent, WAKE_WAIT_MS / 1000.0):
                 self.on_wake(agent)
 
@@ -256,9 +286,10 @@ class Spawner:
         tab answers NO_HANDLER for every spawn-mode agent. The park itself is a blocked socket in a
         process that has not imported crewai; the work is done by a worker that exits.
         """
+        mine = self.state.get(agent)
         while not self._stop.is_set():
             st = self.state.get(agent)
-            if st is None or st.retired:
+            if st is None or st.retired or st is not mine:
                 return
             frame = self._next_invoke(agent, WAKE_WAIT_MS / 1000.0)
             if frame:
@@ -657,8 +688,9 @@ class Spawner:
         return True
 
     def _retire_agent(self, agent: str) -> None:
-        """Stop serving `agent`. Its loops exit after the park in flight (<=25 s); a RUNNING worker is
-        left alone — the agent left the roster, its work did not stop being work."""
+        """Stop serving `agent`. Its three loops exit after the park in flight (<=25 s) because each
+        one serves the AgentState it was born with and this marks that object retired; a RUNNING
+        worker is left alone — the agent left the roster, its work did not stop being work."""
         with self._lock:
             st = self.state.get(agent)
             if st is None or st.retired:

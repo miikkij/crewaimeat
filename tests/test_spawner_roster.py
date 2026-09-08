@@ -428,3 +428,75 @@ def test_worker_answers_an_unknown_capability_rather_than_hanging(tmp_path):
     assert answer_invoke(job) == 0
     out = json.loads((tmp_path / "inv.out.json").read_text(encoding="utf-8"))
     assert out["ok"] is False
+
+
+# --------------------------------------------------------------------------- #
+# One park per agent per generation — the leak that hid a missing wake
+# --------------------------------------------------------------------------- #
+# MEASURED 2026-09-08, during a serve-daemon restart: `news-writer-b` left the roster at 20:13:06,
+# rejoined at 20:13:36, and the spawner log then carried FOUR simultaneous re-park lines for it in
+# the same second. `_wake_loop` tested only the global stop flag, so a retired agent's park lived
+# forever and every churn added another one. Each of these three tests HANGS on the old code, so the
+# call is bounded: a loop that will not leave is a failure, not a stuck suite.
+_LIMIT = 6
+
+
+def _bounded(calls: list, what: str):
+    if len(calls) > _LIMIT:
+        raise AssertionError(f"{what} did not exit — it is leaking a thread per roster churn")
+
+
+def test_a_retired_agent_stops_parking():
+    from crewaimeat.spawner import AgentState
+
+    sp, calls = _spawner(), []
+    sp.state["a"] = AgentState("a")
+
+    def wake(agent, timeout):
+        calls.append(agent)
+        _bounded(calls, "the wake park")
+        sp.state["a"].retired = True  # what _retire_agent does
+        return False
+
+    sp.wake_fn = wake
+    sp._wake_loop("a")
+    assert calls == ["a"], "the park must end with the generation that owns it"
+
+
+def test_a_rejoined_agent_does_not_leave_the_old_park_running():
+    """A `retired` test alone is not enough: `_ensure_agent` puts a FRESH AgentState under the same
+    name, which the previous thread would happily read as alive. The object is the generation."""
+    from crewaimeat.spawner import AgentState
+
+    sp, calls = _spawner(), []
+    sp.state["a"] = AgentState("a")
+
+    def wake(agent, timeout):
+        calls.append(agent)
+        _bounded(calls, "the wake park")
+        sp.state["a"] = AgentState("a")  # leave + join, as refresh_roster does it
+        return False
+
+    sp.wake_fn = wake
+    sp._wake_loop("a")
+    assert calls == ["a"]
+
+
+def test_the_work_poll_stops_with_its_generation_too(monkeypatch):
+    """The poll used to `continue` past a retired agent, so it kept asking the node forever."""
+    from crewaimeat import spawner as sp_mod
+    from crewaimeat.spawner import AgentState
+
+    monkeypatch.setattr(sp_mod, "WORK_POLL_S", 0.0)
+    sp, calls = _spawner(), []
+    sp.state["a"] = AgentState("a")
+
+    def has_work(agent):
+        calls.append(agent)
+        _bounded(calls, "the work poll")
+        sp.state["a"].retired = True
+        return False
+
+    monkeypatch.setattr(sp, "_has_open_work", has_work)
+    sp._work_poll_loop("a")
+    assert calls == ["a"]
