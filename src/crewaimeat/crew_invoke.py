@@ -33,7 +33,7 @@ from typing import Any
 # are the same numbers seen from this side: a reply the node has stopped waiting for is wasted work.
 _POLL_WAIT_MS = 25_000  # long-poll; the daemon answers 204 when nothing arrives
 _RETRY_S = 5.0  # after a transport error, before parking again
-_CAPABILITIES = ("crew.validate", "crew.try")
+_CAPABILITIES = ("crew.validate", "crew.try", "crew.menu")
 
 
 def handle(capability: str, payload: dict, *, agent_name: str) -> tuple[bool, dict]:
@@ -42,6 +42,21 @@ def handle(capability: str, payload: dict, *, agent_name: str) -> tuple[bool, di
     Pure apart from the model call inside `crew.try`, so the whole contract is unit-testable without
     a node: the transport is somebody else's problem, this is the meaning.
     """
+    # WHAT THIS RUNTIME OFFERS, asked rather than copied. The node kept its own hand-written list of
+    # tool names and its own idea of which models exist, and both drifted: measured 2026-09-08, the
+    # Crew tab offered ten tools where TOOL_REGISTRY resolved twelve, so two real tools could not be
+    # picked. A list the node does not own can only ever be behind, so it asks. Takes no `doc`, which
+    # is why it is answered before the doc check below.
+    if capability == "crew.menu":
+        from crewaimeat.crew_def import TOOL_PURPOSES, TOOL_REGISTRY
+        from crewaimeat.llm import available_models, known_profiles
+
+        return True, {
+            "spec": "aimeat.crew-menu/1",
+            "tools": [{"id": name, "purpose": TOOL_PURPOSES.get(name, "")} for name in sorted(TOOL_REGISTRY)],
+            "llm": {"profiles": known_profiles(), "models": available_models()},
+        }
+
     doc = payload.get("doc") if isinstance(payload, dict) else None
     if not isinstance(doc, dict):
         return False, {"code": "BAD_INPUT", "message": "input.doc must be the crew definition object"}

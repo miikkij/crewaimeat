@@ -180,6 +180,11 @@ class Definition:
                 file=sys.stderr,
             )
             self.doc, self.revision = doc, revision
+            # The profile can change with the definition, and a stale one would keep routing the new
+            # crew to the old model — the kind of wrong that produces plausible output.
+            from crewaimeat import llm as _llm
+
+            _llm.set_doc_profile(self.agent_name, doc.get("llm_profile"))
             report_runtime(self.agent_name, revision=revision, ok=True)
         return self.doc
 
@@ -276,6 +281,21 @@ def run_json_agent(agent_name: str, **overrides: Any) -> None:
         doc, revision = seeded
 
     live = Definition(agent_name, doc, revision)
+
+    # THE DEFINITION'S OWN `llm_profile`, HONOURED. It was carried and validated from the start and
+    # routed nothing: `get_llm` finds a declaration by reading `crews/<name>_crew.py` with ast, and a
+    # node-backed agent's loader is five lines that name the agent. So the profile a person picked in
+    # the Crew tab was ignored, silently, on every task. crew_def.py's own scope note called this "a
+    # later phase"; this is it, and `Definition.refresh` re-states it whenever the definition changes.
+    from crewaimeat import llm as _llm
+
+    _llm.set_doc_profile(agent_name, doc.get("llm_profile"))
+
+    # And tell the node which profiles and models this machine can actually reach, so the picker on
+    # the Agents page offers what exists here rather than a free-text box. Best-effort.
+    from crewaimeat.llm_choice import publish_catalog
+
+    publish_catalog(agent_name)
     # THE IDENTITY WINS OVER THE DOCUMENT'S NAME. `doc["agent_name"]` is the bare name, and when one
     # connector home serves more than one owner a bare name is REFUSED — the daemon answers
     # UNKNOWN_AGENT and lists both GAIIs. So when the caller named this agent by its full identity,

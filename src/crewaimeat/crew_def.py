@@ -192,6 +192,7 @@ TOOL_PURPOSES: dict[str, str] = {
     "local_memory": "keep raw findings in LOCAL memory (remember/recall/search) and publish only the refined result upward (publish_memory)",
     "article_fetch": "fetch + extract the readable article text behind result URLs (read sources, not snippets)",
     "app_tools": "find and CALL app-tools hosted on AIMEAT (list_app_tools reads how each is called; call_app_tool invokes one) — your own family's tools run free",
+    "crew_registry": "publish a crew definition to the AIMEAT registry, and install one somebody shared by their GAII",
     "exchange": "trade on the AIMEAT EXCHANGE — browse/accept/run offerings, post needs + bid, renegotiate, run agent-work; plus deterministic band + I/O-match gates",
 }
 

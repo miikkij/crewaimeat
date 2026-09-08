@@ -241,6 +241,21 @@ def clear_override(agent_name: str) -> bool:
     return True
 
 
+def known_profiles() -> list[str]:
+    """The profile names this machine's `llm_providers.json` declares, in file order ([] when it has
+    none). Public because the node's picker offers them and only this side can see the file."""
+    pf = _providers_file()
+    if not pf or not os.path.isfile(pf):
+        return []
+    try:
+        with open(pf, encoding="utf-8") as fh:
+            cfg = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    profiles = cfg.get("profiles")
+    return list(profiles) if isinstance(profiles, dict) else []
+
+
 def available_models(cfg: dict | None = None) -> list[dict]:
     """The catalogue a picker offers: every distinct (provider-type, model-id) across all profiles
     (and a flat `providers` list), de-duplicated, each carrying a self-contained one-model provider
@@ -318,6 +333,32 @@ def _declared_profile(agent_name: str | None) -> str | None:
     return m.llm_profile if m else None
 
 
+# A JSON crew's own `llm_profile`, per process.
+#
+# `_declared_profile` resolves a declaration by reading `crews/<name>_crew.py` with ast, which works
+# for a repo crew and CANNOT work for a node-backed one: its loader is five lines that name the agent
+# and nothing else, and the declaration lives in the definition the runtime fetched a moment ago. So
+# `run_json_agent` hands it here at start, and the resolver reads it at the same step it reads a
+# repo crew's LLM_PROFILE. crew_def.py's own docstring called this "a later phase"; this is it.
+_DOC_PROFILES: dict[str, str] = {}
+
+
+def set_doc_profile(agent_name: str, profile: str | None) -> None:
+    """Record (or clear) the profile the running JSON definition declares for `agent_name`."""
+    if profile and isinstance(profile, str) and profile.strip():
+        _DOC_PROFILES[agent_name] = profile.strip()
+    else:
+        _DOC_PROFILES.pop(agent_name, None)
+
+
+def _profile_declared_anywhere(agent_name: str | None) -> str | None:
+    """The crew's own declaration: a JSON definition's `llm_profile` first (it is the live one), then
+    the repo crew's LLM_PROFILE."""
+    if not agent_name:
+        return None
+    return _DOC_PROFILES.get(agent_name) or _declared_profile(agent_name)
+
+
 def _select_chain(cfg: dict, agent_name: str | None) -> tuple[list, str]:
     """Pick the provider chain for a crew.
 
@@ -342,20 +383,42 @@ def _select_chain(cfg: dict, agent_name: str | None) -> tuple[list, str]:
             prof = (cfg.get("profiles") or {}).get(ov.get("profile"))
             if isinstance(prof, dict):
                 return ((prof.get("providers") or []), f"override-profile:{ov.get('profile')}")
+
+    # THE OWNER'S CHOICE, MADE ON THE NODE. Below the local override, which is this machine's own
+    # pin and what a person sitting at it reaches for; above everything in the file, because a
+    # choice the owner made about THIS agent is more specific than any map on the box. Their
+    # DEFAULT is weaker and is resolved further down, beside the file's own default.
+    from crewaimeat.llm_choice import node_choice
+
+    choice, scope = node_choice(agent_name)
+    if choice and scope == "agent":
+        if choice.get("kind") == "model" and isinstance(choice.get("provider"), dict):
+            return ([choice["provider"]], f"node:{choice.get('label', 'model')}")
+        prof = (cfg.get("profiles") or {}).get(choice.get("profile"))
+        if isinstance(prof, dict):
+            return ((prof.get("providers") or []), f"node:{choice.get('profile')}")
+
     profiles = cfg.get("profiles")
     if isinstance(profiles, dict) and profiles:
         # PRECEDENCE, widest override first:
         #   1. a per-agent override from the TUI/cockpit (handled above)
-        #   2. the `crews` map in llm_providers.json — the OPERATOR's override for this machine
-        #   3. the crew's own LLM_PROFILE declaration — the agent's default, versioned with its code
-        #   4. the file's `default` profile
+        #   1b. the OWNER's own choice for THIS agent, made on the node (handled above)
+        #   2. the `crews` map in llm_providers.json - the OPERATOR's override for this machine
+        #   3. the crew's own declaration - a JSON definition's `llm_profile` first, else LLM_PROFILE
+        #   4. the OWNER's DEFAULT on the node, below the crew's own declaration because a crew
+        #      that states its need is stating it about itself
+        #   5. the file's `default` profile
         # Step 3 is what stops the silent fallback: until 2026-08-22 an unmapped crew went straight to
         # `default` with no way to express intent in the crew itself, so 20 of 46 crews ran on a
         # profile nobody had chosen for them. A crew now carries its own answer, and llm_providers.json
         # becomes what its name suggests — providers, plus per-machine overrides.
+        node_default = (
+            choice.get("profile") if (choice and scope == "default" and choice.get("kind") == "profile") else None
+        )
         name = (
             (cfg.get("crews") or {}).get(agent_name or "")
-            or _declared_profile(agent_name)
+            or _profile_declared_anywhere(agent_name)
+            or node_default
             or cfg.get("default")
             or next(iter(profiles))
         )
