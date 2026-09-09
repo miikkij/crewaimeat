@@ -17,6 +17,12 @@ import pytest
 
 import crewaimeat.julkaisu_grok as jg
 
+
+@pytest.fixture(autouse=True)
+def known_dns(monkeypatch):
+    monkeypatch.setattr(jg, "_resolves", lambda host: True)
+
+
 # ── a run that looks like the real one (julkaisu.2026-08-25) ─────────────────────────────────────
 # 1-4 and 7-9 are screen recordings; 5 and 10 are wide shots with a generated first frame; 6 is a
 # close-up with no image of its own.

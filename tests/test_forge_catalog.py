@@ -9,8 +9,12 @@ then falls back to keyless DDG; schedule/memory are pure closures / a filesystem
 
 from __future__ import annotations
 
+import pytest
+
 from crewaimeat import forge, forge_catalog
 from crewaimeat._validate_crew import _is_toollike
+
+pytestmark = pytest.mark.local_process
 
 
 # ── preflight: env-missing capabilities are hidden from the Architect ──────────

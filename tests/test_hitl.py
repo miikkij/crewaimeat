@@ -13,6 +13,14 @@ def _store(monkeypatch):
     monkeypatch.setattr(hitl.session_store, "session_set", lambda a, c, k, v: store.__setitem__((a, c, k), v))
     monkeypatch.setattr(hitl.session_store, "session_get", lambda a, c, k: store.get((a, c, k)))
     monkeypatch.setattr(hitl.session_store, "session_clear", lambda a, c, k: store.pop((a, c, k), None))
+
+    def consume(a, c, k, expected):
+        if store.get((a, c, k)) != expected:
+            return False
+        del store[(a, c, k)]
+        return True
+
+    monkeypatch.setattr(hitl.session_store, "session_consume", consume)
     return store
 
 
@@ -37,7 +45,7 @@ def test_ask_approval_sets_pending(asked, _store):
 
 def test_resolve_approval_yes(monkeypatch, asked, _store):
     hitl.ask_approval("a", "owner@n", "c1", summary="Publish?", action_id="pub", payload={"x": 1})
-    monkeypatch.setattr(hitl.dm, "dm_answers_from_event", lambda a, e: {"hitl_approve": {"selected": ["yes"]}})
+    monkeypatch.setattr(hitl.dm, "dm_answers_from_event", lambda a, e: {asked[-1][1][0]["id"]: {"selected": ["yes"]}})
     res = hitl.resolve("a", _event())
     assert res["kind"] == "approval" and res["approved"] is True and res["payload"] == {"x": 1}
     assert ("a", "c1", "hitl") not in _store  # cleared
@@ -45,7 +53,7 @@ def test_resolve_approval_yes(monkeypatch, asked, _store):
 
 def test_resolve_approval_no(monkeypatch, asked):
     hitl.ask_approval("a", "owner@n", "c1", summary="Publish?", action_id="pub")
-    monkeypatch.setattr(hitl.dm, "dm_answers_from_event", lambda a, e: {"hitl_approve": {"selected": ["no"]}})
+    monkeypatch.setattr(hitl.dm, "dm_answers_from_event", lambda a, e: {asked[-1][1][0]["id"]: {"selected": ["no"]}})
     res = hitl.resolve("a", _event())
     assert res["approved"] is False
 
@@ -53,7 +61,7 @@ def test_resolve_approval_no(monkeypatch, asked):
 def test_resolve_choice_returns_picked_option_dicts(monkeypatch, asked):
     opts = [{"id": "o1", "label": "One", "data": 1}, {"id": "o2", "label": "Two", "data": 2}]
     hitl.ask_choice("a", "owner@n", "c1", prompt="Pick", options=opts, action_id="ch", multi=True)
-    monkeypatch.setattr(hitl.dm, "dm_answers_from_event", lambda a, e: {"hitl_choice": {"selected": ["o2"]}})
+    monkeypatch.setattr(hitl.dm, "dm_answers_from_event", lambda a, e: {asked[-1][1][0]["id"]: {"selected": ["o2"]}})
     res = hitl.resolve("a", _event())
     assert res["kind"] == "choice" and res["picked"] == [{"id": "o2", "label": "Two", "data": 2}]
 
@@ -74,4 +82,4 @@ def test_resolve_none_when_no_pending(monkeypatch):
 def test_escalate_is_a_choice_gate(asked, _store):
     hitl.escalate("a", "owner@n", "c1", question="Which way?", options=[{"id": "x", "label": "X"}], action_id="esc")
     assert _store[("a", "c1", "hitl")]["kind"] == "choice"
-    assert _store[("a", "c1", "hitl")]["qid"] == "hitl_escalate"
+    assert _store[("a", "c1", "hitl")]["qid"] == asked[-1][1][0]["id"]

@@ -57,12 +57,14 @@ def start_fleet() -> str:
     return f"serve daemon pid {doc.get('pid')} port {doc.get('port')}. {recon}"
 
 
-def stop_fleet() -> str:
+def stop_fleet(*, strict: bool = False) -> str:
     """Tear the fleet down in the correct order. Windows: scripts/terminate_fleet.ps1 (kills the
     serve-watchdog → connectors → crews). Elsewhere: best-effort pkill of watchdog/crews/serve."""
     # terminate_fleet kills REAL processes scoped to this checkout — under pytest that is the live dev
     # fleet. Tests mock actions.stop_fleet; this backstop catches the one that forgets.
     if os.environ.get("PYTEST_CURRENT_TEST"):
+        if strict:
+            raise RuntimeError("fleet stop refused under pytest; mock actions.stop_fleet")
         return "fleet stop skipped (pytest — mock actions.stop_fleet in the test)"
     if os.name == "nt":
         from crewaimeat.forge import _project_root
@@ -76,15 +78,23 @@ def stop_fleet() -> str:
                 timeout=120,
             )
             tail = (r.stdout or "").strip().splitlines()[-1:] or [""]
+            if r.returncode != 0:
+                raise RuntimeError(f"terminate_fleet.ps1 exit {r.returncode}: {(r.stderr or '').strip()}")
             return f"terminate_fleet.ps1 ran. {tail[0]}"
         except Exception as exc:  # noqa: BLE001
+            if strict:
+                raise
             return f"terminate_fleet.ps1 failed: {exc!r}"
     killed = []
     for pat in ("watchdog.sh", "crews/", "connect serve"):  # watchdogs first, then crews, then serve
         try:
             r = subprocess.run(["pkill", "-f", pat], capture_output=True, timeout=20)
+            if strict and r.returncode not in (0, 1):
+                raise RuntimeError(f"pkill {pat}: exit {r.returncode}")
             killed.append(f"{pat}:{'ok' if r.returncode in (0, 1) else 'err'}")
         except Exception:  # noqa: BLE001
+            if strict:
+                raise
             killed.append(f"{pat}:err")
     return "fleet stop (posix pkill): " + ", ".join(killed)
 

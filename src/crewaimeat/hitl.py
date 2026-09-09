@@ -17,6 +17,9 @@ actually carries this gate's question id, so an unrelated answer in the thread l
 
 from __future__ import annotations
 
+import sys
+import uuid
+
 from crewaimeat import dm, session_store
 
 _PENDING_KEY = "hitl"
@@ -30,8 +33,19 @@ def _get_pending(agent: str, conv: str) -> dict | None:
     return session_store.session_get(agent, conv, _PENDING_KEY)
 
 
-def _clear_pending(agent: str, conv: str) -> None:
-    session_store.session_clear(agent, conv, _PENDING_KEY)
+def _send_pending(agent: str, to: str, conv: str, question: dict, pending: dict, body: str) -> bool:
+    """Persist before sending so a fast response is resolvable; undo only our own failed request."""
+    pending = dict(pending, request_id=question["id"], recipient=to)
+    _set_pending(agent, conv, pending)
+    try:
+        result = dm.dm_ask(agent, to, [question], body=body, conversation_id=conv)
+    except Exception:
+        session_store.session_consume(agent, conv, _PENDING_KEY, pending)
+        raise
+    if not result or result.get("ok") is False:
+        session_store.session_consume(agent, conv, _PENDING_KEY, pending)
+        return False
+    return True
 
 
 def ask_approval(
@@ -50,10 +64,16 @@ def ask_approval(
     """Ask the owner to APPROVE an action before doing it. `summary` describes the action; `payload` is
     whatever the caller needs to carry out the action on approval (returned by resolve). Returns True if
     the question was sent. Resolve the answer in on_dm with resolve(agent, event)."""
+    qid = f"{qid}-{uuid.uuid4().hex}"
     q = dm.build_question(qid, "Approve?", summary, [("yes", yes), ("no", no)], multi_select=False, allow_other=False)
-    res = dm.dm_ask(agent, to, [q], body=body or summary, conversation_id=conv)
-    _set_pending(agent, conv, {"kind": "approval", "qid": qid, "action_id": action_id, "payload": payload})
-    return bool(res)
+    return _send_pending(
+        agent,
+        to,
+        conv,
+        q,
+        {"kind": "approval", "qid": qid, "action_id": action_id, "payload": payload},
+        body or summary,
+    )
 
 
 def ask_choice(
@@ -73,11 +93,13 @@ def ask_choice(
     """Present N OPTIONS and let the owner pick. `options` = [{"id","label", ...any data}]; the picked
     option dicts come back from resolve. `multi`=True for checkboxes. Generalises the offer->pick pattern."""
     opts = [(o["id"], o.get("label", o["id"])) for o in options if o.get("id")]
+    qid = f"{qid}-{uuid.uuid4().hex}"
     q = dm.build_question(qid, "Pick", prompt, opts, multi_select=multi, allow_other=allow_other)
-    res = dm.dm_ask(agent, to, [q], body=body or prompt, conversation_id=conv)
-    _set_pending(
+    return _send_pending(
         agent,
+        to,
         conv,
+        q,
         {
             "kind": "choice",
             "qid": qid,
@@ -86,8 +108,8 @@ def ask_choice(
             "multi": multi,
             "payload": payload,
         },
+        body or prompt,
     )
-    return bool(res)
 
 
 def escalate(
@@ -118,13 +140,19 @@ def resolve(agent: str, event: dict) -> dict | None:
     pending = _get_pending(agent, conv)
     if not pending:
         return None
+    if not pending.get("request_id"):
+        print(f"[{agent}] approval predates request correlation; ask again in {conv}", file=sys.stderr)
+        return None
     answers = dm.dm_answers_from_event(agent, event) or {}
     if pending["qid"] not in answers:
         return None  # this answer is for a different question — don't consume our gate
     ans = answers.get(pending["qid"]) or {}
     selected = ans.get("selected") or []
     other = ans.get("other")
-    _clear_pending(agent, conv)
+    if pending["kind"] == "approval" and selected not in (["yes"], ["no"]):
+        return None
+    if not session_store.session_consume(agent, conv, _PENDING_KEY, pending):
+        return None
     if pending["kind"] == "approval":
         return {
             "kind": "approval",

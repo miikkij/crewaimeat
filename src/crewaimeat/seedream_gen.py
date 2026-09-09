@@ -21,7 +21,7 @@ import urllib.parse
 
 import requests
 
-from crewaimeat.aimeat_crew import _aimeat_call, _serve_api
+from crewaimeat.aimeat_crew import _aimeat_call
 from crewaimeat.generator_tool import _discover_owner, _token
 from crewaimeat.ledger_report import report_llm_usage
 
@@ -64,17 +64,9 @@ def _upload_public(agent: str, key: str, image: bytes, mime: str) -> bool:
     Same as image_contract._upload_public."""
     presign = {"key": key, "mime_type": mime, "visibility": "public", "mode": "presigned"}
     try:
-        api = _serve_api()
-        if api is not None:
-            base, session = api
-            r = session.post(f"{base}/v1/storage", json=presign, headers={"X-Aimeat-Agent": agent}, timeout=60)
-        else:
-            tok, url = _token(agent, _discover_owner(agent))
-            if not tok or not url:
-                return False
-            r = requests.post(
-                f"{url.rstrip('/')}/v1/storage", json=presign, headers={"Authorization": f"Bearer {tok}"}, timeout=60
-            )
+        from crewaimeat.aimeat_crew import _aimeat_request
+
+        r = _aimeat_request(agent, "POST", "/v1/storage", json=presign, timeout=60)
         upload_url = ((r.json() or {}).get("data") or {}).get("upload_url") if r.status_code == 200 else None
         if not upload_url:
             print(f"[seedream] presign {key} failed: HTTP {r.status_code} {r.text[:160]}", file=sys.stderr)

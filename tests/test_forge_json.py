@@ -91,6 +91,7 @@ def test_write_json_crew_requires_prompt_injection(tmp_root):
 
 
 # ── the emitted loader validates through the REAL fleet subprocess validator ──
+@pytest.mark.local_process
 def test_emitted_loader_passes_subprocess_validator(tmp_root):
     ok, _detail, _ = forge_json.write_json_crew(_good_doc())
     assert ok
@@ -125,7 +126,7 @@ def _run_tool(crew_json: str, request: str = "") -> str:
     return t.run({"crew_json": crew_json, "request": request})
 
 
-def test_tool_accepts_fenced_json(tmp_root):
+def test_tool_accepts_fenced_json(tmp_root, no_pipeline_memory):
     import json
 
     fenced = "```json\n" + json.dumps(_good_doc()) + "\n```"

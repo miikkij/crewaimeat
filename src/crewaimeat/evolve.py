@@ -610,8 +610,9 @@ def run_evolution(agent: str, ctx: str, owner: str | None = None) -> None:
             return
         lock.parent.mkdir(parents=True, exist_ok=True)
         lock.write_text(str(time.time()), encoding="utf-8")
-    except OSError:
-        pass
+    except OSError as exc:
+        print(f"[{agent}] evolution refused: cannot write its coordination lock ({exc})", file=sys.stderr)
+        return
     try:
         sig_ctx, sig, _ = latest_signal(agent, owner)
         ctx = sig_ctx or ctx

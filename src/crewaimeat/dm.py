@@ -39,7 +39,7 @@ import requests
 from aimeat_crewai import usage_run
 
 from crewaimeat.aimeat_crew import _aimeat_call, _serve_api
-from crewaimeat.generator_tool import _discover_owner, _token
+from crewaimeat.generator_tool import _discover_owner
 
 # How AIMEAT renders an attachment by media kind (the recipient's inbox: image thumbnails, a/v players,
 # a doc viewer, or a plain download). Map a MIME prefix -> the `kind` field the send contract wants.
@@ -287,17 +287,9 @@ def dm_attach_bytes(agent: str, data: bytes, *, name: str, mime: str) -> dict | 
     key = f"dm/{agent}/{name}"
     presign = {"key": key, "mime_type": mime, "visibility": "private", "mode": "presigned"}
     try:
-        api = _serve_api()
-        if api is not None:
-            base, session = api
-            r = session.post(f"{base}/v1/storage", json=presign, headers={"X-Aimeat-Agent": agent}, timeout=60)
-        else:
-            tok, url = _token(agent, _discover_owner(agent))
-            if not tok or not url:
-                return None
-            r = requests.post(
-                f"{url.rstrip('/')}/v1/storage", json=presign, headers={"Authorization": f"Bearer {tok}"}, timeout=60
-            )
+        from crewaimeat.aimeat_crew import _aimeat_request
+
+        r = _aimeat_request(agent, "POST", "/v1/storage", json=presign, timeout=60)
         upload_url = ((r.json() or {}).get("data") or {}).get("upload_url") if r.status_code == 200 else None
         if not upload_url:
             print(f"[{agent}] dm_attach presign {key} failed: HTTP {r.status_code} {r.text[:160]}", file=sys.stderr)

@@ -27,7 +27,6 @@ import json
 import os
 from typing import Any
 
-import requests
 from crewai.tools import tool
 
 try:  # private helper; degrade gracefully if a future version moves it
@@ -75,13 +74,10 @@ def _token(agent_name: str, owner: str | None):
 def _call(agent_name: str, owner: str | None, method: str, path: str, body: Any = None) -> dict:
     """Authenticated REST call to the node. Returns the parsed AIMEAT envelope dict (with an extra
     `_status`), or {"_error": ...}. Never raises."""
-    tok, url = _token(agent_name, owner)
-    if not tok or not url:
-        return {"_error": "no token/url for agent (is it registered + approved?)"}
-    base = url.rstrip("/")
-    headers = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
     try:
-        r = requests.request(method, f"{base}{path}", headers=headers, json=body, timeout=GEN_TIMEOUT)
+        from crewaimeat.aimeat_crew import _aimeat_request
+
+        r = _aimeat_request(agent_name, method, path, owner=owner, json=body, timeout=GEN_TIMEOUT)
     except Exception as e:  # noqa: BLE001
         return {"_error": f"request failed: {e!r}"}
     try:

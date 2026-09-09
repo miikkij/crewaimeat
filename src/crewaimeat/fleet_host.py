@@ -6,9 +6,9 @@ the queue, shuffle some text, call an LLM API). The host imports the heavy stack
 agent as a thread: the work is network-bound, so the GIL is released during every poll / LLM call and
 the agents run truly concurrently. Memory drops ~20x (one crewai + N thread stacks ≈ a few hundred MB).
 
-This is OPT-IN and ADDITIVE — the per-process model (start_fleet -> watchdog per crew) is unchanged and
-stays the default for prod. The host is ideal for a dev clone, where memory matters and per-process
-crash isolation matters less. Each agent thread runs the SAME `run_crew` daemon loop; the per-agent
+start_fleet starts this host for resident agents and a separate spawner for agents the node marks
+run_mode=spawn. An all-spawn roster leaves the host empty while the detached spawner keeps running.
+Each agent thread runs the SAME `run_crew` daemon loop; the per-agent
 single-instance lock still applies (separate lock files, all held by this one process), so the host and
 a stray per-process daemon for the same agent can never double-dispatch.
 

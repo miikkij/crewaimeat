@@ -49,6 +49,10 @@ own "How to task me" line for exactly this reason.
 ```
 src/crewaimeat/         the LOCKED scaffold + shared machinery (the package)
   aimeat_crew.py        run_crew / CrewSpec / BuildContext — the heart; liaison + daemon + dispatch
+  transport.py         node MCP, JSON REST and raw/streamed REST transport with injected runtime hooks
+  lifecycle.py         deterministic publish and completion callbacks, including verify gates
+  _sqlite.py           transaction and connection lifetime shared by the six SQLite stores
+  session_store.py     expiring conversation state and separately stored durable preferences
   _home.py              AIMEAT_HOME resolution (single source of truth)
   llm.py                LLM factory: provider-profile routing + per-agent overrides
   agent_manifest.py     each crew's OWN declaration, read statically (the one source per agent)
@@ -68,12 +72,14 @@ src/crewaimeat/         the LOCKED scaffold + shared machinery (the package)
   workflow.py /         workflow execution + inspection
     workflow_inspector.py
   evolve.py / evolve_run.py   reputation / variant-selection (lab benchmark ↔ field selection)
-  fleet_host.py         run every approved crew as a THREAD in one process (the default fleet model)
+  fleet_host.py         resident crews as threads; node-selected spawn crews run through spawner.py
   skills.py /           SKILL.md loading (repo-local) + registry/workspace skill attachment
     skills_registry.py
   crew_def.py /         declarative JSON crew definitions: interpreter/validator + the forge `/build-json`
     forge_json.py         path + AIMEAT publish/install (crew_registry.py)
   agency/               the aimeat-agency cockpit (FastAPI): wizard, brains, fleet ops, copilot
+    brain_routes.py / memory_routes.py   authenticated route groups mounted by cockpit.create_app
+    api_models.py / reset.py             request schemas and explicit reset failure reporting
   tui/                  the fleet TUI (see below)
   <tools>               searxng_search, ddg_search, browser_tool, seedream_gen, librarian, …
 
@@ -122,21 +128,30 @@ run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=RE
    contract agents poll their request namespace deterministically.
 4. **Live progress** — a deterministic heartbeat writes status to a memory key (no LLM).
 
-**Dispatch:** all deterministic AIMEAT calls go through one helper, `_aimeat_call(agent, tool,
-payload)` — POST to the shared loopback serve daemon (`/local/call/<tool>`), with a subprocess
-fallback. This is the single channel the TUI, pipelines, and contracts all use.
+**Dispatch:** `_aimeat_call(agent, tool, payload)` uses the shared loopback daemon's MCP dispatcher,
+with a subprocess fallback. `_aimeat_rest` handles JSON envelopes; `_aimeat_request` returns raw
+responses for text and binary consumers. Their implementation is in `transport.NodeTransport`.
+It owns node authentication and attribution. Presigned uploads to external storage remain external
+HTTP calls. Raw reads can retry a broken connection; raw mutations make one attempt by default.
+
+**State:** SQLite contexts commit or roll back and explicitly close the connection, including on
+schema failures. Conversation state expires on reads after seven days. Durable reader/briefing
+preferences use their own table, with lazy migration from legacy pseudo-conversations. HITL replies
+must match a unique request and atomically consume it before resolving; expired or superseded replies
+cannot approve a newer action. Chat windows select the newest turns and return chronological order.
 
 ---
 
 ## Runtime topology (the fleet)
 
 ```
-start_fleet.ps1/.sh ─ pins AIMEAT_HOME=<repo>/.aimeat, ensures ONE serve daemon, runs the FLEET HOST
+start_fleet.ps1 ─ pins AIMEAT_HOME=<repo>/.aimeat and starts the shared services
    │
    ├── serve daemon (one, shared)          ── the loopback tunnel every crew calls through
    ├── serve_watchdog.ps1/.sh              ── keeps the serve daemon alive (single-instance lock)
-   └── fleet host (crewaimeat.fleet_host)  ── every approved crew as a THREAD in one process
-          └── run_crew loop per agent         (crewai imported once; ~20× less RAM; the default)
+   ├── spawner_watchdog + spawner         ── temporary workers for node run_mode=spawn agents
+   └── fleet host (crewaimeat.fleet_host)  ── resident crews as threads in one process
+          └── run_crew loop per agent         (crewai imported once; empty host roster exits)
 ```
 
 Legacy per-process model (still available, for per-crew process isolation): start crew-forge under

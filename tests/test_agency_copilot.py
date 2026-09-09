@@ -18,7 +18,10 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr("crewaimeat.agency.cockpit._has_openrouter_key", lambda: False)
     from starlette.testclient import TestClient
 
+    from crewaimeat import forge
     from crewaimeat.agency.cockpit import create_app
+
+    monkeypatch.setattr(forge, "_crew_proc_entries", lambda *a, **kw: [])
 
     c = TestClient(create_app(token=TOKEN))
     c.headers.update({"Authorization": f"Bearer {TOKEN}"})
@@ -122,6 +125,7 @@ def test_chat_store_order_and_window(tmp_path, monkeypatch):
     assert len(w) == 1 and set(w[0]) == {"role", "text"}  # window is role+text only
 
 
+@pytest.mark.node_syntax
 def test_render_template_fills_placeholders(tmp_path, monkeypatch):
     monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
     from crewaimeat import author_tool
@@ -222,7 +226,10 @@ def test_app_build_requires_connect(client):
     assert r.status_code == 400 and "connect" in r.json()["detail"].lower()
 
 
-def test_app_build_pytest_guarded(client, tmp_path):
+def test_app_build_pytest_guarded(client, tmp_path, monkeypatch):
+    from crewaimeat.agency import account
+
+    monkeypatch.setattr(account, "agent_auth", lambda *args: {"has_token": True})
     client.post("/api/account/connect", json={"owner": "owner1"})
     client.post("/api/brains", json={"agent_name": "watcher", "template_id": "topic-watcher"})
     toks = tmp_path / "tokens"

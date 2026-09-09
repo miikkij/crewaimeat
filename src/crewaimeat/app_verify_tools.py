@@ -10,11 +10,10 @@ from __future__ import annotations
 
 import json
 
-import requests
 from crewai.tools import tool
 
 from crewaimeat import app_verify
-from crewaimeat.generator_tool import _call, _discover_owner, _node_base, _token
+from crewaimeat.generator_tool import _call, _discover_owner, _node_base
 
 
 def make_verify_tools(agent_name: str, owner: str | None = None) -> list:
@@ -52,8 +51,6 @@ def make_verify_tools(agent_name: str, owner: str | None = None) -> list:
         if isinstance(comps, dict):
             comps = list(comps.values())
         base = (_node_base(agent_name, owner) or "").rstrip("/")
-        tok, _ = _token(agent_name, owner)
-        headers = {"Authorization": f"Bearer {tok}"} if tok else {}
         problems: list[str] = []
 
         # Gate 3 — seeded memory keys exist (the "AIMEAT.data.get gets the i18n" check)
@@ -73,7 +70,9 @@ def make_verify_tools(agent_name: str, owner: str | None = None) -> list:
                 problems.append(f"cortex {c.get('id')} not registered (no registeredAs)")
                 continue
             try:
-                js = requests.get(f"{base}/v1/cortex/{name}/libs/{name}.js", headers=headers, timeout=20).text
+                js = _aimeat_request(
+                    agent_name, "GET", f"/v1/cortex/{name}/libs/{name}.js", owner=owner, timeout=20
+                ).text
             except Exception as e:  # noqa: BLE001
                 problems.append(f"{name}: lib fetch failed ({e!r})")
                 continue
@@ -106,3 +105,9 @@ def make_verify_tools(agent_name: str, owner: str | None = None) -> list:
         )
 
     return [verify_app]
+
+
+def _aimeat_request(*args, **kwargs):
+    from crewaimeat.aimeat_crew import _aimeat_request as request
+
+    return request(*args, **kwargs)

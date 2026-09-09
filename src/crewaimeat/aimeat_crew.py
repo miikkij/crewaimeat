@@ -806,6 +806,25 @@ def _warn_if_provenance_dropped(agent_name: str, tool: str, data: object) -> Non
     )
 
 
+def _node_transport():
+    from crewaimeat.transport import NodeTransport
+
+    return NodeTransport(
+        serve_api=_serve_api,
+        reset=_serve_reset,
+        identity_guard=_identity_guard,
+        read_token=_aimeat_read_token,
+        subprocess_call=_aimeat_call_subprocess,
+        transient_error=_is_transient_error,
+        warn_provenance=_warn_if_provenance_dropped,
+    )
+
+
+def _aimeat_request(agent_name: str, method: str, path: str, **kwargs):
+    """Raw response for node text/binary routes; shares auth, attribution and retry handling."""
+    return _node_transport().request(agent_name, method, path, **kwargs)
+
+
 def _aimeat_call(
     agent_name: str,
     tool: str,
@@ -816,79 +835,10 @@ def _aimeat_call(
     quiet: bool = False,
     return_error: bool = False,
 ) -> dict | None:
-    """Deterministic AIMEAT tool call (no LLM).
-
-    Primary path: POST /local/call/<tool> on the shared loopback serve daemon (same tool name +
-    JSON input as `connect call`; returns the envelope's data). Fallback when no daemon exists:
-    the legacy one-shot `aimeat connect call` subprocess.
-
-    RESILIENCE: a transient TRANSPORT failure (tunnel reconnecting, connection dropped, 5xx) is
-    RETRIED up to `retries` times with exponential backoff — the serve daemon is reset between tries
-    so the next attempt re-discovers/re-establishes it. Tool-level errors (e.g. a key that isn't
-    there yet) are NOT retried — they return None immediately so "not found yet" polls stay cheap.
-
-    `return_error=True` hands back the node's own envelope on a settled tool error instead of None, so
-    a caller can tell "there is nothing there" apart from "the answer never arrived". Without it the
-    two are indistinguishable: `list_memory` reported "No memory keys found under prefix 'news.'" when
-    the node had in fact refused a 25 MB answer, and a model reads that as the upstream stage not
-    having run — which is how a fetch failure turns into a fabricated article."""
-    for attempt in range(retries):
-        api = _serve_api()
-        if api is None:
-            data = _aimeat_call_subprocess(agent_name, tool, payload)
-            if "ai_provenance" in payload:
-                _warn_if_provenance_dropped(agent_name, tool, data)
-            return data
-        base, session = api
-        last = attempt + 1 >= retries
-        try:
-            r = session.post(
-                f"{base}/local/call/{tool}",
-                json=payload,
-                headers={"X-Aimeat-Agent": agent_name},
-                timeout=90,
-            )
-        except requests.RequestException as exc:
-            _serve_reset()  # daemon gone mid-flight -> re-discover / auto-restart it on the next try
-            if last:
-                print(
-                    f"[{agent_name}] {tool} loopback POST failed ({exc}); gave up after {retries} tries",
-                    file=sys.stderr,
-                )
-                return None
-            print(f"[{agent_name}] {tool} POST failed ({exc}); retry {attempt + 1}/{retries}", file=sys.stderr)
-            time.sleep(backoff * (2**attempt))
-            continue
-        try:
-            body = r.json()
-        except ValueError:
-            print(f"[{agent_name}] {tool} returned non-JSON (HTTP {r.status_code}): {r.text[:120]}", file=sys.stderr)
-            return None
-        if not isinstance(body, dict) or not body.get("ok"):
-            err = (body or {}).get("error") if isinstance(body, dict) else None
-            if _is_transient_error(err) and not last:
-                _serve_reset()
-                print(
-                    f"[{agent_name}] {tool} transient failure ({err}); retry {attempt + 1}/{retries}", file=sys.stderr
-                )
-                time.sleep(backoff * (2**attempt))
-                continue
-            if not quiet:  # quiet=True for EXPECTED probe failures (e.g. listing an org you don't serve)
-                print(f"[{agent_name}] {tool} failed: {err or f'HTTP {r.status_code}'}", file=sys.stderr)
-            if return_error and isinstance(body, dict):
-                return dict(body, http_status=r.status_code)
-            return None
-        # NB we return `data` and DISCARD `body["meta"]` — the same envelope-carrier discard that cost
-        # the connector its inbound provenance (it unwrapped `resp.data ?? resp`, binning the envelope
-        # that GET /v1/memory/:key serves the record on; fixed connector-side in 2.5.0 by folding the
-        # block into the result). Nothing here needs `meta` today, and the block now arrives inside
-        # `data`. If something ever DOES need an envelope-level field, add it explicitly — reading it
-        # off a return value that never carried it is the bug, one layer up.
-        data = body.get("data")
-        if "ai_provenance" in payload:  # only when WE declared — a read never carries one outbound
-            _warn_if_provenance_dropped(agent_name, tool, data)
-        return data
-    return None
+    """Compatibility entry point for the shared node transport."""
+    return _node_transport().call(
+        agent_name, tool, payload, retries=retries, backoff=backoff, quiet=quiet, return_error=return_error
+    )
 
 
 # Per-agent verdict from `_identity_guard`: True = the node answered as this agent, False = it
@@ -968,80 +918,10 @@ def _aimeat_rest(
     raw: bool = False,
     return_error: bool = False,
 ) -> dict | None:
-    """Deterministic REST call on the agent's behalf (a `/v1/...` node route). No LLM.
-
-    The sibling of `_aimeat_call` for routes the connector publishes no MCP tool for — today that is
-    PATCH /v1/memory/:key (the RFC 7386 merge patch six crews use to share one status record). Same
-    transport and the same retry policy: the loopback serve daemon proxies ANY /v1 path over its
-    persistent tunnel, so an in-fleet call costs one keep-alive request.
-
-    Fallback when no daemon is running: a DIRECT authed request with the agent's stored token. That
-    path deliberately differs from `_aimeat_call`'s subprocess fallback — `aimeat connect call` only
-    reaches TOOLS, and a REST route has none — and it is the one that keeps off-fleet scripts honest
-    (the connector tool surface returns empty off-fleet; a direct authed call really works or really
-    fails).
-
-    Returns the envelope's `data` on success, None on failure (logged loud).
-
-    `return_error=True` hands the caller the node's own ENVELOPE on a verdict (a 4xx, or `ok:false`)
-    instead of None, transport failures still being None. Use it where the caller must SAY what the
-    node said rather than infer it: `call_app_tool` used to read None, look at the tool's price, and
-    announce a payment wall — so the app's own owner was told their tool was priced and foreign when
-    the node had actually answered TOOL_NOT_INVOKABLE (measured 2026-09-03). The retry policy is
-    unchanged; only what a settled failure gives back."""
-    if not _identity_guard(agent_name, method):
-        return None
-    for attempt in range(retries):
-        last = attempt + 1 >= retries
-        api = _serve_api()
-        try:
-            if api is not None:
-                base, session = api
-                r = session.request(
-                    method, f"{base}{path}", json=body, headers={"X-Aimeat-Agent": agent_name}, timeout=60
-                )
-            else:
-                if _aimeat_read_token is None:
-                    print(f"[{agent_name}] {method} {path}: no daemon and no token reader", file=sys.stderr)
-                    return None
-                token, node_url = _aimeat_read_token(agent_name)
-                r = requests.request(
-                    method,
-                    f"{node_url.rstrip('/')}{path}",
-                    json=body,
-                    headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-                    timeout=60,
-                )
-        except requests.RequestException as exc:
-            _serve_reset()  # daemon gone mid-flight -> re-discover it on the next try
-            if last:
-                print(f"[{agent_name}] {method} {path} failed ({exc}); gave up after {retries} tries", file=sys.stderr)
-                return None
-            print(f"[{agent_name}] {method} {path} failed ({exc}); retry {attempt + 1}/{retries}", file=sys.stderr)
-            time.sleep(backoff * (2**attempt))
-            continue
-        try:
-            env = r.json()
-        except ValueError:
-            print(f"[{agent_name}] {method} {path} returned non-JSON (HTTP {r.status_code})", file=sys.stderr)
-            return None
-        if r.status_code >= 400 or (not raw and not (isinstance(env, dict) and env.get("ok"))):
-            err = (env or {}).get("error") if isinstance(env, dict) else None
-            # A 5xx / tunnel hiccup is worth another try; a 400/403 (malformed patch, missing scope)
-            # is the node's verdict and must fail fast and LOUD — it is a bug in us, not weather.
-            if (r.status_code >= 500 or _is_transient_error(err)) and not last:
-                _serve_reset()
-                print(
-                    f"[{agent_name}] {method} {path} transient ({err}); retry {attempt + 1}/{retries}", file=sys.stderr
-                )
-                time.sleep(backoff * (2**attempt))
-                continue
-            print(f"[{agent_name}] {method} {path} failed: HTTP {r.status_code} {err or ''}", file=sys.stderr)
-            if return_error and isinstance(env, dict):
-                return dict(env, http_status=r.status_code)
-            return None
-        return env if raw else env.get("data")
-    return None
+    """Compatibility entry point for the shared node transport."""
+    return _node_transport().rest(
+        agent_name, method, path, body, retries=retries, backoff=backoff, raw=raw, return_error=return_error
+    )
 
 
 def _aimeat_call_subprocess(agent_name: str, tool: str, payload: dict) -> dict | None:
@@ -1785,6 +1665,12 @@ def _eval_ctx(eval_info: dict | None) -> dict:
     return ctx
 
 
+def _lifecycle_callbacks():
+    from crewaimeat.lifecycle import LifecycleCallbacks
+
+    return LifecycleCallbacks(_aimeat_call, _eval_ctx, _mark_todos_done, _RUN_DELIVERABLE_KEYS)
+
+
 def _make_publish_cb(
     agent_name: str,
     primary_key: str,
@@ -1795,68 +1681,10 @@ def _make_publish_cb(
     clean: Callable[[str], str] | None = None,
     offer_id: str | None = None,
 ):
-    """Task callback: write the task output to AIMEAT memory deterministically (no LLM).
-
-    Attached to the last DOMAIN task so the deliverable always lands, even if the liaison's
-    LLM-driven memory_write loops or errors (observed on weaker models). Always writes the agent's
-    own key; if a shared_key/tag are supplied (a delegated workflow subtask), ALSO writes into the
-    shared tag area so the coordinator can collect it with its own scope. When eval_info is given,
-    also records the run's eval-context (model/temperature/tokens): the shared `<shared_key>.evalctx`
-    is written BEFORE the shared deliverable (so a coordinator that detects the deliverable always
-    finds the evalctx beside it), plus an own-introspection copy under statistics.custom.*.
-
-    task_id (the full AIMEAT task id) is added as a `task:<id>` tag on every per-task write so AIMEAT
-    can list a task's memory entries by tag (GET /v1/memory?...&tags=task:<id>). The tag is additive —
-    key formats are unchanged — and since the callback is deterministic it lands as surely as the
-    deliverable itself. When the task was ordered from the Offers surface (scope carries offer_id), an
-    `offer:<offer_id>` tag is added too, so the Offerings card can list the last N runs for THAT offer."""
-    task_tag = f"task:{task_id}" if task_id else None
-    offer_tag = f"offer:{offer_id}" if offer_id else None
-    _per_task_tags = [t for t in (task_tag, offer_tag) if t]  # additive; key formats unchanged
-
-    def _cb(task_output) -> None:
-        text = getattr(task_output, "raw", None)
-        if text is None:
-            text = str(task_output)
-        if clean:  # deterministic post-processor (e.g. strip an editor's leaked KEPT/CUT notes)
-            try:
-                cleaned = clean(text)
-                if cleaned:  # never publish an empty deliverable; fall back to the original
-                    text = cleaned
-            except Exception as exc:  # noqa: BLE001 — cleaning is best-effort, must not block publish
-                print(f"[{agent_name}] clean_deliverable skipped: {exc}", file=sys.stderr)
-        r1 = _aimeat_call(
-            agent_name,
-            "aimeat_memory_write",
-            {"key": primary_key, "value": text, "visibility": "owner", "tags": list(_per_task_tags)},
-        )
-        print(
-            f"[{agent_name}] deliverable published -> {primary_key} (tags {_per_task_tags}): {bool(r1)}",
-            file=sys.stderr,
-        )
-        ectx = _eval_ctx(eval_info)
-        if ectx and eval_info and eval_info.get("custom_key"):
-            _aimeat_call(  # own performance introspection; public so the Quality Custom Metrics tab renders it
-                agent_name,
-                "aimeat_memory_write",
-                {"key": eval_info["custom_key"], "value": ectx, "visibility": "public"},
-            )
-        if shared_key:
-            shared_tags = [t for t in (tag, task_tag, offer_tag) if t]  # delegation + per-task + per-offer (additive)
-            if ectx:  # write evalctx FIRST so it is present when the coordinator sees the deliverable
-                _aimeat_call(
-                    agent_name,
-                    "aimeat_memory_write",
-                    {"key": f"{shared_key}.evalctx", "value": ectx, "visibility": "owner", "tags": shared_tags},
-                )
-            r2 = _aimeat_call(
-                agent_name,
-                "aimeat_memory_write",
-                {"key": shared_key, "value": text, "visibility": "owner", "tags": shared_tags},
-            )
-            print(f"[{agent_name}] deliverable shared -> {shared_key} (tag {tag}): {bool(r2)}", file=sys.stderr)
-
-    return _cb
+    """Compatibility entry point for deterministic task lifecycle callbacks."""
+    return _lifecycle_callbacks().publish_callback(
+        agent_name, primary_key, shared_key, tag, eval_info, task_id, clean, offer_id
+    )
 
 
 def _resolve_offer(agent_name: str, task: dict) -> dict | None:
@@ -1946,90 +1774,8 @@ def _make_complete_cb(
     owner: str | None = None,
     auto_revert: bool = False,
 ):
-    """Task callback: close the AIMEAT task deterministically (no LLM). Attached to the finalize
-    task so the task is completed even if the liaison never calls aimeat_task_complete.
-
-    When require_verify is True (CrewSpec.require_verify_pass — SYS-1), completion is GATED on the app
-    verify gates' deterministic outcome: a build whose verify_render / verify_interaction FAILED, or that
-    never ran a gate at all, is FAILED (aimeat_task_fail) instead of shipping 'green'. The verdicts come
-    from the gate {ok} recorded by the verify tools (author_tool.get_verify_verdicts), never the agent's
-    self-reported text — the whole point is to not trust the self-report. The gate is STATUS-ONLY.
-
-    When auto_revert is True (CrewSpec.auto_revert_on_fail), a gate-fail ALSO restores each app this run
-    published to its pre-run last-good version (revert_apps_to_baseline) — an outward-facing live rollback,
-    kept a SEPARATE opt-in from the safe status gate."""
-
-    def _cb(_task_output) -> None:
-        if require_verify:
-            try:
-                from crewaimeat.author_tool import get_verify_verdicts
-
-                verdicts = get_verify_verdicts(tid)
-            except Exception as exc:  # noqa: BLE001 — never break finalize on the lookup
-                print(f"[{agent_name}] verify-gate lookup failed ({exc}); completing without gating", file=sys.stderr)
-                verdicts = None
-            if verdicts is not None:
-                failed = sorted(g for g, v in verdicts.items() if v.get("ok") is False)
-                passed = [g for g, v in verdicts.items() if v.get("ok") is True]
-                reason = None
-                if failed:
-                    reason = (
-                        f"Not shipping a broken build: verify gate(s) FAILED — {', '.join(failed)}. "
-                        "Fix the app and re-queue."
-                    )
-                elif not passed:
-                    reason = (
-                        "Not shipping unverified: no verify gate produced a PASS. A build must prove "
-                        "itself with verify_render / verify_interaction before it can complete."
-                    )
-                if reason:
-                    # The gate itself only fails the task (status-only). Optional, separate opt-in:
-                    if auto_revert:
-                        # also restore each app this run published to its pre-run last-good version, so the
-                        # LIVE app is rolled back, not just left un-'done' (the recorded rollback baseline).
-                        restored = []
-                        try:
-                            from crewaimeat.author_tool import revert_apps_to_baseline
-
-                            restored = [r for r in revert_apps_to_baseline(agent_name, tid, owner) if r.get("ok")]
-                        except Exception as exc:  # noqa: BLE001 — revert is best-effort; still fail the task
-                            print(f"[{agent_name}] auto-revert skipped ({exc})", file=sys.stderr)
-                        if restored:
-                            names = ", ".join(f"{r['filename']}->v{r['to_version']}" for r in restored)
-                            reason += f" Auto-restored {len(restored)} app(s) to last-good: {names}."
-                    fr = _aimeat_call(agent_name, "aimeat_task_fail", {"task_id": tid, "message": reason})
-                    print(
-                        f"[{agent_name}] require_verify_pass GATE -> task_fail {tid}: {reason[:90]} ({bool(fr)})",
-                        file=sys.stderr,
-                    )
-                    return
-        # Mark todos done DETERMINISTICALLY here, while the task is still active (aimeat_task_todo
-        # rejects a completed task), so a task never lands Done with its todos still pending (0/1).
-        _mark_todos_done(agent_name, tid)
-        payload = {"task_id": tid, "message": "Crew finished; deliverable published to memory."}
-        # A pipeline that wrote a contract key (the workflow blueprint's key) named it here; that key
-        # IS the deliverable, so it wins over the scaffold's derived crews.<agent>.… wrapper key.
-        key = _RUN_DELIVERABLE_KEYS.pop(tid, None) or mem_key
-        if key:
-            # The Offers/Inbox contract: the task record's deliverable key points at the memory key
-            # holding the deliverable — without it the Inbox shows the task but no content/sample,
-            # and `outcome` comes back with a message and no address to follow.
-            #
-            # THE FIELD IS snake_case, AND WE HAD IT WRONG. Both doors read `deliverable_key`: the
-            # MCP tool declares it (mcp/agent-tasks.ts) and the REST route reads
-            # `req.body?.deliverable_key` (routes/agent-tasks/completion.ts). We sent
-            # `deliverableKey`, which is simply ignored — no error, the completion succeeds, and the
-            # pointer is silently absent. Measured 2026-08-16: task a73ddeb9 completed with a real
-            # deliverable in memory and its outcome carried state/message/at but no deliverable_key.
-            payload["deliverable_key"] = key
-            payload["message"] = f"Crew finished; deliverable published to memory at {key}."
-        res = _aimeat_call(agent_name, "aimeat_task_complete", payload)
-        print(
-            f"[{agent_name}] task completed deterministically {tid} (deliverable_key={key or '-'}): {bool(res)}",
-            file=sys.stderr,
-        )
-
-    return _cb
+    """Compatibility entry point for deterministic task lifecycle callbacks."""
+    return _lifecycle_callbacks().complete_callback(agent_name, tid, mem_key, require_verify, owner, auto_revert)
 
 
 def _finalize_message_task(agent_name: str, mem_key: str, sender: str | None, liaison: Agent) -> Task:
@@ -2287,8 +2033,8 @@ def _publish_readme(agent_name: str, readme_md: str, commands: list[dict] | None
             cache_dir.mkdir(parents=True, exist_ok=True)
             body_file.write_text(expanded, encoding="utf-8")
             hash_file.write_text(src_hash, encoding="utf-8")
-        except OSError:
-            pass  # cache is best-effort
+        except OSError as exc:
+            print(f"[{agent_name}] README cache write failed: {exc}; publishing without cache", file=sys.stderr)
 
     res = _aimeat_call(
         agent_name,

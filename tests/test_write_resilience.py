@@ -9,6 +9,8 @@ import pytest
 from crewaimeat import write_pipeline as wp
 from crewaimeat.aimeat_crew import _is_transient_error
 
+pytestmark = pytest.mark.usefixtures("no_pipeline_memory")
+
 
 # ── dispatcher: which failures are worth retrying ─────────────────────────────
 def test_transient_classification():

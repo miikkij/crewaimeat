@@ -572,8 +572,8 @@ def reconcile_fleet() -> str:
         if lock.is_file() and (time.time() - lock.stat().st_mtime) < 90:
             return "A fleet reconcile is already in progress; try again shortly."
         lock.write_text(str(time.time()), encoding="utf-8")
-    except OSError:
-        pass
+    except OSError as exc:
+        return f"Fleet reconcile refused: cannot write its coordination lock ({exc})."
 
     launched, already, needs_approval = [], [], []
     try:

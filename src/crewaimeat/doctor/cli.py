@@ -40,6 +40,10 @@ def run(root: Path, *, live: bool = False) -> Report:
     return report
 
 
+def _failed(report: Report, stale: list[str], strict: bool) -> bool:
+    return bool(report.errors) or (strict and bool(report.strict_warnings or stale))
+
+
 def _render(report: Report, stale: list[str], *, strict: bool, colour: bool) -> str:
     out: list[str] = []
     for note in report.notes:
@@ -75,7 +79,7 @@ def _render(report: Report, stale: list[str], *, strict: bool, colour: bool) -> 
     # A stale baseline entry FAILS under --strict, so it has to count towards the verdict too. It did
     # not, which produced the one output a checker must never produce: "PASS" printed above a non-zero
     # exit code. A gate that says one thing and does another is how people learn to ignore the gate.
-    verdict = "FAIL" if (n_err or (strict and (len(report.strict_warnings) or n_stale))) else "PASS"
+    verdict = "FAIL" if _failed(report, stale, strict) else "PASS"
     tone = "31" if verdict == "FAIL" else "32"
     tally = f"{n_err} error(s), {n_warn} warning(s)"
     if n_env:
@@ -112,18 +116,19 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.accept_baseline:
         path = write_baseline(root, raw.findings, note="recorded by `crewaimeat doctor --accept-baseline`")
-        print(f"recorded {len(raw.findings)} finding(s) as accepted in {path.name}.")
+        print(f"recorded {len(load_baseline(root))} finding(s) as accepted in {path.name}.")
         print("They no longer fail the build; a NEW violation of the same rule still does.")
         return 0
 
     accepted = set() if args.no_baseline else load_baseline(root)
     report, stale = apply_baseline(raw, accepted)
+    failed = _failed(report, stale, args.strict)
 
     if args.json:
         print(
             json.dumps(
                 {
-                    "verdict": "fail" if (report.errors or (args.strict and report.strict_warnings)) else "pass",
+                    "verdict": "fail" if failed else "pass",
                     "errors": len(report.errors),
                     "warnings": len(report.warnings),
                     "baselined": len(accepted),
@@ -143,7 +148,6 @@ def main(argv: list[str] | None = None) -> int:
             print(f"    baseline: {len(accepted)} pre-existing finding(s) accepted (doctor-baseline.json)")
         print(_render(report, stale, strict=args.strict, colour=colour))
 
-    failed = bool(report.errors) or (args.strict and bool(report.strict_warnings)) or (args.strict and bool(stale))
     return 1 if failed else 0
 
 

@@ -95,8 +95,9 @@ def test_a_trial_that_blows_up_answers_with_the_reason(monkeypatch):
 
 
 @pytest.mark.parametrize("capability", ci._CAPABILITIES)
-def test_every_declared_capability_is_actually_handled(capability):
+def test_every_declared_capability_is_actually_handled(capability, monkeypatch):
     """The list in the module and the branches in `handle` must not drift apart."""
+    monkeypatch.setattr(ci, "_run_trial", lambda *a, **kw: (True, {"output": "stub trial"}))
     ok, result = ci.handle(capability, {"doc": DOC, "prompt": "x"}, agent_name="node-agent")
     assert result.get("code") != "UNKNOWN_CAPABILITY"
 

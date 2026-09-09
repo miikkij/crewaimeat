@@ -6,8 +6,12 @@ Offline: dry-runs stage into .candidates and the subprocess validator only impor
 
 from __future__ import annotations
 
+import pytest
+
 from crewaimeat import forge, forge_eval
 from crewaimeat.forge_eval import grade
+
+pytestmark = [pytest.mark.local_process, pytest.mark.usefixtures("no_pipeline_memory")]
 
 _BD = (
     "def build_domain(ctx):\n"

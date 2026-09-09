@@ -8,7 +8,7 @@ suggestions. The human brings the social data (no scraping); the agent structure
 This module holds the DETERMINISTIC parts (config, owner addressing, the kickoff message, the digest
 write). The judgement — extracting signals + suggesting threads — is the crew's LLM job (the crew file).
 
-Config lives in session_store under a fixed pseudo-conversation ("_briefing") so it survives restarts
+Config lives in session_store's durable preferences namespace ("_briefing") so it survives restarts
 with no read-after-write lag: {topics:[...], conversation_id, schedule_id}. The owner is addressed on the
 federated inbox; same-owner delivery is ungated, so the agent reaches its own owner directly.
 """
@@ -30,7 +30,7 @@ DEFAULT_TOPICS = ["AI agents", "multi-agent systems", "agent memory", "CrewAI", 
 
 # ── config (durable, local) ──────────────────────────────────────────────────
 def get_config(agent: str = AGENT_NAME) -> dict:
-    cfg = session_store.session_get(agent, _CONFIG_CONV, _CONFIG_KEY) or {}
+    cfg = session_store.preference_get(agent, _CONFIG_CONV, _CONFIG_KEY) or {}
     if not cfg.get("topics"):
         cfg["topics"] = list(DEFAULT_TOPICS)
     return cfg
@@ -39,7 +39,7 @@ def get_config(agent: str = AGENT_NAME) -> dict:
 def set_config(agent: str, **changes) -> dict:
     cfg = get_config(agent)
     cfg.update({k: v for k, v in changes.items() if v is not None})
-    session_store.session_set(agent, _CONFIG_CONV, _CONFIG_KEY, cfg)
+    session_store.preference_set(agent, _CONFIG_CONV, _CONFIG_KEY, cfg)
     return cfg
 
 

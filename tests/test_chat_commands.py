@@ -39,6 +39,7 @@ def test_validator_select_options_only_for_select():
 
 
 def test_concierge_dynamic_commands(monkeypatch):
+    monkeypatch.setattr(cc, "_aimeat_call", lambda *a, **kw: None)
     # Mock the live roster so the builder is deterministic (two of the directory are "up").
     monkeypatch.setattr(
         cc.orchestrator,

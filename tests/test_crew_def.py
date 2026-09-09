@@ -270,7 +270,7 @@ def test_crewspec_overrides_win():
 
 
 # ── the proof: JSON joker reconstructs the hand-written joker ─────────────────
-def test_json_joker_equivalent_to_python_joker():
+def test_json_joker_equivalent_to_python_joker(no_pipeline_memory):
     from crews import joker_crew
 
     ctx = make_ctx()

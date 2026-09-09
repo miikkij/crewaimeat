@@ -8,8 +8,12 @@ well-formed (expectations reference real catalog capabilities).
 
 from __future__ import annotations
 
+import pytest
+
 from crewaimeat import forge, forge_catalog, forge_eval
 from crewaimeat.forge_eval import Grade, Order, grade
+
+pytestmark = pytest.mark.local_process
 
 
 def _write(monkeypatch, tmp_path, name, caps, use_prompt=True):

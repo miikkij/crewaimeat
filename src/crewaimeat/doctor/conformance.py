@@ -28,6 +28,7 @@ from .model import ERROR, WARN, Finding, Report
 # every time — a swallowed 401 that looks like "no tasks" (see run-crew-daemon-real-behavior).
 DISPATCHER_MODULES = {
     "src/crewaimeat/aimeat_crew.py",  # defines _aimeat_call / _aimeat_rest
+    "src/crewaimeat/transport.py",  # shared transport implementations, including raw/binary responses
     "src/crewaimeat/serve_guard.py",  # owns the daemon lifecycle, must probe it directly
     "src/crewaimeat/serve_watchdog.py",
     "src/crewaimeat/wake_spin.py",  # reads the daemon's wake queue by design

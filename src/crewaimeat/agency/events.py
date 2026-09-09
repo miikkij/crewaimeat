@@ -20,6 +20,7 @@ import sqlite3
 import time
 
 from crewaimeat._home import aimeat_home
+from crewaimeat._sqlite import database
 
 
 def _db_path() -> str:
@@ -28,14 +29,15 @@ def _db_path() -> str:
     return os.path.join(home, "events.db")
 
 
-def _conn() -> sqlite3.Connection:
-    c = sqlite3.connect(_db_path(), timeout=10)
-    c.execute("PRAGMA journal_mode=WAL")
+def _schema(c: sqlite3.Connection) -> None:
     c.execute(
         "CREATE TABLE IF NOT EXISTS events (agent TEXT NOT NULL, ts REAL NOT NULL, kind TEXT NOT NULL, detail TEXT)"
     )
     c.execute("CREATE INDEX IF NOT EXISTS events_agent_ts ON events(agent, ts DESC)")
-    return c
+
+
+def _conn():
+    return database(_db_path(), _schema)
 
 
 _KEEP_PER_AGENT = 1000  # History shows ~100; keep a deep tail but stop the db growing forever

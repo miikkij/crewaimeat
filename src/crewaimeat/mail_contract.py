@@ -174,12 +174,7 @@ def _storage_image(image_key: str) -> tuple[bytes, str] | None:
         if image_key.startswith("http"):
             r = _rq.get(image_key, timeout=30)
         else:
-            from crewaimeat.generator_tool import _discover_owner, _token
-
-            tok, url = _token(AGENT, _discover_owner(AGENT))
-            r = _rq.get(
-                f"{url.rstrip('/')}/v1/storage/{image_key}", headers={"Authorization": f"Bearer {tok}"}, timeout=30
-            )
+            r = _aimeat_request(AGENT, "GET", f"/v1/storage/{image_key}", direct=True, timeout=30)
         mime = (r.headers.get("Content-Type") or "image/jpeg").split(";")[0]
         return (r.content, mime) if r.status_code == 200 and mime.startswith("image/") else None
     except Exception:  # noqa: BLE001
@@ -781,3 +776,9 @@ def make_mail_tools(agent_name: str) -> list:
         return f"postman: sent {res['sent']} mail(s), {res['failed']} failed."
 
     return [_process]
+
+
+def _aimeat_request(*args, **kwargs):
+    from crewaimeat.aimeat_crew import _aimeat_request as request
+
+    return request(*args, **kwargs)

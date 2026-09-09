@@ -160,6 +160,13 @@ def test_fetch_public_by_gaii(monkeypatch):
 
 
 def test_list_crew_defs(monkeypatch):
+    from crewaimeat import memory_tools
+
+    monkeypatch.setattr(
+        memory_tools,
+        "owner_scope_values",
+        lambda *a, **kw: {"crews.registry.a": {"publishedAt": "2026-07-05T10:00:00"}},
+    )
     items = {
         "items": [
             {"key": "crews.registry.a", "value": {"publishedAt": "2026-07-05T10:00:00"}, "owner_gaii": "a#o@n"},
@@ -171,6 +178,7 @@ def test_list_crew_defs(monkeypatch):
     got = reg.list_crew_defs(agent="crew-forge")
     assert {e["agent_name"] for e in got} == {"a", "b"}
     assert next(e for e in got if e["agent_name"] == "a")["gaii"] == "a#o@n"
+    assert next(e for e in got if e["agent_name"] == "a")["publishedAt"] == "2026-07-05T10:00:00"
 
 
 # ── install (materialize; optional register + launch) ─────────────────────────
@@ -197,6 +205,7 @@ def test_install_fetches_then_materializes(tmp_root, monkeypatch):
     assert "INSTALLED" in out and (tmp_root / "crew_defs" / "release_notes_writer.json").is_file()
 
 
+@pytest.mark.local_process
 def test_installed_crew_passes_subprocess_validator(tmp_root, monkeypatch):
     monkeypatch.setattr(reg, "_aimeat_call", _FakeCall({}))
     reg.install_crew_def(_good_doc(), agent="crew-forge", register=False)
