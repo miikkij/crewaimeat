@@ -305,7 +305,7 @@ def test_crew_forge_routes_undeploy_task_to_undeployer_domain():
     assert [t.name for t in agents[0].tools] == ["undeploy_app_agent"]
 
 
-def test_crew_forge_without_deploy_scope_keeps_normal_build_path():
+def test_crew_forge_without_deploy_scope_keeps_normal_build_path(no_pipeline_memory):
     agents, _tasks = _forge_domain({"id": "t", "title": "deploy-app-agent", "description": "make me an agent"})
     roles = [a.role for a in agents]
     assert "App Agent Deployer" not in roles  # a title alone never routes to the deployer

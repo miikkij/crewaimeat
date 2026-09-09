@@ -35,6 +35,7 @@ import time
 import uuid
 
 from crewaimeat._home import aimeat_home
+from crewaimeat._sqlite import database
 
 # Record lifecycle: born "raw" (local scratch); flips to "published" once mirrored upward to the node.
 RAW = "raw"
@@ -102,9 +103,7 @@ def _ensure_fts(c: sqlite3.Connection) -> None:
         print(f"[local_memory] FTS5 unavailable in this sqlite build ({exc}); search() disabled", file=sys.stderr)
 
 
-def _conn() -> sqlite3.Connection:
-    c = sqlite3.connect(_db_path(), timeout=10)
-    c.execute("PRAGMA journal_mode=WAL")
+def _schema(c: sqlite3.Connection) -> None:
     c.execute(
         "CREATE TABLE IF NOT EXISTS records ("
         "agent TEXT NOT NULL, id TEXT NOT NULL, ts REAL NOT NULL, "
@@ -116,7 +115,10 @@ def _conn() -> sqlite3.Connection:
     # Faceted browse is by (agent, time) and (agent, topic/event/source) — index the hot path.
     c.execute("CREATE INDEX IF NOT EXISTS records_agent_ts ON records(agent, ts DESC)")
     _ensure_fts(c)
-    return c
+
+
+def _conn():
+    return database(_db_path(), _schema)
 
 
 def _row_to_record(row: sqlite3.Row | tuple) -> dict:

@@ -38,6 +38,7 @@ def routing(tmp_path, monkeypatch):
     cfg.write_text(json.dumps(_CFG), encoding="utf-8")
     monkeypatch.setenv("LLM_PROVIDERS_FILE", str(cfg))
     monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    monkeypatch.setattr("crewaimeat.llm_choice.node_choice", lambda *a, **kw: (None, None))
     return cfg
 
 

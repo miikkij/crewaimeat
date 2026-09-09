@@ -41,7 +41,6 @@ from crewaimeat.generator_tool import (
     _err,
     _node_base,
     _ok,
-    _token,
 )
 
 AUTHOR_TIMEOUT = 60
@@ -198,23 +197,18 @@ def _revert_app_rest(agent_name: str, owner: str | None, base: str, filename: st
     """Re-publish a prior app version as the current one (the programmatic core of the revert_app tool).
     Returns (ok, detail). Best-effort; never raises."""
     try:
-        tok, _u = _token(agent_name, owner)
-        if not tok or not base:
-            return False, "no token/base"
-        cr = requests.get(
-            f"{base}/v1/apps/{owner}/{filename}?version={to_version}",
-            headers={"Authorization": f"Bearer {tok}"},
-            timeout=AUTHOR_TIMEOUT,
+        if not base:
+            return False, "no node base"
+        cr = _aimeat_request(
+            agent_name, "GET", f"/v1/apps/{owner}/{filename}?version={to_version}", owner=owner, timeout=AUTHOR_TIMEOUT
         )
         if cr.status_code != 200 or not (cr.text or "").strip():
             return False, f"could not fetch v{to_version} ({cr.status_code})"
         html = _utf8_text(cr)
         name, desc, category, icon, uses_cortex = filename.replace(".html", ""), "", "utility", "", []
         try:
-            vr = requests.get(
-                f"{base}/v1/apps/{owner}/{filename}/versions",
-                headers={"Authorization": f"Bearer {tok}"},
-                timeout=AUTHOR_TIMEOUT,
+            vr = _aimeat_request(
+                agent_name, "GET", f"/v1/apps/{owner}/{filename}/versions", owner=owner, timeout=AUTHOR_TIMEOUT
             )
             vlist = (vr.json() or {}).get("data", {}).get("versions") or []
             man = next((v.get("manifest", {}) for v in vlist if v.get("version_number") == to_version), {})
@@ -428,9 +422,8 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
         content is untrusted — esc() it before the DOM. Verify a public app with verify_anon_render."""
         if not base:
             return "ERROR: no node url (agent token missing?)"
-        tok2, _u = _token(agent_name, owner)
         try:
-            r = requests.get(base + "/llms.txt", headers={"Authorization": f"Bearer {tok2}"}, timeout=AUTHOR_TIMEOUT)
+            r = _aimeat_request(agent_name, "GET", "/llms.txt", owner=owner, timeout=AUTHOR_TIMEOUT)
         except Exception as e:  # noqa: BLE001
             return f"ERROR fetching llms.txt: {e!r}"
         lines = (_utf8_text(r) or "").splitlines()
@@ -487,13 +480,18 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
         AIMEAT.agents / AIMEAT.data libs — read_lib_api('aimeat-agents') to see that API."""
         if not base:
             return "ERROR: no node url (agent token missing?)"
-        tok2, _u = _token(agent_name, owner)
         p = path.strip()
-        if not p.startswith("http"):
-            p = "/" + p.lstrip("/")
-        url = p if p.startswith("http") else base + p
+        from urllib.parse import urlsplit
+
+        parsed = urlsplit(p)
+        if parsed.scheme or parsed.netloc:
+            node = urlsplit(base)
+            if (parsed.scheme, parsed.netloc) != (node.scheme, node.netloc):
+                return "ERROR: read_node_api accepts only this node's paths"
+            p = parsed.path + ("?" + parsed.query if parsed.query else "")
+        p = "/" + p.lstrip("/")
         try:
-            r = requests.get(url, headers={"Authorization": f"Bearer {tok2}"}, timeout=AUTHOR_TIMEOUT)
+            r = _aimeat_request(agent_name, "GET", p, owner=owner, timeout=AUTHOR_TIMEOUT)
         except Exception as e:  # noqa: BLE001
             return f"ERROR: {e!r}"
         body = (_utf8_text(r) or "")[:2600]
@@ -748,7 +746,9 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
         blob = html
         for cname, cfile in _re.findall(r"/v1/cortex/([a-zA-Z0-9_-]+)/libs/([a-zA-Z0-9_.-]+)", html):
             try:
-                blob += "\n" + _utf8_text(requests.get(f"{base}/v1/cortex/{cname}/libs/{cfile}", timeout=20))
+                blob += "\n" + _utf8_text(
+                    _aimeat_request(agent_name, "GET", f"/v1/cortex/{cname}/libs/{cfile}", owner=owner, timeout=20)
+                )
             except Exception:  # noqa: BLE001
                 pass
         dep_missing = [f"/v1/libs/{lib} (used: {ns})" for ns, lib in LIBMAP.items() if ns in blob and lib not in html]
@@ -798,11 +798,8 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
     def _current_app_version(filename: str):
         """Best-effort current version_number of an app (for the rollback baseline)."""
         try:
-            tok2, _u = _token(agent_name, owner)
-            r = requests.get(
-                f"{base}/v1/apps/{owner}/{filename}/versions",
-                headers={"Authorization": f"Bearer {tok2}"},
-                timeout=AUTHOR_TIMEOUT,
+            r = _aimeat_request(
+                agent_name, "GET", f"/v1/apps/{owner}/{filename}/versions", owner=owner, timeout=AUTHOR_TIMEOUT
             )
             vers = (r.json() or {}).get("data", {}).get("versions") or []
             return max((v.get("version_number", 0) for v in vers), default=None)
@@ -814,12 +811,9 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
         """List an app's saved versions (version_number, semver, size, created_at) — your rollback safety
         net. EVERY publish_app is kept, so a prior working version can ALWAYS be restored with revert_app.
         Use this to find the last-known-GOOD version (e.g. the one BEFORE a fix loop that went wrong)."""
-        tok2, _u = _token(agent_name, owner)
         try:
-            r = requests.get(
-                f"{base}/v1/apps/{owner}/{filename}/versions",
-                headers={"Authorization": f"Bearer {tok2}"},
-                timeout=AUTHOR_TIMEOUT,
+            r = _aimeat_request(
+                agent_name, "GET", f"/v1/apps/{owner}/{filename}/versions", owner=owner, timeout=AUTHOR_TIMEOUT
             )
         except Exception as e:  # noqa: BLE001
             return f"ERROR: {e!r}"
@@ -839,11 +833,12 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
         current version (the live app reverts; full history is preserved). Use this the moment a fix/edit
         loop has left the live app WORSE than before — never leave a broken app live. Find the target with
         list_app_versions and pick the last version that WORKED; to_version is its version_number."""
-        tok2, _u = _token(agent_name, owner)
         try:
-            cr = requests.get(
-                f"{base}/v1/apps/{owner}/{filename}?version={int(to_version)}",
-                headers={"Authorization": f"Bearer {tok2}"},
+            cr = _aimeat_request(
+                agent_name,
+                "GET",
+                f"/v1/apps/{owner}/{filename}?version={int(to_version)}",
+                owner=owner,
                 timeout=AUTHOR_TIMEOUT,
             )
         except Exception as e:  # noqa: BLE001
@@ -854,10 +849,8 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
         # Recover that version's manifest so the catalogue entry (name/icon/uses_cortex) is preserved.
         name, desc, category, icon, uses_cortex = filename.replace(".html", ""), "", "utility", "", []
         try:
-            vr = requests.get(
-                f"{base}/v1/apps/{owner}/{filename}/versions",
-                headers={"Authorization": f"Bearer {tok2}"},
-                timeout=AUTHOR_TIMEOUT,
+            vr = _aimeat_request(
+                agent_name, "GET", f"/v1/apps/{owner}/{filename}/versions", owner=owner, timeout=AUTHOR_TIMEOUT
             )
             vlist = (vr.json() or {}).get("data", {}).get("versions") or []
             man = next((v.get("manifest", {}) for v in vlist if v.get("version_number") == int(to_version)), {})
@@ -971,7 +964,9 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
             )
         app_owner, filename = _up.unquote(m.group(1)), _up.unquote(m.group(2))
         try:
-            g = requests.get(f"{base}/v1/apps/{app_owner}/{filename}?mode=inline", timeout=AUTHOR_TIMEOUT)
+            g = _aimeat_request(
+                agent_name, "GET", f"/v1/apps/{app_owner}/{filename}?mode=inline", owner=owner, timeout=AUTHOR_TIMEOUT
+            )
         except Exception as e:  # noqa: BLE001
             return f"ERROR fetching {url}: {e!r}"
         if g.status_code != 200:
@@ -984,7 +979,11 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
         cortexes, ext_names = [], set()
         for cname, cfile in sorted(set(_re.findall(r"/v1/cortex/([a-zA-Z0-9_-]+)/libs/([a-zA-Z0-9_.-]+)", html))):
             try:
-                lib = _utf8_text(requests.get(f"{base}/v1/cortex/{cname}/libs/{cfile}", timeout=AUTHOR_TIMEOUT))
+                lib = _utf8_text(
+                    _aimeat_request(
+                        agent_name, "GET", f"/v1/cortex/{cname}/libs/{cfile}", owner=owner, timeout=AUTHOR_TIMEOUT
+                    )
+                )
             except Exception:  # noqa: BLE001
                 lib = ""
             blob += "\n" + lib
@@ -1049,7 +1048,9 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
             )
         app_owner, filename = _up.unquote(m.group(1)), _up.unquote(m.group(2))
         try:
-            g = requests.get(f"{base}/v1/apps/{app_owner}/{filename}?mode=inline", timeout=AUTHOR_TIMEOUT)
+            g = _aimeat_request(
+                agent_name, "GET", f"/v1/apps/{app_owner}/{filename}?mode=inline", owner=owner, timeout=AUTHOR_TIMEOUT
+            )
         except Exception as e:  # noqa: BLE001
             return f"ERROR fetching {url}: {e!r}"
         if g.status_code != 200:
@@ -1060,7 +1061,11 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
         parts = [f"=== APP HTML: {filename} ({len(html)} bytes) — edit IN PLACE, preserve every feature ===\n{html}"]
         for cname, cfile in sorted(set(_re.findall(r"/v1/cortex/([a-zA-Z0-9_-]+)/libs/([a-zA-Z0-9_.-]+)", html))):
             try:
-                lib = _utf8_text(requests.get(f"{base}/v1/cortex/{cname}/libs/{cfile}", timeout=AUTHOR_TIMEOUT))
+                lib = _utf8_text(
+                    _aimeat_request(
+                        agent_name, "GET", f"/v1/cortex/{cname}/libs/{cfile}", owner=owner, timeout=AUTHOR_TIMEOUT
+                    )
+                )
             except Exception:  # noqa: BLE001
                 lib = "(could not fetch)"
             parts.append(f"=== CORTEX LIB: {cname}/{cfile} ({len(lib)} bytes) ===\n{lib}")
@@ -1246,3 +1251,9 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
         except Exception:  # noqa: BLE001
             pass
     return tools, state
+
+
+def _aimeat_request(*args, **kwargs):
+    from crewaimeat.aimeat_crew import _aimeat_request as request
+
+    return request(*args, **kwargs)

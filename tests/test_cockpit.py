@@ -15,7 +15,13 @@ def client(tmp_path, monkeypatch):
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)  # _web_tools() -> [] (no network in dry-run)
     from starlette.testclient import TestClient
 
+    from crewaimeat import aimeat_crew, forge
     from crewaimeat.agency.cockpit import create_app
+    from crewaimeat.tui import fleet_state
+
+    monkeypatch.setattr(aimeat_crew, "_aimeat_call", lambda *a, **kw: None)
+    monkeypatch.setattr(forge, "_crew_proc_entries", lambda *a, **kw: [])
+    monkeypatch.setattr(fleet_state, "collect_cmdlines", lambda: [])
 
     c = TestClient(create_app(token=TOKEN))
     c.headers.update({"Authorization": f"Bearer {TOKEN}"})
@@ -87,7 +93,7 @@ def test_reset_wipes_state(client, monkeypatch, tmp_path):
     import crewaimeat.tui.actions as actions
     from crewaimeat import brains
 
-    monkeypatch.setattr(actions, "stop_fleet", lambda: "stopped")
+    monkeypatch.setattr(actions, "stop_fleet", lambda **kw: "stopped")
     brains.save_brain("reset-test-agent", "topic-watcher", prose="hi")  # a real brain in the DB
     (tmp_path / "agency_account.json").write_text("{}", encoding="utf-8")
     assert brains.list_brains(), "precondition: a brain exists"
@@ -175,19 +181,12 @@ def test_models_catalogue(client, monkeypatch):
 
 
 def test_models_include_local_ollama(client, monkeypatch):
-    import requests
-
     from crewaimeat import llm
+    from crewaimeat.agency import cockpit
 
     monkeypatch.setattr(llm, "available_models", lambda: [])  # no cloud models, just Ollama
 
-    class _R:
-        status_code = 200
-
-        def json(self):
-            return {"models": [{"name": "gemma4"}, {"name": "qwen3.6"}]}
-
-    monkeypatch.setattr(requests, "get", lambda url, timeout=2: _R())
+    monkeypatch.setattr(cockpit, "_ollama_probe", lambda: (True, ["gemma4", "qwen3.6"]))
     models = client.get("/api/models").json()["models"]
     assert "ollama:gemma4" in [m["label"] for m in models]
     assert models[0]["local"] is True
@@ -518,6 +517,10 @@ def test_stop_agency_ollama_never_kills_a_reused_pid(client, tmp_path, monkeypat
     monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
     pidfile = tmp_path / "agency_ollama.pid"
     pidfile.write_text(str(_os.getpid()), encoding="utf-8")
+    import subprocess
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: SimpleNamespace(stdout="python.exe", returncode=0))
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     msg = cp._stop_agency_ollama()
     assert "not ollama" in msg
@@ -561,7 +564,7 @@ def test_reset_cleans_pidfile_logs_and_openrouter_key(client, monkeypatch, tmp_p
     monkeypatch.setenv("OPENROUTER_API_KEY", "dummy-for-reset-test")  # restored to the machine value after
     import crewaimeat.tui.actions as actions
 
-    monkeypatch.setattr(actions, "stop_fleet", lambda: "stopped")
+    monkeypatch.setattr(actions, "stop_fleet", lambda **kw: "stopped")
     (tmp_path / "agency_ollama.pid").write_text("12345", encoding="utf-8")
     (tmp_path / "logs").mkdir()
     (tmp_path / "logs" / "x.watchdog.log").write_text("log", encoding="utf-8")

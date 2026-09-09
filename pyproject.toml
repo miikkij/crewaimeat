@@ -90,6 +90,11 @@ ignore = [
 # The L1/L2 test floor: deterministic, no LLM, no network. See docs/aimeat-guides/nextgeneration/
 # 10-testing-and-evaluation-plan.md. pythonpath lets tests import crews.<x> and the shared fixtures.
 testpaths = ["tests"]
+markers = [
+    "loopback: integration test using only a local loopback server (external network remains blocked)",
+    "local_process: explicit Python subprocess test inheriting the offline network guard",
+    "node_syntax: permit node --check only, parsing JavaScript without executing it",
+]
 addopts = "-q"
 pythonpath = [".", "tests"]
 filterwarnings = ["ignore::DeprecationWarning"]

@@ -25,6 +25,7 @@ import sqlite3
 import time
 
 from crewaimeat._home import aimeat_home
+from crewaimeat._sqlite import database
 
 _COLUMNS = ("agent_name", "template_id", "prose", "policy", "title", "version", "created", "updated")
 
@@ -35,9 +36,7 @@ def _db_path() -> str:
     return os.path.join(home, "brains.db")
 
 
-def _conn() -> sqlite3.Connection:
-    c = sqlite3.connect(_db_path(), timeout=10)
-    c.execute("PRAGMA journal_mode=WAL")
+def _schema(c: sqlite3.Connection) -> None:
     c.execute(
         "CREATE TABLE IF NOT EXISTS brains ("
         "agent_name TEXT PRIMARY KEY, template_id TEXT NOT NULL, prose TEXT, policy TEXT, "
@@ -48,7 +47,10 @@ def _conn() -> sqlite3.Connection:
         "agent_name TEXT NOT NULL, version INTEGER NOT NULL, template_id TEXT, prose TEXT, policy TEXT, "
         "title TEXT, ts REAL NOT NULL, PRIMARY KEY(agent_name, version))"
     )
-    return c
+
+
+def _conn():
+    return database(_db_path(), _schema)
 
 
 def _row_to_brain(row) -> dict:

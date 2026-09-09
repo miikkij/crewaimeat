@@ -105,7 +105,7 @@ def write_baseline(root: Path, findings: list[Finding], *, note: str = "") -> Pa
             "fires is reported as baseline.stale so it gets removed. Do not hand-add entries."
         ),
         "note": note,
-        "accepted": sorted({f.key for f in findings}),
+        "accepted": sorted({f.key for f in findings if f.rule not in ENVIRONMENT_RULES}),
     }
     p.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return p

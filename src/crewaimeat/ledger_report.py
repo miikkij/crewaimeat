@@ -17,8 +17,6 @@ from __future__ import annotations
 import sys
 from typing import Any
 
-import requests
-
 
 def _resolve_agent(agent: str | None) -> str | None:
     """The explicit agent, else the AIMEAT agent whose crew kickoff is running on this context —
@@ -117,34 +115,8 @@ def report_llm_usage(
                 extra = f" cost=${data['cost_usd']}" if "cost_usd" in data else ""
                 print(f"[ledger] {who} metered {model} pt={pt} ct={ct}{extra} via {via}", file=sys.stderr)
 
-        from crewaimeat.aimeat_crew import _serve_api  # lazy: avoid an import cycle
+        from crewaimeat.aimeat_crew import _aimeat_request
 
-        api = _serve_api()
-        if api is not None:
-            base, session = api
-            _log(
-                session.post(
-                    f"{base}/v1/agents/{who}/telemetry",
-                    json=payload,
-                    headers={"X-Aimeat-Agent": who},
-                    timeout=15,
-                ),
-                "loopback serve",
-            )
-            return
-        # No loopback serve daemon — fall back to a direct call with the agent's own bearer token.
-        from crewaimeat.generator_tool import _discover_owner, _token
-
-        tok, url = _token(who, _discover_owner(who))
-        if tok and url:
-            _log(
-                requests.post(
-                    f"{url.rstrip('/')}/v1/agents/{who}/telemetry",
-                    json=payload,
-                    headers={"Authorization": f"Bearer {tok}"},
-                    timeout=15,
-                ),
-                "agent token",
-            )
+        _log(_aimeat_request(who, "POST", f"/v1/agents/{who}/telemetry", json=payload, timeout=15), "shared transport")
     except Exception as exc:  # noqa: BLE001 — metering must never break the calling tool
         print(f"[ledger] usage report failed ({model}): {exc!r}", file=sys.stderr)

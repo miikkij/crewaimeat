@@ -19,6 +19,7 @@ import sqlite3
 import time
 
 from crewaimeat._home import aimeat_home
+from crewaimeat._sqlite import database
 
 _COLUMNS = ("agent", "filename", "url", "variant", "visibility", "status", "verified", "built_ts")
 
@@ -29,15 +30,16 @@ def _db_path() -> str:
     return os.path.join(home, "agency_apps.db")
 
 
-def _conn() -> sqlite3.Connection:
-    c = sqlite3.connect(_db_path(), timeout=10)
-    c.execute("PRAGMA journal_mode=WAL")
+def _schema(c: sqlite3.Connection) -> None:
     c.execute(
         "CREATE TABLE IF NOT EXISTS apps ("
         "agent TEXT PRIMARY KEY, filename TEXT, url TEXT, variant TEXT, visibility TEXT, "
         "status TEXT, verified INTEGER, built_ts REAL)"
     )
-    return c
+
+
+def _conn():
+    return database(_db_path(), _schema)
 
 
 def _verified_to_db(v) -> int | None:

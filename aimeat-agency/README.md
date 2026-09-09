@@ -81,3 +81,10 @@ is smoothed: it opens aimeat.io for you, copies the code, and auto-detects appro
    if not).
 
 The cockpit is feature-complete for the v1 operator experience; this shell is the packaging.
+# Installer verification
+
+Relevant pull requests and manual workflow runs build unsigned Windows bundles and run
+`scripts/smoke_agency_installer.ps1`. It installs NSIS and verifies the packaged backend in a
+temporary home, including dependency setup, authentication and brain persistence. Tag releases run
+the same gate before publication. WebView interaction and updater UI still require manual checks.
+See [verification](../docs/testing.md).

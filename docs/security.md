@@ -9,17 +9,16 @@ signal shows up, not a wall that stops work.
 
 | Layer | Catches | Reports to | When |
 |---|---|---|---|
-| **CodeQL** (`.github/workflows/codeql.yml`) | bugs and injection in our Python and our workflows (`security-extended` suite) | Code scanning | every push/PR to main, weekly Mon 04:41 |
+| **CodeQL** (`.github/workflows/codeql.yml`) | bugs and injection in our Python and our workflows (default query suite) | Code scanning | every push/PR to main, weekly Mon 04:41 |
 | **Dependency review** (`dependency-review.yml`) | a new dependency with a high-severity CVE or a GPL/AGPL licence | fails the PR | every PR |
 | **OSSF Scorecard** (`scorecard.yml`) | supply-chain posture: unpinned actions, over-broad workflow scopes, missing branch protection | Code scanning + OSSF dashboard | weekly Mon 05:20, push to main |
 | **Dependabot alerts** | known CVEs in `uv.lock` (pip) and `Cargo.lock` (the Tauri app) | Dependabot | continuously |
 | **Secret scanning + push protection** | a committed credential — and it blocks the push that would add one | Secret scanning | on every push |
 | **Private vulnerability reporting** | an outside report, privately (see `SECURITY.md`) | Security advisories | on report |
-| **Dependabot updater** (`.github/dependabot.yml`) | action pins going stale | one grouped PR / week | weekly |
 
-Every action in the workflows is pinned to a commit SHA. The updater is what keeps those pins from
-silently rotting — it is the maintenance half of pinning, scoped to `github-actions` only so the pip
-tree stays on security alerts without routine-bump noise.
+Every action in the workflows is pinned to a commit SHA. This checkout has no Dependabot updater
+configuration; pin updates require maintenance PRs. Alert and push-protection availability depends
+on the repository's GitHub settings and should be checked there, not inferred from workflow files.
 
 ## Where to watch
 
@@ -83,7 +82,7 @@ accident. Either pick a different dependency, or make it a deliberate, recorded 
 
 - **Leave the settings on.** Dependabot alerts, secret scanning, push protection and private
   vulnerability reporting are the floor. Turning one off is a silent regression.
-- **Let the weekly updater PR through** after a glance — it keeps the SHA pins current.
+- **Review action pin updates** with the same CI checks as other dependency changes.
 - **Advisory is the default; make a rule blocking only once its false positives are understood.**
   A scanner that blocks on noise gets muted, and a muted scanner sees nothing.
 

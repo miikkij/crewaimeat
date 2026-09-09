@@ -21,6 +21,8 @@ from crew_fixtures import (
     make_ctx,
 )
 
+pytestmark = pytest.mark.usefixtures("no_pipeline_memory")
+
 
 def _build(module_name, prompt=None):
     mod = importlib.import_module(f"crews.{module_name}")

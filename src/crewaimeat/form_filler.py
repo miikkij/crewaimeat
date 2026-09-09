@@ -10,6 +10,7 @@ deterministic job is just the AcroForm case. Pure pypdf, no external services, n
 from __future__ import annotations
 
 import io
+import sys
 
 
 def extract_fields(pdf_bytes: bytes) -> list[dict]:
@@ -52,17 +53,14 @@ def fill_pdf(pdf_bytes: bytes, values: dict) -> bytes | None:
         writer.append(reader)
         str_values = {str(k): str(v) for k, v in values.items() if v is not None}
         for page in writer.pages:
-            try:
-                writer.update_page_form_field_values(page, str_values, auto_regenerate=False)
-            except Exception:  # noqa: BLE001 — a page without the field just skips
+            if not page.get("/Annots"):
                 continue
-        try:
-            writer.set_need_appearances_writer(True)  # make filled values visible in all viewers
-        except Exception:  # noqa: BLE001
-            pass
+            writer.update_page_form_field_values(page, str_values, auto_regenerate=False)
+        writer.set_need_appearances_writer(True)  # make filled values visible in all viewers
         buf = io.BytesIO()
         writer.write(buf)
         data = buf.getvalue()
         return data or None
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        print(f"[form-filler] PDF fill failed: {exc!r}", file=sys.stderr)
         return None

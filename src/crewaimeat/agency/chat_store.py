@@ -20,6 +20,7 @@ import sqlite3
 import time
 
 from crewaimeat._home import aimeat_home
+from crewaimeat._sqlite import database
 
 _KEEP_PER_SESSION = 400  # keep a deep tail; the LLM only ever sees `window(...)`
 
@@ -30,15 +31,16 @@ def _db_path() -> str:
     return os.path.join(home, "chat.db")
 
 
-def _conn() -> sqlite3.Connection:
-    c = sqlite3.connect(_db_path(), timeout=10)
-    c.execute("PRAGMA journal_mode=WAL")
+def _schema(c: sqlite3.Connection) -> None:
     c.execute(
         "CREATE TABLE IF NOT EXISTS messages ("
         "session_id TEXT NOT NULL, ts REAL NOT NULL, role TEXT NOT NULL, text TEXT, actions TEXT)"
     )
     c.execute("CREATE INDEX IF NOT EXISTS messages_session_ts ON messages(session_id, ts)")
-    return c
+
+
+def _conn():
+    return database(_db_path(), _schema)
 
 
 def append(session_id: str, role: str, text: str, actions: list | None = None) -> None:
@@ -60,17 +62,17 @@ def append(session_id: str, role: str, text: str, actions: list | None = None) -
 
 
 def history(session_id: str, limit: int = 200) -> list[dict]:
-    """The session's turns in chat order (oldest first): [{ts, role, text, actions}]."""
+    """The latest session turns in chat order (oldest first): [{ts, role, text, actions}]."""
     try:
         with _conn() as c:
             rows = c.execute(
-                "SELECT ts, role, text, actions FROM messages WHERE session_id=? ORDER BY ts, rowid LIMIT ?",
+                "SELECT ts, role, text, actions FROM messages WHERE session_id=? ORDER BY ts DESC, rowid DESC LIMIT ?",
                 (session_id, limit),
             ).fetchall()
     except Exception:  # noqa: BLE001
         return []
     out = []
-    for ts, role, text, actions in rows:
+    for ts, role, text, actions in reversed(rows):
         try:
             acts = json.loads(actions) if actions else []
         except (ValueError, TypeError):

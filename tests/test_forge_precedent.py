@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.local_process
+
 from crewaimeat import forge
 from crewaimeat.pipeline_memory import DedupResult, MemoryHit
 

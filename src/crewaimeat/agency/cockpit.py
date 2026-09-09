@@ -26,10 +26,54 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import HTMLResponse, StreamingResponse
-from pydantic import BaseModel
 
-from crewaimeat import brain_templates, brains, local_memory
+from crewaimeat import brain_templates, brains
 from crewaimeat.agency import account, apps, chat_store, events, journey
+from crewaimeat.agency.api_models import (
+    DEFAULT_OLLAMA_MODEL as DEFAULT_OLLAMA_MODEL,
+)
+from crewaimeat.agency.api_models import (
+    AppGenPromptIn as AppGenPromptIn,
+)
+from crewaimeat.agency.api_models import (
+    AppGenPublishIn as AppGenPublishIn,
+)
+from crewaimeat.agency.api_models import (
+    BrainEdit as BrainEdit,
+)
+from crewaimeat.agency.api_models import (
+    BrainGenCreateIn as BrainGenCreateIn,
+)
+from crewaimeat.agency.api_models import (
+    BrainGenIn as BrainGenIn,
+)
+from crewaimeat.agency.api_models import (
+    BrainIn as BrainIn,
+)
+from crewaimeat.agency.api_models import (
+    ChatIn as ChatIn,
+)
+from crewaimeat.agency.api_models import (
+    ConnectIn as ConnectIn,
+)
+from crewaimeat.agency.api_models import (
+    KeyIn as KeyIn,
+)
+from crewaimeat.agency.api_models import (
+    PublishIn as PublishIn,
+)
+from crewaimeat.agency.api_models import (
+    PullIn as PullIn,
+)
+from crewaimeat.agency.api_models import (
+    RollbackIn as RollbackIn,
+)
+from crewaimeat.agency.api_models import (
+    TestIn as TestIn,
+)
+from crewaimeat.agency.api_models import (
+    UrlIn as UrlIn,
+)
 
 COCKPIT_VERSION = "0.8.31"
 _TOKEN_ENV = "AIMEAT_AGENCY_TOKEN"
@@ -37,84 +81,9 @@ _STATIC = Path(__file__).parent / "static"
 # Default local model for the wizard. gemma4 is capable enough for the agentic onboarding + news task
 # (proven); small 3B models (llama3.2:3b) were too weak in practice. Small-GPU users can pick a lighter
 # model in the picker or use OpenRouter.
-DEFAULT_OLLAMA_MODEL = "gemma4"
 
 
 # ── request bodies ────────────────────────────────────────────────────────────
-class BrainIn(BaseModel):
-    agent_name: str
-    template_id: str
-    prose: str | None = None
-    policy: dict | None = None
-    title: str | None = None
-
-
-class BrainEdit(BaseModel):
-    prose: str | None = None
-    policy: dict | None = None
-    title: str | None = None
-
-
-class RollbackIn(BaseModel):
-    version: int
-
-
-class PublishIn(BaseModel):
-    id: str
-    key: str
-    visibility: str = "owner"
-
-
-class ConnectIn(BaseModel):
-    owner: str
-    node: str | None = None
-
-
-class TestIn(BaseModel):
-    prompt: str
-
-
-class KeyIn(BaseModel):
-    key: str
-
-
-class PullIn(BaseModel):
-    model: str = DEFAULT_OLLAMA_MODEL
-
-
-class UrlIn(BaseModel):
-    url: str
-
-
-class ChatIn(BaseModel):
-    message: str
-    session_id: str | None = None
-    lang: str = "en"
-
-
-class AppGenPromptIn(BaseModel):
-    idea: str = ""
-    template: str | None = None
-    lang: str = "en"
-
-
-class BrainGenIn(BaseModel):
-    description: str = ""
-    lang: str = "en"
-
-
-class BrainGenCreateIn(BaseModel):
-    template: dict  # the (edited) generated template JSON: {template: <header>, crew: <crew def>}
-    agent_name: str
-    prose: str | None = None
-    policy: dict | None = None
-    title: str | None = None
-
-
-class AppGenPublishIn(BaseModel):
-    html: str
-    name: str = ""
-    agent: str | None = None
 
 
 def _brain_diff(prev: dict | None, new: dict) -> list[str]:
@@ -579,6 +548,11 @@ def create_app(token: str | None = None) -> FastAPI:
             )
         return agent
 
+    from crewaimeat.agency import brain_routes, memory_routes
+
+    brain_routes.mount(app, require_token, _safe_agent, _brain_diff)
+    memory_routes.mount(app, require_token)
+
     @app.get("/healthz")
     def healthz() -> dict:  # open: liveness only, no secrets — the shell polls this for readiness
         return {"ok": True, "service": "aimeat-agency-cockpit", "version": COCKPIT_VERSION}
@@ -819,83 +793,12 @@ def create_app(token: str | None = None) -> FastAPI:
 
     @app.post("/api/reset", dependencies=[require_token])
     def reset() -> dict:
-        """Wipe ALL agency state (account, brains, agents, memory, tokens) for a true fresh start — what the
-        uninstaller's 'delete application data' doesn't reach. Stops the fleet first so nothing is locked."""
-        import shutil
-
-        from crewaimeat._home import aimeat_home
-        from crewaimeat.tui import actions
+        from crewaimeat.agency.reset import reset_agency
 
         try:
-            actions.stop_fleet()
-        except Exception:  # noqa: BLE001
-            pass
-        removed = []
-        # Brains live in a SQLite DB that may be LOCKED (so file-unlink can fail silently) — clear the rows
-        # through the data layer instead, plus its model overrides. This is the bit a plain file delete missed.
-        try:
-            from crewaimeat import llm
-
-            for b in brains.list_brains():
-                name = b["agent_name"]
-                if brains.delete_brain(name):
-                    removed.append("brain:" + name)
-                llm.clear_override(name)
-        except Exception:  # noqa: BLE001
-            pass
-        _stop_agency_ollama()  # if WE started ollama, stop it too — reset means a truly cold start
-        home = Path(aimeat_home())
-        for name in (
-            "brains.db",
-            "local_memory.db",
-            "events.db",
-            "agency_account.json",
-            "llm_overrides.json",
-            "serve.json",
-            "agency_ollama.pid",  # else a later shutdown could act on a stale (reused) pid
-        ):
-            for suffix in ("", "-wal", "-shm"):
-                p = home / (name + suffix)
-                try:
-                    if p.exists():
-                        p.unlink()
-                        removed.append(p.name)
-                except OSError:
-                    pass
-        tok = home / "tokens"
-        if tok.is_dir():
-            shutil.rmtree(tok, ignore_errors=True)
-            removed.append("tokens/")
-        for f in Path("crews").glob("*_crew.py"):  # generated brain stubs
-            try:
-                f.unlink()
-                removed.append(f.name)
-            except OSError:
-                pass
-        # The reset confirm promises ALL settings go — that includes the saved OpenRouter key (.env)
-        # and this process's copy of it, so the wizard's model step truly starts over.
-        try:
-            from crewaimeat.forge import _project_root
-
-            envf = _project_root() / ".env"
-            if envf.is_file():
-                lines = [
-                    ln
-                    for ln in envf.read_text(encoding="utf-8").splitlines()
-                    if not ln.startswith("OPENROUTER_API_KEY=")
-                ]
-                envf.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
-                removed.append(".env:OPENROUTER_API_KEY")
-        except OSError:
-            pass
-        os.environ.pop("OPENROUTER_API_KEY", None)
-        # Crew/register logs are agent data too (prompts, outputs, device codes) — a fresh start drops them.
-        logs = Path("logs")
-        if logs.is_dir():
-            shutil.rmtree(logs, ignore_errors=True)  # best-effort: a file held open just survives
-            removed.append("logs/")
-        os.environ.pop("AIMEAT_OWNER", None)  # so the wizard restarts at step 1
-        return {"ok": True, "removed": removed}
+            return reset_agency(_stop_agency_ollama)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.post("/api/agents/{agent}/register", dependencies=[require_token])
     def register_agent_route(agent: str) -> dict:
@@ -976,96 +879,6 @@ def create_app(token: str | None = None) -> FastAPI:
         return {"templates": [t.localized(lang) for t in brain_templates.all_templates()]}
 
     # ── brains (CRUD + versioning) ─────────────────────────────────────────────
-    @app.get("/api/brains", dependencies=[require_token])
-    def list_brains() -> dict:
-        return {"brains": brains.list_brains()}
-
-    @app.post("/api/brains", dependencies=[require_token])
-    def create_brain(body: BrainIn) -> dict:
-        # The agent name becomes the connector identity, which must be 3-64 lowercase alphanumeric + hyphens
-        # (the connector rejects e.g. 'Mapmaker' and device-auth then fails). Slug it at the boundary.
-        name = brains.slug_agent_name(body.agent_name)
-        if len(name) < 3:
-            raise HTTPException(
-                status_code=400, detail="agent name must be 3–64 lowercase letters, numbers, or hyphens"
-            )
-        try:
-            prev = brains.get_brain(name)
-            saved = brains.save_brain(name, body.template_id, prose=body.prose, policy=body.policy, title=body.title)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
-        events.record(
-            saved["agent_name"], "brain_saved", {"version": saved["version"], "changed": _brain_diff(prev, saved)}
-        )
-        return saved
-
-    @app.get("/api/brains/{agent}", dependencies=[require_token])
-    def get_brain(agent: str) -> dict:
-        b = brains.get_brain(agent)
-        if b is None:
-            raise HTTPException(status_code=404, detail=f"no brain '{agent}'")
-        return b
-
-    @app.patch("/api/brains/{agent}", dependencies=[require_token])
-    def edit_brain(agent: str, body: BrainEdit) -> dict:
-        b = brains.get_brain(agent)
-        if b is None:
-            raise HTTPException(status_code=404, detail=f"no brain '{agent}'")
-        # keep the same template; save_brain falls back to existing prose/policy when a field is omitted
-        saved = brains.save_brain(agent, b["template_id"], prose=body.prose, policy=body.policy, title=body.title)
-        events.record(agent, "brain_saved", {"version": saved["version"], "changed": _brain_diff(b, saved)})
-        return saved
-
-    @app.delete("/api/brains/{agent}", dependencies=[require_token])
-    def delete_brain(agent: str) -> dict:
-        agent = _safe_agent(agent)  # globs + os.remove()s token files below
-        # Stop the crew first so we don't orphan a running daemon, then drop the brain + its model override.
-        from crewaimeat import llm
-        from crewaimeat.tui import actions
-
-        try:
-            actions.stop_crew(agent)
-        except Exception:  # noqa: BLE001 — not running / already stopped is fine
-            pass
-        deleted = brains.delete_brain(agent)
-        try:
-            llm.clear_override(agent)
-        except Exception:  # noqa: BLE001
-            pass
-        # Remove the connector TOKEN(s) too — otherwise the serve daemon keeps loading a deleted agent from
-        # its leftover token file (the 'news-paska is still served though I deleted it' zombie).
-        try:
-            from crewaimeat._home import aimeat_home
-
-            # Same rule as the log tail: compare against the names the token store actually holds rather
-            # than globbing a pattern built from the URL. What we unlink comes from the listing.
-            for tokf in (aimeat_home() / "tokens").glob("*.token"):
-                if tokf.name.split("@", 1)[0] != agent:
-                    continue
-                try:
-                    tokf.unlink()
-                except OSError:
-                    pass
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            apps.clear_app(agent)  # forget any built data-app pointer for this agent
-        except Exception:  # noqa: BLE001
-            pass
-        return {"deleted": deleted}
-
-    @app.get("/api/brains/{agent}/history", dependencies=[require_token])
-    def brain_history(agent: str) -> dict:
-        return {"versions": brains.history(agent)}
-
-    @app.post("/api/brains/{agent}/rollback", dependencies=[require_token])
-    def rollback_brain(agent: str, body: RollbackIn) -> dict:
-        try:
-            restored = brains.rollback(agent, body.version)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
-        events.record(agent, "rolled_back", {"to_version": body.version, "version": restored["version"]})
-        return restored
 
     @app.get("/api/agents/{agent}/activity", dependencies=[require_token])
     def agent_activity(agent: str) -> dict:
@@ -1240,38 +1053,6 @@ def create_app(token: str | None = None) -> FastAPI:
         events.record(agent, "offer_published", {"offer_id": meta["id"]})
         return {"ok": True, "offer_id": meta["id"]}
 
-    @app.post("/api/brains/{agent}/instantiate", dependencies=[require_token])
-    def instantiate_brain(agent: str) -> dict:
-        if brains.get_brain(agent) is None:
-            raise HTTPException(status_code=404, detail=f"no brain '{agent}'")
-        return {"stub": brains.write_crew_stub(agent)}
-
-    @app.get("/api/brains/{agent}/dry-run", dependencies=[require_token])
-    def dry_run(agent: str) -> dict:
-        """A node-independent PLAN PREVIEW: build the crew from the brain and report what it WOULD run —
-        the roster (roles + tools) and each task's resolved description. (The full PROPOSE phase, with a
-        real spend estimate, runs against the node once the agent is live — that is a later step.)"""
-        from crewaimeat.aimeat_crew import BuildContext
-
-        b = brains.get_brain(agent)
-        if b is None:
-            raise HTTPException(status_code=404, detail=f"no brain '{agent}'")
-        from crewaimeat import llm
-
-        ov = llm.agent_override(agent) or {}
-        model = ov.get("model") or "(routed by llm_providers.json)"
-        spec = brains.build_crewspec(agent)
-        ctx = BuildContext(task={}, prompt="", llm=str(model), today="(current time injected at run)")
-        agents, tasks = spec.build_domain(ctx)
-        return {
-            "agent": agent,
-            "template_id": b["template_id"],
-            "model": model,
-            "agents": [{"role": a.role, "goal": a.goal, "tools": [t.name for t in a.tools]} for a in agents],
-            "tasks": [{"description": t.description, "expected_output": t.expected_output} for t in tasks],
-            "note": "plan preview (no LLM, no spend). Full PROPOSE runs live once the agent is started.",
-        }
-
     # ── fleet (read + controls) ────────────────────────────────────────────────
     @app.get("/api/fleet", dependencies=[require_token])
     def fleet(node: int = 0) -> dict:
@@ -1360,98 +1141,6 @@ def create_app(token: str | None = None) -> FastAPI:
         return {"agent": agent, "action": action, "result": result, "attach": attach}
 
     # ── local memory (browser + Sync view) ─────────────────────────────────────
-    @app.get("/api/memory/{agent}", dependencies=[require_token])
-    def memory(
-        agent: str,
-        topic: str | None = None,
-        event: str | None = None,
-        source: str | None = None,
-        status: str | None = None,
-        tag: str | None = None,
-        limit: int = 50,
-    ) -> dict:
-        return {
-            "records": local_memory.browse(
-                agent, topic=topic, event=event, source=source, status=status, tag=tag, limit=limit
-            )
-        }
-
-    @app.get("/api/memory/{agent}/facets", dependencies=[require_token])
-    def memory_facets(agent: str) -> dict:
-        return local_memory.facets(agent)
-
-    @app.get("/api/memory/{agent}/record/{rid}", dependencies=[require_token])
-    def memory_record(agent: str, rid: str) -> dict:
-        r = local_memory.recall(agent, rid)
-        if r is None:
-            raise HTTPException(status_code=404, detail=f"no record '{rid}'")
-        return r
-
-    @app.post("/api/memory/{agent}/publish", dependencies=[require_token])
-    def memory_publish(agent: str, body: PublishIn) -> dict:
-        res = local_memory.publish(agent, body.id, key=body.key, visibility=body.visibility)
-        if not res.get("ok"):
-            raise HTTPException(status_code=400, detail=res.get("error", "publish failed"))
-        return res
-
-    @app.get("/api/sync/{agent}", dependencies=[require_token])
-    def sync_view(agent: str) -> dict:
-        """The Sync view's data: local scratch vs what's ACTUALLY published on aimeat.io. Published is read
-        from the NODE's own memory keys (not just the local tier) — so it includes the deliverables the
-        scaffold publishes directly (crews.<agent>.…latest_output, watch.<agent>.…). Internal keys
-        (.live / config / readme / offers / statistics) are filtered out so only real outputs show."""
-        from crewaimeat.aimeat_crew import _aimeat_call
-
-        raw = local_memory.browse(agent, status="raw", limit=1000)
-        r = _aimeat_call(agent, "aimeat_memory_list", {})
-        items = (r.get("items") if isinstance(r, dict) else None) or []
-        node = []
-        for it in items:
-            k = it.get("key") or ""
-            if not k:
-                continue
-            internal = (
-                k.endswith(".live")
-                or ".statistics" in k
-                or k.startswith("agents.config")
-                or k.endswith(".readme")
-                or k.endswith(".offers")
-                or k.endswith(".runtime")
-            )
-            is_output = (".latest_output" in k) or k.startswith(f"watch.{agent}") or it.get("visibility") == "public"
-            if is_output and not internal:
-                node.append(
-                    {
-                        "key": k,
-                        "visibility": it.get("visibility"),
-                        "updated": it.get("updated_at"),
-                        "created": it.get("created_at"),
-                    }
-                )
-        node.sort(key=lambda x: x.get("updated") or "", reverse=True)
-        return {
-            "agent": agent,
-            "raw_count": len(raw),
-            "in_sync": len(raw) == 0,
-            "published_count": len(node),
-            "published": node,
-            "attached": r is not None,
-        }
-
-    @app.get("/api/agents/{agent}/key", dependencies=[require_token])
-    def read_node_key(agent: str, key: str = Query(...)) -> dict:
-        """Read one of the agent's published memory keys ON THE NODE — so the Sync view can show the actual
-        deliverable (a news summary, etc.) for any key."""
-        import json as _json
-
-        from crewaimeat.aimeat_crew import _aimeat_call
-
-        r = _aimeat_call(agent, "aimeat_memory_read", {"key": key})
-        val = (r.get("value") if isinstance(r, dict) else r) if r else None
-        text = (
-            val if isinstance(val, str) else (None if val is None else _json.dumps(val, ensure_ascii=False, indent=1))
-        )
-        return {"key": key, "value": text}
 
     # ── data app: build an AIMEAT app that SHOWS this agent's published data ──────
     @app.post("/api/agents/{agent}/app/build", dependencies=[require_token])

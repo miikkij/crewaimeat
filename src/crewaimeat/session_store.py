@@ -22,8 +22,10 @@ import sqlite3
 import time
 
 from crewaimeat._home import aimeat_home
+from crewaimeat._sqlite import database
 
 _TTL_SECONDS = 7 * 24 * 3600  # forget conversation state older than a week
+_LEGACY_CONFIG_CONVS = ("_briefing", "_sanomat_desk")
 
 
 def _db_path() -> str:
@@ -32,14 +34,19 @@ def _db_path() -> str:
     return os.path.join(home, "sessions.db")
 
 
-def _conn() -> sqlite3.Connection:
-    c = sqlite3.connect(_db_path(), timeout=10)
-    c.execute("PRAGMA journal_mode=WAL")
+def _schema(c: sqlite3.Connection) -> None:
     c.execute(
         "CREATE TABLE IF NOT EXISTS sessions "
         "(agent TEXT, conv TEXT, key TEXT, value TEXT, updated REAL, PRIMARY KEY(agent, conv, key))"
     )
-    return c
+    c.execute(
+        "CREATE TABLE IF NOT EXISTS preferences "
+        "(agent TEXT, namespace TEXT, key TEXT, value TEXT, PRIMARY KEY(agent, namespace, key))"
+    )
+
+
+def _conn():
+    return database(_db_path(), _schema)
 
 
 def session_set(agent: str, conv: str, key: str, value) -> None:
@@ -50,13 +57,20 @@ def session_set(agent: str, conv: str, key: str, value) -> None:
             "INSERT OR REPLACE INTO sessions(agent, conv, key, value, updated) VALUES(?,?,?,?,?)",
             (agent, conv, key, json.dumps(value), now),
         )
-        c.execute("DELETE FROM sessions WHERE updated < ?", (now - _TTL_SECONDS,))
+        # Preserve pre-migration preferences until their first durable read, even if they are old.
+        c.execute(
+            "DELETE FROM sessions WHERE updated <= ? AND NOT (conv IN (?, ?) AND key='config')",
+            (now - _TTL_SECONDS, *_LEGACY_CONFIG_CONVS),
+        )
 
 
 def session_get(agent: str, conv: str, key: str, default=None):
-    """Read the value for (agent, conversation, key), or `default` if absent/unparseable."""
+    """Read unexpired conversation state; expiry is independent of later writes."""
     with _conn() as c:
-        row = c.execute("SELECT value FROM sessions WHERE agent=? AND conv=? AND key=?", (agent, conv, key)).fetchone()
+        row = c.execute(
+            "SELECT value FROM sessions WHERE agent=? AND conv=? AND key=? AND updated > ?",
+            (agent, conv, key, time.time() - _TTL_SECONDS),
+        ).fetchone()
     if not row:
         return default
     try:
@@ -72,3 +86,44 @@ def session_clear(agent: str, conv: str, key: str | None = None) -> None:
             c.execute("DELETE FROM sessions WHERE agent=? AND conv=?", (agent, conv))
         else:
             c.execute("DELETE FROM sessions WHERE agent=? AND conv=? AND key=?", (agent, conv, key))
+
+
+def session_consume(agent: str, conv: str, key: str, expected) -> bool:
+    """Atomically consume exactly the unexpired value read by the caller, at most once.
+
+    Another worker may have consumed or replaced it since the read. The conditional DELETE makes
+    either race a miss, so an old approval cannot remove or authorize a newer pending action.
+    """
+    with _conn() as c:
+        result = c.execute(
+            "DELETE FROM sessions WHERE agent=? AND conv=? AND key=? AND value=? AND updated > ?",
+            (agent, conv, key, json.dumps(expected), time.time() - _TTL_SECONDS),
+        )
+        return result.rowcount == 1
+
+
+def preference_get(agent: str, namespace: str, key: str, default=None):
+    """Read durable preferences, migrating the two historical pseudo-conversations lazily."""
+    with _conn() as c:
+        if namespace in _LEGACY_CONFIG_CONVS and key == "config":
+            c.execute(
+                "INSERT OR IGNORE INTO preferences(agent, namespace, key, value) "
+                "SELECT agent, conv, key, value FROM sessions WHERE agent=? AND conv=? AND key=?",
+                (agent, namespace, key),
+            )
+            c.execute("DELETE FROM sessions WHERE agent=? AND conv=? AND key=?", (agent, namespace, key))
+        row = c.execute(
+            "SELECT value FROM preferences WHERE agent=? AND namespace=? AND key=?", (agent, namespace, key)
+        ).fetchone()
+    if row is None:
+        return default
+    return json.loads(row[0])
+
+
+def preference_set(agent: str, namespace: str, key: str, value) -> None:
+    """Save preferences until the owner changes or deletes them; conversation TTL does not apply."""
+    with _conn() as c:
+        c.execute(
+            "INSERT OR REPLACE INTO preferences(agent, namespace, key, value) VALUES(?,?,?,?)",
+            (agent, namespace, key, json.dumps(value)),
+        )

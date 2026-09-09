@@ -12,6 +12,14 @@ on:
     tags:
       - 'agency-v*.*.*'
   workflow_dispatch: {}
+  pull_request:
+    paths:
+      - 'aimeat-agency/**'
+      - 'src/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'scripts/smoke_agency_installer.ps1'
+      - '.github/workflows/release-agency.yml'
 
 permissions:
   contents: read
@@ -83,11 +91,28 @@ jobs:
         working-directory: aimeat-agency
 
       - name: Build installers (NSIS + MSI) — signed for the updater
+        if: startsWith(github.ref, 'refs/tags/')
         run: pnpm tauri build
         working-directory: aimeat-agency
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: Build unsigned installers for validation
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: pwsh
+        run: |
+          $config = Join-Path $env:RUNNER_TEMP 'agency-smoke-config.json'
+          '{"bundle":{"createUpdaterArtifacts":false}}' | Set-Content -Encoding utf8 $config
+          pnpm tauri build --config $config
+        working-directory: aimeat-agency
+
+      - name: Smoke installed runtime before publishing
+        shell: pwsh
+        run: |
+          $installer = @(Get-ChildItem aimeat-agency/src-tauri/target/release/bundle/nsis/*-setup.exe)
+          if ($installer.Count -ne 1) { throw 'Expected exactly one NSIS installer' }
+          ./scripts/smoke_agency_installer.ps1 -Installer $installer[0].FullName
 
       - name: List built bundles
         shell: bash
@@ -100,8 +125,8 @@ jobs:
         run: |
           mkdir -p dist
           NSIS=aimeat-agency/src-tauri/target/release/bundle/nsis
-          cp "$NSIS"/*-setup.exe dist/ 2>/dev/null || true
-          cp aimeat-agency/src-tauri/target/release/bundle/msi/*.msi dist/ 2>/dev/null || true
+          cp "$NSIS"/*-setup.exe dist/
+          cp aimeat-agency/src-tauri/target/release/bundle/msi/*.msi dist/
           # Build the updater manifest the app polls: version + the minisign signature + the download URL.
           if [ -n "$GITHUB_REF_NAME" ] && [[ "$GITHUB_REF_NAME" == agency-v* ]]; then
             VER="${GITHUB_REF_NAME#agency-v}"
@@ -113,7 +138,8 @@ jobs:
                 "$VER" "$VER" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SIG" "$URL" > dist/latest.json
               echo "wrote dist/latest.json"; cat dist/latest.json
             else
-              echo "WARNING: no .sig at $SIGFILE — updater latest.json NOT written (signing secret missing?)"
+              echo "::error::Missing updater signature at $SIGFILE"
+              exit 1
             fi
           fi
           ls -la dist

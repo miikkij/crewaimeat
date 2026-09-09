@@ -20,6 +20,13 @@ from crewaimeat.doctor import conformance, inventory
 from crewaimeat.doctor.cli import run
 from crewaimeat.doctor.model import ERROR, WARN, Finding, Report, apply_baseline, load_baseline, write_baseline
 
+
+@pytest.fixture(autouse=True)
+def fixture_routing_file(monkeypatch):
+    # These tests deliberately build the routing file inside their synthetic repo.
+    monkeypatch.delenv("LLM_PROVIDERS_FILE", raising=False)
+
+
 CREW = '''\
 """A crew."""
 

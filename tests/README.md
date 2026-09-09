@@ -2,8 +2,8 @@
 
 The deterministic, LLM-free, no-network test floor for the AIMEAT crews — the P0 layer from
 [../docs/aimeat-guides/nextgeneration/10-testing-and-evaluation-plan.md](../docs/aimeat-guides/nextgeneration/10-testing-and-evaluation-plan.md).
-It is the gate that catches the highest-blast-radius regressions in milliseconds, for free, on
-every PR.
+It checks shared runtime and crew behavior on every PR, on Ubuntu and Windows. See
+[the verification guide](../docs/testing.md) for enforced isolation and installer checks.
 
 ## Run it
 
@@ -18,8 +18,9 @@ reconciles what the repo DECLARES (six registries agreeing, every node/model cal
 route). Both run in CI and in the pre-commit hook. Its own floor is
 [test_doctor.py](test_doctor.py) — a quality gate without tests is an opinion.
 
-No API keys, no AIMEAT connection, no network. A dummy `OPENROUTER_API_KEY` is set in
-[conftest.py](conftest.py) only so `LLM(...)` objects construct (they are never called).
+No API keys or AIMEAT connection are needed. [conftest.py](conftest.py) isolates connector state,
+removes inherited credentials and rejects unexpected socket calls or subprocesses. A dummy
+`OPENROUTER_API_KEY` lets `LLM(...)` objects construct. Tests that execute a model use a fake.
 
 ## What it covers
 

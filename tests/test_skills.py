@@ -124,7 +124,7 @@ def test_crewspec_accepts_skills():
 
 
 # ── the live proof: joker's comedians carry the skill in their rendered prompt ─
-def test_joker_agents_carry_comedy_set_craft():
+def test_joker_agents_carry_comedy_set_craft(no_pipeline_memory):
     from crewai.utilities.prompts import Prompts
 
     from crews import joker_crew

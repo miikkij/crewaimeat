@@ -65,8 +65,8 @@ Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass',
 
 # Run the fleet HOST: every crew the node has NOT marked run_mode=spawn, as a thread in ONE Python
 # process (crewai imported once) instead of one OS process per crew. ~20x less RAM for I/O-bound
-# work; see scripts/start_host.ps1 / README "Fleet host". crew-forge is excluded (its job is
-# launching the per-process fleet, redundant here) and reconcile_fleet no-ops under
+# work; see scripts/start_host.ps1 / README "Fleet host". Resident crew-forge runs here too,
+# and reconcile_fleet no-ops under
 # AIMEAT_FLEET_HOST, so nothing spawns a shadow per-process fleet.
 #
 # THE HOST MAY HAVE NOTHING TO DO, AND THAT IS A CORRECT OUTCOME, NOT A FAILURE. The spawner above
@@ -77,7 +77,7 @@ Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass',
 # host stay in this window, and only then does Ctrl+C here stop anything.
 Write-Host "[start_fleet] starting the fleet HOST (crews the node has NOT marked run_mode=spawn) ..."
 Write-Host "[start_fleet] with an all-spawn fleet the host has no roster and exits at once - the fleet is still up."
-Write-Host "[start_fleet] while any agent is resident the host stays in THIS window; Ctrl+C then stops the whole fleet."
+Write-Host "[start_fleet] while any agent is resident the host stays in THIS window; Ctrl+C stops resident threads only."
 uv run python -m crewaimeat.fleet_host
 Write-Host "[start_fleet] host returned. Serve daemon, its supervisor and the spawner keep running (detached)."
 Write-Host "[start_fleet] stop everything with: .\scripts\terminate_fleet.ps1"

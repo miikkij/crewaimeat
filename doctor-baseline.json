@@ -1,28 +1,5 @@
 {
   "_comment": "Findings accepted as pre-existing by `crewaimeat doctor --accept-baseline`. This file may only SHRINK: a new violation of the same rule still fails, and an entry that no longer fires is reported as baseline.stale so it gets removed. Do not hand-add entries.",
   "note": "recorded by `crewaimeat doctor --accept-baseline`",
-  "accepted": [
-    "guard.silent_sink::src/crewaimeat/agency/cockpit.py::create_app.reset",
-    "guard.silent_sink::src/crewaimeat/aimeat_crew.py::_publish_readme",
-    "guard.silent_sink::src/crewaimeat/evolve.py::run_evolution",
-    "guard.silent_sink::src/crewaimeat/forge.py::reconcile_fleet",
-    "guard.silent_sink::src/crewaimeat/form_filler.py::fill_pdf",
-    "guard.silent_sink::src/crewaimeat/workflow.py::_write_explore_seq",
-    "route.node.direct_http::src/crewaimeat/activity_contract.py::_activity_events",
-    "route.node.direct_http::src/crewaimeat/app_verify_tools.py::make_verify_tools.verify_app",
-    "route.node.direct_http::src/crewaimeat/author_tool.py::_revert_app_rest",
-    "route.node.direct_http::src/crewaimeat/author_tool.py::make_author_tools._current_app_version",
-    "route.node.direct_http::src/crewaimeat/author_tool.py::make_author_tools.list_app_versions",
-    "route.node.direct_http::src/crewaimeat/author_tool.py::make_author_tools.publish_app",
-    "route.node.direct_http::src/crewaimeat/author_tool.py::make_author_tools.read_app_source",
-    "route.node.direct_http::src/crewaimeat/author_tool.py::make_author_tools.read_app_stack",
-    "route.node.direct_http::src/crewaimeat/author_tool.py::make_author_tools.revert_app",
-    "route.node.direct_http::src/crewaimeat/dm.py::dm_attach_bytes",
-    "route.node.direct_http::src/crewaimeat/image_contract.py::_upload_public",
-    "route.node.direct_http::src/crewaimeat/ledger_report.py::report_llm_usage",
-    "route.node.direct_http::src/crewaimeat/mail_contract.py::_storage_image",
-    "route.node.direct_http::src/crewaimeat/map_snapshot.py::upload_public",
-    "route.node.direct_http::src/crewaimeat/seedream_gen.py::_upload_public",
-    "route.node.direct_http::src/crewaimeat/storage.py::fetch_bytes"
-  ]
+  "accepted": []
 }

@@ -317,8 +317,8 @@ def _write_explore_seq(coordinator_name: str, n: int) -> None:
         p = _explore_seq_path(coordinator_name)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(str(n), encoding="utf-8")
-    except Exception:  # noqa: BLE001 — persistence is best-effort; the cadence still works in-memory
-        pass
+    except Exception as exc:  # noqa: BLE001
+        print(f"[{coordinator_name}] could not persist exploration sequence: {exc!r}", file=sys.stderr)
 
 
 def _reputation(coordinator_name: str, agent: str, gaii: str | None) -> tuple[str, dict | None, dict | None]:

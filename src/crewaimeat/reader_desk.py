@@ -42,13 +42,13 @@ _TZ = ZoneInfo("Europe/Helsinki")
 
 # ── config (durable, local) ──────────────────────────────────────────────────
 def get_config(agent: str = AGENT_NAME) -> dict:
-    return session_store.session_get(agent, _CONFIG_CONV, _CONFIG_KEY) or {}
+    return session_store.preference_get(agent, _CONFIG_CONV, _CONFIG_KEY) or {}
 
 
 def set_config(agent: str, **changes) -> dict:
     cfg = get_config(agent)
     cfg.update({k: v for k, v in changes.items() if v is not None})
-    session_store.session_set(agent, _CONFIG_CONV, _CONFIG_KEY, cfg)
+    session_store.preference_set(agent, _CONFIG_CONV, _CONFIG_KEY, cfg)
     return cfg
 
 

@@ -448,21 +448,27 @@ Run one crew at a time, or manage the whole fleet with the scripts in `scripts/`
 |---|---|---|
 | Run / develop a single crew | `uv run python crews/<x>_crew.py` | Runs one crew in the foreground (Ctrl+C stops it). |
 | Keep one crew alive (auto-restart) | `./scripts/watchdog.ps1 crews/<x>_crew.py` | Re-launches that crew if it ever exits. The building block the others use. |
-| Start the **whole fleet** now | `./scripts/start_fleet.ps1` | `uv sync`, ensures the serve daemon + supervisor, then runs the **fleet host** — every approved agent as a thread in ONE process (memory-light, ~20× less RAM; default since 0.5.0). Stays in that terminal; Ctrl+C stops the whole fleet. See [Fleet host](#fleet-host-one-process-memory-light). |
+| Start the **whole fleet** now | `./scripts/start_fleet.ps1` | Syncs dependencies and starts the shared daemon, supervisor and spawner. The host runs resident agents; the spawner handles agents whose node `run_mode` is `spawn`. With an all-spawn roster the host exits while detached services keep running. |
 | Run a **subset** in the host (or preview) | `./scripts/start_host.ps1 -Agents a,b` | The same host, but lets you pick a subset (`-Agents`) or preview (`-List`). |
 | Start the fleet **per-process** (legacy) | `./scripts/watchdog.ps1 crews/crew_forge_crew.py` | The old model: crew-forge reconciles and launches one watchdog+daemon per crew. Heavier; use only if you need per-crew process isolation. |
-| Start the fleet on **every boot** | `./scripts/install-autostart.ps1` | One-time: registers crew-forge to start at logon, so the fleet returns by itself after a reboot. |
+| Start the legacy fleet at **logon** | `./scripts/install-autostart.ps1` | Registers crew-forge under its watchdog. This is the legacy per-process topology, not an autostart wrapper for `start_fleet.ps1`. |
 | See **what's running** | `./scripts/view_fleet.ps1` | Read-only: each crew's state (running / down) and the live-daemon count. Kills nothing. |
 | **Stop everything** | `./scripts/terminate_fleet.ps1` | Kills all watchdogs, crew daemons, and connectors (in that order). `-DryRun` lists first. |
 | Re-reconcile while crew-forge is up | crew-forge `/startall` (send as a task) | Brings stopped crews back without restarting crew-forge. |
 
-**Which and when, in short:** for day-to-day dev, run one crew with `uv run python crews/<x>_crew.py`. To bring everything up in one go (or after `terminate_fleet`), use `start_fleet`. To have the fleet survive reboots unattended, run `install-autostart` once. Use `view_fleet` to check state, `terminate_fleet` to stop, and crew-forge's `/startall` to re-reconcile while it's running.
+For day-to-day development, run one crew with `uv run python crews/<x>_crew.py`. Use `start_fleet`
+for the host and spawner topology, `view_fleet` to inspect it, and `terminate_fleet` to stop it.
+`install-autostart` applies only to the legacy crew-forge topology.
 
-**Why there's no "launch every crew" loop:** starting the fleet is crew-forge's *idempotent reconcile* (in code) — it skips crews already running and never double-launches. `start_fleet` and `install-autostart` only bootstrap crew-forge; it brings up the rest (see [Surviving a reboot](#surviving-a-reboot-the-fleet-supervisor)). `terminate_fleet` is the blunt inverse (kill all).
+The host and spawner own their respective rosters and use per-agent locks. Legacy crew-forge uses
+idempotent reconciliation to launch missing per-process crews. These are separate launch paths.
 
 ### Fleet host (one process, memory-light)
 
-The **legacy** model runs **one OS process per crew**. Each imports `crewai` + `litellm` independently (~150–250 MB resident), so a large fleet costs several GB of pure import bloat — wasteful for I/O-bound work (poll, shuffle text, call an LLM API). Since 0.5.0 **`start_fleet` runs the host by default**; **`./scripts/start_host.ps1`** (or `uv run python -m crewaimeat.fleet_host`) is the same thing with `-Agents`/`-List`. It runs every agent as a **thread in ONE process**: `crewai` is imported once, and because the work is network-bound the GIL is released on every poll/LLM call so the agents run concurrently. Measured: **~800 MB for ~38 agents** (≈20× less RAM), and two full fleets (prod + a dev clone) fit in ~2 GB together.
+The host shares one CrewAI import across resident agent threads, reducing the repeated memory cost
+of the legacy per-process fleet. `start_host.ps1` (or `uv run python -m crewaimeat.fleet_host`) runs
+just that host, with subset and preview options. It does not launch spawn-mode workers; use
+`start_fleet.ps1` for those too. Memory use depends on the active agents and their workloads.
 
 ```powershell
 ./scripts/start_host.ps1                       # every approved crew, one process
@@ -470,7 +476,12 @@ The **legacy** model runs **one OS process per crew**. Each imports `crewai` + `
 ./scripts/start_host.ps1 -List                 # show what would run, then exit
 ```
 
-The host is the **default** (`start_fleet` runs it since 0.5.0); the per-process model remains available for per-crew process isolation. Pick **one** model per checkout (host *or* per-process): the per-agent single-instance lock makes whichever starts second exit. A crashed agent is restarted (bounded) without touching the others; `crew-forge` is excluded (its job is launching the per-process fleet, redundant here). Ctrl+C stops the whole host. The TUI shows host-threaded agents as `running` with `host` in the wd/dae column.
+`start_fleet` starts the host alongside the spawner. The node's `run_mode=spawn` agents are excluded
+from the host so one runtime owns each agent. Resident `crew-forge` runs in the host too; its fleet
+reconciliation becomes a no-op there to prevent duplicate processes. Ctrl+C stops resident host
+threads, while detached services and spawn workers can remain. Use `terminate_fleet.ps1` to stop
+the whole checkout's fleet. Avoid combining the legacy per-process launcher with this topology.
+The TUI identifies host threads with `host` in the wd/dae column.
 
 **Two fleets at once (e.g. dev + prod).** Run a second checkout (a `git clone`) against a different node: each clone has its own `AIMEAT_HOME`, serve daemon, logs and locks, so process detection (reconcile, the TUI, `terminate_fleet`) is scoped per-checkout and the two never collide. Mass-register the second node's agents with `uv run python scripts/register_fleet.py --owner <owner> --url http://localhost:40050`, then `start_host` there.
 

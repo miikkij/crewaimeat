@@ -11,8 +11,8 @@ from crewaimeat import social_briefing as sb
 def _isolate_store(monkeypatch):
     """In-memory session store so config tests don't touch the real WAL file."""
     store: dict = {}
-    monkeypatch.setattr(sb.session_store, "session_get", lambda a, c, k: store.get((a, c, k)))
-    monkeypatch.setattr(sb.session_store, "session_set", lambda a, c, k, v: store.__setitem__((a, c, k), v))
+    monkeypatch.setattr(sb.session_store, "preference_get", lambda a, c, k: store.get((a, c, k)))
+    monkeypatch.setattr(sb.session_store, "preference_set", lambda a, c, k, v: store.__setitem__((a, c, k), v))
     return store
 
 
@@ -73,7 +73,7 @@ def test_send_kickoff_replies_in_existing_thread(monkeypatch):
     assert used["conv"] == "cv-existing"
 
 
-def test_write_digest_writes_dated_and_latest(monkeypatch):
+def test_write_digest_writes_dated_and_latest(monkeypatch, no_pipeline_memory):
     writes: list = []
     monkeypatch.setattr(sb, "_aimeat_call", lambda agent, tool, payload: writes.append(payload["key"]) or {"ok": True})
     assert sb.write_digest("social-briefing", "2026-06-23", "digest body", ["AI agents"])

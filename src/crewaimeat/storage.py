@@ -12,10 +12,6 @@ from __future__ import annotations
 import sys
 import urllib.parse
 
-import requests
-
-from crewaimeat.generator_tool import _discover_owner, _token
-
 _MAX_BYTES = 25 * 1024 * 1024  # 25 MB cap — matches the concierge fetch guard
 
 
@@ -26,20 +22,10 @@ def fetch_bytes(agent: str, key: str, *, max_bytes: int = _MAX_BYTES) -> tuple[b
     (it text-corrupts binary)."""
     if not key:
         return None
-    owner = _discover_owner(agent)
-    tok, url = _token(agent, owner)
-    if not tok or not url:
-        print(f"[{agent}] storage fetch: no token/url", file=sys.stderr)
-        return None
     # Encode the key for the path but keep '/' separators; the stored key is raw (spaces become %20).
     safe_key = urllib.parse.quote(key, safe="/")
     try:
-        with requests.get(
-            f"{url.rstrip('/')}/v1/storage/{safe_key}",
-            headers={"Authorization": f"Bearer {tok}"},
-            stream=True,
-            timeout=120,
-        ) as r:
+        with _aimeat_request(agent, "GET", f"/v1/storage/{safe_key}", direct=True, stream=True, timeout=120) as r:
             if r.status_code != 200:
                 print(f"[{agent}] storage fetch {key}: HTTP {r.status_code}", file=sys.stderr)
                 return None
@@ -54,3 +40,9 @@ def fetch_bytes(agent: str, key: str, *, max_bytes: int = _MAX_BYTES) -> tuple[b
     except Exception as exc:  # noqa: BLE001
         print(f"[{agent}] storage fetch {key} failed: {exc!r}", file=sys.stderr)
         return None
+
+
+def _aimeat_request(*args, **kwargs):
+    from crewaimeat.aimeat_crew import _aimeat_request as request
+
+    return request(*args, **kwargs)

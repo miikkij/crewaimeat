@@ -24,11 +24,9 @@ from __future__ import annotations
 import datetime
 import sys
 
-import requests
 from crewai.tools import tool
 
 from crewaimeat.aimeat_crew import _aimeat_call, member_workspaces
-from crewaimeat.generator_tool import _discover_owner, _token
 from crewaimeat.llm import get_llm
 
 AGENT = "activity-reporter"
@@ -86,33 +84,16 @@ def _activity_events(org_id: str, ws: str) -> list[dict]:
     holds the token and rides its persistent WS tunnel). Fallback: direct REST with the agent's
     own token, for environments without the daemon."""
     try:
-        from crewaimeat.aimeat_crew import _serve_api
+        from crewaimeat.aimeat_crew import _aimeat_request
 
-        api = _serve_api()
-        if api is not None:
-            base, session = api
-            r = session.get(
-                f"{base}/v1/organisms/{org_id}/workspace/activity",
-                params={"ws": ws},
-                headers={"X-Aimeat-Agent": AGENT},
-                timeout=30,
-            )
-        else:
-            owner = _discover_owner(AGENT)
-            tok, url = _token(AGENT, owner)
-            if not tok or not url:
-                return []
-            r = requests.get(
-                f"{url.rstrip('/')}/v1/organisms/{org_id}/workspace/activity",
-                params={"ws": ws},
-                headers={"Authorization": f"Bearer {tok}"},
-                timeout=30,
-            )
+        r = _aimeat_request(AGENT, "GET", f"/v1/organisms/{org_id}/workspace/activity", params={"ws": ws}, timeout=30)
+        r.raise_for_status()
         evs = ((r.json() or {}).get("data") or {}).get("events") or []
         for e in evs:
             e["ws"] = ws
         return evs
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        print(f"[{AGENT}] activity feed failed: {exc!r}", file=sys.stderr)
         return []
 
 
