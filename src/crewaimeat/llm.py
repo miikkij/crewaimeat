@@ -15,6 +15,11 @@ Two ways to choose models:
    1M). See `llm_providers.example.json`.
 
 Both go through CrewAI's LLM. The provider config takes precedence when present.
+
+Whichever way the model is chosen, `get_llm(agent_name=...)` installs the owner's directives on the
+returned instance (crewaimeat.directives): every `call` for that agent carries them as a system
+message. Before 2026-09-09 only a build_domain crew's task text did, and the 27 direct `llm.call`
+sites (the julkaisupöytä writers among them) sent their prompts bare.
 """
 
 from __future__ import annotations
@@ -27,6 +32,8 @@ from contextvars import ContextVar
 from crewai import LLM
 from crewai.llms.base_llm import BaseLLM
 from pydantic import PrivateAttr
+
+from crewaimeat.directives import install_directives
 
 # The model the PROVIDER SAYS it actually used, from the completion response body. A ContextVar, not
 # a plain global, because the fleet runs every agent as a thread in ONE process — a global would let
@@ -596,8 +603,13 @@ class MultiProviderLLM(BaseLLM):
             return True
 
 
-def get_llm(for_tool_use: bool = True, temperature: float | None = None, agent_name: str | None = None) -> BaseLLM:
-    """Build an LLM instance.
+def get_llm(
+    for_tool_use: bool = True,
+    temperature: float | None = None,
+    agent_name: str | None = None,
+    owner: str | None = None,
+) -> BaseLLM:
+    """Build an LLM instance, with the owner's directives installed on it.
 
     for_tool_use=True (default) adds parallel_tool_calls=False for the tool-calling crews. Pass False for a
     plain completion (e.g. README expansion): OpenAI-compatible endpoints reject parallel_tool_calls when no
@@ -609,7 +621,17 @@ def get_llm(for_tool_use: bool = True, temperature: float | None = None, agent_n
     `agent_name` selects the per-crew provider profile from llm_providers.json (e.g. content crews -> grok,
     code crews -> a real coder). When omitted (the deterministic content pipelines call get_llm() directly),
     the `default` profile is used.
+
+    `agent_name` ALSO names whose directives ride on every call: the returned instance's `call` prepends
+    the owner's merged directives as a system message (crewaimeat.directives). `owner` disambiguates the
+    credential on a daemon that serves more than one owner; the scaffold passes it, a pipeline may omit it.
+    With no agent_name there is nobody to fetch for, and the instance is returned bare.
     """
+    return install_directives(_build_llm(for_tool_use, temperature, agent_name), agent_name, owner)
+
+
+def _build_llm(for_tool_use: bool, temperature: float | None, agent_name: str | None) -> BaseLLM:
+    """The model choice alone: get_llm() as it was before directives rode on the instance."""
     temperature = temperature if temperature is not None else float(os.getenv("LLM_TEMPERATURE", "0.5"))
 
     # --- Per-agent MODEL override (e.g. the agency's local-Ollama pick) — wins over everything, needs NO

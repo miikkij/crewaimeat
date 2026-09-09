@@ -75,6 +75,7 @@ try:  # private helper; degrade gracefully if a future version moves it
 except Exception:  # pragma: no cover
     _aimeat_read_token = None
 
+from crewaimeat.directives import fetch_directives, format_directives  # noqa: E402
 from crewaimeat.llm import get_llm  # noqa: E402
 from crewaimeat.progress import install_progress  # noqa: E402
 
@@ -501,53 +502,11 @@ def _auth_alive(agent_name: str, owner: str | None) -> bool | None:
         return None
 
 
-def _fetch_directives(agent_name: str, owner: str | None) -> dict | None:
-    """Read the agent's owner-set directives via GET /v1/agents/me/directives (its own token).
-
-    `me` resolves to the calling agent from its JWT. Returns the inner data payload
-    {purpose, rules[], memory_areas, shared_tags, shared_memory_prefixes, resources} or None.
-    rules are merged system -> owner -> agent, each tagged with its source. This is the canonical
-    directives contract (also onboarding STEP 1). Best-effort: any failure returns None so a crew
-    still runs without directives."""
-    if _aimeat_read_token is None:
-        return None
-    try:
-        token, node_url = _aimeat_read_token(agent_name, owner=owner)
-        r = requests.get(
-            f"{node_url.rstrip('/')}/v1/agents/me/directives",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=15,
-        )
-        if r.status_code != 200:
-            return None
-        body = r.json()
-        return body.get("data") if isinstance(body, dict) else None
-    except Exception:  # noqa: BLE001 — transient / offline; run without directives
-        return None
-
-
-def _format_directives(data: dict | None) -> str:
-    """Render purpose + rules into a behavioral-constraints block for the crew's prompt.
-
-    system/owner rules are binding policy; agent rules are the agent's own standing notes. All are
-    framed as directives to follow. Returns "" when there is nothing to apply."""
-    if not isinstance(data, dict):
-        return ""
-    purpose = (data.get("purpose") or "").strip()
-    rules = [r for r in (data.get("rules") or []) if isinstance(r, dict) and (r.get("description") or "").strip()]
-    if not purpose and not rules:
-        return ""
-    lines = [
-        "STANDING DIRECTIVES (owner-set policy — follow these in everything you produce. They apply "
-        "to YOU; if you delegate work to other crews, do NOT copy these into their instructions — "
-        "each crew already applies its own directives):"
-    ]
-    if purpose:
-        lines.append(f"- Purpose: {purpose}")
-    label = {"system": "policy", "owner": "policy", "agent": "standing"}
-    for r in rules:
-        lines.append(f"- [{label.get(r.get('source'), 'rule')}] {r.get('description', '').strip()}")
-    return "\n".join(lines)
+# The directive fetch and its formatting moved to crewaimeat.directives on 2026-09-09, so that
+# get_llm() can put the same block on EVERY model call, not only on a build_domain crew's task text.
+# The names stay for the callers below and for the tests that patch them.
+_fetch_directives = fetch_directives
+_format_directives = format_directives
 
 
 def _rate_task(
@@ -2741,9 +2700,9 @@ def run_crew(spec: CrewSpec) -> None:
         # Per-crew provider routing: the domain agents (ctx.llm) use this crew's profile in llm_providers.json
         # (e.g. content crews -> grok, code crews -> a real coder).
         llm = (
-            get_llm(temperature=_temp, agent_name=spec.agent_name)
+            get_llm(temperature=_temp, agent_name=spec.agent_name, owner=spec.owner)
             if _temp is not None
-            else get_llm(agent_name=spec.agent_name)
+            else get_llm(agent_name=spec.agent_name, owner=spec.owner)
         )
         verify_mode = verify_override or (gate["verify"] if gate else None) or spec.verify
         mem_key = _memory_key(spec.agent_name, spec.memory_key_prefix, {"id": tid, "description": prompt})
