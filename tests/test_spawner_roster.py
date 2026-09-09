@@ -14,6 +14,23 @@ from pathlib import Path
 
 import pytest
 
+_SPAWNERS = []
+
+
+@pytest.fixture(autouse=True)
+def stop_test_spawners():
+    """Roster refresh starts real threads; every test must stop them before its mocks disappear."""
+    _SPAWNERS.clear()
+    yield
+    for sp in _SPAWNERS:
+        sp._stop.set()
+    for sp in _SPAWNERS:
+        for threads in sp._threads.values():
+            for thread in threads:
+                thread.join(timeout=2)
+                assert not thread.is_alive(), f"leaked spawner thread: {thread.name}"
+    _SPAWNERS.clear()
+
 
 class _Ok:
     """A requests-shaped response for the loopback POST the spawner makes."""
@@ -55,8 +72,16 @@ def _spawner(**kw):
     kw.setdefault("agents", [])
     kw.setdefault("root", Path.cwd())
     kw.setdefault("spawn_fn", lambda *_: None)
-    kw.setdefault("wake_fn", lambda *_: False)
-    return Spawner(**kw)
+    sp = Spawner(**kw)
+    if sp.wake_fn is None:
+
+        def park(*_):
+            sp._stop.wait(0.01)
+            return False
+
+        sp.wake_fn = park
+    _SPAWNERS.append(sp)
+    return sp
 
 
 # --------------------------------------------------------------------------- #
