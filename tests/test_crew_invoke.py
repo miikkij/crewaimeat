@@ -144,3 +144,41 @@ def test_the_agent_name_comes_from_the_frame():
     finally:
         mod.handle = original
     assert seen["who"] == "lender"
+
+
+def test_the_menu_file_carries_the_key_names_never_a_key(tmp_path, monkeypatch):
+    """CodeQL #32 reads `api_key_env` as a password flowing into the answer file. It is the NAME of an
+    environment variable, and the node's picker needs it: the model override it stores routes by that
+    name. This runs the real sink — `answer_invoke` writing `<job>.out.json` — with the variable set to
+    a recognisable value, so a change that ever copies the key itself into the menu fails here."""
+    import json
+
+    from crewaimeat import run_once
+
+    secret = "sk-or-v1-THIS-VALUE-MUST-NEVER-LEAVE-THE-PROCESS"
+    monkeypatch.setenv("CODEQL_PROBE_KEY", secret)
+    providers = tmp_path / "llm_providers.json"
+    providers.write_text(
+        json.dumps(
+            {
+                "profiles": {
+                    "default": {
+                        "providers": [
+                            {"type": "openrouter", "api_key_env": "CODEQL_PROBE_KEY", "models": ["openai/gpt-oss-120b"]}
+                        ]
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LLM_PROVIDERS_FILE", str(providers))
+    job = tmp_path / "invoke.json"
+    job.write_text(json.dumps({"agent": "node-agent", "capability": "crew.menu", "input": {}}), encoding="utf-8")
+
+    assert run_once.answer_invoke(job) == 0
+
+    written = job.with_suffix(".out.json").read_text(encoding="utf-8")
+    assert secret not in written, "the key's VALUE reached the file the spawner posts to the node"
+    models = json.loads(written)["result"]["llm"]["models"]
+    assert models and models[0]["api_key_env"] == "CODEQL_PROBE_KEY", "the override still needs the NAME"
