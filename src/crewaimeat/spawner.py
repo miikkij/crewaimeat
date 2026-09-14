@@ -721,12 +721,27 @@ class Spawner:
         running daemon without a restart, so a roster read once at startup would never serve them.
         Adding one starts its two parks; the others are not touched.
         """
+        current = {a for a, st in self.state.items() if not st.retired}
         try:
             wanted = list(self.roster_fn()) if self.roster_fn else discover_agents(self.root)
+        except RosterUnreadable as exc:
+            # A roster we could not READ is not a roster that is EMPTY. Treating the two alike retired
+            # every agent on every blip -- measured 2026-09-14: nine times in thirty hours, once while
+            # julkaisu-toimittaja was mid-run, and because a re-join replaces the AgentState the
+            # supervisor loop never saw that worker end: its audit kept `ended: None` and the wake
+            # queued behind it was lost. So an owner we could not ask keeps exactly what it had, and an
+            # owner that DID answer is still followed, additions and removals both.
+            kept = {a for a in current if "*" in exc.owners or _gaii_owner(a) in exc.owners or _gaii_owner(a) is None}
+            wanted = sorted(set(exc.agents) | kept)
+            _note_once(
+                f"keeping {len(kept)} agent(s) of {', '.join(sorted(exc.owners))} until the node answers",
+                key="roster-kept",
+            )
         except Exception as exc:  # noqa: BLE001 — a bad roster read must not stop the ones we serve
             _say(f"[spawner] roster refresh failed ({exc!r}); keeping the current set")
             return
-        current = {a for a, st in self.state.items() if not st.retired}
+        else:
+            _LAST_NOTE.pop("roster-kept", None)
         for agent in sorted(set(wanted) - current):
             if self._ensure_agent(agent):
                 _say(f"[spawner] {agent}: joined the roster — parking for it now")
@@ -811,8 +826,73 @@ def local_spawn_agents(root: Path) -> list[str]:
     )
 
 
+class RosterUnreadable(RuntimeError):
+    """The node's roster could not be read for some owner — which is NOT the same as an empty roster.
+
+    `agents` is what the owners that DID answer listed; `owners` is who could not be asked ("*" when
+    no owner could even be named, e.g. serve.json has no port). The caller keeps what those owners had.
+    """
+
+    def __init__(self, note: str, agents: list[str], owners: set[str]):
+        super().__init__(note)
+        self.note, self.agents, self.owners = note, agents, owners
+
+
+def _gaii_owner(identity: str) -> str | None:
+    """`owner` out of `<agent>#<owner>@<node>`; None for a bare name, which names no owner at all."""
+    if "#" not in identity:
+        return None
+    return identity.split("#", 1)[1].split("@", 1)[0] or None
+
+
+def _roster_rows(resp) -> tuple[list | None, str | None]:
+    """`(rows, None)` for a well-formed answer, `(None, why)` for anything else — said by SHAPE.
+
+    The old one-liner `((resp.json() or {}).get("data") or {}).get("agents")` turned different faults
+    into one empty list or a bare `AttributeError`: a refusal (403 with an error body and no `data`)
+    read as "this owner has no spawn agents", and a body of the wrong shape surfaced as
+    `unreadable (AttributeError)` twice on 2026-09-14 with nothing to say what had come back.
+    """
+    status = getattr(resp, "status_code", None)
+    try:
+        body = resp.json()
+    except Exception:  # noqa: BLE001 — not JSON is a finding, reported with the text itself
+        text = str(getattr(resp, "text", ""))[:80].replace("\n", " ")
+        return None, f"HTTP {status}, body is not JSON: {text!r}"
+    if status != 200:
+        err = body.get("error") if isinstance(body, dict) else None
+        code = (err.get("code") if isinstance(err, dict) else err) or ""
+        return None, f"HTTP {status} {code}".strip()
+    if not isinstance(body, dict):
+        return None, f"body is a {type(body).__name__}, not an object"
+    data = body.get("data")
+    if not isinstance(data, dict):
+        return None, f"`data` is a {type(data).__name__}, not an object"
+    rows = data.get("agents")
+    if rows is None:
+        return [], None
+    if not isinstance(rows, list):
+        return None, f"`data.agents` is a {type(rows).__name__}, not a list"
+    return rows, None
+
+
+def _join_notes(notes: list[str], agents: list[str]) -> str | None:
+    return "; ".join(notes) + " — local crews only" if notes and not agents else ("; ".join(notes) or None)
+
+
 def node_spawn_agents() -> tuple[list[str], str | None]:
     """Agents the NODE says are spawn-mode, as GAIIs. Returns (agents, note) — a reason, not a crash.
+
+    The fleet host reads this shape: an unreadable node is an empty list plus a note, so every crew
+    stays a thread. The spawner must NOT read it that way — it uses `read_node_roster`, which also
+    says whose read failed.
+    """
+    agents, notes, _unreadable = read_node_roster()
+    return agents, _join_notes(notes, agents)
+
+
+def read_node_roster() -> tuple[list[str], list[str], set[str]]:
+    """`(agents, notes, unreadable_owners)` — the roster, and WHO could not be asked.
 
     ONE CALL PER OWNER, and the identity is the GAII, not the name. Both follow from one connector
     home now serving more than one owner:
@@ -828,7 +908,7 @@ def node_spawn_agents() -> tuple[list[str], str | None]:
     doc = _serve_doc()
     port = doc.get("port")
     if not isinstance(port, int):
-        return [], "no serve daemon in serve.json — node roster skipped"
+        return [], ["no serve daemon in serve.json — node roster skipped"], {"*"}
     # One caller per owner: whichever of that owner's agents the daemon carries.
     callers: dict[str, str] = {}
     for a in doc.get("agents") or []:
@@ -836,11 +916,12 @@ def node_spawn_agents() -> tuple[list[str], str | None]:
         if owner and ident and owner not in callers:
             callers[owner] = ident
     if not callers:
-        return [], "serve.json names no agents — node roster skipped"
+        return [], ["serve.json names no agents — node roster skipped"], {"*"}
     import requests
 
     out: list[str] = []
     notes: list[str] = []
+    unreadable: set[str] = set()
     for owner, caller in sorted(callers.items()):
         try:
             resp = requests.get(
@@ -849,9 +930,14 @@ def node_spawn_agents() -> tuple[list[str], str | None]:
                 headers={"X-Aimeat-Agent": caller},
                 timeout=30,
             )
-            rows = ((resp.json() or {}).get("data") or {}).get("agents") or []
         except Exception as exc:  # noqa: BLE001 — an unreachable node must not empty the roster
             notes.append(f"{owner}: unreadable ({type(exc).__name__})")
+            unreadable.add(owner)
+            continue
+        rows, problem = _roster_rows(resp)
+        if rows is None:
+            notes.append(f"{owner}: unreadable ({problem})")
+            unreadable.add(owner)
             continue
         picked = [
             str(r.get("gaii") or r.get("name"))
@@ -867,8 +953,7 @@ def node_spawn_agents() -> tuple[list[str], str | None]:
             notes.append(f"{owner}: {len(rows)} agent(s), none marked run_mode=spawn")
             continue
         out.extend(picked)
-    note = "; ".join(notes) + " — local crews only" if notes and not out else ("; ".join(notes) or None)
-    return sorted(set(out)), note
+    return sorted(set(out)), notes, unreadable
 
 
 def _daemon_carries() -> set[str]:
@@ -894,9 +979,14 @@ def discover_agents(root: Path) -> list[str]:
     cannot both claim an agent. When the node cannot be asked, this is empty and every crew stays a
     fleet thread: work still happens, in the other half, which is the safe direction to fail.
     """
-    node, note = node_spawn_agents()
+    node, notes, unreadable = read_node_roster()
+    note = _join_notes(notes, node)
     if note:
         _note_once(note)
+    if unreadable:
+        # Raised before the unmet-request note below: with an owner unread, "the node does not list
+        # it" is not something this call can know.
+        raise RosterUnreadable(note or "node roster unreadable", sorted(set(node)), unreadable)
     # Said out loud, because a crew declaring spawn and NOT getting it is otherwise invisible: it
     # simply runs as a thread, which looks like nothing happened.
     asked = set(local_spawn_agents(root))
@@ -912,16 +1002,19 @@ def discover_agents(root: Path) -> list[str]:
 _LAST_NOTE: dict[str, str] = {}
 
 
-def _note_once(note: str) -> None:
+def _note_once(note: str, key: str = "roster") -> None:
     """Say a roster limitation once per change, not every 30 s."""
-    if _LAST_NOTE.get("roster") != note:
-        _LAST_NOTE["roster"] = note
+    if _LAST_NOTE.get(key) != note:
+        _LAST_NOTE[key] = note
         _say(f"[spawner] roster: {note}")
 
 
 def select_agents(root: Path, wanted: list[str] | None = None) -> list[str]:
     """Live crews declaring RUN_MODE = "spawn". Undeclared stays CONTINUOUS — fleet_host keeps those."""
-    spawn = discover_agents(root)
+    try:
+        spawn = discover_agents(root)
+    except RosterUnreadable as exc:
+        spawn = exc.agents  # at start-up there is nothing to keep; the 30 s refresh fills in the rest
     if not wanted:
         return sorted(spawn)
     chosen, unknown = [], []

@@ -298,7 +298,7 @@ def test_a_repo_crew_the_daemon_does_not_carry_is_not_served(monkeypatch, tmp_pa
         _crew_src("stranger"),
     )
     _serve(tmp_path, [{"agent": "bot", "gaii": f"bot#alice@{NODE}", "owner": "alice"}])
-    monkeypatch.setattr(spawner, "node_spawn_agents", lambda: ([f"bot#alice@{NODE}"], None))
+    monkeypatch.setattr(spawner, "read_node_roster", lambda: ([f"bot#alice@{NODE}"], [], set()))
     monkeypatch.setattr(spawner, "_LAST_NOTE", {})
     assert spawner.discover_agents(root) == [f"bot#alice@{NODE}"], "an agent the daemon lacks is not ours to park on"
 
@@ -317,7 +317,7 @@ def test_a_repo_crew_is_not_served_just_because_it_asks(monkeypatch, tmp_path, c
     root = _repo(tmp_path, _crew_src("mine"))
     monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
     _serve(tmp_path, [{"agent": "mine", "gaii": f"mine#alice@{NODE}", "owner": "alice"}])
-    monkeypatch.setattr(spawner, "node_spawn_agents", lambda: ([], None))
+    monkeypatch.setattr(spawner, "read_node_roster", lambda: ([], [], set()))
     monkeypatch.setattr(spawner, "_LAST_NOTE", {})
 
     assert spawner.discover_agents(root) == []
@@ -331,7 +331,7 @@ def test_the_node_is_the_only_source_of_the_roster(monkeypatch, tmp_path):
     root = _repo(tmp_path, _crew_src("mine"))
     monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
     _serve(tmp_path, [{"agent": "bot", "gaii": f"bot#alice@{NODE}", "owner": "alice"}])
-    monkeypatch.setattr(spawner, "node_spawn_agents", lambda: ([f"bot#alice@{NODE}"], None))
+    monkeypatch.setattr(spawner, "read_node_roster", lambda: ([f"bot#alice@{NODE}"], [], set()))
     monkeypatch.setattr(spawner, "_LAST_NOTE", {})
     assert spawner.discover_agents(root) == [f"bot#alice@{NODE}"]
 
@@ -525,3 +525,117 @@ def test_the_work_poll_stops_with_its_generation_too(monkeypatch):
     monkeypatch.setattr(sp, "_has_open_work", has_work)
     sp._work_poll_loop("a")
     assert calls == ["a"]
+
+
+# --------------------------------------------------------------------------- #
+# A roster that could not be READ is not a roster that is EMPTY
+# --------------------------------------------------------------------------- #
+# MEASURED 2026-09-14: every failed read retired every agent — nine times in thirty hours (seven
+# ConnectionErrors while the serve daemon restarted, two AttributeErrors from a body of the wrong
+# shape). Once julkaisu-toimittaja was mid-run; the re-join replaced its AgentState, so the worker's end
+# was never recorded (`ended: None`) and the wake queued behind it was lost.
+def _quiet_spawner(tmp_path, **kw):
+    """A spawner whose parks sleep instead of spinning, so a test that starts parks does not burn a core."""
+    import time
+
+    kw.setdefault("root", tmp_path)
+    kw.setdefault("wake_fn", lambda *_: time.sleep(0.2) or False)
+    kw.setdefault("invoke_fn", lambda *_: None)
+    return _spawner(**kw)
+
+
+class _Status:
+    def __init__(self, status, body):
+        self.status_code, self._body, self.text = status, body, str(body)
+
+    def json(self):
+        return self._body
+
+
+def test_a_refusal_is_unreadable_not_an_empty_roster(monkeypatch, tmp_path):
+    """A 403 carries no `data`, and the old reader turned that into "this owner has no spawn agents"."""
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    import requests
+
+    from crewaimeat import spawner
+
+    _serve(tmp_path, [{"agent": "bot", "gaii": f"bot#alice@{NODE}", "owner": "alice"}])
+    monkeypatch.setattr(
+        requests, "get", lambda *a, **k: _Status(403, {"ok": False, "error": {"code": "ACCESS_DENIED"}})
+    )
+    agents, notes, unreadable = spawner.read_node_roster()
+    assert agents == [] and unreadable == {"alice"}
+    assert "HTTP 403 ACCESS_DENIED" in notes[0], "the refusal must be named, not flattened"
+
+
+def test_a_body_of_the_wrong_shape_says_what_came_back(monkeypatch, tmp_path):
+    """This is the `unreadable (AttributeError)` of 2026-09-14, which said nothing about the body."""
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    import requests
+
+    from crewaimeat import spawner
+
+    _serve(tmp_path, [{"agent": "bot", "gaii": f"bot#alice@{NODE}", "owner": "alice"}])
+    for body, word in (([], "list"), ({"data": "oops"}, "`data` is a str"), ({"data": {"agents": {}}}, "not a list")):
+        monkeypatch.setattr(requests, "get", lambda *a, _b=body, **k: _Status(200, _b))
+        _, notes, unreadable = spawner.read_node_roster()
+        assert unreadable == {"alice"} and word in notes[0], (body, notes)
+
+
+def test_the_fleet_host_still_reads_an_unreadable_node_as_empty(monkeypatch, tmp_path):
+    """fleet_host keeps every crew as a thread when the node cannot be asked — that contract is unchanged."""
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    import requests
+
+    from crewaimeat import spawner
+
+    _serve(tmp_path, [{"agent": "bot", "gaii": f"bot#alice@{NODE}", "owner": "alice"}])
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _Status(500, {"ok": False}))
+    agents, note = spawner.node_spawn_agents()
+    assert agents == [] and note and "unreadable" in note
+
+
+def test_an_unreadable_node_retires_nobody(monkeypatch, tmp_path):
+    from crewaimeat import spawner
+
+    a, b = f"a#alice@{NODE}", f"b#alice@{NODE}"
+    reads = iter([([a, b], [], set()), ([], ["alice: unreadable (ConnectionError)"], {"alice"})])
+    monkeypatch.setattr(spawner, "read_node_roster", lambda: next(reads))
+    monkeypatch.setattr(spawner, "_LAST_NOTE", {})
+    sp = _quiet_spawner(tmp_path)
+    try:
+        sp.refresh_roster()
+        first = dict(sp.state)
+        sp.refresh_roster()  # the node blinks
+        assert {k for k, v in sp.state.items() if not v.retired} == {a, b}
+        assert all(sp.state[k] is first[k] for k in (a, b)), "a kept agent keeps its state, running work and all"
+    finally:
+        sp._stop.set()
+
+
+def test_an_owner_that_answers_is_still_followed_while_another_cannot_be_asked(monkeypatch, tmp_path):
+    from crewaimeat import spawner
+
+    a1, a2, b1 = f"a1#alice@{NODE}", f"a2#alice@{NODE}", f"b1#bob@{NODE}"
+    reads = iter([([a1, b1], [], set()), ([a2], ["bob: unreadable (HTTP 503)"], {"bob"})])
+    monkeypatch.setattr(spawner, "read_node_roster", lambda: next(reads))
+    monkeypatch.setattr(spawner, "_LAST_NOTE", {})
+    sp = _quiet_spawner(tmp_path)
+    try:
+        sp.refresh_roster()
+        sp.refresh_roster()
+        live = {k for k, v in sp.state.items() if not v.retired}
+        assert live == {a2, b1}, "alice answered (a1 out, a2 in); bob could not be asked, so b1 stays"
+        assert sp.state[a1].retired is True
+    finally:
+        sp._stop.set()
+
+
+def test_start_up_with_an_unreadable_node_is_not_a_crash(monkeypatch, tmp_path):
+    from crewaimeat import spawner
+
+    monkeypatch.setattr(spawner, "read_node_roster", lambda: ([], ["no serve daemon in serve.json"], {"*"}))
+    monkeypatch.setattr(spawner, "_LAST_NOTE", {})
+    with pytest.raises(spawner.RosterUnreadable):
+        spawner.discover_agents(tmp_path)
+    assert spawner.select_agents(tmp_path) == [], "main() must get an empty list and a note, not a traceback"

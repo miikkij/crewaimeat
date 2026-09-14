@@ -149,7 +149,7 @@ def test_select_agents_only_picks_spawn_mode(tmp_path, monkeypatch):
     # nobody is served and the fleet host keeps every crew — the safe direction, and it is said aloud.
     assert select_agents(root) == []
 
-    monkeypatch.setattr("crewaimeat.spawner.node_spawn_agents", lambda: (["spawny"], None))
+    monkeypatch.setattr("crewaimeat.spawner.read_node_roster", lambda: (["spawny"], [], set()))
     assert select_agents(root) == ["spawny"]
     # asking for a continuous agent is refused, not silently served
     assert select_agents(root, ["cont"]) == []
