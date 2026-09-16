@@ -132,3 +132,20 @@ def test_a_read_the_node_cannot_answer_is_not_fatal(monkeypatch):
     monkeypatch.setattr("crewaimeat.memory_tools.read_owner_key", boom)
     llm_choice.forget()
     assert llm_choice.node_choice("any-agent") == (None, None)
+
+
+def test_the_catalogue_is_published_into_the_agents_own_namespace(monkeypatch):
+    """`crews.llm.` is reserved in the owner's namespace: an agent writing there is refused unless it
+    holds memory:write-reserved, which would also hand it the owner's AI key settings and payment
+    provider. The node reads the catalogue from the agent's own namespace since 2026-09-16."""
+    calls = []
+    monkeypatch.setattr(
+        "crewaimeat.aimeat_crew._aimeat_call", lambda agent, tool, args: calls.append((agent, tool, args))
+    )
+    monkeypatch.setattr(llmmod, "available_models", lambda: [{"label": "x", "api_key_env": "OPENROUTER_API_KEY"}])
+    monkeypatch.setattr(llmmod, "known_profiles", lambda: ["content"])
+
+    assert llm_choice.publish_catalog("some-agent") is True
+    ((agent, tool, args),) = calls
+    assert tool == "aimeat_memory_write" and args["key"] == "crews.llm.catalog"
+    assert not args.get("owner_scope"), "the catalogue must not be written into the owner's namespace"

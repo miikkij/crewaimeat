@@ -105,8 +105,13 @@ def publish_catalog(agent_name: str) -> bool:
     """Tell the node which profiles and models this machine can actually reach.
 
     The picker on the node has to offer something, and only this side knows what `llm_providers.json`
-    holds. Written to `crews.llm.catalog` in the owner's namespace, best-effort: a fleet that cannot
-    publish its catalogue still runs, the page just falls back to typing a profile name.
+    holds. Written to `crews.llm.catalog` in THIS AGENT's own namespace, best-effort: a fleet that
+    cannot publish its catalogue still runs, the page just falls back to typing a profile name.
+
+    NOT THE OWNER'S NAMESPACE. `crews.llm.` is reserved there, so an agent's write is refused unless it
+    holds memory:write-reserved, which would also let it write the owner's AI key settings and payment
+    provider. The node reads each agent's catalogue from that agent (aimeat services/crew-menu.ts),
+    which also stops agents on two machines overwriting one shared list.
 
     NO SECRETS. Each model carries its provider dict as `available_models()` builds it, which names
     an `api_key_env` and never a key.
@@ -125,7 +130,7 @@ def publish_catalog(agent_name: str) -> bool:
         _aimeat_call(
             agent_name,
             "aimeat_memory_write",
-            {"key": CATALOG_KEY, "value": payload, "visibility": "owner", "owner_scope": True, "tags": ["llm-catalog"]},
+            {"key": CATALOG_KEY, "value": payload, "visibility": "owner", "tags": ["llm-catalog"]},
         )
         return True
     except Exception as exc:  # noqa: BLE001 — best-effort by design
