@@ -50,6 +50,18 @@ def check(inv: Inventory, report: Report) -> None:
         f"{sum(1 for a in inv.live_agents if inv.declared_profile(a))} routing · "
         f"routing overrides: {len([k for k in ((inv.routing or {}).get('crews') or {}) if not k.startswith('_')])}"
     )
+    if inv.node_defined:
+        unread = (
+            f"; the node could not be asked for {', '.join(inv.node_roster_unread)} then, so that part is "
+            "an older answer"
+            if inv.node_roster_unread
+            else ""
+        )
+        report.note(
+            f"defined on the node, served by the spawner, no crew file here: {', '.join(sorted(inv.node_defined))} "
+            f"(the spawner's roster as the node gave it at {inv.node_roster_at}{unread}; doctor is offline "
+            f"and cannot read their definitions — check them with `crewaimeat defs --as <agent>`)"
+        )
     if inv.node_backed:
         report.note(
             f"node-backed, declared on the node not here: {', '.join(sorted(inv.node_backed))} "
@@ -94,8 +106,10 @@ def _crews_vs_serve(inv: Inventory, report: Report) -> None:
         )
     # A spare agent's runtime is somebody else's program (a chat client, a probe), so it has no crew
     # file here and never had one. This rule is for a crew whose file VANISHED; retiring a chat client
-    # because it looks the same from here would be the wrong fix, loudly given.
-    known = inv.live_agents | inv.parked_agents | inv.spare
+    # because it looks the same from here would be the wrong fix, loudly given. The same holds for an
+    # agent the node defines and the spawner runs: measured on a hosted fleet, one ran its task to exit
+    # 0 while doctor exited 1 calling it a ghost. The node's roster is the fact that something consumes it.
+    known = inv.live_agents | inv.parked_agents | inv.spare | inv.node_roster
     for agent in sorted(served - known):
         report.add(
             Finding(

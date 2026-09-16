@@ -722,6 +722,7 @@ class Spawner:
         Adding one starts its two parks; the others are not touched.
         """
         current = {a for a, st in self.state.items() if not st.retired}
+        unread: set[str] = set()
         try:
             wanted = list(self.roster_fn()) if self.roster_fn else discover_agents(self.root)
         except RosterUnreadable as exc:
@@ -733,6 +734,7 @@ class Spawner:
             # owner that DID answer is still followed, additions and removals both.
             kept = {a for a in current if "*" in exc.owners or _gaii_owner(a) in exc.owners or _gaii_owner(a) is None}
             wanted = sorted(set(exc.agents) | kept)
+            unread = set(exc.owners)
             _note_once(
                 f"keeping {len(kept)} agent(s) of {', '.join(sorted(exc.owners))} until the node answers",
                 key="roster-kept",
@@ -742,6 +744,10 @@ class Spawner:
             return
         else:
             _LAST_NOTE.pop("roster-kept", None)
+        if self.roster_fn is None:
+            # Only a roster the NODE gave is written down: `roster_fn` is a seam, and a list somebody
+            # made up has no business in a connector home.
+            _keep_roster(wanted, unread)
         for agent in sorted(set(wanted) - current):
             if self._ensure_agent(agent):
                 _say(f"[spawner] {agent}: joined the roster — parking for it now")
@@ -824,6 +830,22 @@ def local_spawn_agents(root: Path) -> list[str]:
         for m in agent_manifest.all_manifests(root, refresh=True)
         if m.live and m.agent and m.effective_run_mode == agent_manifest.RUN_SPAWN
     )
+
+
+def _keep_roster(agents: list[str], unread: set[str]) -> None:
+    """Write the roster down where it survives the spawner stopping — see `spawn_state.roster_file`.
+
+    Best-effort in the one way that is safe: a write that fails is said once per change and serving
+    goes on. The agents this spawner parks on do not depend on the file; doctor's reading of them does.
+    """
+    try:
+        spawn_state.write_json(
+            spawn_state.roster_file(),
+            {"read_at": _now(), "agents": sorted(set(agents)), "unread_owners": sorted(unread)},
+        )
+        _LAST_NOTE.pop("roster-file", None)
+    except OSError as exc:
+        _note_once(f"could not keep the roster at {spawn_state.roster_file()} ({exc!r})", key="roster-file")
 
 
 class RosterUnreadable(RuntimeError):

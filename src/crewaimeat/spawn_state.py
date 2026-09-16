@@ -12,6 +12,7 @@ time and must stay small enough that idle is genuinely free.
     <AIMEAT_HOME>/spawn/
       .spawner.lock            OS advisory lock — one spawner per home
       .spawner_status.json     heartbeat the TUI reads (same shape idea as logs/.host_status.json)
+      roster.json              the node's last roster answer; outlives the spawner (doctor reads it)
       running/<agent>.pid      {pid, run_id, started, manager_pid} — the orphan sweep reads these
       audit/<agent>/<run>.json one record per run: who woke it, what it cost, how it ended
 """
@@ -69,6 +70,16 @@ def log_file(agent: str, run_id: str) -> Path:
 
 def status_file() -> Path:
     return spawn_dir() / ".spawner_status.json"
+
+
+def roster_file() -> Path:
+    """The node's last answer to "who does this spawner serve", kept after the spawner stops.
+
+    Separate from the status heartbeat on purpose: that file is deleted on shutdown because it says
+    the spawner is ALIVE, while this one says who the NODE lists — and a stopped fleet's agents are
+    still the node's agents. `crewaimeat doctor` reads no node, so this is how it tells an agent
+    defined on the node from a registration whose crew file vanished."""
+    return spawn_dir() / "roster.json"
 
 
 def lock_file() -> Path:

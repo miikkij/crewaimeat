@@ -14,7 +14,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from crewaimeat.agent_manifest import PARKED_PREFIX, Manifest, all_manifests
+from crewaimeat.agent_manifest import PARKED_PREFIX, Manifest, agent_local_name, all_manifests
 
 __all__ = ["Inventory", "Manifest", "PARKED_PREFIX", "gather"]
 
@@ -26,6 +26,9 @@ class Inventory:
     served: dict[str, dict]  # agent -> serve.json entry (token NEVER read)
     serve_found: bool  # was there a serve.json AT ALL — absent is a different fact from empty
     spare: set[str]  # registered here, but its runtime is not a crew file (chat clients, probes)
+    node_roster: set[str]  # names the NODE lists as this spawner's agents (spawn/roster.json), crew file or not
+    node_roster_at: str | None  # when the spawner last asked; None when there is no roster file
+    node_roster_unread: list[str]  # owners that did not answer then, whose part is an older answer
     routing: dict  # parsed llm_providers.json ({} when absent)
     connector_pin: str | None  # forge.AIMEAT_CONNECTOR, e.g. "aimeat@3.5.0"
     connector_floor: str | None
@@ -49,6 +52,16 @@ class Inventory:
         merely cannot see teaches the reader to ignore it.
         """
         return {c.agent for c in self.live if c.agent and c.kind == "node"}
+
+    @property
+    def node_defined(self) -> set[str]:
+        """Agents the node serves here that have no crew file in this checkout at all.
+
+        Created on the node (the basic-agents button, the Crew tab), defined at `crews.registry.<agent>`
+        and run by the spawner. Like `node_backed`, doctor sees the NAME and nothing else, so they are
+        kept out of `live_agents`: the declaration checks read the crew file, and asking for one here
+        would turn a wrong error into three warnings about what doctor cannot see."""
+        return self.node_roster - self.live_agents - self.parked_agents
 
     @property
     def parked_agents(self) -> set[str]:
@@ -143,6 +156,28 @@ def _read_spare(root: Path) -> set[str]:
     return {str(a) for a in (doc.get("spare") or []) if a}
 
 
+def _read_node_roster(root: Path) -> tuple[set[str], str | None, list[str]]:
+    """The roster the spawner last got from the node, next to the serve.json this tree reads.
+
+    The file and not the node, because doctor asks no node: it runs in pre-commit and CI. And the file
+    and not the spawner's heartbeat, because the heartbeat is deleted when the spawner stops while the
+    node's answer stays true — a verdict that flipped whenever the fleet was down would be learned as
+    noise. The roster holds GAIIs; serve.json and the crew files speak in names.
+    """
+    serve = serve_path(root)
+    if serve is None:
+        return set(), None, []
+    try:
+        doc = json.loads((serve.parent / "spawn" / "roster.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set(), None, []
+    if not isinstance(doc, dict):
+        return set(), None, []
+    names = {agent_local_name(str(a)) for a in (doc.get("agents") or []) if a}
+    unread = [str(o) for o in (doc.get("unread_owners") or []) if o]
+    return {n for n in names if n}, (str(doc["read_at"]) if doc.get("read_at") else None), unread
+
+
 def gather(root: Path) -> Inventory:
     try:
         from crewaimeat.fleet_identity import FLEET_IDENTITY
@@ -156,12 +191,16 @@ def gather(root: Path) -> Inventory:
         pin, floor = AIMEAT_CONNECTOR, AIMEAT_CONNECTOR_FLOOR
     except Exception:  # noqa: BLE001
         pin, floor = None, None
+    roster, roster_at, roster_unread = _read_node_roster(root)
     return Inventory(
         root=root,
         crews=all_manifests(root, refresh=True),
         served=_read_serve(root),
         serve_found=serve_path(root) is not None,
         spare=_read_spare(root),
+        node_roster=roster,
+        node_roster_at=roster_at,
+        node_roster_unread=roster_unread,
         routing=_read_routing(root),
         connector_pin=pin,
         connector_floor=floor,

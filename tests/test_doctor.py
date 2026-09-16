@@ -106,6 +106,44 @@ def test_ghost_registration_is_an_error(tmp_path):
     assert ghosts[0].severity == ERROR
 
 
+def _node_roster(root: Path, agents: list[str], read_at: str = "2026-09-16T12:00:00+00:00", unread=()) -> None:
+    """What the spawner writes after asking the node who it serves (spawn/roster.json in the home)."""
+    p = root / ".aimeat" / "spawn" / "roster.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"read_at": read_at, "agents": agents, "unread_owners": list(unread)}), encoding="utf-8")
+
+
+def test_an_agent_the_node_defines_and_the_spawner_serves_is_not_a_ghost(tmp_path):
+    """Measured on a hosted fleet: a JSON agent created on the node ran its task to exit 0, and doctor
+    exited 1 calling it a ghost, because the rule knew only crew files. The spawner's roster is the
+    fact that something here consumes it. A registration with neither a file nor a place in that
+    roster is still exactly what the rule exists for."""
+    root = _repo(tmp_path, crews={"a_crew.py": CREW.format(agent="a")}, served=["a", "pingisti", "long-gone"])
+    _node_roster(root, ["pingisti#o@aimeat-x"])
+    report = run(root)
+
+    assert [f.subject for f in report.findings if f.rule == "registry.serve.ghost"] == ["long-gone"]
+    note = next((n for n in report.notes if "pingisti" in n), "")
+    assert "2026-09-16T12:00:00" in note, "say WHEN the node said so — the file outlives the spawner"
+
+
+def test_a_node_agent_is_not_asked_for_a_declaration_it_keeps_on_the_node(tmp_path):
+    """Its identity, offer and routing live at crews.registry.<agent>, which doctor cannot read. Adding
+    it to the live crews would turn one fixed error into three warnings about what doctor cannot see."""
+    root = _repo(tmp_path, crews={"a_crew.py": CREW.format(agent="a")}, served=["a", "pingisti"])
+    _node_roster(root, ["pingisti#o@aimeat-x"])
+    report = run(root)
+    assert not [f for f in report.findings if f.subject == "pingisti"]
+
+
+def test_an_owner_the_spawner_could_not_ask_is_named_in_the_note(tmp_path):
+    root = _repo(tmp_path, crews={"a_crew.py": CREW.format(agent="a")}, served=["a", "pingisti"])
+    _node_roster(root, ["pingisti#o@aimeat-x"], unread=["o"])
+    report = run(root)
+    note = next((n for n in report.notes if "pingisti" in n), "")
+    assert "o" in note and "could not" in note
+
+
 def test_unregistered_live_crew_is_an_error(tmp_path):
     root = _repo(tmp_path, crews={"a_crew.py": CREW.format(agent="a")}, served=[])
     report = run(root)

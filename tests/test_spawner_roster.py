@@ -639,3 +639,88 @@ def test_start_up_with_an_unreadable_node_is_not_a_crash(monkeypatch, tmp_path):
     with pytest.raises(spawner.RosterUnreadable):
         spawner.discover_agents(tmp_path)
     assert spawner.select_agents(tmp_path) == [], "main() must get an empty list and a note, not a traceback"
+
+
+# --------------------------------------------------------------------------- #
+# The roster the node gave is kept on disk, so an offline reader can know it
+# --------------------------------------------------------------------------- #
+# `crewaimeat doctor` reads no node: it runs in pre-commit and CI. An agent created on the node has no
+# crew file here, so doctor called every one of them a ghost — measured on a hosted fleet, a JSON agent
+# ran its task to exit 0 and doctor still exited 1. The spawner is the only thing on this machine that
+# asks the node who is served, and the heartbeat it writes is deleted when it stops, so the answer has
+# to be written where it survives the stop.
+def test_the_node_roster_is_kept_on_disk_and_outlives_the_spawner(monkeypatch, tmp_path):
+    import json
+
+    from crewaimeat import spawn_state, spawner
+
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    monkeypatch.setattr(spawner, "discover_agents", lambda root: ["pingisti#o@n", "kirjuri#o@n"])
+    sp = _spawner(invoke_fn=lambda *_: None)
+    sp.refresh_roster()
+
+    doc = json.loads(spawn_state.roster_file().read_text(encoding="utf-8"))
+    assert doc["agents"] == ["kirjuri#o@n", "pingisti#o@n"]
+    assert doc["read_at"] and doc["unread_owners"] == []
+
+    sp._stop.set()
+    sp._shutdown()
+    assert spawn_state.roster_file().is_file(), "a stopped fleet's agents are still the node's agents"
+
+
+def test_a_partly_read_roster_records_what_it_kept_and_who_did_not_answer(monkeypatch, tmp_path):
+    """The file says what the spawner SERVES, so an unread owner's agents stay in it — and it says
+    which owner could not be asked, so a reader knows that part is the last answer, not a fresh one."""
+    import json
+
+    from crewaimeat import spawn_state, spawner
+
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    answers = [["a#o1@n", "b#o2@n"]]
+
+    def discover(root):
+        if answers:
+            return answers.pop()
+        raise spawner.RosterUnreadable("o2 unreadable", ["a#o1@n"], {"o2"})
+
+    monkeypatch.setattr(spawner, "discover_agents", discover)
+    sp = _spawner(invoke_fn=lambda *_: None)
+    sp.refresh_roster()
+    sp.refresh_roster()
+
+    doc = json.loads(spawn_state.roster_file().read_text(encoding="utf-8"))
+    assert doc["agents"] == ["a#o1@n", "b#o2@n"]
+    assert doc["unread_owners"] == ["o2"]
+
+
+def test_a_roster_that_could_not_be_read_at_all_leaves_the_last_file_alone(monkeypatch, tmp_path):
+    import json
+
+    from crewaimeat import spawn_state, spawner
+
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    answers = [["a#o@n"]]
+
+    def discover(root):
+        if answers:
+            return answers.pop()
+        raise ConnectionError("daemon restarting")
+
+    monkeypatch.setattr(spawner, "discover_agents", discover)
+    sp = _spawner(invoke_fn=lambda *_: None)
+    sp.refresh_roster()
+    before = spawn_state.roster_file().read_text(encoding="utf-8")
+    sp.refresh_roster()
+    assert spawn_state.roster_file().read_text(encoding="utf-8") == before
+    assert json.loads(before)["agents"] == ["a#o@n"]
+
+
+def test_an_injected_roster_is_never_written_to_a_home(monkeypatch, tmp_path):
+    """`roster_fn` is a test seam. The file records what the NODE said, so a list a test made up must
+    not land in a connector home — several tests here run without a temporary one."""
+    from crewaimeat import spawn_state
+
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    sp = _spawner(invoke_fn=lambda *_: None, roster_fn=lambda: ["a"])
+    sp.refresh_roster()
+    assert not spawn_state.roster_file().exists()
