@@ -512,16 +512,16 @@ Run one crew at a time, or manage the whole fleet with the scripts in `scripts/`
 | Run / develop a single crew | `uv run python crews/<x>_crew.py` | Runs one crew in the foreground (Ctrl+C stops it). |
 | Keep one crew alive (auto-restart) | `./scripts/watchdog.ps1 crews/<x>_crew.py` | Re-launches that crew if it ever exits. The building block the others use. |
 | Start the **whole fleet** now | `./scripts/start_fleet.ps1` | Syncs dependencies and starts the shared serve daemon, its supervisor and the spawner (under `spawner_watchdog.ps1`). The host runs resident agents; the spawner handles agents whose node `run_mode` is `spawn`. With an all-spawn roster the host exits at once while the detached services keep running, and the window then follows the spawner log (Ctrl+C stops watching, not the fleet). |
-| The same on macOS/Linux | `./scripts/start_fleet.sh` + `uv run crewaimeat spawner` | `start_fleet.sh` starts the serve daemon, its supervisor and the host, but not the spawner. Run the spawner yourself in a second terminal, or spawn-mode agents run nowhere. |
+| The same on macOS/Linux | `./scripts/start_fleet.sh` | The same sequence: serve daemon + supervisor, the spawner under `spawner_watchdog.sh`, the host, then the spawner log. |
 | Run a **subset** in the host (or preview) | `./scripts/start_host.ps1 -Agents a,b` | The same host, but lets you pick a subset (`-Agents`) or preview (`-List`). |
 | Start the fleet **per-process** (legacy) | `./scripts/watchdog.ps1 crews/crew_forge_crew.py` | The old model: crew-forge reconciles and launches one watchdog+daemon per crew. Heavier; use only if you need per-crew process isolation. |
 | Start the legacy fleet at **logon** | `./scripts/install-autostart.ps1` | Registers crew-forge under its watchdog. This is the legacy per-process topology, not an autostart wrapper for `start_fleet.ps1`. |
-| See **what's running** | `./scripts/view_fleet.ps1` | Read-only: each crew's state (running / down) and the live-daemon count. Kills nothing. |
-| **Stop everything** | `./scripts/terminate_fleet.ps1` | Stops the spawner first (it would revive workers), then watchdogs, crew daemons and connectors. `-DryRun` lists first. |
+| See **what's running** | `uv run crewaimeat-tui` | The fleet TUI (one-time `uv sync --extra tui`): every agent's state — running, parked under the spawner, host thread, down — plus logs, test runs and the model picker. Same on Windows, macOS and Linux. |
+| **Stop everything** | `./scripts/terminate_fleet.ps1` / `.sh` | Stops the spawner first (it would revive workers), then the watchdogs, host, crew daemons and this home's serve daemon. Only this checkout's processes; another checkout's or the desktop app's fleet is left alone. `-DryRun` / `--dry-run` lists first. |
 | Re-reconcile while crew-forge is up | crew-forge `/startall` (send as a task) | Brings stopped crews back without restarting crew-forge. |
 
 For day-to-day development, run one crew with `uv run python crews/<x>_crew.py`. Use `start_fleet`
-for the host and spawner topology, `view_fleet` to inspect it, and `terminate_fleet` to stop it.
+for the host and spawner topology, `crewaimeat-tui` to inspect it, and `terminate_fleet` to stop it.
 `install-autostart` applies only to the legacy crew-forge topology.
 
 The host and spawner own their respective rosters and use per-agent locks. Legacy crew-forge uses
@@ -573,7 +573,7 @@ The TUI identifies host threads with `host` in the wd/dae column.
 
 ## Fleet TUI (crewaimeat-tui)
 
-A lazydocker-style terminal UI to watch and drive the whole fleet from one screen — the cross-platform (Windows/Linux), interactive successor to `view_fleet.ps1`. It runs as a full-screen app, so it works the same in PowerShell and bash.
+A lazydocker-style terminal UI to watch and drive the whole fleet from one screen — the one status view for Windows, macOS and Linux (it replaced the read-only `view_fleet` scripts, which predated the fleet host and the spawner). It runs as a full-screen app, so it works the same in PowerShell and bash.
 
 ```powershell
 uv sync --extra tui      # one-time: installs textual

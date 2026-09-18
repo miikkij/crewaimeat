@@ -128,8 +128,7 @@ an all-spawn roster the host exits at once and the window follows the spawner lo
 watching, not the fleet. Only approved agents come online — an unapproved one waits and joins by itself
 once approved.
 
-**On macOS/Linux** `start_fleet.sh` does not start the spawner: also run `uv run crewaimeat spawner` in a
-second terminal, or spawn-mode agents never run. Alternatives:
+`start_fleet.sh` does the same on macOS/Linux. Alternatives:
 
 - **One crew, foreground (dev loop):** `uv run python crews/<name>_crew.py`
 - **A subset in the host:** `./scripts/start_host.ps1 -Agents a,b` (or `-List` to preview); other OSes:
@@ -137,7 +136,7 @@ second terminal, or spawn-mode agents never run. Alternatives:
 - **Desktop app:** `cd aimeat-agency && pnpm install && pnpm tauri dev` — or run the cockpit directly:
   `uv run --extra agency python -m crewaimeat.agency.cockpit` and open the printed local URL. Its wizard
   handles account, model, registration, and approval on its own.
-- `./scripts/view_fleet.*` — read-only status · `./scripts/terminate_fleet.*` — stop everything
+- `uv run crewaimeat-tui` — fleet status (after `uv sync --extra tui`) · `./scripts/terminate_fleet.*` — stop everything
   (**confirm with the user first**) · `./scripts/install-autostart.ps1` — start the **legacy**
   per-process crew-forge topology on every boot (Windows); it does not wrap `start_fleet`.
 
@@ -210,5 +209,5 @@ Check progress with the node's `aimeat_onboarding_status`, not the dashboard ste
 ## Do it now
 
 Ask Step 0's questions, then work Steps 1→5 (run the commands, surface each approval code and wait).
-When agents are up, run `view_fleet` (or the TUI), summarize what's running, and suggest 2–3 next
+When agents are up, open the TUI (`uv run crewaimeat-tui`), summarize what's running, and suggest 2–3 next
 actions (queue a task, `/build` a crew with crew-forge, or open the agency cockpit).

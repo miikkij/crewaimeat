@@ -3,7 +3,7 @@ name: aimeat-agent-modes
 description: The four AIMEAT agent modes (interactive / task-runner / autonomous / coordinator), what each one authorises, and why a task sits in `queued` until someone starts it. Use when an agent cannot complete its own task, when choosing a mode at registration, or when deciding whether work should run without a human in the loop.
 license: MIT
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
 ---
 
 # AIMEAT agent modes — what each one is allowed to do on its own
@@ -100,4 +100,4 @@ direct `queued → done`.
 ## Rule of thumb
 
 > If you are reaching for a way to bypass the `queued` gate, you are probably in the wrong mode.
-> Change the mode, not the gate.
+> Ask the owner to change the mode, not the gate.

@@ -195,15 +195,15 @@ start_fleet.ps1 ─ pins AIMEAT_HOME=<repo>/.aimeat and starts the shared servic
    │
    ├── serve daemon (one, shared)          ── the loopback tunnel every crew calls through
    ├── serve_watchdog.ps1/.sh              ── keeps the serve daemon alive (single-instance lock)
-   ├── spawner_watchdog.ps1 + spawner      ── node run_mode=spawn agents: roster re-read every 30 s,
+   ├── spawner_watchdog.ps1/.sh + spawner  ── node run_mode=spawn agents: roster re-read every 30 s,
    │      └── run_once worker per wake        one worker process per agent at a time, exits after a cycle
    └── fleet host (crewaimeat.fleet_host)  ── resident crews as threads in one process
           └── run_crew loop per agent         (crewai imported once; empty host roster exits)
 ```
 
-`start_fleet.sh` starts the serve daemon, its supervisor and the host, but not the spawner; on
-macOS/Linux run `uv run crewaimeat spawner` yourself. `terminate_fleet` stops the spawner first,
-because it would revive the workers.
+`start_fleet.sh` / `spawner_watchdog.sh` / `terminate_fleet.sh` do the same on macOS/Linux.
+`terminate_fleet` stops the spawner first, because it would revive the workers, and stops only this
+repo's processes and this home's serve daemon.
 
 Legacy per-process model (still available, for per-crew process isolation): start crew-forge under
 `watchdog.ps1` and it reconciles the fleet — one watchdog + one crew daemon (python) per agent.

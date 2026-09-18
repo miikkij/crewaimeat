@@ -4,13 +4,17 @@
 # Usage:   ./scripts/start_fleet.sh
 #
 # 1) uv sync                              — make the venv match pyproject/uv.lock
-# 2) ensure the shared serve daemon + supervisor (the forward tunnel + auto-restart)
-# 3) start the fleet HOST in THIS terminal — every agent as a thread in ONE process
+# 2) the aimeat connector at npm latest   — upgraded before the serve daemon starts
+# 3) ensure the shared serve daemon + supervisor (the forward tunnel + auto-restart)
+# 4) start the SPAWNER under its supervisor — agents the node marks run_mode=spawn
+# 5) start the fleet HOST in THIS terminal — every other agent as a thread in ONE process
+# 6) when the host returns (an all-spawn roster returns at once), follow the spawner's log
 #
-# MEMORY-LIGHT BY DEFAULT (since 0.5.0): no longer one OS process per crew (which imported crewai
-# ~N times and cost several GB). Runs the **fleet host** — every approved agent as a thread in ONE
-# Python process, crewai imported once — ~20x less RAM for I/O-bound work. Ctrl+C stops the WHOLE
-# fleet. Legacy per-process model: start crew-forge directly (bash scripts/watchdog.sh crews/crew_forge_crew.py).
+# The same sequence as start_fleet.ps1. Which runtime serves an agent is the NODE's run_mode, read by
+# both halves from the same source. Ctrl+C in the host stops resident threads only; the serve daemon,
+# its supervisor and the spawner are detached and keep running — stop everything with
+# ./scripts/terminate_fleet.sh. Legacy per-process model: start crew-forge directly
+# (bash scripts/watchdog.sh crews/crew_forge_crew.py).
 # (Only APPROVED agents come online; an unapproved one waits for its device-flow approval.)
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -55,9 +59,30 @@ mkdir -p "$root/logs"
 echo "[start_fleet] starting the serve-daemon supervisor (auto-restarts the shared tunnel) ..."
 nohup bash "$root/scripts/serve_watchdog.sh" >"$root/logs/serve_watchdog.log" 2>&1 &
 
-# Run the fleet HOST: every agent as a thread in ONE process (crewai imported once) — ~20x less RAM
-# than one process per crew. crew-forge is excluded and reconcile_fleet no-ops under AIMEAT_FLEET_HOST,
-# so nothing spawns a shadow per-process fleet. The host stays in THIS window; Ctrl+C stops the fleet.
-echo "[start_fleet] starting the fleet HOST (all agents as threads in ONE process — memory-light) ..."
-echo "[start_fleet] the host stays in THIS window; Ctrl+C stops the WHOLE fleet."
-exec uv run python -m crewaimeat.fleet_host
+# The SPAWNER: the runtime for agents the node marks run_mode=spawn. The host skips exactly those, so
+# without this they run nowhere and nothing says so. Detached + single-instance (it holds a lock).
+echo "[start_fleet] starting the spawner (agents the node marks run_mode=spawn) ..."
+nohup bash "$root/scripts/spawner_watchdog.sh" >"$root/logs/spawner_watchdog.log" 2>&1 &
+
+# Run the fleet HOST for every agent the node has NOT marked spawn: threads in ONE process (crewai
+# imported once). crew-forge's reconcile_fleet no-ops under AIMEAT_FLEET_HOST, so nothing spawns a
+# shadow per-process fleet. With an all-spawn roster the host has nothing to run and returns at once.
+echo "[start_fleet] starting the fleet HOST (crews the node has NOT marked run_mode=spawn) ..."
+echo "[start_fleet] with an all-spawn fleet the host has no roster and exits at once - the fleet is still up."
+echo "[start_fleet] while any agent is resident the host stays in THIS window; Ctrl+C stops resident threads only."
+rc=0; uv run python -m crewaimeat.fleet_host || rc=$?
+echo "[start_fleet] host returned ($rc). Serve daemon, its supervisor and the spawner keep running (detached)."
+echo "[start_fleet] stop everything with: ./scripts/terminate_fleet.sh"
+
+# Keep watching the fleet in this window: with every agent in spawn mode the host returns in seconds,
+# and the spawner is where the work shows — what wakes, what runs, what exits.
+spawner_log="$root/logs/spawner_watchdog.log"
+if [ -f "$spawner_log" ]; then
+    echo
+    echo "[start_fleet] following the spawner - what wakes, what runs, what exits."
+    echo "[start_fleet] Ctrl+C stops WATCHING only; the fleet keeps running."
+    echo
+    exec tail -n 20 -f "$spawner_log"
+else
+    echo "[start_fleet] no spawner log yet - the fleet is up; watch logs/spawner_watchdog.log"
+fi

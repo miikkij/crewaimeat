@@ -15,7 +15,20 @@ daemons import the modules at start. `git log` has the measurement behind each e
   the installed connector is below the floor.
 - A pre-commit hook (`aimeat-connector-latest`) fails a commit while the pin is behind npm latest.
 
+- **macOS/Linux fleet scripts at the Windows level.** `start_fleet.sh` now starts the spawner (new
+  `spawner_watchdog.sh`, which stops on exit 2 like its `.ps1` twin) and follows its log after the host
+  returns. `terminate_fleet.sh` is rewritten after `terminate_fleet.ps1`: spawner first, repo-scoped
+  matching, and only THIS home's serve daemon. The old one killed every `connect serve` on the machine,
+  another checkout's and the desktop app's included. Verified in WSL Ubuntu 22.04 against a fake repo,
+  a sibling clone and another home's daemon: the six own processes stopped, the other two survived.
+
+### Removed
+- `scripts/view_fleet.ps1` / `.sh`, in favour of `crewaimeat-tui`. They predated the fleet host and the
+  spawner, so they could not show how the fleet actually runs.
+
 ### Changed
+- `skills/aimeat-agent-modes` (published to the node registry as v1.0.2): an agent in the wrong mode
+  asks its owner; it does not call `aimeat_agent_mode_set` on itself.
 - Pin `aimeat@3.10.0` → `aimeat@3.17.0` (npm latest; the machine had 3.15.0). The comment above the pin
   claimed doctor compared it with npm; nothing did.
 - `AIMEAT_CONNECTOR_FLOOR` 2.6.1 → 3.13.4, the floor `pyproject.toml` already documented (task wakes).

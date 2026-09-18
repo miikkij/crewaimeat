@@ -1,5 +1,5 @@
-"""fleet_state — the pure, testable data layer behind the fleet TUI (and a cross-platform successor
-to scripts/view_fleet.ps1).
+"""fleet_state — the pure, testable data layer behind the fleet TUI (the fleet's one status view; it
+replaced scripts/view_fleet.ps1/.sh on 2026-09-18).
 
 Separation of concerns:
   - DERIVATION (top): pure functions over raw inputs (process command lines, lock names, serve.json,
@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 # A crew process' command line references crews/<name>_crew.py; its supervisor also matches
-# watchdog.(ps1|sh). The serve daemon matches 'connect serve'. Same patterns as view_fleet.ps1.
+# watchdog.(ps1|sh). The serve daemon matches 'connect serve'.
 _CREW_RE = re.compile(r"crews[\\/]([A-Za-z0-9_]+_crew\.py)")
 _WATCHDOG_RE = re.compile(r"watchdog\.(ps1|sh)")
 _CONNECT_RE = re.compile(r"connect\s+serve")
