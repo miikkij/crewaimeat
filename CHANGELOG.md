@@ -7,6 +7,8 @@ daemons import the modules at start. `git log` has the measurement behind each e
 ## [Unreleased] — 2026-09-18 — soupsieve CVEs, example config
 
 ### Security
+- anyio 4.13.0 → 4.14.2 in `uv.lock`, closing Dependabot #51 (critical: TLSStream IDNA 2003 host-name
+  encoding, a TLS certificate-check weakness) and #50 (process-pool workers blocking on undrained stderr).
 - soupsieve 2.8.4 → 2.9.2 in `uv.lock`, closing Dependabot #48 and #49 (GHSA-j934-xhv5-fg8f,
   GHSA-gjv8-xp57-g29c: polynomial-time ReDoS in selector parsing; fixed in 2.9.0).
 
