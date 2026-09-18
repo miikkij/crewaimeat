@@ -132,7 +132,16 @@ fn provision(handle: &AppHandle, lang: &str, say: &dyn Fn(&str)) -> Result<(Stri
     Ok((uv, repo))
 }
 
-fn spawn_cockpit(uv: &str, repo: &Path, token: &str) -> std::io::Result<Child> {
+/// The bundled engine (portable Node + the AIMEAT connector) ships as resources; the cockpit hands them to
+/// every agent so nothing depends on a Node the person installed (agency 2.0, spec §3A). A folder that
+/// is missing is passed anyway — the cockpit's health view names it instead of falling back silently.
+fn engine_dirs(handle: &AppHandle) -> (PathBuf, PathBuf) {
+    let res = handle.path().resource_dir().unwrap_or_default();
+    let base = if res.join("resources").join("node").exists() { res.join("resources") } else { res };
+    (base.join("node"), base.join("connector"))
+}
+
+fn spawn_cockpit(uv: &str, repo: &Path, token: &str, engine: &(PathBuf, PathBuf)) -> std::io::Result<Child> {
     // The cockpit (and later the fleet) run in their own visible windows ON PURPOSE — the splash tells the
     // user they'll open and what they are. "Shut down" closes them all safely.
     //
@@ -142,11 +151,11 @@ fn spawn_cockpit(uv: &str, repo: &Path, token: &str) -> std::io::Result<Child> {
     let venv_py = repo.join(".venv").join("Scripts").join("python.exe");
     let mut c = if venv_py.exists() {
         let mut c = Command::new(&venv_py);
-        c.args(["-m", "crewaimeat.agency.cockpit"]);
+        c.args(["-m", "crewaimeat.agency2"]);
         c
     } else {
         let mut c = Command::new(uv);
-        c.args(["run", "--extra", "agency", "python", "-m", "crewaimeat.agency.cockpit"]);
+        c.args(["run", "--extra", "agency", "python", "-m", "crewaimeat.agency2"]);
         c
     };
     c.current_dir(repo)
@@ -154,6 +163,9 @@ fn spawn_cockpit(uv: &str, repo: &Path, token: &str) -> std::io::Result<Child> {
         .env("AIMEAT_AGENCY", "1") // lets runtime code branch appliance-vs-dev explicitly
         .env("AIMEAT_AGENCY_TOKEN", token)
         .env("AIMEAT_AGENCY_PORT", PORT.to_string())
+        .env("AIMEAT_AGENCY_DATA", repo)
+        .env("AIMEAT_AGENCY_NODE_DIR", &engine.0)
+        .env("AIMEAT_AGENCY_CONNECTOR_DIR", &engine.1)
         .spawn()
 }
 
@@ -193,7 +205,7 @@ fn start_provisioning(handle: AppHandle) {
         match provision(&handle, &lang, &say) {
             Ok((uv, repo)) => {
                 say(&status(&lang, "starting"));
-                match spawn_cockpit(&uv, &repo, &token) {
+                match spawn_cockpit(&uv, &repo, &token, &engine_dirs(&handle)) {
                     Ok(mut child) => {
                         *handle.state::<AppState>().pid.lock().unwrap() = Some(child.id());
                         if wait_up(Duration::from_secs(120)) {

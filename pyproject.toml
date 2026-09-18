@@ -55,6 +55,7 @@ packages = ["src/crewaimeat"]
 [tool.hatch.build.targets.wheel.force-include]
 "src/crewaimeat/agency/static" = "crewaimeat/agency/static"
 "src/crewaimeat/agency/templates" = "crewaimeat/agency/templates"
+"src/crewaimeat/agency2/static" = "crewaimeat/agency2/static"
 
 [dependency-groups]
 dev = ["pytest>=8.0", "textual>=0.60", "ruff>=0.6", "pre-commit>=3.5", "fastapi>=0.110", "uvicorn>=0.27", "httpx>=0.27"]  # textual: TUI tests; fastapi/uvicorn/httpx: cockpit + its TestClient; ruff: lint+format; pre-commit: git hooks

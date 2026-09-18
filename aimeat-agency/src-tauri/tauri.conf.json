@@ -1,6 +1,6 @@
 {
   "productName": "aimeat-agency",
-  "version": "0.8.31",
+  "version": "2.0.0",
   "identifier": "io.aimeat.agency",
   "build": {
     "frontendDist": "../src"
@@ -38,6 +38,6 @@
       "icons/icon.ico"
     ],
     "externalBin": ["binaries/uv"],
-    "resources": ["resources/runtime-src/**/*"]
+    "resources": ["resources/runtime-src/**/*", "resources/node/**/*", "resources/connector/**/*"]
   }
 }

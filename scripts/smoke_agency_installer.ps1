@@ -8,7 +8,7 @@ $installRoot = Join-Path $smokeRoot 'installed'
 New-Item -ItemType Directory -Path $smokeRoot | Out-Null
 $cockpit = $null
 $savedEnv = @{}
-foreach ($name in @('AIMEAT_HOME','AIMEAT_AGENCY_TOKEN','AIMEAT_AGENCY_PORT','AIMEAT_AGENCY_HOST','OTEL_SDK_DISABLED','CREWAI_TELEMETRY_DISABLED')) {
+foreach ($name in @('AIMEAT_HOME','AIMEAT_AGENCY_DATA','AIMEAT_AGENCY_NODE_DIR','AIMEAT_AGENCY_CONNECTOR_DIR','AIMEAT_AGENCY_TOKEN','AIMEAT_AGENCY_PORT','OTEL_SDK_DISABLED','CREWAI_TELEMETRY_DISABLED')) {
     $savedEnv[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
 try {
@@ -19,9 +19,16 @@ try {
     $uv = @(Get-ChildItem -LiteralPath $installRoot -File -Recurse -Filter 'uv.exe')
     if ($runtime.Count -ne 1 -or $uv.Count -ne 1) { throw 'Expected one packaged runtime and one uv sidecar' }
     $runtimePath = $runtime[0].FullName
-    foreach ($file in @('pyproject.toml','uv.lock','src/crewaimeat/agency/static/index.html')) {
+    foreach ($file in @('pyproject.toml','uv.lock','src/crewaimeat/agency2/static/index.html')) {
         if (-not (Test-Path -LiteralPath (Join-Path $runtimePath $file))) { throw "Packaged resource missing: $file" }
     }
+    # agency 2.0 ships its own engine: a portable Node and the AIMEAT connector, never the machine's.
+    $nodeExe = @(Get-ChildItem -LiteralPath $installRoot -File -Recurse -Filter 'node.exe' | Where-Object { $_.Directory.Name -eq 'node' })
+    $connectorJs = @(Get-ChildItem -LiteralPath $installRoot -File -Recurse -Filter 'aimeat.js' | Where-Object { $_.FullName -match 'connector[\/]node_modules[\/]aimeat[\/]dist[\/]bin' })
+    if ($nodeExe.Count -ne 1 -or $connectorJs.Count -ne 1) { throw 'Expected one bundled node.exe and one bundled connector' }
+    $connectorVersion = & $nodeExe[0].FullName $connectorJs[0].FullName --version
+    if ($LASTEXITCODE -ne 0) { throw 'Bundled connector does not run on the bundled node' }
+    Write-Host "Bundled engine: node $(& $nodeExe[0].FullName --version), $connectorVersion"
     & $uv[0].FullName sync --frozen --extra agency --no-dev --project $runtimePath
     if ($LASTEXITCODE -ne 0) { throw 'Packaged runtime provisioning failed' }
     $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
@@ -29,18 +36,36 @@ try {
     $port = $listener.LocalEndpoint.Port
     $listener.Stop()
     $env:AIMEAT_HOME = Join-Path $smokeRoot 'home'
+    $env:AIMEAT_AGENCY_DATA = Join-Path $smokeRoot 'data'
+    $env:AIMEAT_AGENCY_NODE_DIR = $nodeExe[0].Directory.FullName
+    $env:AIMEAT_AGENCY_CONNECTOR_DIR = $connectorJs[0].Directory.Parent.Parent.Parent.Parent.FullName
     $env:AIMEAT_AGENCY_TOKEN = [guid]::NewGuid().ToString('N')
     $env:AIMEAT_AGENCY_PORT = "$port"
-    $env:AIMEAT_AGENCY_HOST = '127.0.0.1'
     $env:OTEL_SDK_DISABLED = 'true'
     $env:CREWAI_TELEMETRY_DISABLED = 'true'
     $python = Join-Path $runtimePath '.venv/Scripts/python.exe'
-    $cockpit = Start-Process -FilePath $python -ArgumentList @('-m','crewaimeat.agency.cockpit') -WorkingDirectory $runtimePath -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $smokeRoot 'cockpit.log') -RedirectStandardError (Join-Path $smokeRoot 'cockpit.err.log')
+    $cockpit = Start-Process -FilePath $python -ArgumentList @('-m','crewaimeat.agency2') -WorkingDirectory $runtimePath -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $smokeRoot 'cockpit.log') -RedirectStandardError (Join-Path $smokeRoot 'cockpit.err.log')
     $base = "http://127.0.0.1:$port"
     $ready = $false
     for ($attempt = 0; $attempt -lt 90; $attempt++) {
         if ($cockpit.HasExited) { throw 'Packaged cockpit exited before readiness' }
         try { $ready = (Invoke-RestMethod "$base/healthz" -TimeoutSec 2).ok } catch { $ready = $false }
+        if ($ready) { break }
+        Start-Sleep -Seconds 1
+    }
+    if (-not $ready) { throw 'Packaged cockpit did not become ready' }
+    $denied = Invoke-WebRequest "$base/api/state" -SkipHttpErrorCheck
+    if ($denied.StatusCode -ne 401) { throw 'Missing token was not rejected' }
+    $headers = @{Authorization = "Bearer $env:AIMEAT_AGENCY_TOKEN"}
+    $state = Invoke-RestMethod "$base/api/state" -Headers $headers
+    if (-not ($state.engine.bundled -and $state.engine.ok)) { throw "Bundled engine not in use: $($state.engine | ConvertTo-Json -Compress)" }
+    if ($state.version -ne '2.0.0') { throw "Unexpected cockpit version $($state.version)" }
+    $health = Invoke-RestMethod "$base/api/health" -Headers $headers
+    if (-not ($health.rows | Where-Object id -eq 'engine' | Where-Object level -eq 'ok')) { throw 'Health view does not report the bundled engine as ok' }
+    $page = Invoke-WebRequest "$base/?boot=$env:AIMEAT_AGENCY_TOKEN"
+    if ($page.Content -match '__AGENCY_TOKEN__') { throw 'Cockpit token injection failed' }
+    Write-Host 'Installer smoke passed: bundle resources, bundled engine, provisioning, health, auth and HTML.'
+} catch { $ready = $false }
         if ($ready) { break }
         Start-Sleep -Seconds 1
     }

@@ -86,6 +86,30 @@ jobs:
           Copy-Item (Get-Command uv).Source "$bin/uv-$triple.exe"
           Write-Host "Staged: source -> $src ; uv -> $bin/uv-$triple.exe (triple $triple)"
 
+      # agency 2.0 ships its own engine: a portable Node and the AIMEAT connector installed into the app,
+      # so nothing depends on a Node the person installed (0.8.x did, and only worked on dev machines).
+      # Connector = npm's newest at build time (the fleet follows npm latest too); the smoke below runs it
+      # on the bundled node before anything is published.
+      - name: Stage engine (portable Node + AIMEAT connector)
+        shell: pwsh
+        run: |
+          $ag = "aimeat-agency/src-tauri/resources"
+          $ver = "v24.21.0"
+          $zip = "node-$ver-win-x64.zip"
+          Invoke-WebRequest "https://nodejs.org/dist/$ver/$zip" -OutFile $env:RUNNER_TEMP/$zip
+          $sums = (Invoke-WebRequest "https://nodejs.org/dist/$ver/SHASUMS256.txt").Content -split "`n" | Where-Object { $_ -match " $zip$" }
+          $want = ($sums -split '\s+')[0]
+          $got = (Get-FileHash $env:RUNNER_TEMP/$zip -Algorithm SHA256).Hash.ToLower()
+          if ($want -ne $got) { throw "Node zip checksum mismatch: want $want got $got" }
+          Expand-Archive $env:RUNNER_TEMP/$zip -DestinationPath $env:RUNNER_TEMP/node-x
+          New-Item -ItemType Directory -Force "$ag/node", "$ag/connector" | Out-Null
+          Copy-Item "$env:RUNNER_TEMP/node-x/node-$ver-win-x64/*" "$ag/node" -Recurse
+          $connector = (npm view aimeat version).Trim()
+          & "$ag/node/npm.cmd" install --prefix "$ag/connector" "aimeat@$connector" --no-fund --no-audit
+          if ($LASTEXITCODE -ne 0) { throw "connector install failed" }
+          & "$ag/node/node.exe" "$ag/connector/node_modules/aimeat/dist/bin/aimeat.js" --version
+          Write-Host "Staged: node $ver, connector aimeat@$connector"
+
       - name: Install Tauri CLI
         run: pnpm install --frozen-lockfile
         working-directory: aimeat-agency
