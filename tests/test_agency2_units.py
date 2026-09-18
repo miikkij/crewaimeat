@@ -604,3 +604,23 @@ def test_the_problems_route_gives_the_logged_cause():
     r = c.get(f"/api/problems/{ref}", headers={"Authorization": "Bearer tok"})
     assert r.status_code == 200 and "port 1" in r.json()["text"]
     assert c.get("/api/problems/zzzzzzzz", headers={"Authorization": "Bearer tok"}).status_code == 404
+
+
+def test_validator_lines_reach_the_person_as_a_sentence_and_a_reference(monkeypatch):
+    from crewaimeat.agency2 import app as app_mod
+    from crewaimeat.agency2 import problems
+
+    paths.set_env_key("sk-or-test")
+    monkeypatch.setattr(
+        app_mod.author,
+        "author",
+        lambda *a, **k: {"ok": False, "doc": None, "errors": ["signals.success_signal: bad tree"], "attempts": 3},
+    )
+    r = _client().post(
+        "/api/author",
+        json={"name": "uutiset", "description": "x", "lang": "fi"},
+        headers={"Authorization": "Bearer tok"},
+    )
+    err = r.json()["errors"][0]
+    assert err.startswith("määritelmä ei läpäissyt tarkistusta") and "bad tree" not in err
+    assert "bad tree" in problems.detail(err.split("[ref:")[1].rstrip("]"))["text"]

@@ -32,6 +32,7 @@ _WORDS = {
         "unreachable": "palvelin ei vastaa",
         "model": "mallin kutsu epäonnistui",
         "read": "tietoa ei voitu lukea",
+        "invalid": "määritelmä ei läpäissyt tarkistusta — kokeile kuvata tehtävä toisin",
         "other": "jokin meni vikaan",
     },
     "en": {
@@ -43,6 +44,7 @@ _WORDS = {
         "unreachable": "the instance does not answer",
         "model": "the model call failed",
         "read": "it could not be read",
+        "invalid": "the definition did not pass the check — try describing the job differently",
         "other": "something went wrong",
     },
 }
@@ -52,19 +54,27 @@ def _log():
     return paths.contained(paths.logs_dir() / _LOG_NAME)
 
 
-def note(exc: BaseException, where: str) -> str:
-    """Write the whole cause down; return its reference (random — nothing of the exception in it)."""
+def _write(where: str, type_: str, text: str) -> str:
     ref = uuid.uuid4().hex[:8]
-    row = {
-        "ref": ref,
-        "at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "where": where,
-        "type": type(exc).__name__,
-        "text": str(exc),
-    }
+    row = {"ref": ref, "at": time.strftime("%Y-%m-%d %H:%M:%S"), "where": where, "type": type_, "text": text}
     with open(_log(), "a", encoding="utf-8") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
     return ref
+
+
+def note(exc: BaseException, where: str) -> str:
+    """Write the whole cause down; return its reference (random — nothing of the exception in it)."""
+    return _write(where, type(exc).__name__, str(exc))
+
+
+def say_invalid(errors: list[str], where: str, lang: str = "fi") -> str:
+    """A definition the validator refused: a sentence + a reference to the validator's own lines.
+
+    The lines are written for the MODEL (fed back to it as correction) and some quote a validator
+    exception (crew_def._validate_signal_tree); the person gets a sentence and opens the lines behind
+    the reference if they want them."""
+    ref = _write(where, "ValidationError", "\n".join(errors))
+    return f"{_WORDS.get(lang, _WORDS['en'])['invalid']} [ref:{ref}]"
 
 
 def kind_of(exc: BaseException) -> str:
