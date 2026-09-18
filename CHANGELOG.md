@@ -23,6 +23,10 @@ daemons import the modules at start. `git log` has the measurement behind each e
   a sibling clone and another home's daemon: the six own processes stopped, the other two survived.
 
 ### Removed
+- Finished one-off scripts (git history keeps them): `_fix_chat.py`, `_test_chat_interaction.py` and
+  `_smoke_template.py` (one chat app's fix and its test), `backfill_sanomat_memory.py` (a July backfill),
+  `ec_image_gen.py`, `lingua_image_gen.py` and the seven `ec-image-prompts*.txt` (content-pack image
+  generation, not fleet tooling). `verify_edition_consolidation.py` stays: `rerun_edition.py` points to it.
 - `scripts/view_fleet.ps1` / `.sh`, in favour of `crewaimeat-tui`. They predated the fleet host and the
   spawner, so they could not show how the fleet actually runs.
 
