@@ -73,7 +73,7 @@ tr.click{cursor:pointer} tr.click:hover{background:var(--soft)}
 const TOKEN = "__AGENCY_TOKEN__";
 const T = {
  fi:{
-  nav_agents:"Agentit", nav_health:"Kunto", nav_instances:"Palvelimet",
+  sched:"Aikataulu", sched_add:"Lisää aikataulu", sched_what:"Mitä agentti tekee silloin", sched_save:"Tallenna aikataulu", sched_none:"Ei aikatauluja. Agentti tekee töitä, kun sille antaa tehtävän.", s_daily:"Joka päivä", s_weekdays:"Arkisin", s_weekly:"Kerran viikossa", s_hourly:"Joka tunti", day1:"maanantaisin", day2:"tiistaisin", day3:"keskiviikkoisin", day4:"torstaisin", day5:"perjantaisin", day6:"lauantaisin", day7:"sunnuntaisin", pause:"Keskeytä", resume:"Jatka", paused:"keskeytetty", nav_agents:"Agentit", nav_health:"Kunto", nav_instances:"Palvelimet",
   mig_title:"Tämä on kokonaan uusi sovellus",
   mig_body:"AIMEAT Agency 2.0 toimii eri tavalla kuin aiempi versio. Mikään ei ole ennallaan: agentit tehdään kuvailemalla, ne liitetään AIMEAT-palvelimeen, ja niiden määritelmä on AIMEATissa, ei tällä koneella. Vanhat agenttisi eivät siirry itsestään, mutta voit tehdä ne uudelleen: kuvauksesi on valmiina.",
   mig_old:"Aiemmat agenttisi", mig_remake:"Tee uudelleen", mig_ok:"Selvä, jatketaan",
@@ -104,7 +104,7 @@ const T = {
   confirm_remove:"Poistetaanko agentti tältä koneelta? Se jää AIMEATiin.",
  },
  en:{
-  nav_agents:"Agents", nav_health:"Health", nav_instances:"Instances",
+  sched:"Schedule", sched_add:"Add a schedule", sched_what:"What the agent does then", sched_save:"Save the schedule", sched_none:"No schedules. The agent works when it is given a task.", s_daily:"Every day", s_weekdays:"On weekdays", s_weekly:"Once a week", s_hourly:"Every hour", day1:"on Mondays", day2:"on Tuesdays", day3:"on Wednesdays", day4:"on Thursdays", day5:"on Fridays", day6:"on Saturdays", day7:"on Sundays", pause:"Pause", resume:"Resume", paused:"paused", nav_agents:"Agents", nav_health:"Health", nav_instances:"Instances",
   mig_title:"This is a completely new app",
   mig_body:"AIMEAT Agency 2.0 works differently from the previous version. Nothing is the same: agents are made by describing them, they are connected to an AIMEAT instance, and their definition lives in AIMEAT, not on this machine. Your old agents do not move over by themselves, but you can make them again: your description is ready.",
   mig_old:"Your earlier agents", mig_remake:"Make again", mig_ok:"Got it, continue",
@@ -332,6 +332,15 @@ async function agentDetail(name){
     <div class="card ${noDef?"hidden":""}"><h2>${t("def")}</h2>${a.definition ? planHtml(a.definition.summary) : `<p class="err">${esc(a.definition_error||"")}</p>`}
       <h3>${t("edit")}</h3><textarea id="eDesc" placeholder="${esc(t("edit_desc"))}"></textarea>
       <div class="row" style="margin-top:8px"><button class="btn ghost" id="eMake">${t("edit_make")}</button><span class="muted" id="eBusy"></span></div><div class="err" id="eErr"></div><div id="ePlan"></div></div>
+    <div class="card ${a.connected?"":"hidden"}" id="schedCard"><h2>${t("sched")}</h2><div id="schedList"><p class="muted">…</p></div>
+      <h3>${t("sched_add")}</h3>
+      <div class="row">
+        <select id="sPreset" style="width:auto"><option value="daily">${t("s_daily")}</option><option value="weekdays">${t("s_weekdays")}</option><option value="weekly">${t("s_weekly")}</option><option value="hourly">${t("s_hourly")}</option></select>
+        <select id="sDay" style="width:auto" class="hidden">${[1,2,3,4,5,6,7].map(d=>`<option value="${d}">${t("day"+d)}</option>`).join("")}</select>
+        <input id="sTime" type="time" value="07:00" style="width:auto">
+      </div>
+      <label>${t("sched_what")}</label><textarea id="sWhat" style="min-height:70px"></textarea>
+      <div class="row" style="margin-top:8px"><button class="btn ghost" id="sAdd">${t("sched_save")}</button></div><div class="err" id="sErr"></div></div>
     <div class="card"><h2>${t("runs")}</h2>${a.tasks_error?`<p class="err">${esc(a.tasks_error)}</p>`:""}
       ${tasks.length ? `<table><tr><th></th><th></th><th></th></tr>${tasks.map(x=>`<tr><td>${esc(x.title||x.id)}</td><td><span class="pill ${stCls(x.status)}">${esc(stLabel(x.status))}</span></td><td class="muted">${esc((x.completedAt||x.updatedAt||x.updated_at||x.createdAt||x.created_at||"").replace("T"," ").slice(0,16))}</td></tr>
         ${x.output ? `<tr><td colspan="3"><details><summary class="muted">${t("output")}</summary><div class="out">${esc(x.output)}</div></details></td></tr>`:""}
@@ -357,6 +366,16 @@ async function agentDetail(name){
     }catch(e){ $("#fErr").textContent=e.message; }
     $("#fBusy").textContent="";
   };
+  if(a.connected) loadSchedules(name);
+  $("#sPreset").onchange = () => { const v=$("#sPreset").value; $("#sDay").classList.toggle("hidden", v!=="weekly"); $("#sTime").classList.toggle("hidden", v==="hourly"); };
+  $("#sAdd").onclick = async () => {
+    $("#sErr").textContent="";
+    try{
+      await api("POST",`/api/agents/${name}/schedules`,{preset:$("#sPreset").value, time:$("#sTime").value, weekday:+$("#sDay").value, what:$("#sWhat").value,
+        timezone:(Intl.DateTimeFormat().resolvedOptions().timeZone||"Europe/Helsinki")});
+      $("#sWhat").value=""; loadSchedules(name);
+    }catch(e){ $("#sErr").textContent=e.message; }
+  };
   $("#eMake").onclick = async () => {
     $("#eErr").textContent=""; $("#eBusy").textContent=t("making");
     try{
@@ -371,6 +390,16 @@ async function agentDetail(name){
     }catch(e){ $("#eErr").textContent=e.message; }
     $("#eBusy").textContent="";
   };
+}
+
+async function loadSchedules(name){
+  let d; try{ d = await api("GET",`/api/agents/${name}/schedules?lang=${LANG}`); }catch(e){ $("#schedList").innerHTML=`<p class="err">${esc(e.message)}</p>`; return; }
+  if(!d.schedules.length){ $("#schedList").innerHTML=`<p class="muted">${t("sched_none")}</p>`; return; }
+  $("#schedList").innerHTML = `<table>${d.schedules.map(x=>`<tr><td><b>${esc(x.when)}</b>${x.enabled?"":` <span class="pill">${t("paused")}</span>`}<div class="muted">${esc(x.what)}</div></td>
+    <td style="text-align:right;white-space:nowrap;width:1%"><button class="btn ghost small" data-tog="${esc(x.id)}" data-en="${x.enabled?1:0}">${x.enabled?t("pause"):t("resume")}</button>
+    <button class="btn ghost small" data-del="${esc(x.id)}">${t("inst_remove")}</button></td></tr>`).join("")}</table>`;
+  document.querySelectorAll("[data-tog]").forEach(b => b.onclick = async () => { try{ await api("PATCH",`/api/agents/${name}/schedules/${b.dataset.tog}`,{enabled: b.dataset.en!=="1"}); }catch(e){ alert(e.message); } loadSchedules(name); });
+  document.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => { try{ await api("DELETE",`/api/agents/${name}/schedules/${b.dataset.del}`); }catch(e){ alert(e.message); } loadSchedules(name); });
 }
 
 // ── health ──

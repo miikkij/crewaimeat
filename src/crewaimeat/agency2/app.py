@@ -15,7 +15,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from crewaimeat.agency2 import author, connect, engine, health, migrate, node, paths, procs, store, trial
+from crewaimeat.agency2 import author, connect, engine, health, migrate, node, paths, procs, schedule, store, trial
 
 TOKEN_ENV = "AIMEAT_AGENCY_TOKEN"
 VERSION = "2.0.0"
@@ -67,6 +67,18 @@ class UrlIn(BaseModel):
     url: str
 
 
+class ScheduleIn(BaseModel):
+    preset: str  # daily | weekdays | weekly | hourly
+    time: str = "07:00"
+    weekday: int = 1  # ISO: 1 = Monday … 7 = Sunday
+    what: str
+    timezone: str = "Europe/Helsinki"
+
+
+class EnabledIn(BaseModel):
+    enabled: bool
+
+
 # ── helpers ─────────────────────────────────────────────────────────────────
 
 
@@ -98,6 +110,9 @@ def _after_approval(name: str, st: dict | None) -> None:
 
 
 def _autostart() -> None:
+    if not paths.get_env_key():
+        print("[agency2] autostart waits for the OpenRouter key (a runtime cannot start without a model)", flush=True)
+        return
     try:
         if any(a.get("connected") for a in store.agents()):
             procs.ensure_serve()
@@ -163,6 +178,9 @@ def create_app(token: str | None = None) -> FastAPI:
         if not chk["ok"]:
             raise _bad(chk["detail"])
         paths.set_env_key(key)
+        # A runtime cannot start without a model (the README expansion calls it at start), so agents
+        # that autostarted before the key existed are down now. Bring them up with the key.
+        threading.Thread(target=_autostart, name="start-after-key", daemon=True).start()
         return chk
 
     @app.post("/api/instances", dependencies=auth)
@@ -337,7 +355,7 @@ def create_app(token: str | None = None) -> FastAPI:
         if not a:
             raise _bad(f"no agent '{name}' on this machine", 404)
         store.update_agent(name, connected=False)
-        return connect.start(name, a["instance"], a["owner"], on_done=_after_approval)
+        return connect.start(name, a["instance"], a["owner"], on_done=_after_approval, fresh=True)
 
     @app.post("/api/agents/{name}/start", dependencies=auth)
     def start(name: str) -> dict:
@@ -399,6 +417,64 @@ def create_app(token: str | None = None) -> FastAPI:
         procs.stop(name)
         store.remove_agent(name)
         return {"ok": True}
+
+    # ── schedules: the node's clock, the agent's own agent_task records ──
+
+    def _connected(name: str) -> dict:
+        a = store.agent(name)
+        if not a or not a.get("connected"):
+            raise _bad("connect the agent first")
+        return a
+
+    def _node_error(exc: Exception) -> HTTPException:
+        if isinstance(exc, node.Refused) and exc.code in ("SCOPE_DENIED", "INSUFFICIENT_SCOPE", "ACCESS_DENIED"):
+            need = ", ".join(connect.REQUIRED_SCOPES)
+            return _bad(f"the agent was approved without the permissions schedules need ({need}) — reconnect it: {exc}")
+        return _bad(str(exc), 502)
+
+    @app.get("/api/agents/{name}/schedules", dependencies=auth)
+    def schedules(name: str, lang: str = "fi") -> dict:
+        _connected(name)
+        try:
+            return {"schedules": schedule.list_for(name, lang)}
+        except (node.Refused, node.NoDaemon) as exc:
+            raise _node_error(exc) from exc
+
+    @app.post("/api/agents/{name}/schedules", dependencies=auth)
+    def schedule_create(name: str, body: ScheduleIn) -> dict:
+        _connected(name)
+        try:
+            return {
+                "ok": True,
+                "schedule": schedule.create(
+                    name,
+                    preset=body.preset,
+                    time=body.time,
+                    weekday=body.weekday,
+                    what=body.what,
+                    timezone=body.timezone,
+                ),
+            }
+        except schedule.ScheduleError as exc:
+            raise _bad(str(exc)) from exc
+        except (node.Refused, node.NoDaemon) as exc:
+            raise _node_error(exc) from exc
+
+    @app.patch("/api/agents/{name}/schedules/{sid}", dependencies=auth)
+    def schedule_enable(name: str, sid: str, body: EnabledIn) -> dict:
+        _connected(name)
+        try:
+            return {"ok": True, "result": schedule.set_enabled(name, sid, body.enabled)}
+        except (node.Refused, node.NoDaemon) as exc:
+            raise _node_error(exc) from exc
+
+    @app.delete("/api/agents/{name}/schedules/{sid}", dependencies=auth)
+    def schedule_delete(name: str, sid: str) -> dict:
+        _connected(name)
+        try:
+            return {"ok": True, "result": schedule.delete(name, sid)}
+        except (node.Refused, node.NoDaemon) as exc:
+            raise _node_error(exc) from exc
 
     @app.get("/api/health", dependencies=auth)
     def health_route(lang: str = "fi") -> dict:

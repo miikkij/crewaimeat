@@ -25,9 +25,11 @@ import time
 
 from crewaimeat.agency2 import engine
 
-# Beyond the node defaults (memory:read/write/delete, catalogue:read). agent:write is what the scaffold's
-# identity push (tags) needs — measured: without it `aimeat_agent_tags_set` answers SCOPE_DENIED.
-REQUIRED_SCOPES = ("agent:write",)
+# Beyond the node defaults (memory:read/write/delete, catalogue:read):
+#   agent:write     the scaffold's identity push (tags) — measured: without it tags_set answers SCOPE_DENIED
+#   task:write      creating the agent's own `agent_task` schedule (services/schedule-gate.ts)
+#   workflow:read   listing schedules (GET /v1/schedules)
+REQUIRED_SCOPES = ("agent:write", "task:write", "workflow:read")
 
 _CODE_RE = re.compile(r"Verification code:\s*([A-Z0-9]{3,}-[A-Z0-9]{3,})")
 _URL_RE = re.compile(r"Open\s+(https?://\S+/v1/agents/verify)\S*")
@@ -56,16 +58,43 @@ def parse(text: str) -> dict:
         "verify_url": url.group(1) if url else None,
         "approved": "Approved!" in text,
         "stored": "Token stored" in text,
+        "already": "Already connected!" in text,
     }
 
 
-def start(name: str, instance_url: str, owner: str, *, on_done=None) -> dict:
-    """Start the device flow in the background. Returns the state row; poll `state(name)`."""
+def _token_path(name: str, owner: str):
+    from crewaimeat.agency2 import paths
+
+    return paths.aimeat_home() / "tokens" / f"{name}@{owner}.token"
+
+
+def _set_aside(name: str, owner: str):
+    """Move the stored credential out of the connector's sight, so it runs a NEW device flow.
+
+    The connector has no "force": with a valid token it answers "Already connected!" and exits, and a
+    reconnect is exactly the case where the old token is valid but carries the wrong scopes (scopes are
+    baked into the token at approval). `tokens/.replaced/` is not read — the connector lists only
+    `*.token` files directly in `tokens/` (cli/connect/keychain.ts). Returns where it went, or None."""
+    src = _token_path(name, owner)
+    if not src.is_file():
+        return None
+    dst = src.parent / ".replaced" / f"{src.stem}.{int(time.time())}.token"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    src.replace(dst)
+    return dst
+
+
+def start(name: str, instance_url: str, owner: str, *, on_done=None, fresh: bool = False) -> dict:
+    """Start the device flow in the background. Returns the state row; poll `state(name)`.
+
+    fresh=True (a reconnect) sets the stored credential aside first, so the person approves again —
+    and puts it back if the new flow does not end with a new token."""
     if os.environ.get("PYTEST_CURRENT_TEST"):
         raise RuntimeError("connect.start spawns the connector — never under pytest")
     cur = state(name)
     if cur and cur.get("status") in ("starting", "waiting"):
         return cur
+    aside = _set_aside(name, owner) if fresh else None
     argv = engine.connector_argv(
         "connect", "--url", instance_url, "--owner", owner, "--agent", name, "--mode", "task-runner"
     )
@@ -114,9 +143,11 @@ def start(name: str, instance_url: str, owner: str, *, on_done=None) -> dict:
                 _set(name, output=buf[-4000:])
         rc = proc.wait()
         p = parse(buf)
-        if rc == 0 and p["stored"]:
+        if rc == 0 and (p["stored"] or (p["already"] and not fresh)):
             _set(name, status="approved", finished=time.time())
         else:
+            if aside is not None and not _token_path(name, owner).is_file():
+                aside.replace(_token_path(name, owner))  # the old key is better than none
             # Never guess ("maybe already registered"): the connector's own words are the reason.
             _set(name, status="failed", error=_tail(buf) or f"connector exited with {rc}", finished=time.time())
         if on_done:

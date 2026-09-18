@@ -85,6 +85,7 @@ def test_connector_output_is_parsed():
         "verify_url": "http://localhost:40561/v1/agents/verify",
         "approved": True,
         "stored": True,
+        "already": False,
     }
     assert connect.parse("Requesting device authorization...\n")["code"] is None
 
@@ -208,7 +209,9 @@ def test_health_warns_about_an_instance_without_the_live_connection(_isolated):
         "en",
         openrouter_fn=lambda: {"ok": True, "detail": ""},
         health_fn=lambda url: {"ok": True, "node_id": "n", "detail": {}},
-        roster_fn=lambda n: [{"name": "uutiset", "mode": "task-runner", "default_scopes": ["agent:write"]}],
+        roster_fn=lambda n: [
+            {"name": "uutiset", "mode": "task-runner", "default_scopes": list(connect.REQUIRED_SCOPES)}
+        ],
         running_fn=lambda n: {"pid": 1},
     )
     inst = next(r for r in rows if r["id"].startswith("instance:"))
@@ -353,9 +356,82 @@ def test_health_says_a_stopped_agent_has_no_definition(_isolated):
         "en",
         openrouter_fn=lambda: {"ok": True, "detail": ""},
         health_fn=lambda url: {"ok": True, "node_id": "n", "detail": {}},
-        roster_fn=lambda n: [{"name": "myyntiraportti", "mode": "task-runner", "default_scopes": ["agent:write"]}],
+        roster_fn=lambda n: [
+            {"name": "myyntiraportti", "mode": "task-runner", "default_scopes": list(connect.REQUIRED_SCOPES)}
+        ],
         running_fn=lambda n: None,
         log_fn=lambda n: "[myyntiraportti] CANNOT START — crews.registry.myyntiraportti holds no crew definition",
     )
     row = next(r for r in rows if r["id"] == "agent:myyntiraportti")
     assert "no definition" in row["detail"] and row["fix"] == "agent:myyntiraportti"
+
+
+# ── schedules ────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("preset", "time", "day", "cron", "fi"),
+    [
+        ("daily", "07:05", 1, "5 7 * * *", "joka päivä klo 07.05"),
+        ("weekdays", "8:00", 1, "0 8 * * 1-5", "arkisin klo 08.00"),
+        ("weekly", "09:30", 1, "30 9 * * 1", "maanantaisin klo 09.30"),
+        ("weekly", "18:00", 7, "0 18 * * 0", "sunnuntaisin klo 18.00"),
+        ("hourly", "", 1, "0 * * * *", "joka tasatunti"),
+    ],
+)
+def test_the_cron_is_built_by_code_and_read_back_in_words(preset, time, day, cron, fi):
+    from crewaimeat.agency2 import schedule
+
+    assert schedule.build_cron(preset, time, day) == cron
+    assert schedule.describe(cron, "fi") == fi
+
+
+def test_bad_schedule_input_is_refused():
+    from crewaimeat.agency2 import schedule
+
+    with pytest.raises(schedule.ScheduleError):
+        schedule.build_cron("daily", "25:00")
+    with pytest.raises(schedule.ScheduleError):
+        schedule.build_cron("monthly", "07:00")
+    assert schedule.describe("*/5 * * * *", "fi") == "*/5 * * * *"  # not ours: shown as it is, not guessed
+
+
+def test_the_list_shows_only_this_agents_task_schedules(monkeypatch):
+    from crewaimeat.agency2 import schedule
+
+    rows = {
+        "schedules": [
+            {
+                "id": "a",
+                "type": "agent_task",
+                "agentName": "uutiset",
+                "cron": "0 7 * * *",
+                "enabled": True,
+                "taskTemplate": {"title": "t", "description": "Kerää uutiset"},
+            },
+            {"id": "b", "type": "agent_task", "agentName": "toinen", "cron": "0 8 * * *"},
+            {"id": "c", "type": "ai", "cron": "0 9 * * *"},
+        ]
+    }
+    monkeypatch.setattr(schedule.node, "call", lambda agent, tool, args=None, **kw: rows)
+    got = schedule.list_for("uutiset", "fi")
+    assert [(g["id"], g["when"], g["what"]) for g in got] == [("a", "joka päivä klo 07.00", "Kerää uutiset")]
+
+
+def test_schedules_need_their_scopes_at_approval():
+    assert {"task:write", "workflow:read"} <= set(connect.REQUIRED_SCOPES)
+
+
+def test_a_reconnect_sets_the_old_key_aside_where_the_connector_cannot_see_it(_isolated):
+    tokens = _isolated / "home" / "tokens"
+    tokens.mkdir()
+    (tokens / "uutiset@teemu.token").write_text("old", encoding="utf-8")
+    moved = connect._set_aside("uutiset", "teemu")
+    assert moved is not None and moved.read_text(encoding="utf-8") == "old"
+    assert moved.parent.name == ".replaced" and not (tokens / "uutiset@teemu.token").exists()
+    assert [p.name for p in tokens.glob("*.token")] == []  # what the connector lists: nothing
+    assert connect._set_aside("uutiset", "teemu") is None
+
+
+def test_already_connected_is_parsed():
+    assert connect.parse("Already connected! Token is valid.\n")["already"] is True
