@@ -606,21 +606,11 @@ def test_the_problems_route_gives_the_logged_cause():
     assert c.get("/api/problems/zzzzzzzz", headers={"Authorization": "Bearer tok"}).status_code == 404
 
 
-def test_validator_lines_reach_the_person_as_a_sentence_and_a_reference(monkeypatch):
-    from crewaimeat.agency2 import app as app_mod
+def test_validator_lines_reach_the_person_as_a_sentence_and_a_reference():
     from crewaimeat.agency2 import problems
 
-    paths.set_env_key("sk-or-test")
-    monkeypatch.setattr(
-        app_mod.author,
-        "author",
-        lambda *a, **k: {"ok": False, "doc": None, "errors": ["signals.success_signal: bad tree"], "attempts": 3},
-    )
-    r = _client().post(
-        "/api/author",
-        json={"name": "uutiset", "description": "x", "lang": "fi"},
-        headers={"Authorization": "Bearer tok"},
-    )
-    err = r.json()["errors"][0]
-    assert err.startswith("määritelmä ei läpäissyt tarkistusta") and "bad tree" not in err
-    assert "bad tree" in problems.detail(err.split("[ref:")[1].rstrip("]"))["text"]
+    bad = json.dumps({**_VALID, "tasks": []})
+    res = author.author("uutiset", "x", lang="fi", call=lambda p: bad)
+    err = res["errors"][0]
+    assert not res["ok"] and err.startswith("määritelmä ei läpäissyt tarkistusta") and "[ref:" in err
+    assert problems.detail(err.split("[ref:")[1].rstrip("]"))["type"] == "ValidationError"

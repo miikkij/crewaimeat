@@ -67,7 +67,12 @@ def author(
     llm: Any = None,
     call: Callable[[str], str] | None = None,
 ) -> dict:
-    """Returns {ok, doc, errors, attempts}. `doc` is the best attempt (valid when ok)."""
+    """Returns {ok, doc, errors, attempts}. `doc` is the best attempt (valid when ok).
+
+    `errors` is for the PERSON: sentences with a `[ref:…]` to the whole cause (problems.py). The
+    validator's own lines are for the model — they go back into the next attempt's prompt and into
+    the problems log, never straight into what this returns."""
+    from crewaimeat.agency2 import problems
     from crewaimeat.crew_def import validate_crew_doc
     from crewaimeat.forge_json import coerce_doc
 
@@ -89,12 +94,10 @@ def author(
             raw = call(_prompt(name, description, lang, current=current, errors=errors))
         except Exception as exc:  # noqa: BLE001 — a model/transport error is the answer, shown as is
             _log(name, attempt, model, t0, f"model call failed: {type(exc).__name__}")
-            from crewaimeat.agency2 import problems
-
-            err = [problems.say(exc, "author.model_call", lang, kind="model")]
-            if best[1] is None:
-                best = (10**6, None, err)
-            return {"ok": False, "doc": best[1], "errors": best[2], "attempts": attempt}
+            said = [problems.say(exc, "author.model_call", lang, kind="model")]
+            if best[1] is not None:  # an earlier attempt is kept: never end worse than it
+                said.append(problems.say_invalid(best[2], "author.validation", lang))
+            return {"ok": False, "doc": best[1], "errors": said, "attempts": attempt}
         doc = coerce_doc(raw)
         if doc is None:
             errors = ["the answer was not a JSON object"]
@@ -107,7 +110,8 @@ def author(
             best = (len(errors), doc, errors)
         if not errors:
             return {"ok": True, "doc": doc, "errors": [], "attempts": attempt}
-    return {"ok": False, "doc": best[1], "errors": best[2], "attempts": MAX_ATTEMPTS}
+    said = [problems.say_invalid(best[2], "author.validation", lang)]
+    return {"ok": False, "doc": best[1], "errors": said, "attempts": MAX_ATTEMPTS}
 
 
 def _model_of(llm: Any) -> str:

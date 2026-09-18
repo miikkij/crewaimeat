@@ -348,14 +348,10 @@ def create_app(token: str | None = None) -> FastAPI:
             except Exception as exc:  # noqa: BLE001
                 raise _bad(problems.say(exc, "author.current_definition", body.lang, kind="read")) from exc
         res = author.author(name, body.description, lang=body.lang, current=current)
-        errors = res["errors"]
-        if not res["ok"] and not any("[ref:" in e for e in errors):
-            # the validator's lines (written for the model) -> a sentence + the lines behind a reference
-            errors = [problems.say_invalid(errors, "author.validation", body.lang)]
-        return {
+        return {  # author() returns sentences + references only (see its docstring)
             "ok": res["ok"],
             "doc": res["doc"],
-            "errors": errors,
+            "errors": res["errors"],
             "attempts": res["attempts"],
             "summary": author.summary(res["doc"], body.lang) if res.get("doc") else None,
         }
