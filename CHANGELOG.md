@@ -4,6 +4,27 @@ Notable changes to crewaimeat. Format loosely follows [Keep a Changelog](https:/
 Dates are the working dates. A change reaches a running fleet only on its next restart, because the
 daemons import the modules at start. `git log` has the measurement behind each entry.
 
+## [Unreleased] — 2026-09-18 — soupsieve CVEs, example config
+
+### Security
+- soupsieve 2.8.4 → 2.9.2 in `uv.lock`, closing Dependabot #48 and #49 (GHSA-j934-xhv5-fg8f,
+  GHSA-gjv8-xp57-g29c: polynomial-time ReDoS in selector parsing; fixed in 2.9.0).
+
+### Changed
+- `llm_providers.example.json` carries every profile a crew here declares — `content`, `news`,
+  `coding`, `content-free`, `image` — mirroring the live routing (default `content-free`). It had
+  only `content` and `coding`, so three of five declared profiles fell silently to the default on
+  a fresh checkout. NVIDIA NIM is no longer in it (removed from routing 2026-07-23; the `nvidia`
+  type still works). `crews` is an override-only map, as in the live file.
+- `.env.example` is in English, drops the NVIDIA NIM block, and no longer ships `XAI_MODEL=xai/grok-4-fast`:
+  xAI's own model list no longer offers it (checked 2026-09-18), so the value was dead on arrival.
+
+### Verified
+- crewai 1.15.22 on the live routing, run locally (nothing on any node): a coding-profile crew
+  (deepseek-v4-pro) and a content-free crew (gpt-oss-120b), each two model calls. `reasoning_effort`
+  was sent on none of them — 1.15.22 sends it only to o-series and gpt-5+ names, and only when set
+  — no `max_tokens` either, every call `finish_reason=stop` with full content.
+
 ## [Unreleased] — 2026-09-18 — crewai 1.15.22
 
 ### Changed

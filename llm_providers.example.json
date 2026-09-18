@@ -1,25 +1,54 @@
 {
-  "_about": "Per-crew LLM routing. Copy to llm_providers.json (gitignored) to use it. 'profiles' are named provider chains; 'crews' maps an agent_name to a profile; every other crew uses 'default'. So content crews route to one model (grok) and code crews to another (a real coder). get_llm() tries each provider in the chosen profile top-to-bottom, and within a provider its models in order, falling through on ANY error (across providers). Delete the file to fall back to env (OPENROUTER_MODEL).",
+  "_about": "Per-crew LLM routing. Copy to llm_providers.json (gitignored) to use it. 'profiles' are named provider chains. Each crew names its own profile (LLM_PROFILE in crews/<name>_crew.py, llm_profile in a JSON crew doc); 'crews' is a per-machine OVERRIDE of that; a crew that names none uses 'default'. get_llm() tries each provider in the chosen profile top-to-bottom, and within a provider its models in order, falling through on ANY error (across providers). A provider whose key is missing is skipped. The owner can also choose a model per agent on the node (crews.llm.<agent>) and a TUI pin outranks everything on this machine; see README 'Who picks the profile'. Never add max_tokens. Delete the file to fall back to env (OPENROUTER_MODEL).",
   "_fields": {
-    "default": "profile name used by any crew not listed in 'crews'",
+    "default": "profile used by a crew that names none",
     "profiles": "name -> { providers:[...] }. A provider: {name, type, api_key_env?, base_url?, context?, models:[...], enabled?}",
-    "crews": "agent_name -> profile name (the agent_name from `aimeat connect add --agent ...`)",
-    "type": "openrouter | ollama (local, keyless) | xai | openai | nvidia (NVIDIA NIM @ build.nvidia.com — free, OpenAI-compatible, ~40 req/min) | generic (decides the litellm prefix + default base_url)",
-    "api_key_env": "name of the .env var holding the key (omit for keyless local ollama); a provider whose key is missing is skipped, not fatal",
-    "models": "models IN PRIORITY ORDER, each an id string or {id, context}. id has NO litellm prefix. context = that model's MAX context window (tokens) so CrewAI never over-fills a small model.",
+    "crews": "agent_name -> profile name. OVERRIDES ONLY: the crew's own LLM_PROFILE is its default",
+    "type": "openrouter | ollama (local, keyless) | xai | openai | nvidia (NVIDIA NIM, OpenAI-compatible) | generic (decides the litellm prefix + default base_url)",
+    "api_key_env": "NAME of the .env var holding the key (omit for keyless local ollama). Never a key itself",
+    "models": "models IN PRIORITY ORDER, each an id string or {id, context}. id has NO litellm prefix. context = that model's MAX context window (tokens) so a chain never over-fills its smallest model",
     "enabled": "optional false to keep a provider in the file but skip it"
   },
-  "default": "content",
+  "default": "content-free",
   "profiles": {
     "content": {
-      "_use": "news / editorial / features / research — grok is strong at prose; free + local fall back if grok dies.",
+      "_use": "English prose: features, research, briefings. grok is strong at prose, weak at code and at Finnish.",
       "providers": [
         {
-          "name": "xai",
+          "name": "openrouter-paid",
+          "type": "openrouter",
+          "api_key_env": "OPENROUTER_API_KEY",
+          "models": [
+            {
+              "id": "deepseek/deepseek-v4-pro",
+              "context": 1048576
+            },
+            {
+              "id": "z-ai/glm-5.2",
+              "context": 1048576
+            }
+          ]
+        },
+        {
+          "name": "xai-grok",
           "type": "xai",
           "api_key_env": "XAI_API_KEY",
           "models": [
-            { "id": "grok-4.3", "context": 1000000 }
+            {
+              "id": "grok-4.3",
+              "context": 131072
+            }
+          ]
+        },
+        {
+          "name": "openrouter-grok",
+          "type": "openrouter",
+          "api_key_env": "OPENROUTER_API_KEY",
+          "models": [
+            {
+              "id": "x-ai/grok-4.3",
+              "context": 131072
+            }
           ]
         },
         {
@@ -27,8 +56,10 @@
           "type": "openrouter",
           "api_key_env": "OPENROUTER_API_KEY",
           "models": [
-            { "id": "openai/gpt-oss-120b:free", "context": 131072 },
-            { "id": "google/gemma-4-31b-it:free", "context": 262144 }
+            {
+              "id": "google/gemma-4-31b-it:free",
+              "context": 262144
+            }
           ]
         },
         {
@@ -37,32 +68,97 @@
           "base_url": "http://localhost:11434",
           "context": 32768,
           "models": [
-            { "id": "qwen2.5:7b" },
-            { "id": "llama3.2:3b" }
+            {
+              "id": "qwen2.5:7b"
+            },
+            {
+              "id": "llama3.2:3b"
+            }
+          ]
+        }
+      ]
+    },
+    "news": {
+      "_use": "Finnish prose (the Sanomat newspaper). DeepSeek V4 Pro writes it best; gpt-oss-120b is the cheap fallback.",
+      "providers": [
+        {
+          "name": "openrouter-paid",
+          "type": "openrouter",
+          "api_key_env": "OPENROUTER_API_KEY",
+          "models": [
+            {
+              "id": "deepseek/deepseek-v4-pro",
+              "context": 1048576
+            },
+            {
+              "id": "z-ai/glm-5.2",
+              "context": 1048576
+            }
+          ]
+        },
+        {
+          "name": "openrouter-cheap",
+          "type": "openrouter",
+          "api_key_env": "OPENROUTER_API_KEY",
+          "models": [
+            {
+              "id": "openai/gpt-oss-120b",
+              "context": 131072
+            }
+          ]
+        },
+        {
+          "name": "ollama-local",
+          "type": "ollama",
+          "base_url": "http://localhost:11434",
+          "context": 32768,
+          "models": [
+            {
+              "id": "qwen2.5:7b"
+            }
           ]
         }
       ]
     },
     "coding": {
-      "_use": "app / cortex / extension / test crews. Do NOT put grok here (weak at code). Slot your strongest coder as the FIRST provider — e.g. NVIDIA NIM's free frontier coders (glm-5.2 / kimi-k2.6 / minimax-m3), a paid model via OpenRouter, or a local code model.",
+      "_use": "app / cortex / crew-forge / web-tester crews. Never grok here. Slot your strongest coder first; the free meta-router is a late fallback.",
       "providers": [
         {
-          "name": "nvidia-nim",
-          "type": "nvidia",
-          "api_key_env": "NVIDIA_KEY",
-          "base_url": "https://integrate.api.nvidia.com/v1",
-          "models": [
-            { "id": "z-ai/glm-5.2", "context": 131072 },
-            { "id": "moonshotai/kimi-k2.6", "context": 131072 },
-            { "id": "minimaxai/minimax-m3", "context": 131072 }
-          ]
-        },
-        {
-          "name": "openrouter-coder",
+          "name": "openrouter-paid",
           "type": "openrouter",
           "api_key_env": "OPENROUTER_API_KEY",
           "models": [
-            { "id": "openai/gpt-oss-120b:free", "context": 131072 }
+            {
+              "id": "deepseek/deepseek-v4-pro",
+              "context": 1048576
+            },
+            {
+              "id": "openai/gpt-oss-120b",
+              "context": 131072
+            },
+            {
+              "id": "z-ai/glm-5.2",
+              "context": 1048576
+            },
+            {
+              "id": "qwen/qwen3-max",
+              "context": 256000
+            }
+          ]
+        },
+        {
+          "name": "openrouter-free",
+          "type": "openrouter",
+          "api_key_env": "OPENROUTER_API_KEY",
+          "models": [
+            {
+              "id": "openrouter/free",
+              "context": 131072
+            },
+            {
+              "id": "google/gemma-4-31b-it:free",
+              "context": 262144
+            }
           ]
         },
         {
@@ -71,25 +167,95 @@
           "base_url": "http://localhost:11434",
           "context": 32768,
           "models": [
-            { "id": "qwen2.5:7b" }
+            {
+              "id": "qwen2.5:7b"
+            }
+          ]
+        }
+      ]
+    },
+    "content-free": {
+      "_use": "Cheap default for everything else: gpt-oss-120b leads, OpenRouter's free meta-router (picks a free model per call) falls back.",
+      "providers": [
+        {
+          "name": "openrouter-cheap",
+          "type": "openrouter",
+          "api_key_env": "OPENROUTER_API_KEY",
+          "models": [
+            {
+              "id": "openai/gpt-oss-120b",
+              "context": 131072
+            }
+          ]
+        },
+        {
+          "name": "openrouter-free",
+          "type": "openrouter",
+          "api_key_env": "OPENROUTER_API_KEY",
+          "models": [
+            {
+              "id": "openrouter/free",
+              "context": 131072
+            }
+          ]
+        },
+        {
+          "name": "ollama-local",
+          "type": "ollama",
+          "base_url": "http://localhost:11434",
+          "context": 32768,
+          "models": [
+            {
+              "id": "qwen2.5:7b"
+            }
+          ]
+        }
+      ]
+    },
+    "image": {
+      "_use": "The live image services (image-maker, image-scout): the model writes the prompt, the image comes from the image API. Fast first.",
+      "providers": [
+        {
+          "name": "openrouter-gptoss",
+          "type": "openrouter",
+          "api_key_env": "OPENROUTER_API_KEY",
+          "models": [
+            {
+              "id": "openai/gpt-oss-120b",
+              "context": 131072
+            }
+          ]
+        },
+        {
+          "name": "openrouter-paid",
+          "type": "openrouter",
+          "api_key_env": "OPENROUTER_API_KEY",
+          "models": [
+            {
+              "id": "z-ai/glm-5.2",
+              "context": 1048576
+            },
+            {
+              "id": "qwen/qwen3-max",
+              "context": 256000
+            }
+          ]
+        },
+        {
+          "name": "ollama-local",
+          "type": "ollama",
+          "base_url": "http://localhost:11434",
+          "context": 32768,
+          "models": [
+            {
+              "id": "qwen2.5:7b"
+            }
           ]
         }
       ]
     }
   },
   "crews": {
-    "aimeat-app-builder": "coding",
-    "aimeat-app-conductor": "coding",
-    "aimeat-app-editor": "coding",
-    "aimeat-app-designer": "coding",
-    "aimeat-app-specs-designer": "coding",
-    "aimeat-cortex-fixer": "coding",
-    "aimeat-realtime-builder": "coding",
-    "aimeat-realtime-presence-board-builder": "coding",
-    "aimeat-extension-builder": "coding",
-    "aimeat-sdlc-architect": "coding",
-    "crew-forge": "coding",
-    "aimeat-crew-forge": "coding",
-    "web-tester": "coding"
+    "_note": "OVERRIDES ONLY. Each crew declares its own profile; list an agent here only for a deliberate, machine-local deviation."
   }
 }

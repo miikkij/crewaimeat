@@ -85,8 +85,8 @@ AIMEAT_OWNER=<OWNER>       # lets crew-forge register the agents it builds
 **LLM routing (recommended)** — copy `llm_providers.example.json` to `llm_providers.json` (gitignored).
 It defines named **profiles** (provider→model fallback chains); each crew names its profile in its own
 file (`LLM_PROFILE`), and a provider whose key is missing is skipped. Crews in this repo name `content`,
-`coding`, `news`, `content-free` and `image`; the example file ships only `content` and `coding`, and a
-crew whose profile is missing falls back to the file's `default`. When the file exists it overrides
+`coding`, `news`, `content-free` and `image`, and the example file carries all five; a crew whose
+profile is missing falls back to the file's `default`. When the file exists it overrides
 `OPENROUTER_MODEL`. Check a model can actually drive the scaffold with
 `uv run python scripts/check_models.py --quick`. Never add a `max_tokens` cap.
 
