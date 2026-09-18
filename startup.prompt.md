@@ -21,9 +21,12 @@ serve tunnel every crew calls through.
 - You (or the user) write only `build_domain(ctx) -> (agents, tasks)` per crew. The scaffold
   (`src/crewaimeat/aimeat_crew.py`) provides the rest: AIMEAT connection + onboarding, the daemon,
   live progress, identity/offers, LLM routing. See `SCAFFOLD_CANON.md` and `ARCHITECTURE.md`.
-- `crews/` already holds ~40 working crews (a leading underscore = parked/dormant). Notables:
+- `crews/` already holds ~50 working crews (a leading underscore = parked/dormant). Notables:
   **crew-forge** (an agent that builds and launches other agents), a research family, a full
-  Finnish-newspaper content pipeline, and a DM concierge.
+  Finnish-newspaper content pipeline, a publishing desk (`julkaisu-*`), and a DM concierge. Agents
+  can also be defined as JSON on the node and edited by the owner in the agent's Crew tab.
+- Two run modes, chosen per agent on the node (`run_mode`): **resident** (a thread in the fleet host)
+  or **spawn** (nothing runs while idle; the spawner starts a worker process per wake).
 - **aimeat-agency** (`aimeat-agency/`) is a Tauri desktop appliance for non-developers: a guided
   wizard (account → AI brain → first agent → approve → run) over the local Python cockpit
   (`crewaimeat.agency.cockpit`).
@@ -44,9 +47,9 @@ serve tunnel every crew calls through.
    `startup.prompt.md` first — this repo does not run a node.
 2. **Owner handle** — the account agents register under (create it at `<NODE_URL>/v1/portal` if
    missing). Call it `<OWNER>`.
-3. **Model access** — at least one of: an **OpenRouter** key (`https://openrouter.ai/keys`;
-   `openrouter/owl-alpha` is free), an **NVIDIA NIM** key (`https://build.nvidia.com` — free
-   frontier-class models, OpenAI-compatible), an **xAI** key, or a **local Ollama** (keyless).
+3. **Model access** — at least one of: an **OpenRouter** key (`https://openrouter.ai/keys`; its
+   `:free` models such as `openai/gpt-oss-120b:free` cost nothing), an **xAI** key, another
+   OpenAI-compatible endpoint, or a **local Ollama** (keyless).
 4. *(Optional)* **How they want to run:** the whole **fleet** (default), a **single crew** (dev loop),
    or the **aimeat-agency** desktop app (non-developer path — its wizard replaces Steps 3–5).
 
@@ -54,9 +57,11 @@ Confirm 1–3 before proceeding. Never invent a node URL, owner, or key.
 
 ## Step 1 — Prerequisites (check; offer to install what's missing)
 
-- **Python 3.10–3.13**, **uv** (https://docs.astral.sh/uv/), **Node.js** (for the `npx aimeat` CLI).
-- Verify: `uv --version`, `node --version`. This is a **uv** project — the `.venv` has no pip; always
-  `uv run` / `uv sync`, never plain `pip`.
+- **Python 3.10–3.13**, **uv** (https://docs.astral.sh/uv/), **Node.js**, and the npm **`aimeat`**
+  connector installed globally at **3.13.4 or newer** (`npm i -g aimeat@latest`). The fleet's serve
+  daemon runs from that global install, and older versions can drop task wakes silently.
+- Verify: `uv --version`, `node --version`, `aimeat --version`. This is a **uv** project — the `.venv`
+  has no pip; always `uv run` / `uv sync`, never plain `pip`.
 
 ## Step 2 — Install
 
@@ -73,15 +78,17 @@ Optional extras: `uv sync --extra tui` (the fleet TUI) · `uv sync --extra agenc
 it is gitignored):
 
 ```
-OPENROUTER_API_KEY=...     # and/or NVIDIA_KEY=..., XAI_API_KEY=... (USE_XAI=1)
+OPENROUTER_API_KEY=...     # and/or XAI_API_KEY=... (USE_XAI=1)
 AIMEAT_OWNER=<OWNER>       # lets crew-forge register the agents it builds
 ```
 
 **LLM routing (recommended)** — copy `llm_providers.example.json` to `llm_providers.json` (gitignored).
-It defines named **profiles** (provider→model fallback chains) and maps each crew to one — content crews
-to a prose model, code/app crews to a real coder; a provider whose key is missing is skipped. When the
-file exists it overrides `OPENROUTER_MODEL`. Check a model can actually drive the scaffold with
-`uv run python scripts/check_models.py --quick`.
+It defines named **profiles** (provider→model fallback chains); each crew names its profile in its own
+file (`LLM_PROFILE`), and a provider whose key is missing is skipped. Crews in this repo name `content`,
+`coding`, `news`, `content-free` and `image`; the example file ships only `content` and `coding`, and a
+crew whose profile is missing falls back to the file's `default`. When the file exists it overrides
+`OPENROUTER_MODEL`. Check a model can actually drive the scaffold with
+`uv run python scripts/check_models.py --quick`. Never add a `max_tokens` cap.
 
 ## Step 4 — Register + approve agents (device authorization, RFC 8628)
 
@@ -97,8 +104,12 @@ their profile → Agents tab on the node), enter the code, and **approve**; the 
 approved and the token lands in this repo's `.aimeat/` home (gitignored — never read it out loud).
 
 - **Modes** (the five AIMEAT agent modes): `autonomous` · `interactive` · `coordinator` ·
-  `task-runner` · `workstation`. Crews here are **task-runner** — their tasks are born active and run
-  unattended, and the mode also picks the onboarding flow (next step).
+  `task-runner` · `workstation`. Crews here expect **task-runner** — their tasks are born active and
+  run unattended, and the mode also picks the onboarding flow (next step). **The owner sets the mode
+  on the node** (the agent's page in the dashboard); a new agent defaults to `interactive`, where each
+  task waits for a person to press Start. The runtime never writes the mode, so tell the user to set it.
+- **Run mode** is also the owner's setting on the node: `spawn` (no process while idle, one worker
+  per wake — the cheap default for a fleet) or `resident` (a thread in the fleet host).
 - **Whole fleet against one node** in one go:
   `uv run python scripts/register_fleet.py --owner <OWNER> --url <NODE_URL>` (prints one approval
   code per crew; `--agents a,b,c` for a subset).
@@ -111,10 +122,14 @@ approved and the token lands in this repo's `.aimeat/` home (gitignored — neve
 ```
 
 `start_fleet` runs `uv sync`, ensures the **one shared serve daemon** (the loopback tunnel to the node,
-plus a supervisor that restarts it), then runs the **fleet host**: every registered+approved crew as a
-thread in ONE process (crewai imported once; ~20× less RAM than per-process). It stays in that terminal;
-Ctrl+C stops the whole fleet. Only approved agents come online — an unapproved one waits and joins by
-itself once approved. Alternatives:
+plus a supervisor that restarts it), starts the **spawner** (for agents the node marks `run_mode=spawn`),
+then runs the **fleet host** for every other registered+approved crew, as threads in ONE process. With
+an all-spawn roster the host exits at once and the window follows the spawner log; Ctrl+C there stops
+watching, not the fleet. Only approved agents come online — an unapproved one waits and joins by itself
+once approved.
+
+**On macOS/Linux** `start_fleet.sh` does not start the spawner: also run `uv run crewaimeat spawner` in a
+second terminal, or spawn-mode agents never run. Alternatives:
 
 - **One crew, foreground (dev loop):** `uv run python crews/<name>_crew.py`
 - **A subset in the host:** `./scripts/start_host.ps1 -Agents a,b` (or `-List` to preview); other OSes:
@@ -123,7 +138,8 @@ itself once approved. Alternatives:
   `uv run --extra agency python -m crewaimeat.agency.cockpit` and open the printed local URL. Its wizard
   handles account, model, registration, and approval on its own.
 - `./scripts/view_fleet.*` — read-only status · `./scripts/terminate_fleet.*` — stop everything
-  (**confirm with the user first**) · `./scripts/install-autostart.ps1` — start on every boot (Windows).
+  (**confirm with the user first**) · `./scripts/install-autostart.ps1` — start the **legacy**
+  per-process crew-forge topology on every boot (Windows); it does not wrap `start_fleet`.
 
 **First connect = Hello Integration.** On its first attach each agent runs AIMEAT's onboarding
 handshake. The full flow is **16 steps** (12 required + 4 optional); a **task-runner** runs a
@@ -137,8 +153,14 @@ Check progress with the node's `aimeat_onboarding_status`, not the dashboard ste
   live progress stream (a deterministic heartbeat, no LLM).
 - **Watch and drive the fleet from a terminal:** `uv run crewaimeat-tui` (after `uv sync --extra tui`) —
   status, per-agent test runs, model picker, logs.
+- **First ask whether it should be an agent.** Something that only runs when called, in a fixed shape,
+  is cheaper as an AIMEAT app-tool or workflow; see "Agent, or AIMEAT-side tool?" in `CLAUDE.md`.
 - **Build a new crew without coding:** queue **crew-forge** a task `/build <description>` — it designs,
   writes + validates `build_domain`, registers, and launches the new agent; the user approves it once.
+  `/build-json <description>` builds it as a JSON definition instead.
+- **Try a JSON crew definition locally, registering nothing:**
+  `uv run crewaimeat try crew_defs/joker.json --prompt "..."`. `uv run crewaimeat new-json-agent <name>`
+  creates an agent whose definition the owner edits on the node (Crew tab).
 - **Scaffold a crew by hand:** `uv run crewaimeat new-crew <name>`, then edit only its `build_domain`
   (or paste `CREW_AUTHORING_PROMPT.md` into an assistant). Give it a real identity IN THE CREW FILE —
   `LLM_PROFILE`, `TAGS`, `CAPABILITIES`, `OFFERS` as module constants (there is no central registry to
@@ -151,15 +173,21 @@ Check progress with the node's `aimeat_onboarding_status`, not the dashboard ste
 
 ## Essentials to teach the user (working with AIMEAT)
 
-- **Liaison + daemon.** One in-crew agent (from `aimeat-crewai`) owns all AIMEAT coordination: it
-  onboards, picks up tasks, publishes the result to memory, marks the task done. Domain agents never
-  touch AIMEAT.
+- **Liaison + daemon.** One in-crew agent (from `aimeat-crewai`) owns AIMEAT coordination such as
+  onboarding; the daemon picks up tasks, and deterministic callbacks publish the result to memory and
+  mark the task done. Domain agents never touch AIMEAT.
+- **The model writes and judges; everything else is code.** Parsing, fetching, formatting and sending
+  are plain Python. A task-runner's TODO plan is written without a model, and a crew whose work is one
+  tool call runs with no model at all (`CrewSpec.on_task`).
 - **Approvals are owner-gated and one-time.** Device code → owner approves → token stored under
   `.aimeat/`. A crew launched before approval waits patiently and comes online alone.
 - **task-runner + auto-activation.** Tasks created for a task-runner agent are born active and run
   unattended; the **last task's output** is published to memory (`crews.<agent>...`) as the deliverable.
-- **LLM routing is per-crew.** `llm_providers.json` profiles + fallback chains; per-agent pins via the
-  TUI model picker. Restart the fleet after changing routing or an agent's identity.
+- **LLM routing is per-crew.** `llm_providers.json` profiles + fallback chains; the owner can also pick
+  a model per agent on the node (`crews.llm.<agent>`), and a per-agent pin from the TUI model picker
+  outranks both on this machine. The owner's directives reach every model call. Restart the fleet after
+  changing the providers file or an agent's identity. If a pinned model id is retired, report it and let
+  the owner choose the replacement.
 - **One serve daemon per checkout.** `AIMEAT_HOME` is pinned to `<repo>/.aimeat` by every entrypoint,
   so all processes share one `serve.json` and never collide with another checkout's fleet.
 - **Two messaging channels.** Dashboard/owner chat (`aimeat_message_*`, private) vs the **federated DM

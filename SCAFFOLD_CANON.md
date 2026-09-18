@@ -2,15 +2,19 @@
 
 **The authoritative "why it's built this way" reference.** The scaffold (`crewaimeat/aimeat_crew.py`, plus `progress.py` and `llm.py`) provides everything below. Reuse it as-is and keep your work in `build_domain`. The **Why** column explains each piece; every one is a real failure we diagnosed and fixed end-to-end against https://aimeat.io, so reusing the scaffold keeps it fixed.
 
-Validated 2026-05-30 against: aimeat-crewai **0.3.4**, aimeat CLI **1.14.3**, crewai **1.14.6** (native providers, no litellm), model `openrouter/owl-alpha`, Windows 11. Result: onboarding 7/7 `completed`; daemon picks up an active task; the domain crew researches; the liaison publishes to memory and completes the task; live progress feed updates every 5s.
+First validated end to end 2026-05-30 (aimeat-crewai 0.3.4, aimeat CLI 1.14.3, crewai 1.14.6, Windows 11): onboarding 7/7 `completed`; daemon picks up an active task; the domain crew researches; the liaison publishes to memory and completes the task; live progress feed updates every 5s.
+
+Current floors (September 2026): **aimeat-crewai >= 0.26.0**, **crewai >= 1.15.18**, the npm **`aimeat` connector >= 3.13.4** (the machine's global install, which no lockfile pins). `pyproject.toml` records why each floor is where it is; every one was measured on a live node.
 
 ---
 
 ## 1. Mental model
 
 - **Liaison** is one in-crew CrewAI agent whose tools are the AIMEAT MCP surface. It handles **all** AIMEAT coordination: Hello Integration, capability reporting, memory writes, task lifecycle. Your **domain agents** stay focused on their own work; the liaison handles every AIMEAT touchpoint.
-- **Per task** the daemon builds a crew of `[liaison, *domain_agents]` with tasks `[*domain_tasks, finalize]`. The domain agents produce the deliverable; the liaison's `finalize` task publishes it and closes the AIMEAT task.
+- **Per task** the daemon builds a crew of `[liaison, *domain_agents]` with tasks `[*domain_tasks, finalize]`. The domain agents produce the deliverable. Deterministic callbacks then write it to memory (`_make_publish_cb`), mark the todos done and close the AIMEAT task (`_make_complete_cb`). The liaison's `finalize` task does no tool work any more: on weaker models the model skipped the memory write or answered "done" without marking the todos.
 - **Daemon** is the crew as a reachable target on AIMEAT: it polls the queue and runs the crew for each task. Other same-owner agents can queue work to it.
+- **Run mode** decides where the daemon lives: a thread in the fleet host (resident), or a worker process the spawner starts per wake and that exits after one cycle (spawn). Same code path either way: the worker is `run_crew(one_shot=True)`.
+- **The model writes and judges; everything else is code.** If a step does not depend on a real result the model has to interpret, and is not prose a person will read, it is deterministic.
 
 ## 2. Lifecycle
 
@@ -21,11 +25,13 @@ aimeat connect (+ approve in dashboard)
 Hello Integration (onboarding, once)         ← deterministic gate; LLM only if needed
         │
         ▼
-run_crew_daemon  ──poll──►  PROPOSE: queued tasks → propose todos, await approval
-                            EXECUTE: active/stalled tasks → run crew → publish + complete
+run_crew_daemon  ──poll──►  PROPOSE: tasks with no live plan → propose todos
+                            EXECUTE: active/stalled tasks → run crew (or on_task) → publish + complete
 ```
 
-A task-runner agent's tasks are **auto-activated** on the node (C3, landed 2026-05-30): created directly as `active`, so they skip PROPOSE and have no todos. That is full autonomy. (If you need a todo plan, the task travels `queued → propose → owner approves → active`.)
+A task-runner agent's tasks are **auto-activated** on the node: created directly as `active`. PROPOSE still gives them a plan (aimeat-crewai >= 0.21 picks up active tasks with no plan; without it onboarding jams at 6/7), but the plan is written **deterministically** from the task's title, because nobody reads it before the work starts. An `interactive` or `coordinator` agent's task waits at `queued` until a person starts it, and that plan is what they read when they decide, so it keeps the model.
+
+The **mode** is the owner's setting on the node, and the scaffold never writes it. `CrewSpec.mode` declares what the crew expects (derived: `task-runner` for almost every crew).
 
 ## 3. Built-in machinery and why to reuse it
 
@@ -35,7 +41,7 @@ A task-runner agent's tasks are **auto-activated** on the node (C3, landed 2026-
 | 2 | **Pass `llm=` to the daemon/liaison** | Without it the liaison fell back to OpenAI → `OPENAI_API_KEY required` crash → task never completed | `run_crew_daemon(llm=...)` (upstream 0.3.4) |
 | 3 | **Two-phase daemon** (propose on `queued`, execute on `active`) | Single-phase polling re-dispatched the same queued task forever (`INVALID_STATE` on complete) | aimeat-crewai daemon (upstream 0.3.4) |
 | 4 | **Tool cache disabled on AIMEAT tools** | CrewAI caches by (tool, args); `onboarding_status` is time-varying → froze at first snapshot → loop | aimeat-crewai `liaison.py` (upstream 0.3.4) |
-| 5 | **`parallel_tool_calls=False` + sequential-verify todos** | The liaison fired 4 `aimeat_task_todo` in one turn → server read-modify-writes the whole task → lost updates (only 1 stuck) | `get_llm()` + `_finalize_task` |
+| 5 | **`parallel_tool_calls=False` + sequential-verify todos** | The liaison fired 4 `aimeat_task_todo` in one turn → server read-modify-writes the whole task → lost updates (only 1 stuck) | `get_llm()` + `_mark_todos_done` (called from the complete callback) |
 | 6 | **Empty-`choices` guard** | OpenRouter returns transient upstream errors as HTTP 200 + `choices=None` → `'NoneType' object is not subscriptable` | crewai `openai/completion.py` (upstream) |
 | 7 | **Current-date injection** (`ctx.today`) | The model hallucinated dates (produced "18.6.2025" on a 2026 run) with no grounding | `_now_context()` |
 | 8 | **Deterministic progress bridge** (no LLM): milestones → `aimeat_task_event`, 5s live status → memory key | UI needs "what's happening now"; todos are the wrong tool, and auto-activated tasks have none | `crewaimeat/progress.py` |
@@ -43,12 +49,20 @@ A task-runner agent's tasks are **auto-activated** on the node (C3, landed 2026-
 | 10 | **Idle auth-guard** (probe on idle; exit `78` after N rejections) | `_poll_tasks` swallows a 401, so a stale token looks like an empty queue and the daemon would idle silently forever. The guard notices and exits so you re-approve the agent | `run_crew` `on_idle` + `_auth_alive`; watchdog stops on exit 78 |
 | 11 | **Reliable recurring/idle-hook processing** (output-dedup + per-run processed-set + bounded batch) | An idle-hook deduping on a just-read status re-processed ONE item ~347× under read-after-write lag (2026-06-09): the write advanced it but the next read still showed it pending → re-run every cycle. Dedup on the OUTPUT (survives restarts) + a per-run set + a per-pass cap keep it safe | `CrewSpec.idle_hook`/`idle_hook_seconds`; `research_contract._PROCESSED` / `activity_contract._REPORTED` |
 
-Items marked *(upstream)* are now shipped in the packages, listed so you know the scaffold relies on them; keep `aimeat-crewai>=0.3.4`.
+| 12 | **Deterministic PROPOSE for task-runners** (`_DeterministicPhase`, no agent, no tokens) | Every task cost two ReAct runs; the first wrote three lines of boilerplate nobody read in time, and `_mark_todos_done` flips every todo on completion anyway | `_propose_deterministically` |
+| 13 | **`CrewSpec.on_task`** (deterministic EXECUTE) | A crew whose `build_domain` is one Agent around one tool call paid a model to parse arguments out of a sentence, and could invent a wrong date. `on_task` skips the model and still runs the publish/complete callbacks, so the deliverable key, todo completion, verify gate and auto-revert all stay | `CrewSpec.on_task`; first user `workflow-inspector` |
+| 14 | **No `max_tokens` on cloud models** | A guessed cap returned `finish='length'` with 0 characters of content on a reasoning model; a cap derived from the context window made every call on every endpoint 400 and crash-looped the fleet | `crewaimeat.llm` |
+| 15 | **Mode is read, never written** | Stamping `task-runner` on every start silently overwrote `coordinator` modes an owner had set on purpose | `CrewSpec.mode` is a declaration only |
+| 16 | **Identity check before the first write** | A loopback proxy that stamped every call with one agent's name made agents read each other's task lists while every log said success | refuses a write on a proven mismatch; an unknown answer proceeds |
+| 17 | **A refusal is visible** | A 403 flattened into an empty list made an agent without a granted scope look exactly like an idle one — the resting state of a spawn fleet | aimeat-crewai >= 0.26.0 |
+| 18 | **Directives on every model call** | The owner's directives reached only a crew task's text; the pipelines that call the model directly never saw them | `directives.install_directives` via `get_llm` |
+
+Items marked *(upstream)* are now shipped in the packages, listed so you know the scaffold relies on them. See the floors at the top of this file.
 
 ## 4. The contract: what you write vs what the scaffold provides
 
-- **You write:** `build_domain(ctx)` (your `Agent`s and `Task`s), `AGENT_NAME`, the agent's own declaration (`LLM_PROFILE`, `TAGS`, `CAPABILITIES`, `OFFERS`, `SKILLS` — module constants read statically by `agent_manifest`; there is no central registry to update), and optional `CrewSpec` fields (`process`, `poll_seconds`, `memory_key_prefix`, `owner`, `max_idle_auth_failures`, and `idle_hook`/`idle_hook_seconds` for a deterministic per-cycle workspace-contract poll). Pass `llm=ctx.llm` to every agent. Prepend `ctx.today` to time-sensitive tasks. Give the user's request (`ctx.prompt`) to the agent(s) that need it. The last task's output is what gets published.
-- **Provided by the scaffold (reuse as-is):** `aimeat_crew.py` (onboarding, daemon, `finalize`, date, auth-guard), `progress.py`, the `llm.py` wiring.
+- **You write:** `build_domain(ctx)` (your `Agent`s and `Task`s), `AGENT_NAME`, the agent's own declaration (`LLM_PROFILE`, `TAGS`, `CAPABILITIES`, `OFFERS`, `SKILLS`, optionally `RUN_MODE` and `PROMPT_INDEPENDENT` — module constants read statically by `agent_manifest`; there is no central registry to update), and optional `CrewSpec` fields (`process`, `poll_seconds`, `memory_key_prefix`, `owner`, `max_idle_auth_failures`, `on_task` for deterministic work, and `idle_hook`/`idle_hook_seconds` for a deterministic per-cycle workspace-contract poll). Pass `llm=ctx.llm` to every agent. Prepend `ctx.today` to time-sensitive tasks. Give the user's request (`ctx.prompt`) to the agent(s) that need it. The last task's output is what gets published.
+- **Provided by the scaffold (reuse as-is):** `aimeat_crew.py` (onboarding, daemon, publish/complete callbacks, date, auth-guard), `transport.py` / `lifecycle.py`, `progress.py`, the `llm.py` wiring.
 
 ## 5. Rules
 
@@ -63,3 +77,5 @@ Items marked *(upstream)* are now shipped in the packages, listed so you know th
 - `CREW_AUTHORING_PROMPT.md`: the paste-into-assistant prompt that drives Steps 0 to 3.
 - `src/crewaimeat/research_crew.py`: the canonical worked example.
 - `crewaimeat new-crew <name>`: scaffolds `crews/<name>_crew.py` from the template.
+- `crewaimeat new-json-agent <name>`: an agent whose definition lives on the node, editable in its Crew tab.
+- `ARCHITECTURE.md`: where each piece lives, the run modes and the fleet topology.

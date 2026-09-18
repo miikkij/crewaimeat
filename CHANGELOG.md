@@ -1,8 +1,105 @@
 # Changelog
 
 Notable changes to crewaimeat. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
-Dates are the working dates; entries are **uncommitted and take effect on the next fleet restart**
-(the daemons import the modules at start).
+Dates are the working dates. A change reaches a running fleet only on its next restart, because the
+daemons import the modules at start. `git log` has the measurement behind each entry.
+
+## [Unreleased] — 2026-08-26 → 2026-09-16 — spawn mode, node-backed agents, multi-owner
+
+### Added
+- **Spawn run mode: an agent that costs nothing until it has work.** A spawn agent is data on the
+  node while idle; `crewaimeat spawner` starts one worker process per wake (`crewaimeat run-once`,
+  i.e. `run_crew(one_shot=True)`, the same execution path as the resident daemon), which runs one
+  cycle and exits. Measured: 49 resident agents held ~3 GB and 12.6% of a core while idle; the idle
+  spawner holds ~30 MB, a run peaks at 225–270 MB and returns all of it, cold start ~2.6 s. One
+  worker per agent, always (the OS lock is the only duplicate guard, since the node has no task
+  lease); a wake mid-run sets a dirty flag and re-runs. **The node's `run_mode` decides** — the
+  spawner reads `GET /v1/agents?run_mode=spawn` every 30 s and the host skips the same set, so one
+  runtime owns each agent. `start_fleet.ps1` starts the spawner under `spawner_watchdog.ps1`, and
+  after an all-spawn host returns, the window follows the spawner log. The whole fleet here now runs
+  in spawn mode.
+- **Node-backed JSON agents.** `crewaimeat new-json-agent <name>` writes only a loader; the
+  definition lives at `crews.registry.<agent>` and the owner edits it in the node's Crew tab.
+  `build_domain` re-reads it per task (hot reload with no restart); a definition that fails to load
+  or validate keeps the last good one and reports why to `crews.runtime.<agent>`. The running agent
+  answers the tab's **Validate** / **Try** buttons (`crew.validate` / `crew.try`, via aimeat-crewai
+  0.22's invoke listener) and **`crew.menu`** (its tools, profiles and reachable models; key NAMES
+  only, never a key). `crewaimeat publish` / `install [--node-backed]` / `defs` move definitions
+  between disk and the node; publish goes through `aimeat_crew_publish`, which validates, numbers the
+  revision and wakes the runtime. crew-forge can build the node-backed kind; the agent publishes its
+  own staged definition on its first start, and seeding only ever fills an empty key.
+- **`crewaimeat try <def.json> --prompt "…"`** runs a JSON crew definition once with the real
+  interpreter and a real kickoff, registering and writing nothing (`--check`, `--as <agent>`).
+- **The owner chooses the model on the node.** `llm_choice.py` reads `crews.llm.<agent>` and
+  `crews.llm.default` (cached 60 s, never fatal). Precedence: local pin → owner's choice for the
+  agent → machine `crews` map → the crew's declaration (a JSON definition's `llm_profile` now routes
+  too) → owner's default → file default. Each agent publishes its model catalogue into its own
+  namespace.
+- **The owner's directives ride on every model call**, not only on a crew task's text: `get_llm`
+  wraps `call` and prepends them as a system message, reaching the 27 sites that call the model
+  directly.
+- **`CrewSpec.on_task`** — a deterministic EXECUTE handler. No model runs, and the publish/complete
+  callbacks still run on its result. First user: `workflow-inspector`.
+- **`app_tools` crew-def tool** — `list_app_tools` / `call_app_tool` let a crew agent find and call
+  the owner's AIMEAT app-tools. Same-owner tools run free; another owner's priced tool is reported as
+  "requires payment, did not run", never as a fabricated result.
+- **Multi-owner connector homes.** One home can serve several owners: identity is the GAII (read from
+  the credential, never assembled), the bare name finds the key. `serve.json` schema 2, Agent v2
+  keys (`keys/`), and a per-owner config path are all read. `AIMEAT_CLI` points the fleet at a
+  different connector build.
+- **An identity check before the first write.** If the loopback proxy would record a write under
+  another agent, the write is refused (a read proceeds and says so once).
+- **`julkaisu-grok`**, a seventh agent for the julkaisupöytä: turns the video shot list into Grok
+  Imagine clips with the settings to select, four prompt sizes per clip, and a machine-readable
+  recording commission.
+- **`crewaimeat orphans --only / --except`** — choose which orphans go, by name; a name that is not
+  an orphan is refused.
+- **`skills/aimeat-offer-authoring/`** — the offer contract, written down.
+
+### Changed
+- **The runtime no longer writes the agent's mode.** `aimeat_agent_mode_set` is gone from the start
+  path: the mode is the owner's standing instruction on the node, and stamping `task-runner` on every
+  start overwrote `coordinator` modes set on purpose. `CrewSpec.mode` stays as a declaration.
+- **A task-runner's TODO plan is proposed deterministically** (`_DeterministicPhase`, no agent, no
+  tokens). Nobody reads that plan before the work starts. Interactive and coordinator agents keep the
+  model, because a person reads their plan to decide.
+- **No `max_tokens` is sent to a cloud model.** A guessed cap returned empty output from a reasoning
+  model; a cap derived from the context window made every call on every endpoint 400 and crash-looped
+  the fleet. Only a local Ollama server gets a number.
+- **Every Sanomat workflow step has a `retry`** (`fetch`, `space-weather`, `features` had none; one
+  connection error took the front page down on 2026-08-28).
+- **Reliability pass (#4):** HITL approvals are correlated and consumed atomically, sessions expire on
+  read, durable preferences are migrated, SQLite connections always close; node transport,
+  lifecycle callbacks and cockpit routes are extracted (`transport.py`, `lifecycle.py`); offline
+  tests are enforced; the doctor baseline holds no accepted source findings; Windows and
+  installed-bundle smoke gates run in CI. See `docs/testing.md`.
+- Floors: **aimeat-crewai >= 0.26.0** (a 401/403 is reported with the node's code, never flattened
+  into an empty result), **crewai >= 1.15.18**, and the npm **`aimeat` connector >= 3.13.4** (below
+  it a task can produce no wake, so a spawn agent never runs).
+- The TUI knows the spawner: a spawn agent at rest reads `parked`, not `down`.
+
+### Fixed
+- **Spawn:** a roster the node could not answer no longer retires every agent (nine fleet-wide
+  retirements in 30 h, one mid-run); an agent kept four parks; a workflow step now wakes its worker;
+  the deterministic idle pass (`idle_hook`) runs once per worker, or four clock-driven jobs stopped;
+  the migration no longer launches the per-process fleet it replaced. The spawner heartbeat is
+  deleted: node 3.13.0 reads reachability from the connection.
+- **Memory:** listings carry no values since connector 3.13.0, so eight readers of `value` fell back
+  to reads, and nine of those reads had lost `owner_scope` (the 2026-09-04 front page was built from
+  category names). A failed listing now says why instead of reporting "no keys".
+- **Stale credentials:** offers and four more node calls used a stored v1 token the v2 enrolment had
+  replaced; they now go through the daemon.
+- **doctor:** a node-defined agent the spawner serves is not a ghost; CI no longer fails on files that
+  are per-machine by design; `serve-spare-agents.json` names chat clients that have no crew file.
+- **retire** now moves `keys/` aside as well as `tokens/`, so a retired v2 agent stays retired.
+- OpenRouter endpoints that drop `response_format` are refused for structured memory analysis.
+- julkaisu: the order's own material reaches the writers; an empty image list is a finished run; a
+  house-rule violation (a post over 280 characters) is a note for the person, not a reason to discard
+  the run.
+
+### Removed
+- The M-ROOM pipeline (six crews, three modules, 2 643 lines; 0–1 deliverables each and 46 days
+  silent). The live M-ROOM bridge (`some.radar`, `mail.morning`) is unaffected.
 
 ## [Unreleased] — 2026-08-25 — KANSI v3: the person directs
 

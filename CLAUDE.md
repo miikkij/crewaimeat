@@ -214,13 +214,17 @@ edition shipped with 21 articles and no front page. `write-a`/`write-b`/`editori
 - Two things make it live, not just present: (1) **register once** —
   `npx aimeat@latest connect --url https://aimeat.io --owner <owner> --agent <name>`
   — and approve the one-time device flow (its token lands in the shared `serve.json`); (2) **restart the
-  fleet** (`scripts/start_fleet.ps1` → `fleet_host`) so it attaches as a THREAD to the ONE shared loopback
-  serve daemon (all agents in one process, crewai imported once). Only APPROVED agents come online; an
-  unapproved one waits and joins itself once approved.
-- **`task-runner` mode is load-bearing, not boilerplate — and the scaffold sets it, not the CLI.**
-  Device auth no longer takes a `--mode` flag (removed in connector v1.33), so `run_crew` sets the mode
-  on EVERY start via `aimeat_agent_mode_set`, before onboarding; `CrewSpec.mode=None` derives
-  `task-runner` for every crewaimeat crew. A task is auto-activated ONLY when the agent's mode is
+  fleet** (`scripts/start_fleet.ps1`) so it attaches to the ONE shared loopback serve daemon. WHERE it
+  runs is the node's `run_mode` (the owner's setting): `spawn` → the spawner parks it and starts one
+  worker process per wake (the whole fleet here is spawn); otherwise → a THREAD in `fleet_host`. Only
+  APPROVED agents come online; an unapproved one waits and joins itself once approved.
+- **`task-runner` mode is load-bearing, not boilerplate — and the OWNER sets it on the node.**
+  Device auth no longer takes a `--mode` flag (removed in connector v1.33), and the runtime no longer
+  writes the mode either: `aimeat_agent_mode_set` left the start path on 2026-09-02, because stamping
+  it on every start silently overwrote `coordinator` modes an owner had set on purpose.
+  `CrewSpec.mode` is a DECLARATION only (`None` derives `task-runner` for almost every crewaimeat
+  crew); a new agent defaults to `interactive` on the node until its owner changes it. A task is
+  auto-activated ONLY when the agent's mode is
   `task-runner` (`autoActivated = queued && mode === 'task-runner'`); every other mode
   (`interactive`/`autonomous`/`coordinator`) follows `queued → (OWNER starts it) → active → done`. There
   is NO `aimeat_task_start` tool, and the REST `/start` is owner-only — so an interactive agent has no

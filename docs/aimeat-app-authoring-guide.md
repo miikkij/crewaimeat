@@ -1,13 +1,23 @@
 # AIMEAT app authoring guide (direct build — no generator)
 
-> Crew-side operational guide for the `aimeat-app-builder` / `aimeat-cortex-fixer` crews.
+> Crew-side operational guide for any crew that carries the app-authoring tools
+> (`crewaimeat.author_tool`: `read_lib_api`, `read_app_template`, `read_cortex_example`,
+> `install_cortex`, `publish_app`, `seed_memory`, `verify_render`, `verify_interaction`; the
+> `app_build` capability in the crew-def catalogue).
 > Build AIMEAT apps the way comic-land was built: **author a cortex + app directly** and install
 > them via REST. No generator pipeline. Field-proven 2026-06-02 (fleet-activity-dashboard:
-> 5 cards, topic filter, authed render, zero console errors). See the memory note
-> [[aimeat-direct-build-pattern]]. The canonical AIMEAT docs are
+> 5 cards, topic filter, authed render, zero console errors). The canonical AIMEAT docs are
 > `aimeat-protocol/docs/guides/building-extension-cortex-app-stack.md` +
 > `agent-data-dashboard-cookbook.md` — but they drift from the deployed node, so **read the live
 > lib APIs and export a real cortex** instead of trusting any doc (this guide included).
+
+> **Status (September 2026).** The dedicated app-building crews (`_aimeat_cortex_fixer_crew.py` and
+> the other `_aimeat_*` crews) are **parked**; the tools above remain and any crew can carry them.
+> Before building an app-producing agent, check whether the job is an agent at all: an app that
+> needs server-side logic can often use an AIMEAT **app-tool** (AI-authored code on the node) instead,
+> and a crew agent can call the owner's app-tools through the `app_tools` crew-def tool
+> (`list_app_tools` / `call_app_tool`; same-owner tools run free, another owner's priced tool answers
+> "requires payment"). See "Agent, or AIMEAT-side tool?" in `CLAUDE.md`.
 
 ## Architecture (who calls whom)
 ```
@@ -42,7 +52,10 @@ EXTENSION (server WASM)  → external HTTP, cron, server-validated writes, task 
    tailwind/daisyui CDN is fine (CSP permits it); never use `eval`/`new Function` (unsafe-eval is blocked).
 7. **publish_app(...)** — inline publish; returns the live URL.
 8. **seed_memory(...)** — a few example entries so it shows content + demonstrates the contract.
-9. **Verify**: delegate an authed browser walkthrough to **web-tester** (logs in, checks real content).
+9. **Verify**: `verify_render` (loads without errors) and `verify_interaction` (click / type / assert),
+   then delegate an authed browser walkthrough to **web-tester** (logs in, checks real content). A
+   render pass alone does not prove the app works. Crews that run these gates can set
+   `CrewSpec(require_verify_pass=True)` so a failed gate fails the task.
 
 ## The REAL cortex manifest (k8s-style — the docs' simplified `spec_version/name/libs` is REJECTED)
 ```yaml
@@ -95,8 +108,9 @@ spec:
    of null (reading 'then')"* and the app sticks on the login screen). Login form button:
    `await AIMEAT.auth.loginWithPassword(u, p); location.reload();`.
 3. **One consistent key prefix.** Read keys exactly as you write them — never a bare key vs a prefixed one.
-4. **No external CDN scripts** — the inline-app CSP blocks them. Load only `/v1/libs`, `/v1/cortex`,
-   same-origin. Inline your CSS.
+4. **Only the script origins the inline-app CSP allows.** `/v1/libs`, `/v1/cortex` and same-origin
+   always work; the canonical template's tailwind/daisyui CDN is allowed too (proven 2026-06-03).
+   Any other CDN is blocked — check the live CSP header before adding one, and inline your own CSS.
 5. **One canonical app filename**, reused on every publish; document it at the top of the HTML.
 6. **Escape every interpolated string** in the app (XSS + `[object Object]` / raw-key leaks).
 7. **`session.fetch` returns parsed JSON** — use `.data`, don't call `.json()`.
@@ -106,6 +120,8 @@ spec:
 ## Gates (the deterministic "catch")
 - **Syntax** (`node --check`) on the cortex lib + the app's inline `<script>` — runs INSIDE
   `install_cortex` / `publish_app` (returns `PRE-INSTALL/PRE-PUBLISH BLOCKED` to fix before shipping).
-- **Render** (Playwright headless) — loads the app, asserts no console errors + real content.
+- **Render** (`verify_render`, Playwright headless) — loads the app, asserts no console errors + real content.
+- **Interaction** (`verify_interaction`) — clicks, types and asserts the result, because an app can
+  render cleanly and still not work.
 - **Authed content** — delegated to the **web-tester** crew (logs in as the owner, walks each feature).
   This is the real proof; the local render only proves "loads without errors".
