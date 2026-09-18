@@ -435,3 +435,19 @@ def test_a_reconnect_sets_the_old_key_aside_where_the_connector_cannot_see_it(_i
 
 def test_already_connected_is_parsed():
     assert connect.parse("Already connected! Token is valid.\n")["already"] is True
+
+
+def test_the_single_model_path_asks_openrouter_for_the_real_cost(monkeypatch, tmp_path):
+    """The installed app has no llm_providers.json; without usage.include every call reached the
+    ledger unpriced (cost_usd 0, unpriced_calls = calls — measured on a local node)."""
+    import crewai.llm  # noqa: F401 — its import-time load_dotenv runs NOW, before the env is cleared
+
+    from crewaimeat import llm
+
+    monkeypatch.chdir(tmp_path)  # no llm_providers.json here
+    for v in ("LLM_PROVIDERS_FILE", "NVIDIA_KEY", "USE_XAI", "OPENROUTER_FALLBACK_MODELS"):
+        monkeypatch.delenv(v, raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    got = llm._build_llm(False, 0.3, None)
+    extra = (getattr(got, "additional_params", None) or {}).get("extra_body") or {}
+    assert extra.get("usage") == {"include": True}

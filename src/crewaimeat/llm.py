@@ -705,8 +705,13 @@ def _build_llm(for_tool_use: bool, temperature: float | None, agent_name: str | 
     if for_tool_use:
         additional["parallel_tool_calls"] = False
     fallback = [m.strip() for m in os.getenv("OPENROUTER_FALLBACK_MODELS", "").split(",") if m.strip()]
+    # The REAL per-call cost in usage.cost, as the providers-file path already asks for (df602c9). This
+    # single-model path is the one the installed app uses, and without it every call reached the ledger
+    # unpriced: cost_usd 0, unpriced_calls = calls (measured on a local node, 2026-09-18).
+    extra_body: dict = {"usage": {"include": True}}
     if fallback:
-        additional["extra_body"] = {"models": fallback[:3]}  # OpenRouter caps the models array at 3
+        extra_body["models"] = fallback[:3]  # OpenRouter caps the models array at 3
+    additional["extra_body"] = extra_body
     if additional:
         kwargs["additional_params"] = additional
     return LLM(**kwargs)
