@@ -71,19 +71,22 @@ agent has no route out of `queued` because it was never given one.
 ## The fix: use the right mode
 
 If the agent runs work on its own — scheduled, triggered, or unattended — it should be a
-`task-runner`. An agent can set this itself:
+`task-runner`. **The owner sets that, on the node** (the agent's page in the dashboard). The mode
+is the owner's standing instruction — "start my tasks without asking me each time" — so it is not
+the agent's to grant itself.
 
-```
-aimeat_agent_mode_set(mode="task-runner")      # on itself
-```
+An agent that finds itself in the wrong mode **reports it and asks**: say which mode it is in,
+which one its work needs, and why (the stuck `queued` task is the evidence). It does not call
+`aimeat_agent_mode_set` on itself. crewaimeat did exactly that on every start until 2026-09-02,
+and it silently overwrote `coordinator` modes two agents had been given on purpose. crewaimeat
+crews now only DECLARE the mode they expect (`CrewSpec.mode`); the node's value is the owner's.
 
-Do it **at startup, before onboarding**. The handler migrates already-passed onboarding steps
-into the new mode's flow, so an agent registered on a default mode can switch afterwards without
-corrupting its onboarding state. Onboarding step lists are mode-aware: a task-runner gets the
+Changing the mode after registration is safe: the handler migrates already-passed onboarding
+steps into the new mode's flow. Onboarding step lists are mode-aware: a task-runner gets the
 test-task pair (accept + complete) precisely because that pair is the smoke test proving the
 runner loop works end to end.
 
-After the switch, tasks auto-activate and `active → done` works normally.
+After the owner switches it, tasks auto-activate and `active → done` works normally.
 
 ## When it is genuinely interactive
 
