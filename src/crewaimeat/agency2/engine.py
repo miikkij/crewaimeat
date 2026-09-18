@@ -110,6 +110,17 @@ def apply_to_process() -> None:
 FOREIGN_PROVIDER_VARS = ("NVIDIA_KEY", "USE_XAI", "XAI_API_KEY")
 
 
+def quiet_env() -> None:
+    """The cheap half of `openrouter_only`, for a process that has not imported crewai (yet): drop the
+    other providers' switches and silence bare `load_dotenv()` so a later crewai import finds nothing
+    to load. No crewai import here — the idle cockpit should not carry it."""
+    for v in FOREIGN_PROVIDER_VARS:
+        os.environ.pop(v, None)
+    os.environ.setdefault("LITELLM_MODE", "PRODUCTION")
+    _silence_bare_load_dotenv()
+    paths.load_env_into_process()
+
+
 def openrouter_only() -> list[str]:
     """This process's environment = what it was started with + the app's own `.env`. Nothing else.
 
@@ -187,9 +198,40 @@ def _stray_dotenv(start: Path) -> Path | None:
     return None
 
 
+_HOOK = """# Written by crewaimeat.agency2.engine: every Python process the app starts uses ONLY the app's own
+# environment. A bare load_dotenv() in a library (litellm, crewai) would otherwise read a .env found
+# above the library's folder (see engine.openrouter_only). Light on purpose: no crewai import here —
+# the spawner's whole point is an idle process that has not paid for it.
+try:
+    import os as _os
+
+    from crewaimeat.agency2.engine import FOREIGN_PROVIDER_VARS as _F, _silence_bare_load_dotenv as _s
+
+    for _v in _F:
+        _os.environ.pop(_v, None)
+    _os.environ.setdefault("LITELLM_MODE", "PRODUCTION")
+    _s()
+except Exception:  # noqa: BLE001 — never stop a process from starting over its environment hook
+    pass
+"""
+
+
+def _hook_dir() -> Path:
+    """A folder holding the `sitecustomize` above, put first on the children's PYTHONPATH — the one
+    hook that reaches processes the app does not write itself (the spawner's `run_once` workers)."""
+    d = paths.state_dir() / "pyhook"
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / "sitecustomize.py"
+    if not f.is_file() or f.read_text(encoding="utf-8") != _HOOK:
+        f.write_text(_HOOK, encoding="utf-8")
+    return d
+
+
 def child_env() -> dict[str, str]:
     apply_to_process()
     env = {k: v for k, v in os.environ.items() if k not in FOREIGN_PROVIDER_VARS}
+    hook = str(_hook_dir())
+    env["PYTHONPATH"] = os.pathsep.join([hook, *[p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p]])
     env["LITELLM_MODE"] = env.get("LITELLM_MODE", "PRODUCTION")
     env["PYTHONUNBUFFERED"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"

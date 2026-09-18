@@ -293,13 +293,6 @@ def test_an_instance_that_does_not_answer_is_not_added(monkeypatch):
     assert r.status_code == 400 and store.instances() == []
 
 
-def test_runner_refuses_a_gaii():
-    from crewaimeat.agency2 import runner
-
-    with pytest.raises(SystemExit):
-        runner.main(["probe-a#teemu@node"])
-
-
 # ── the environment belongs to the app ───────────────────────────────────────
 
 
@@ -513,3 +506,26 @@ def test_every_ui_string_exists_in_finnish_and_english():
     defined = lambda block: set(re.findall(r"\b([a-z0-9_]+):\"", block))  # noqa: E731
     assert not (used - defined(fi)), f"missing in Finnish: {sorted(used - defined(fi))}"
     assert not (used - defined(en)), f"missing in English: {sorted(used - defined(en))}"
+
+
+def test_children_carry_the_environment_hook():
+    """The spawner's run_once workers are not agency2 code; the sitecustomize on their PYTHONPATH is
+    what keeps a stray .env out of them."""
+    from crewaimeat.agency2 import engine
+
+    env = engine.child_env()
+    hook = env["PYTHONPATH"].split(__import__("os").pathsep)[0]
+    text = (__import__("pathlib").Path(hook) / "sitecustomize.py").read_text(encoding="utf-8")
+    assert "_silence_bare_load_dotenv" in text and "import crewai" not in text
+
+
+def test_the_spawn_roster_is_this_apps_connected_agents_only():
+    from crewaimeat.agency2 import spawn
+
+    store.add_instance("http://localhost:40561", "teemu")
+    store.add_agent("uutiset", "http://localhost:40561")
+    store.add_agent("pysaytetty", "http://localhost:40561")
+    store.add_agent("kesken", "http://localhost:40561")
+    store.update_agent("uutiset", connected=True)
+    store.update_agent("pysaytetty", connected=True, autostart=False)
+    assert spawn.roster() == ["uutiset"]

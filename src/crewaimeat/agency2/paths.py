@@ -40,7 +40,9 @@ def logs_dir() -> Path:
 
 
 def aimeat_home() -> Path:
-    from crewaimeat._home import aimeat_home as _home
+    """spawn_state's resolver: identical answer when AIMEAT_HOME is set (the shell always sets it), and
+    it does not import aimeat_crewai — which pulls in crewai and costs the idle cockpit ~170 MB."""
+    from crewaimeat.spawn_state import aimeat_home as _home
 
     return Path(_home())
 

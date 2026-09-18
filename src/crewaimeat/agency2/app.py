@@ -111,15 +111,14 @@ def _stage(name: str, doc: dict) -> Path:
 
 
 def _after_approval(name: str, st: dict | None) -> None:
-    """Approved → the daemon must reload its agent set, and every runtime reattach to the new daemon."""
+    """Approved → the daemon reloads its agent set, the agent runs one first cycle (publishes a staged
+    definition, pushes its identity), and the spawner takes it on its roster."""
     if not st or st.get("status") != "approved":
         return
-    store.update_agent(name, connected=True)
+    store.update_agent(name, connected=True, autostart=True)
     procs.restart_serve()
-    for a in store.agents():
-        if a.get("connected") and a.get("autostart", True):
-            procs.stop(a["name"])
-            procs.start(a["name"])
+    procs.first_cycle(name)
+    procs.restart_spawner()
 
 
 def _autostart() -> None:
@@ -129,9 +128,7 @@ def _autostart() -> None:
     try:
         if any(a.get("connected") for a in store.agents()):
             procs.ensure_serve()
-            for a in store.agents():
-                if a.get("connected") and a.get("autostart", True):
-                    procs.start(a["name"])
+            procs.ensure_spawner()
     except Exception as exc:  # noqa: BLE001 — shown in the health view (serve / not running rows)
         print(f"[agency2] autostart: {type(exc).__name__}: {exc}", flush=True)
 
@@ -392,21 +389,21 @@ def create_app(token: str | None = None) -> FastAPI:
             raise _bad("connect the agent first")
         procs.ensure_serve()
         store.update_agent(name, autostart=True)
-        return procs.start(name)
+        return procs.restart_spawner()
 
     @app.post("/api/agents/{name}/stop", dependencies=auth)
     def stop(name: str) -> dict:
         if not store.agent(name):
             raise _bad(f"no agent '{name}' on this machine", 404)
         store.update_agent(name, autostart=False)
-        return {"stopped": procs.stop(name)}
+        procs.restart_spawner()
+        return {"stopped": True}
 
     @app.post("/api/agents/{name}/define", dependencies=auth)
     def define(name: str, body: PublishIn) -> dict:
         """The FIRST definition for an agent that is connected here but has none (e.g. one made on the
-        node). It is staged and the runtime restarted: an agent publishes its own first definition,
-        and only into an EMPTY key (`json_agent.seed_from_staged`), so an existing one is never
-        overwritten from here."""
+        node). It is staged and one cycle run: an agent publishes its own first definition, and only
+        into an EMPTY key (`json_agent.seed_from_staged`), so an existing one is never overwritten."""
         from crewaimeat.crew_def import validate_crew_doc
 
         a = store.agent(name)
@@ -417,9 +414,10 @@ def create_app(token: str | None = None) -> FastAPI:
         if errs:
             raise _bad("the definition is not valid: " + "; ".join(errs))
         _stage(name, doc)
-        procs.stop(name)
         store.update_agent(name, autostart=True)
-        return procs.start(name)
+        rec = procs.first_cycle(name)
+        procs.restart_spawner()
+        return rec
 
     @app.post("/api/agents/{name}/publish", dependencies=auth)
     def publish(name: str, body: PublishIn) -> dict:
@@ -432,6 +430,7 @@ def create_app(token: str | None = None) -> FastAPI:
             raise _bad("connect the agent first")
         if not procs.running(name):
             raise _bad("start the agent first — its own runtime checks a change before the instance takes it")
+        procs.ensure_spawner()  # the spawner answers the node's crew.validate for its agents
         ok, key, detail = publish_crew_def_live(dict(body.doc, agent_name=name), agent=name)
         if not ok:
             raise _bad(detail)
@@ -442,8 +441,8 @@ def create_app(token: str | None = None) -> FastAPI:
         """Stops it HERE and forgets it on this machine. The agent and its definition stay on the instance."""
         if not store.agent(name):
             raise _bad(f"no agent '{name}' on this machine", 404)
-        procs.stop(name)
         store.remove_agent(name)
+        procs.restart_spawner()
         return {"ok": True}
 
     # ── schedules: the node's clock, the agent's own agent_task records ──
@@ -511,10 +510,7 @@ def create_app(token: str | None = None) -> FastAPI:
     @app.post("/api/serve", dependencies=auth)
     def serve() -> dict:
         doc = procs.restart_serve()
-        for a in store.agents():
-            if a.get("connected") and a.get("autostart", True):
-                procs.stop(a["name"])
-                procs.start(a["name"])
+        procs.restart_spawner()
         return {"port": doc.get("port")}
 
     @app.get("/api/migration", dependencies=auth)
@@ -536,7 +532,8 @@ def create_app(token: str | None = None) -> FastAPI:
 
     @app.post("/api/shutdown", dependencies=auth)
     def shutdown() -> dict:
-        stopped = [a["name"] for a in store.agents() if procs.stop(a["name"])]
+        stopped = [a["name"] for a in store.agents() if procs.running(a["name"])]
+        procs.stop_spawner()
         procs.stop_serve()
 
         def _exit() -> None:
@@ -554,8 +551,8 @@ def create_app(token: str | None = None) -> FastAPI:
 def main() -> None:
     import uvicorn
 
+    engine.quiet_env()  # FIRST: before anything can import crewai (it would load a stray .env)
     engine.apply_to_process()
-    engine.openrouter_only()  # before anything imports crewai (it would load a stray .env)
     shell = bool(os.environ.get(TOKEN_ENV))
     token = os.environ.get(TOKEN_ENV) or secrets.token_urlsafe(32)
     host = "127.0.0.1"
