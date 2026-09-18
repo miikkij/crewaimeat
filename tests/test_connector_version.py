@@ -15,7 +15,7 @@ def world(monkeypatch):
     """A controllable world: npm latest, installed CLI, repo pin/floor, live serve daemons."""
     state = {"latest": ("3.17.0", ""), "installed": ("3.15.0", ""), "pin": ("3.10.0", "3.13.4"), "pids": []}
     monkeypatch.setattr(cv, "npm_latest", lambda: state["latest"])
-    monkeypatch.setattr(cv, "installed_version", lambda: state["installed"])
+    monkeypatch.setattr(cv, "installed_version", lambda **_: state["installed"])
     monkeypatch.setattr(cv, "pin_version", lambda: state["pin"])
     monkeypatch.setattr(cv, "live_serve_pids", lambda: state["pids"])
     monkeypatch.delenv("AIMEAT_CLI", raising=False)
@@ -98,6 +98,48 @@ def test_install_reads_the_version_back(world, monkeypatch):
     assert not ok and "3.15.0" in msg
     world["installed"] = ("3.17.0", "")
     assert cv.install("3.17.0") == (True, "installed aimeat@3.17.0")
+
+
+WIN_ROOT = r"C:\Program Files\nodejs\node_modules"
+
+
+def test_a_daemon_on_the_global_install_blocks_the_upgrade_as_npm_launches_it():
+    """npm's shim passes `"%dp0%\\node_modules\\..."` with a trailing-backslash %dp0% — a doubled separator."""
+    procs = [(101, r'"node"  "C:\Program Files\nodejs\\node_modules\aimeat\dist\bin\aimeat.js" connect serve --http')]
+    assert cv.serve_pids_on_global_install(WIN_ROOT, procs, windows=True) == [101]
+
+
+def test_what_is_not_a_global_serve_daemon_does_not_block():
+    """Measured 2026-09-18: all three of these matched the old `connect.*serve` probe."""
+    procs = [
+        # Google Drive's crash handler: 'connect' and 'serve' both appear somewhere in its annotations
+        (44216, r'"C:\Program Files\Google\crashpad_handler.exe" --annotation=max_connection_idle_time --url=server'),
+        # another session's own connector build, loading from ITS directory, not the global one
+        (
+            33776,
+            r'"C:\Temp\scratchpad\node.exe" "C:\Temp\scratchpad\connector\node_modules\aimeat\dist\bin\aimeat.js" '
+            r"connect serve --http",
+        ),
+        # the global install doing something other than serving
+        (7, r'"node" "C:\Program Files\nodejs\node_modules\aimeat\dist\bin\aimeat.js" connect call memory_read'),
+        # the shell that runs the probe, quoting the pattern
+        (8, r"bash -c \"Get-CimInstance ... -match 'connect.*serve'\""),
+    ]
+    assert cv.serve_pids_on_global_install(WIN_ROOT, procs, windows=True) == []
+
+
+def test_posix_paths_match_too():
+    procs = [(5, "node /usr/lib/node_modules/aimeat/dist/bin/aimeat.js connect serve --http")]
+    assert cv.serve_pids_on_global_install("/usr/lib/node_modules", procs, windows=False) == [5]
+
+
+def test_install_refuses_when_it_cannot_tell(world, monkeypatch):
+    def boom():
+        raise RuntimeError("could not read `npm root -g`")
+
+    monkeypatch.setattr(cv, "live_serve_pids", boom)
+    ok, msg = cv.install("3.17.0")
+    assert not ok and "not upgrading on a guess" in msg
 
 
 PIN_FILE = """x = 1
