@@ -257,22 +257,29 @@ _VERIFY_URL_RE = re.compile(r"(https?://\S*(?:verif|activate|device|connect|auth
 # THE SINGLE SOURCE OF TRUTH for the connector version. Never restate a version literal elsewhere —
 # docstrings, error messages and tests all read this constant, because the previous spread (2.0.0 here,
 # ">=2.6.1" documented in pyproject.toml, 1.34.0 asserted in a test, 3.3.2 actually installed) meant no
-# one place told the truth. `crewaimeat doctor` compares this pin against the installed CLI and the npm
-# registry and reports a mismatch.
+# one place told the truth.
+#
+# THE PIN FOLLOWS NPM LATEST (the owner's rule, 2026-09-18). It stays a pin — `@latest` in an npx call
+# once auto-updated us into a release that removed `connect add` — but it is never left behind:
+# `crewaimeat connector` compares npm latest / the installed CLI / this pin, the pre-commit hook fails a
+# commit while this line is behind npm, and `crewaimeat connector --bump-pin` rewrites it. On 2026-09-18
+# it read 3.10.0 against an npm latest of 3.17.0, while this comment claimed doctor was watching.
 #
 # FLOOR 2.6.1 IS LOAD-BEARING, not cosmetic: an older connector DROPS the ai_provenance block SILENTLY
 # in both directions, so a declaration of human authorship disappears with no error (verified against
 # aimeat.io 2026-08-01 — see the aimeat-crewai note in pyproject.toml). Bumped 2026-08-22 from 2.0.0,
 # which sat BELOW that documented floor: every agent crew-forge registered went through a connector
 # that could not carry provenance.
-AIMEAT_CONNECTOR = "aimeat@3.10.0"  # bumped 2026-08-30 (npm latest); the fleet's global install follows.
+AIMEAT_CONNECTOR = "aimeat@3.17.0"  # bumped 2026-09-18 to npm latest by `crewaimeat connector --bump-pin`.
 #   3.10.0 carries `vars` and `target` through the connector's workflow tool defs. Below it a
 #   workflow that takes input can only be run on its defaults, which makes a tool a constant — the
 #   whole point of a recipe is the argument. 3.9.0 remains the floor for the Crew tab: it is where
 #   `aimeat connect serve` grew the invoke queue (/local/invoke/next + /local/invoke/<id>/result).
 #   An older daemon leaves Validate and Try unreachable — reported once by the listener, and
 #   everything else about the agent still works.
-AIMEAT_CONNECTOR_FLOOR = "2.6.1"  # below this the provenance block is dropped silently
+AIMEAT_CONNECTOR_FLOOR = "3.13.4"  # below this a task can be created and produce NO wake, so a spawn-mode
+#   agent never runs and nothing says so (measured 2026-09-07/08; see the aimeat-crewai note in
+#   pyproject.toml). It supersedes 2.6.1, below which the provenance block is dropped silently.
 
 
 def register_fleet(owner: str, url: str = "https://aimeat.io", agents: list[str] | None = None) -> str:

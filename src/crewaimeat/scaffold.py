@@ -35,7 +35,8 @@ def _usage() -> str:
         "  crewaimeat costs [--days N]            model spend per agent + is the routing still priced right\n"
         "  crewaimeat costs --prices              only the price check (needs no node token)\n"
         "  crewaimeat quality [--days N]          published-article grounding + completeness, by MODEL\n"
-        "  crewaimeat orphans [--apply]           agents the NODE holds that no crew file backs\n\n"
+        "  crewaimeat orphans [--apply]           agents the NODE holds that no crew file backs\n"
+        "  crewaimeat connector [--install] [--bump-pin]  npm latest vs installed aimeat vs the repo pin\n\n"
         "Examples:\n"
         "  crewaimeat new-crew support-bot\n"
         "  -> creates ./support_bot_crew.py for the AIMEAT agent 'support-bot'.\n"
@@ -186,6 +187,10 @@ def main(argv: list[str] | None = None) -> int:
         from crewaimeat.fleet_economics import main as costs_main
 
         return costs_main(argv[1:])
+    if argv and argv[0] == "connector":
+        from crewaimeat.connector_version import main as connector_main
+
+        return connector_main(argv[1:])
     if argv and argv[0] == "retire":
         from crewaimeat.retire import main as retire_main
 

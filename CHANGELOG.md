@@ -4,6 +4,22 @@ Notable changes to crewaimeat. Format loosely follows [Keep a Changelog](https:/
 Dates are the working dates. A change reaches a running fleet only on its next restart, because the
 daemons import the modules at start. `git log` has the measurement behind each entry.
 
+## [Unreleased] — 2026-09-18 — the connector is always npm latest
+
+### Added
+- **`crewaimeat connector`** — npm latest vs the installed `aimeat` CLI vs the repo pin, side by side.
+  `--install` upgrades the global CLI (refused while ANY serve daemon on the machine runs, because
+  every home loads from that one directory; `AIMEAT_CLI` is left alone), then reads the version back.
+  `--bump-pin` rewrites `forge.AIMEAT_CONNECTOR`. An unreachable registry is NOT CHECKED, never "fine".
+- `start_fleet.ps1` / `.sh` run `connector --install` before the serve daemon starts, and stop when
+  the installed connector is below the floor.
+- A pre-commit hook (`aimeat-connector-latest`) fails a commit while the pin is behind npm latest.
+
+### Changed
+- Pin `aimeat@3.10.0` → `aimeat@3.17.0` (npm latest; the machine had 3.15.0). The comment above the pin
+  claimed doctor compared it with npm; nothing did.
+- `AIMEAT_CONNECTOR_FLOOR` 2.6.1 → 3.13.4, the floor `pyproject.toml` already documented (task wakes).
+
 ## [Unreleased] — 2026-08-26 → 2026-09-16 — spawn mode, node-backed agents, multi-owner
 
 ### Added

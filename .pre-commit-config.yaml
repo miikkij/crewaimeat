@@ -32,3 +32,13 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      # The fleet runs the NEWEST aimeat connector (owner's rule, 2026-09-18). This fails a commit while
+      # forge.AIMEAT_CONNECTOR is behind npm latest and names the one command that fixes it
+      # (`uv run crewaimeat connector --bump-pin`). One registry read (~1s); no network = NOT CHECKED,
+      # printed, never a blocked commit. The machine's installed CLI is start_fleet's job, not this one's.
+      - id: aimeat-connector-latest
+        name: aimeat connector pin is npm latest
+        entry: uv run crewaimeat connector --hook
+        language: system
+        pass_filenames: false
+        always_run: true

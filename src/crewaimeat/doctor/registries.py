@@ -420,8 +420,9 @@ def _run_mode(inv: Inventory, report: Report) -> None:
 def _connector(inv: Inventory, report: Report) -> None:
     """The connector version must be one pin, at or above the documented floor.
 
-    The floor is not cosmetic: below it the node's provenance block is dropped SILENTLY in both
-    directions, so a declaration of human authorship disappears with no error.
+    The floor is not cosmetic: below it a task can be created and produce no wake, so a spawn-mode
+    agent never runs and nothing says so. Whether the pin keeps up with npm is `crewaimeat connector`'s
+    job (network), not this offline lens.
     """
     pin, floor = inv.connector_pin, inv.connector_floor
     if not pin:
@@ -443,7 +444,7 @@ def _connector(inv: Inventory, report: Report) -> None:
                 ERROR,
                 pin,
                 f"the registration pin is below the documented floor {floor} — an agent registered "
-                f"through it cannot carry provenance, and the loss is silent",
+                f"through it runs a connector that can drop task wakes, and the loss is silent",
                 f"raise AIMEAT_CONNECTOR to at least aimeat@{floor}",
             )
         )

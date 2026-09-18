@@ -39,6 +39,11 @@ uv sync
 # (pid-guarded), so this simply adopts an already-running daemon. Crews can also auto-start it,
 # but doing it here once avoids a 30-crew thundering-herd on a cold boot — and crews launched with
 # auto_start=False crash without it.
+# The fleet runs the NEWEST aimeat connector (owner's rule, 2026-09-18) — upgraded here, before the serve
+# daemon starts; a running daemon is never upgraded underneath. Exit 4 = below the floor: stop.
+echo "[start_fleet] aimeat connector: npm latest / installed / repo pin ..."
+rc=0; uv run crewaimeat connector --install || rc=$?
+if [ "$rc" -eq 4 ]; then echo "[start_fleet] aimeat connector is below the floor - see above" >&2; exit 4; fi
 echo "[start_fleet] ensuring the shared loopback serve daemon (aimeat connect serve --http) ..."
 uv run python "$root/scripts/ensure_serve.py"
 

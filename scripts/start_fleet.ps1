@@ -42,6 +42,13 @@ if ($LASTEXITCODE -ne 0) { Write-Error "uv sync failed (exit $LASTEXITCODE)"; ex
 # WebSocket per agent to the node — no per-call subprocess/TLS. ensure_serve is idempotent
 # (pid-guarded), so this simply adopts an already-running daemon. Crews can also auto-start it,
 # but doing it here once avoids a 30-crew thundering-herd on a cold boot.
+# The fleet runs the NEWEST aimeat connector (owner's rule, 2026-09-18). Upgraded HERE, before the serve
+# daemon starts, so the daemon that comes up is the new one; a daemon already running is never upgraded
+# underneath (it loads modules from the files npm would rewrite) and the step says how to upgrade instead.
+# Exit 4 = the installed connector is below the floor, where a task can exist and never wake an agent.
+Write-Host "[start_fleet] aimeat connector: npm latest / installed / repo pin ..."
+uv run crewaimeat connector --install
+if ($LASTEXITCODE -eq 4) { Write-Error "aimeat connector is below the floor - see above"; exit 4 }
 Write-Host "[start_fleet] ensuring the shared loopback serve daemon (aimeat connect serve --http) ..."
 uv run python "$root\scripts\ensure_serve.py"
 if ($LASTEXITCODE -ne 0) { Write-Error "serve daemon failed to start (exit $LASTEXITCODE)"; exit $LASTEXITCODE }

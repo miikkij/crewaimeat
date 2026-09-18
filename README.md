@@ -102,7 +102,13 @@ Then queue a task for `research-crew` from the AIMEAT dashboard (its Tasks tab, 
 
 **The agent's mode is the owner's setting on the node.** Crews here expect **task-runner** mode, where the node activates a task as soon as it is created. The node's default for a new agent is `interactive`, where every task waits for you to start it. Set the mode on the agent's page in the dashboard. The runtime never writes it: `CrewSpec.mode` only declares what the crew expects, because stamping it on every start overwrote modes owners had chosen on purpose.
 
-**The npm `aimeat` connector matters as much as the Python package.** Every crew reaches the node through `aimeat connect serve`, which runs from the machine's global npm install, and no lockfile here pins that install. Keep it at **3.13.4 or newer** (`npm i -g aimeat@latest`). Older versions can drop a task wake, so a spawn-mode agent never runs, and nothing reports it. The `aimeat-crewai` note in `pyproject.toml` records each floor and why it is there.
+**The npm `aimeat` connector matters as much as the Python package.** Every crew reaches the node through `aimeat connect serve`, which runs from the machine's global npm install, and no lockfile here pins that install. **The fleet always runs the newest `aimeat` from npm**, and three things enforce it:
+
+- `start_fleet` runs `crewaimeat connector --install` before the serve daemon starts, so a stopped fleet comes back up on npm latest. It never upgrades under a running serve daemon (the global install is shared by every checkout and the desktop app on the machine); it says which daemons to stop instead.
+- The pre-commit hook fails a commit while the repo's pin (`forge.AIMEAT_CONNECTOR`, used for registration and the agency installer) is behind npm latest. `uv run crewaimeat connector --bump-pin` fixes it.
+- `uv run crewaimeat connector` shows npm latest, the installed CLI and the pin side by side. An unreachable registry prints NOT CHECKED, never a clean bill.
+
+The hard floor is **3.13.4**: below it a task can be created and never wake a spawn-mode agent, and nothing reports it, so `start_fleet` stops there. The `aimeat-crewai` note in `pyproject.toml` records each floor and why it is there.
 
 ### Common uv commands
 
@@ -122,6 +128,7 @@ Then queue a task for `research-crew` from the AIMEAT dashboard (its Tasks tab, 
 | Stop an agent participating | `uv run crewaimeat retire <agent>` |
 | List node agents no crew file backs | `uv run crewaimeat orphans` (`--only` / `--except` name them, `--apply` removes) |
 | Grade published articles by model | `uv run crewaimeat quality --days 21` |
+| Is the aimeat connector npm latest? | `uv run crewaimeat connector` (`--install` with the fleet stopped, `--bump-pin` for the repo pin) |
 | Add or remove a dependency | `uv add <pkg>` / `uv remove <pkg>` |
 
 ### Picking a model
@@ -273,7 +280,7 @@ Two of them have teeth worth knowing about:
 - Python 3.10 to 3.13 (`requires-python = ">=3.10,<3.14"`).
 - uv for installs and runs (the project `.venv` has no pip). [Install uv](https://docs.astral.sh/uv/getting-started/installation/).
 - `crewai[tools]`, `aimeat-crewai` (the AIMEAT connector — the liaison, serve daemon, and Hello Integration driver; source in [aimeat-protocol](https://github.com/miikkij/aimeat-protocol)), plus web/search/extraction tools — all installed by `uv sync`.
-- Node.js and the npm `aimeat` connector **>= 3.13.4**, installed globally (agent registration + the local serve daemon). Set `AIMEAT_CLI` to point the fleet at a different connector build; the default is the global install.
+- Node.js and the npm `aimeat` connector at **npm latest** (hard floor 3.13.4), installed globally (agent registration + the local serve daemon). Set `AIMEAT_CLI` to point the fleet at a different connector build; the default is the global install.
 - At least one model key: OpenRouter, xAI, an OpenAI-compatible endpoint — or a local Ollama (keyless). Web search works keyless (SearXNG when it answers, DuckDuckGo otherwise); Tavily is optional.
 
 ## Docs

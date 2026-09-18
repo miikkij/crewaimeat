@@ -45,6 +45,13 @@ status cells, append decisions), so the two sides stay synced without drifting p
 
 ## Conventions
 - Package management: use **uv** (`uv run`, `uv sync`).
+- **The npm `aimeat` connector is ALWAYS npm latest** (owner's rule, 2026-09-18 — releases land almost
+  daily). `uv run crewaimeat connector` shows npm latest / installed / repo pin. The repo pin
+  (`forge.AIMEAT_CONNECTOR`) is bumped with `--bump-pin` in the same session that notices it is behind;
+  the pre-commit hook refuses a commit until it is. The machine's global install is upgraded by
+  `start_fleet` (`--install`) BEFORE the serve daemon starts — never `npm i -g aimeat` by hand under a
+  running daemon, this checkout's or any other home's: they all load from the one global directory.
+  So: bump the pin, then tell the owner the fleet restart will bring the installed CLI up.
 - **Connector home is per-repo** (`aimeat-crewai>=0.6.0`): the home holding `serve.json`, tokens, agent
   configs is `AIMEAT_HOME` (env wins) → else `<cwd>/.aimeat`. The fleet **pins `AIMEAT_HOME=<repo>/.aimeat`**
   in every entrypoint (`start_fleet.ps1`/`serve_watchdog.ps1`/`watchdog.ps1` → inherited by crew-forge →
