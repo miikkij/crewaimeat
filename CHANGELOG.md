@@ -4,6 +4,18 @@ Notable changes to crewaimeat. Format loosely follows [Keep a Changelog](https:/
 Dates are the working dates. A change reaches a running fleet only on its next restart, because the
 daemons import the modules at start. `git log` has the measurement behind each entry.
 
+## [Unreleased] — 2026-09-18 — crewai 1.15.22
+
+### Changed
+- **crewai 1.15.18 → 1.15.22** (latest stable, 2026-09-16; crewai-core, -cli and -tools move with it). What
+  it brings here: CRLF accepted in inline skill definitions, SQLite connections closed in kickoff
+  task-output storage, gateway errors inside an HTTP 200 detected (the empty-choices case the scaffold
+  already guards), streamed tool-call arguments preserved, memory `read_only` honoured, and the
+  security floors pypdf 6.16.2 / nltk 3.10.3. **One behaviour change to watch:** `reasoning_effort` is now
+  sent to every OpenAI reasoning model and the forced final answer is asked as a user turn, which
+  reaches `gpt-oss-120b` on the coding profile. The test floor cannot see a model's behaviour, so
+  measure one coding-profile run after the next fleet restart. The full floor and doctor pass.
+
 ## [Unreleased] — 2026-09-18 — the connector is always npm latest
 
 ### Added

@@ -4,7 +4,7 @@
 
 First validated end to end 2026-05-30 (aimeat-crewai 0.3.4, aimeat CLI 1.14.3, crewai 1.14.6, Windows 11): onboarding 7/7 `completed`; daemon picks up an active task; the domain crew researches; the liaison publishes to memory and completes the task; live progress feed updates every 5s.
 
-Current floors (September 2026): **aimeat-crewai >= 0.26.0**, **crewai >= 1.15.18**, the npm **`aimeat` connector >= 3.13.4** (the machine's global install, which no lockfile pins). `pyproject.toml` records why each floor is where it is; every one was measured on a live node.
+Current floors (September 2026): **aimeat-crewai >= 0.26.0**, **crewai >= 1.15.22**, the npm **`aimeat` connector >= 3.13.4** (the machine's global install, which no lockfile pins). `pyproject.toml` records why each floor is where it is; every one was measured on a live node.
 
 ---
 
