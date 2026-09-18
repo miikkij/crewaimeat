@@ -99,13 +99,23 @@ def _bad(detail: str, code: int = 400) -> HTTPException:
     return HTTPException(status_code=code, detail=detail)
 
 
+def _known(name: str) -> str:
+    """The agent name AS STORED in the app's own list. A route never passes the URL's string on: this
+    value is what reaches a subprocess argument (`aimeat connect --agent …`, `run_once …`) or a file
+    name. Unknown -> 404, and nothing downstream runs."""
+    n = store.known(name)
+    if n is None:
+        raise _bad(f"no agent '{name}' on this machine", 404)
+    return n
+
+
 def _stage(name: str, doc: dict) -> Path:
     """Leave the FIRST definition where the runtime publishes it from on its first start."""
     from crewaimeat.forge_json import _doc_base
 
     d = paths.data_dir() / "crew_defs"
     d.mkdir(parents=True, exist_ok=True)
-    p = d / f"{_doc_base(name)}.json"
+    p = paths.contained(d / f"{_doc_base(name)}.json")
     paths.write_json(p, dict(doc, agent_name=name))
     return p
 
@@ -287,6 +297,7 @@ def create_app(token: str | None = None) -> FastAPI:
 
     @app.get("/api/agents/{name}", dependencies=auth)
     def agent_detail(name: str, lang: str = "fi") -> dict:
+        name = _known(name)
         a = store.agent(name)
         if not a:
             raise _bad(f"no agent '{name}' on this machine", 404)
@@ -358,6 +369,7 @@ def create_app(token: str | None = None) -> FastAPI:
             row = store.add_agent(body.name, body.instance, description=body.description)
         except store.StoreError as exc:
             raise _bad(str(exc)) from exc
+        row = store.agent(_known(row["name"]))  # from here on: the stored row, not the request's
         doc = dict(body.doc, agent_name=row["name"])
         errs = validate_crew_doc(doc)
         if errs:
@@ -372,10 +384,12 @@ def create_app(token: str | None = None) -> FastAPI:
             row = store.add_agent(body.name, body.instance)
         except store.StoreError as exc:
             raise _bad(str(exc)) from exc
+        row = store.agent(_known(row["name"]))
         return connect.start(row["name"], row["instance"], row["owner"], on_done=_after_approval)
 
     @app.post("/api/agents/{name}/reconnect", dependencies=auth)
     def reconnect(name: str) -> dict:
+        name = _known(name)
         a = store.agent(name)
         if not a:
             raise _bad(f"no agent '{name}' on this machine", 404)
@@ -384,6 +398,7 @@ def create_app(token: str | None = None) -> FastAPI:
 
     @app.post("/api/agents/{name}/start", dependencies=auth)
     def start(name: str) -> dict:
+        name = _known(name)
         a = store.agent(name)
         if not a or not a.get("connected"):
             raise _bad("connect the agent first")
@@ -393,6 +408,7 @@ def create_app(token: str | None = None) -> FastAPI:
 
     @app.post("/api/agents/{name}/stop", dependencies=auth)
     def stop(name: str) -> dict:
+        name = _known(name)
         if not store.agent(name):
             raise _bad(f"no agent '{name}' on this machine", 404)
         store.update_agent(name, autostart=False)
@@ -404,6 +420,7 @@ def create_app(token: str | None = None) -> FastAPI:
         """The FIRST definition for an agent that is connected here but has none (e.g. one made on the
         node). It is staged and one cycle run: an agent publishes its own first definition, and only
         into an EMPTY key (`json_agent.seed_from_staged`), so an existing one is never overwritten."""
+        name = _known(name)
         from crewaimeat.crew_def import validate_crew_doc
 
         a = store.agent(name)
@@ -423,6 +440,7 @@ def create_app(token: str | None = None) -> FastAPI:
     def publish(name: str, body: PublishIn) -> dict:
         """A change to a RUNNING agent goes through the node's publish route: the agent's own runtime
         validates it, the node numbers the revision and wakes the runtime (crew_registry docstring)."""
+        name = _known(name)
         from crewaimeat.crew_registry import publish_crew_def_live
 
         a = store.agent(name)
@@ -439,6 +457,7 @@ def create_app(token: str | None = None) -> FastAPI:
     @app.delete("/api/agents/{name}", dependencies=auth)
     def remove(name: str) -> dict:
         """Stops it HERE and forgets it on this machine. The agent and its definition stay on the instance."""
+        name = _known(name)
         if not store.agent(name):
             raise _bad(f"no agent '{name}' on this machine", 404)
         store.remove_agent(name)
@@ -461,6 +480,7 @@ def create_app(token: str | None = None) -> FastAPI:
 
     @app.get("/api/agents/{name}/schedules", dependencies=auth)
     def schedules(name: str, lang: str = "fi") -> dict:
+        name = _known(name)
         _connected(name)
         try:
             return {"schedules": schedule.list_for(name, lang)}
@@ -469,6 +489,7 @@ def create_app(token: str | None = None) -> FastAPI:
 
     @app.post("/api/agents/{name}/schedules", dependencies=auth)
     def schedule_create(name: str, body: ScheduleIn) -> dict:
+        name = _known(name)
         _connected(name)
         try:
             return {
@@ -489,6 +510,7 @@ def create_app(token: str | None = None) -> FastAPI:
 
     @app.patch("/api/agents/{name}/schedules/{sid}", dependencies=auth)
     def schedule_enable(name: str, sid: str, body: EnabledIn) -> dict:
+        name = _known(name)
         _connected(name)
         try:
             return {"ok": True, "result": schedule.set_enabled(name, sid, body.enabled)}
@@ -497,6 +519,7 @@ def create_app(token: str | None = None) -> FastAPI:
 
     @app.delete("/api/agents/{name}/schedules/{sid}", dependencies=auth)
     def schedule_delete(name: str, sid: str) -> dict:
+        name = _known(name)
         _connected(name)
         try:
             return {"ok": True, "result": schedule.delete(name, sid)}

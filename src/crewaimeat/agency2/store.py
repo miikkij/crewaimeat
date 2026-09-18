@@ -94,6 +94,15 @@ def agent(name: str) -> dict | None:
     return next((a for a in agents() if a["name"] == name), None)
 
 
+def known(name: str) -> str | None:
+    """The name AS STORED in this app's own list, or None. Everything downstream — a subprocess
+    argument, a file name — uses this value, never the string a request carried."""
+    for a in agents():
+        if a["name"] == name:
+            return a["name"]
+    return None
+
+
 def add_agent(name: str, instance_url: str, *, description: str = "") -> dict:
     n = check_agent_name(name)
     inst = instance(instance_url)

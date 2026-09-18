@@ -47,7 +47,23 @@ def aimeat_home() -> Path:
     return Path(_home())
 
 
+def contained(path: Path | str) -> Path:
+    """`path`, resolved, PROVEN to lie inside one of this app's own folders — or a refusal.
+
+    Paths here are built from an agent name, and an agent name arrives in a URL. The name is checked
+    where it enters (store.check_agent_name) and looked up in the app's own list before it is used,
+    but a file is written or read only after its RESOLVED location is checked too: a `..` that slipped
+    past everything else still cannot leave the data dir or the connector home."""
+    real = os.path.realpath(path)
+    for base in (data_dir(), aimeat_home()):
+        root = os.path.realpath(base)
+        if real == root or real.startswith(root + os.sep):
+            return Path(real)
+    raise ValueError(f"refusing a path outside the app's folders: {path}")
+
+
 def read_json(path: Path, default: Any) -> Any:
+    path = contained(path)
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -56,7 +72,8 @@ def read_json(path: Path, default: Any) -> Any:
 
 def write_json(path: Path, value: Any) -> None:
     """Atomic write: a crash mid-write must never leave a half file that the next start cannot read."""
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    path = contained(path)
+    tmp = contained(path.with_suffix(path.suffix + ".tmp"))
     tmp.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp, path)
 

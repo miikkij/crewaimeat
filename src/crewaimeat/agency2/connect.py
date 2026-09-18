@@ -63,10 +63,15 @@ def parse(text: str) -> dict:
     }
 
 
-def _token_path(name: str, owner: str):
+def _token_file(name: str, owner: str):
+    """The stored credential, SELECTED from the tokens folder by comparison (no path is built from the
+    name), or None."""
     from crewaimeat.agency2 import paths
 
-    return paths.aimeat_home() / "tokens" / f"{name}@{owner}.token"
+    tokens = paths.aimeat_home() / "tokens"
+    if not tokens.is_dir():
+        return None
+    return {p.name: p for p in tokens.glob("*.token")}.get(f"{name}@{owner}.token")
 
 
 def _set_aside(name: str, owner: str):
@@ -76,13 +81,15 @@ def _set_aside(name: str, owner: str):
     reconnect is exactly the case where the old token is valid but carries the wrong scopes (scopes are
     baked into the token at approval). `tokens/.replaced/` is not read — the connector lists only
     `*.token` files directly in `tokens/` (cli/connect/keychain.ts). Returns where it went, or None."""
-    src = _token_path(name, owner)
-    if not src.is_file():
+    from crewaimeat.agency2 import paths
+
+    src = _token_file(name, owner)
+    if src is None:
         return None
-    dst = src.parent / ".replaced" / f"{src.stem}.{int(time.time())}.token"
+    dst = paths.contained(src.parent / ".replaced" / f"{src.stem}.{int(time.time())}.token")
     dst.parent.mkdir(parents=True, exist_ok=True)
     src.replace(dst)
-    return dst
+    return (src, dst)
 
 
 def start(name: str, instance_url: str, owner: str, *, on_done=None, fresh: bool = False) -> dict:
@@ -127,7 +134,7 @@ def start(name: str, instance_url: str, owner: str, *, on_done=None, fresh: bool
 
         buf = ""
         t0 = time.time()
-        with open(paths.logs_dir() / f"connect-{name}.log", "a", encoding="utf-8") as log:
+        with open(paths.contained(paths.logs_dir() / f"connect-{name}.log"), "a", encoding="utf-8") as log:
             for line in proc.stdout:  # type: ignore[union-attr]
                 log.write(f"+{time.time() - t0:6.1f}s {line}")  # when each line came is measured, not assumed
                 log.flush()
@@ -147,8 +154,8 @@ def start(name: str, instance_url: str, owner: str, *, on_done=None, fresh: bool
         if rc == 0 and (p["stored"] or (p["already"] and not fresh)):
             _set(name, status="approved", finished=time.time())
         else:
-            if aside is not None and not _token_path(name, owner).is_file():
-                aside.replace(_token_path(name, owner))  # the old key is better than none
+            if aside is not None and not aside[0].exists():
+                aside[1].replace(aside[0])  # the old key is better than none
             # Never guess ("maybe already registered"): the connector's own words are the reason.
             _set(name, status="failed", error=_tail(buf) or f"connector exited with {rc}", finished=time.time())
         if on_done:

@@ -33,11 +33,20 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 def _pid_path(key: str) -> Path:
     d = paths.state_dir() / "pids"
     d.mkdir(parents=True, exist_ok=True)
-    return d / f"{key}.json"
+    return paths.contained(d / f"{key}.json")
+
+
+def _known(name: str) -> str:
+    from crewaimeat.agency2 import store
+
+    n = store.known(name)
+    if n is None:
+        raise ValueError(f"no agent '{name}' on this machine")
+    return n
 
 
 def log_path(name: str) -> Path:
-    return paths.logs_dir() / f"{name}.log"
+    return paths.contained(paths.logs_dir() / f"{_known(name)}.log")
 
 
 def _cmdline(pid: int) -> str | None:
@@ -74,7 +83,7 @@ def _alive(key: str, module: str) -> dict | None:
 def _launch(key: str, argv: list[str], log: Path) -> dict:
     if os.environ.get("PYTEST_CURRENT_TEST"):
         raise RuntimeError("procs spawns processes — never under pytest")
-    fh = open(log, "ab")  # noqa: SIM115 — handed to the child, closed below
+    fh = open(paths.contained(log), "ab")  # noqa: SIM115 — handed to the child, closed below
     try:
         p = subprocess.Popen(
             argv,
@@ -142,20 +151,31 @@ def running(name: str) -> dict | None:
 
 
 def first_cycle(name: str) -> dict:
-    """One `run_once` right away: publish a staged first definition, push the identity, drain the queue."""
-    return _launch(f"first-{name}", [engine.python_exe(), "-m", RUN_ONCE, name], log_path(name))
+    """One `run_once` right away: publish a staged first definition, push the identity, drain the queue.
+    The argument is the name from the app's own list, never the request's string."""
+    n = _known(name)
+    return _launch(f"first-{n}", [engine.python_exe(), "-m", RUN_ONCE, n], log_path(n))
 
 
 def tail(name: str, max_bytes: int = 24_000) -> str:
     """The agent's own log (first cycles) followed by its latest spawned runs — by BYTES, never whole
     files (0.8.21: reading a grown log OOMed the cockpit)."""
+    # SELECTED from what the folders hold, by comparison — no path is built from the name.
     parts: list[Path] = []
-    own = log_path(name)
-    if own.is_file():
+    own = {p.stem: p for p in paths.logs_dir().glob("*.log")}.get(name)
+    if own is not None:
         parts.append(own)
     runs = paths.aimeat_home() / "spawn" / "logs"
     if runs.is_dir():
-        mine = sorted(runs.glob(f"{name}-*.log"), key=lambda p: p.stat().st_mtime)
+        from crewaimeat import spawn_state
+
+        # The spawner's own naming (`<agent>-<run_id>.log`), taken from it rather than restated here.
+        prefix = spawn_state.log_file(name, "RUN").name[: -len("RUN.log")]
+        run_id_start = spawn_state.log_file(name, f"{name}-X").name[: -len("X.log")]
+        mine = sorted(
+            (p for p in runs.glob("*.log") if p.name.startswith(run_id_start) and p.name.startswith(prefix)),
+            key=lambda p: p.stat().st_mtime,
+        )
         parts.extend(mine[-2:])
     out = []
     budget = max_bytes

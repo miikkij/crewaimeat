@@ -419,8 +419,8 @@ def test_a_reconnect_sets_the_old_key_aside_where_the_connector_cannot_see_it(_i
     tokens = _isolated / "home" / "tokens"
     tokens.mkdir()
     (tokens / "uutiset@teemu.token").write_text("old", encoding="utf-8")
-    moved = connect._set_aside("uutiset", "teemu")
-    assert moved is not None and moved.read_text(encoding="utf-8") == "old"
+    src, moved = connect._set_aside("uutiset", "teemu")
+    assert src.name == "uutiset@teemu.token" and moved.read_text(encoding="utf-8") == "old"
     assert moved.parent.name == ".replaced" and not (tokens / "uutiset@teemu.token").exists()
     assert [p.name for p in tokens.glob("*.token")] == []  # what the connector lists: nothing
     assert connect._set_aside("uutiset", "teemu") is None
@@ -529,3 +529,49 @@ def test_the_spawn_roster_is_this_apps_connected_agents_only():
     store.update_agent("uutiset", connected=True)
     store.update_agent("pysaytetty", connected=True, autostart=False)
     assert spawn.roster() == ["uutiset"]
+
+
+# ── what reaches the disk and a command line ─────────────────────────────────
+
+
+@pytest.mark.parametrize("bad", ["../../x", r"..\..\x", "a/../../b"])
+def test_no_path_leaves_the_apps_folders(bad):
+    with pytest.raises(ValueError):
+        paths.contained(paths.data_dir() / bad / ".." / ".." / ".." / "escape.json")
+
+
+def test_a_name_the_app_does_not_know_never_reaches_a_command_line():
+    from crewaimeat.agency2 import procs
+
+    with pytest.raises(ValueError):
+        procs.log_path("../../etc")
+    store.add_instance("http://localhost:40561", "teemu")
+    store.add_agent("uutiset", "http://localhost:40561")
+    assert procs.log_path("uutiset").name == "uutiset.log"
+
+
+def test_logs_are_selected_from_the_folder_not_built_from_the_name(_isolated):
+    from crewaimeat.agency2 import procs
+
+    (paths.logs_dir() / "uutiset.log").write_text("oma", encoding="utf-8")
+    runs = _isolated / "home" / "spawn" / "logs"
+    runs.mkdir(parents=True)
+    (runs / "uutiset-uutiset-1a.log").write_text("ajo", encoding="utf-8")
+    (runs / "muu-muu-1b.log").write_text("vieras", encoding="utf-8")
+    out = procs.tail("uutiset")
+    assert "oma" in out and "ajo" in out and "vieras" not in out
+    assert procs.tail("../uutiset") == ""
+
+
+def test_a_url_name_the_app_does_not_know_is_404_everywhere():
+    c = _client()
+    h = {"Authorization": "Bearer tok"}
+    for method, path in [
+        ("POST", "/api/agents/..%2F..%2Fx/start"),
+        ("POST", "/api/agents/ghost/reconnect"),
+        ("GET", "/api/agents/ghost"),
+        ("DELETE", "/api/agents/ghost"),
+        ("GET", "/api/agents/ghost/schedules"),
+    ]:
+        r = c.request(method, path, headers=h)
+        assert r.status_code == 404, (method, path, r.status_code)
