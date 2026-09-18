@@ -132,3 +132,26 @@ def deliverable_text(agent: str, key: str, *, limit: int = 6000) -> str | None:
         v = v.get("body") or v.get("content") or v.get("text") or v
     text = v if isinstance(v, str) else __import__("json").dumps(v, ensure_ascii=False, indent=1)
     return text[:limit]
+
+
+def rest_get(agent: str, path: str, params: dict | None = None, *, timeout: float = 30) -> Any:
+    """GET a node `/v1/...` route AS `agent`, through the daemon's forward proxy (the same door
+    `transport` uses for `_aimeat_rest`). A refusal raises `Refused`, never returns empty."""
+    port = serve_port()
+    if not port:
+        raise NoDaemon("no serve daemon for this home")
+    ident = served_agents().get(agent, {}).get("gaii") or agent
+    try:
+        r = requests.get(
+            f"http://127.0.0.1:{port}{path}", params=params or {}, headers={"X-Aimeat-Agent": ident}, timeout=timeout
+        )
+    except requests.ConnectionError as exc:
+        raise NoDaemon(f"serve daemon on port {port} does not answer") from exc
+    try:
+        body = r.json()
+    except ValueError:
+        body = {"error": {"code": "NOT_JSON", "message": r.text[:300]}}
+    if r.status_code >= 400 or (isinstance(body, dict) and body.get("ok") is False):
+        err = (body or {}).get("error") or {}
+        raise Refused(r.status_code, str(err.get("code") or "ERROR"), str(err.get("message") or r.text[:300]))
+    return body.get("data", body) if isinstance(body, dict) else body

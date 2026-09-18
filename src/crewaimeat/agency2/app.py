@@ -15,7 +15,20 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from crewaimeat.agency2 import author, connect, engine, health, migrate, node, paths, procs, schedule, store, trial
+from crewaimeat.agency2 import (
+    author,
+    connect,
+    costs,
+    engine,
+    health,
+    migrate,
+    node,
+    paths,
+    procs,
+    schedule,
+    store,
+    trial,
+)
 
 TOKEN_ENV = "AIMEAT_AGENCY_TOKEN"
 VERSION = "2.0.0"
@@ -221,12 +234,16 @@ def create_app(token: str | None = None) -> FastAPI:
                 ),
                 None,
             )
-            roster, note = [], None
+            roster, note, spend, cost_note = [], None, {}, None
             if asker:
                 try:
                     roster = node.roster(asker["name"])
                 except (node.Refused, node.NoDaemon) as exc:
                     note = str(exc)
+                try:
+                    spend = costs.by_agent(asker["name"])
+                except (node.Refused, node.NoDaemon) as exc:
+                    cost_note = str(exc)
             else:
                 note = "no connected agent on this machine yet — the instance's list appears after the first one"
             rows = []
@@ -244,6 +261,7 @@ def create_app(token: str | None = None) -> FastAPI:
                         "connected_elsewhere": (not lo) and channel == "socket",
                         "mode": r.get("mode"),
                         "last_seen": r.get("last_seen"),
+                        "cost": spend.get(nm),
                     }
                 )
             for nm, lo in local.items():
@@ -260,7 +278,13 @@ def create_app(token: str | None = None) -> FastAPI:
                         }
                     )
             out.append(
-                {"instance": inst, "agents": sorted(rows, key=lambda x: (not x["here"], x["name"])), "note": note}
+                {
+                    "instance": inst,
+                    "agents": sorted(rows, key=lambda x: (not x["here"], x["name"])),
+                    "note": note,
+                    "cost_note": cost_note,
+                    "cost_days": costs.DAYS,
+                }
             )
         return {"instances": out}
 
@@ -279,6 +303,10 @@ def create_app(token: str | None = None) -> FastAPI:
                         t["output"] = node.deliverable_text(name, t["deliverableKey"])
             except (node.Refused, node.NoDaemon) as exc:
                 view["tasks_error"] = str(exc)
+            try:
+                view["costs"] = costs.for_agent(name)
+            except (node.Refused, node.NoDaemon) as exc:
+                view["costs_error"] = str(exc)
             try:
                 view["runtime"] = node.runtime_report(name)
             except (node.Refused, node.NoDaemon) as exc:

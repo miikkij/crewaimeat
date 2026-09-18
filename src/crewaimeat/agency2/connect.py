@@ -29,7 +29,8 @@ from crewaimeat.agency2 import engine
 #   agent:write     the scaffold's identity push (tags) — measured: without it tags_set answers SCOPE_DENIED
 #   task:write      creating the agent's own `agent_task` schedule (services/schedule-gate.ts)
 #   workflow:read   listing schedules (GET /v1/schedules)
-REQUIRED_SCOPES = ("agent:write", "task:write", "workflow:read")
+#   wallet:read     reading what the agents spent (GET /v1/ledger/usage, routes/ledger.ts)
+REQUIRED_SCOPES = ("agent:write", "task:write", "workflow:read", "wallet:read")
 
 _CODE_RE = re.compile(r"Verification code:\s*([A-Z0-9]{3,}-[A-Z0-9]{3,})")
 _URL_RE = re.compile(r"Open\s+(https?://\S+/v1/agents/verify)\S*")

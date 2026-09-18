@@ -73,7 +73,7 @@ tr.click{cursor:pointer} tr.click:hover{background:var(--soft)}
 const TOKEN = "__AGENCY_TOKEN__";
 const T = {
  fi:{
-  sched:"Aikataulu", sched_add:"Lisää aikataulu", sched_what:"Mitä agentti tekee silloin", sched_save:"Tallenna aikataulu", sched_none:"Ei aikatauluja. Agentti tekee töitä, kun sille antaa tehtävän.", s_daily:"Joka päivä", s_weekdays:"Arkisin", s_weekly:"Kerran viikossa", s_hourly:"Joka tunti", day1:"maanantaisin", day2:"tiistaisin", day3:"keskiviikkoisin", day4:"torstaisin", day5:"perjantaisin", day6:"lauantaisin", day7:"sunnuntaisin", pause:"Keskeytä", resume:"Jatka", paused:"keskeytetty", nav_agents:"Agentit", nav_health:"Kunto", nav_instances:"Palvelimet",
+  sched:"Aikataulu", sched_add:"Lisää aikataulu", sched_what:"Mitä agentti tekee silloin", sched_save:"Tallenna aikataulu", sched_none:"Ei aikatauluja. Agentti tekee töitä, kun sille antaa tehtävän.", s_daily:"Joka päivä", s_weekdays:"Arkisin", s_weekly:"Kerran viikossa", s_hourly:"Joka tunti", day1:"maanantaisin", day2:"tiistaisin", day3:"keskiviikkoisin", day4:"torstaisin", day5:"perjantaisin", day6:"lauantaisin", day7:"sunnuntaisin", pause:"Keskeytä", resume:"Jatka", paused:"keskeytetty", costs:"Kulut", days:"pv", calls:"kutsua", unpriced:"ilman hintaa", tokens:"tokenia", cost_unavailable:"Kuluja ei voi näyttää: agentilta puuttuu oikeus wallet:read. Liitä se uudelleen Kunto-näkymästä.", nav_agents:"Agentit", nav_health:"Kunto", nav_instances:"Palvelimet",
   mig_title:"Tämä on kokonaan uusi sovellus",
   mig_body:"AIMEAT Agency 2.0 toimii eri tavalla kuin aiempi versio. Mikään ei ole ennallaan: agentit tehdään kuvailemalla, ne liitetään AIMEAT-palvelimeen, ja niiden määritelmä on AIMEATissa, ei tällä koneella. Vanhat agenttisi eivät siirry itsestään, mutta voit tehdä ne uudelleen: kuvauksesi on valmiina.",
   mig_old:"Aiemmat agenttisi", mig_remake:"Tee uudelleen", mig_ok:"Selvä, jatketaan",
@@ -104,7 +104,7 @@ const T = {
   confirm_remove:"Poistetaanko agentti tältä koneelta? Se jää AIMEATiin.",
  },
  en:{
-  sched:"Schedule", sched_add:"Add a schedule", sched_what:"What the agent does then", sched_save:"Save the schedule", sched_none:"No schedules. The agent works when it is given a task.", s_daily:"Every day", s_weekdays:"On weekdays", s_weekly:"Once a week", s_hourly:"Every hour", day1:"on Mondays", day2:"on Tuesdays", day3:"on Wednesdays", day4:"on Thursdays", day5:"on Fridays", day6:"on Saturdays", day7:"on Sundays", pause:"Pause", resume:"Resume", paused:"paused", nav_agents:"Agents", nav_health:"Health", nav_instances:"Instances",
+  sched:"Schedule", sched_add:"Add a schedule", sched_what:"What the agent does then", sched_save:"Save the schedule", sched_none:"No schedules. The agent works when it is given a task.", s_daily:"Every day", s_weekdays:"On weekdays", s_weekly:"Once a week", s_hourly:"Every hour", day1:"on Mondays", day2:"on Tuesdays", day3:"on Wednesdays", day4:"on Thursdays", day5:"on Fridays", day6:"on Saturdays", day7:"on Sundays", pause:"Pause", resume:"Resume", paused:"paused", costs:"Costs", days:"days", calls:"calls", unpriced:"unpriced", tokens:"tokens", cost_unavailable:"Costs cannot be shown: the agent lacks the wallet:read permission. Reconnect it from the Health view.", nav_agents:"Agents", nav_health:"Health", nav_instances:"Instances",
   mig_title:"This is a completely new app",
   mig_body:"AIMEAT Agency 2.0 works differently from the previous version. Nothing is the same: agents are made by describing them, they are connected to an AIMEAT instance, and their definition lives in AIMEAT, not on this machine. Your old agents do not move over by themselves, but you can make them again: your description is ready.",
   mig_old:"Your earlier agents", mig_remake:"Make again", mig_ok:"Got it, continue",
@@ -142,6 +142,13 @@ const t = k => (T[LANG][k] ?? k);
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
+const money = c => c ? ("$" + c.cost_usd.toFixed(c.cost_usd && c.cost_usd < 0.1 ? 4 : 2)) : "";
+function costText(c){
+  if(!c) return "";
+  let s = `${money(c)} · ${c.calls} ${t("calls")}`;
+  if(c.unpriced_calls) s += ` · ${c.unpriced_calls} ${t("unpriced")}`;
+  return s;
+}
 async function api(method, path, body){
   const r = await fetch(path, {method, headers:{"Authorization":"Bearer "+TOKEN, "Content-Type":"application/json"}, body: body ? JSON.stringify(body) : undefined});
   let data = null; try{ data = await r.json(); }catch(e){}
@@ -222,13 +229,14 @@ async function renderAgents(){
   const local = Object.fromEntries(STATE.agents.map(a=>[a.name,a]));
   $("#lists").innerHTML = data.instances.map(block => `<div class="card"><h2>${esc(block.instance.label)} <span class="muted" style="font-weight:400">· ${esc(block.instance.owner)}</span></h2>
     ${block.note ? `<p class="muted">${esc(block.note.startsWith("no connected") ? t("no_list") : block.note)}</p>` : ""}
+    ${block.cost_note ? `<p class="muted" style="font-size:13px">${t("cost_unavailable")}</p>` : ""}
     <table>${block.agents.map(a => {
       const lo = local[a.name]; const reg = lo && lo.registration;
       let where;
       if(a.here){ where = lo && !lo.connected ? `<span class="pill warn">${t("waiting")}</span>` : `<span class="pill ${a.running_here?"ok":""}">${t("here")} · ${a.running_here?t("running"):t("stopped")}</span>`; }
       else if(a.connected_elsewhere){ where = `<span class="pill">${t("elsewhere")}</span>`; }
       else { where = `<span class="pill">${t("notrunning")}</span> <button class="btn ghost small" data-runhere="${esc(a.name)}" data-inst="${esc(block.instance.url)}">${t("run_here")}</button>`; }
-      return `<tr class="${a.here?"click":""}" data-name="${a.here?esc(a.name):""}"><td><b>${esc(a.name)}</b></td><td style="text-align:right">${where}</td></tr>`;
+      return `<tr class="${a.here?"click":""}" data-name="${a.here?esc(a.name):""}"><td><b>${esc(a.name)}</b>${a.cost?`<div class="muted" style="font-size:13px">${esc(costText(a.cost))} / ${block.cost_days} ${t("days")}</div>`:""}</td><td style="text-align:right">${where}</td></tr>`;
     }).join("")}</table></div>`).join("");
   document.querySelectorAll("tr.click").forEach(tr => tr.onclick = () => tr.dataset.name && agentDetail(tr.dataset.name));
   document.querySelectorAll("[data-runhere]").forEach(b => b.onclick = async (ev) => {
@@ -341,6 +349,10 @@ async function agentDetail(name){
       </div>
       <label>${t("sched_what")}</label><textarea id="sWhat" style="min-height:70px"></textarea>
       <div class="row" style="margin-top:8px"><button class="btn ghost" id="sAdd">${t("sched_save")}</button></div><div class="err" id="sErr"></div></div>
+    ${a.connected ? `<div class="card"><h2>${t("costs")} (${(a.costs||{}).days||30} ${t("days")})</h2>
+      ${a.costs ? `<p><b>${esc(costText(a.costs.total))}</b> · ${a.costs.total.tokens.toLocaleString(LANG==="fi"?"fi-FI":"en-US")} ${t("tokens")}</p>
+        ${a.costs.models.length ? `<table>${a.costs.models.map(m=>`<tr><td>${esc(m.model)}</td><td class="muted" style="text-align:right">${esc(costText(m))}</td></tr>`).join("")}</table>` : `<p class="muted">${t("noruns")}</p>`}`
+        : `<p class="muted">${t("cost_unavailable")}</p>`}</div>` : ""}
     <div class="card"><h2>${t("runs")}</h2>${a.tasks_error?`<p class="err">${esc(a.tasks_error)}</p>`:""}
       ${tasks.length ? `<table><tr><th></th><th></th><th></th></tr>${tasks.map(x=>`<tr><td>${esc(x.title||x.id)}</td><td><span class="pill ${stCls(x.status)}">${esc(stLabel(x.status))}</span></td><td class="muted">${esc((x.completedAt||x.updatedAt||x.updated_at||x.createdAt||x.created_at||"").replace("T"," ").slice(0,16))}</td></tr>
         ${x.output ? `<tr><td colspan="3"><details><summary class="muted">${t("output")}</summary><div class="out">${esc(x.output)}</div></details></td></tr>`:""}

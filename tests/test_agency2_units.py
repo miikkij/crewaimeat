@@ -497,3 +497,19 @@ def test_costs_come_from_the_ledger_and_unpriced_is_not_free(monkeypatch):
 
 def test_costs_need_their_scope_at_approval():
     assert "wallet:read" in connect.REQUIRED_SCOPES
+
+
+def test_every_ui_string_exists_in_finnish_and_english():
+    """A missing key renders as the raw key (`cost_unavailable`) — measured in a screenshot. The UI
+    is for a person who reads Finnish; every t("…") and data-t="…" must be in both tables."""
+    import re
+    from pathlib import Path
+
+    html = (Path(__file__).parent.parent / "src/crewaimeat/agency2/static/index.html").read_text(encoding="utf-8")
+    used = set(re.findall(r'\bt\("([a-z0-9_]+)"\)', html)) | set(re.findall(r'data-t="([a-z0-9_]+)"', html))
+    used |= {f"day{d}" for d in range(1, 8)}  # built as t("day"+d)
+    fi = html[html.index(" fi:{") : html.index(" en:{")]
+    en = html[html.index(" en:{") : html.index("const qs")]
+    defined = lambda block: set(re.findall(r"\b([a-z0-9_]+):\"", block))  # noqa: E731
+    assert not (used - defined(fi)), f"missing in Finnish: {sorted(used - defined(fi))}"
+    assert not (used - defined(en)), f"missing in English: {sorted(used - defined(en))}"
