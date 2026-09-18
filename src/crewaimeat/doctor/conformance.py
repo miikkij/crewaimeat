@@ -45,6 +45,13 @@ DISPATCHER_MODULES = {
     # would be paying the exact import it exists to avoid. Same shape as wake_spin/serve_watchdog:
     # 127.0.0.1 only, never the node over the network.
     "src/crewaimeat/spawner.py",
+    # agency 2.0's own door to the nodes. Its agent calls go to the LOOPBACK daemon (/local/call, the
+    # same door `transport` uses) and it must not import aimeat_crew/crewai: the cockpit is a small
+    # local server, and crewai's import-time load_dotenv() is what leaked a checkout's .env into it
+    # (measured 2026-09-18). The one call that reaches a node over the network is the anonymous
+    # GET /v1/health that checks an instance BEFORE any agent exists on it — there is no identity
+    # to route that through, and `health()` returns the failure as text, never as an empty result.
+    "src/crewaimeat/agency2/node.py",
 }
 HTTP_VERBS = {"get", "post", "put", "patch", "delete", "request", "head", "stream"}
 HTTP_LIBS = {"requests", "httpx", "urllib"}
@@ -65,13 +72,15 @@ SINK_RE = re.compile(
 CONNECTOR_LITERAL = re.compile(r"aimeat@\d+\.\d+\.\d+")
 
 # ── Route 4: the docs must teach a command the connector still has ───────────────────────────────
-# `connect add` and its `--mode` flag were removed in connector v1.33. 142 places in this repo went
-# on teaching the removed form for months — including the first command in the README's Quickstart
-# and the one startup.prompt.md hands to an AI assistant, so onboarding's very first step could not
-# work. Nothing noticed, because documentation has no test. This is that test.
-REMOVED_CONNECT = re.compile(
-    r"aimeat(?:@[\w.\-]+)?\s+connect\s+add\b|connect\s+add\s+--agent\b|--mode[=\s]+task-runner\b"
-)
+# `connect add` was removed in connector v1.33. 142 places in this repo went on teaching the removed
+# form for months — including the first command in the README's Quickstart and the one
+# startup.prompt.md hands to an AI assistant, so onboarding's very first step could not work. Nothing
+# noticed, because documentation has no test. This is that test.
+# `--mode` is NOT on the list any more: connector 3.x accepts `aimeat connect … --mode <mode>` again
+# (cli/connect/auth.ts validates it and sends it with device-authorize), and the owner approves it in
+# the same consent — MEASURED 2026-09-18 on 3.17.0 against a local node: the agent came back
+# `task-runner`. Only the removed `add` subcommand is still flagged.
+REMOVED_CONNECT = re.compile(r"aimeat(?:@[\w.\-]+)?\s+connect\s+add\b|connect\s+add\s+--agent\b")
 
 
 def _scope_map(tree: ast.Module) -> dict[int, str]:
@@ -307,12 +316,13 @@ def _check_version_literal(text: str, lines: list[str], rel: str, scopes: dict[i
 
 
 def _check_removed_connect_command(lines: list[str], rel: str, scopes: dict[int, str], report: Report) -> None:
-    """No file may teach `connect add` / `--mode task-runner` — the connector removed both in v1.33.
+    """No file may teach `connect add` — the connector removed that subcommand in v1.33.
 
     A command that no longer exists is worse than a missing instruction: the reader runs it, gets a
     usage error, and concludes the project is broken. The correct form is
-    `aimeat connect --url <node> --owner <owner> --agent <name>`, and the agent's MODE is set by the
-    scaffold on every start via `aimeat_agent_mode_set` — which is why the flag could be dropped.
+    `aimeat connect --url <node> --owner <owner> --agent <name> [--mode <mode>]`. The mode is the
+    OWNER's decision on the node (commit 1db112d), so registration — which the owner approves — is the
+    right place to ask for it; the runtime never writes it.
     """
     for i, line in enumerate(lines, start=1):
         m = REMOVED_CONNECT.search(line)
@@ -327,7 +337,6 @@ def _check_removed_connect_command(lines: list[str], rel: str, scopes: dict[int,
                 _where(rel, scopes, i),
                 f"line {i}: teaches `{m.group(0)}`, which the connector removed in v1.33 — a reader who "
                 f"runs it gets a usage error and concludes the project is broken",
-                "use `aimeat connect --url <node> --owner <owner> --agent <name>`; the mode is set by "
-                "the scaffold at start, not at registration",
+                "use `aimeat connect --url <node> --owner <owner> --agent <name> [--mode <mode>]`",
             )
         )

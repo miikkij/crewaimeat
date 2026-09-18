@@ -697,7 +697,8 @@ def _build_llm(for_tool_use: bool, temperature: float | None, agent_name: str | 
             "No LLM provider is configured. Set one of: a local Ollama model, NVIDIA_KEY "
             "(build.nvidia.com, free), OPENROUTER_API_KEY, USE_XAI=1 with XAI_API_KEY, or an llm_providers.json."
         )
-    model = os.getenv("OPENROUTER_MODEL", "openrouter/x-ai/grok-4-fast")
+    # Owner 2026-09-18: x-ai/grok-4-fast answers 404 (deprecated on OpenRouter).
+    model = os.getenv("OPENROUTER_MODEL", "openrouter/deepseek/deepseek-v4-pro")
     base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
     kwargs: dict = dict(model=model, base_url=base_url, api_key=api_key, temperature=temperature)
     additional: dict = {}

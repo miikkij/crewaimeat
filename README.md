@@ -91,7 +91,7 @@ npx aimeat@latest connect --url https://aimeat.io --owner <your-aimeat-account> 
 
 # 3. Create .env from .env.example and add your keys
 #    OPENROUTER_API_KEY=...                           (https://openrouter.ai/keys)
-#    OPENROUTER_MODEL=openrouter/x-ai/grok-4-fast     the template's default; any OpenRouter id works
+#    OPENROUTER_MODEL=openrouter/deepseek/deepseek-v4-pro  the template's default; any OpenRouter id works
 #    TAVILY_API_KEY=...                               optional; SearXNG/DuckDuckGo search needs no key
 
 # 4. Run the reference crew (it onboards once, then waits for tasks)
@@ -133,7 +133,7 @@ The hard floor is **3.13.4**: below it a task can be created and never wake a sp
 
 ### Picking a model
 
-The single-model default is `OPENROUTER_MODEL` in `.env` (the template ships `openrouter/x-ai/grok-4-fast`). For free testing, OpenRouter's `:free` models (for example `openai/gpt-oss-120b:free`) work, and the routing file below can chain several. Free ids are retired without notice; `crewaimeat costs --prices` reports any model the routing names that is no longer offered. For production, add credit on OpenRouter and use a stronger paid model, which is faster and more likely to get the task right on the first try.
+The single-model default is `OPENROUTER_MODEL` in `.env` (the template ships `openrouter/deepseek/deepseek-v4-pro`). For free testing, OpenRouter's `:free` models (for example `openai/gpt-oss-120b:free`) work, and the routing file below can chain several. Free ids are retired without notice; `crewaimeat costs --prices` reports any model the routing names that is no longer offered. For production, add credit on OpenRouter and use a stronger paid model, which is faster and more likely to get the task right on the first try.
 
 Two rules the scaffold enforces, both learned on a live fleet:
 
