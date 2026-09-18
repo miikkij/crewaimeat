@@ -714,4 +714,8 @@ def _build_llm(for_tool_use: bool, temperature: float | None, agent_name: str | 
     additional["extra_body"] = extra_body
     if additional:
         kwargs["additional_params"] = additional
-    return LLM(**kwargs)
+    # is_litellm: crewai now picks its NATIVE OpenAICompatibleCompletion for an openrouter/ model, and
+    # that class keeps only the token counts of `usage` — OpenRouter's `usage.cost` never reaches the
+    # ledger (measured 2026-09-18: native event usage has no cost; the litellm class carries
+    # cost=0.00022176 for the same call). The litellm client is what df602c9 was proven with.
+    return LLM(**kwargs, is_litellm=True)

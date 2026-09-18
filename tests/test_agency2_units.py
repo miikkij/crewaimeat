@@ -451,3 +451,49 @@ def test_the_single_model_path_asks_openrouter_for_the_real_cost(monkeypatch, tm
     got = llm._build_llm(False, 0.3, None)
     extra = (getattr(got, "additional_params", None) or {}).get("extra_body") or {}
     assert extra.get("usage") == {"include": True}
+    assert getattr(got, "is_litellm", False) is True  # the native class drops usage.cost
+
+
+# ── costs ────────────────────────────────────────────────────────────────────
+
+
+def test_costs_come_from_the_ledger_and_unpriced_is_not_free(monkeypatch):
+    from crewaimeat.agency2 import costs
+
+    def fake(agent, path, params=None, **kw):
+        assert path == "/v1/ledger/usage"
+        if params.get("group_by") == "agent":
+            return {
+                "groups": [
+                    {
+                        "key": "uutiset#teemu@n",
+                        "cost_usd": 0.0123,
+                        "calls": 4,
+                        "total_tokens": 900,
+                        "unpriced_calls": 1,
+                    },
+                ]
+            }
+        return {
+            "groups": [
+                {
+                    "key": "deepseek/deepseek-v4-pro",
+                    "cost_usd": 0.0123,
+                    "calls": 4,
+                    "total_tokens": 900,
+                    "unpriced_calls": 1,
+                }
+            ],
+            "totals": {"cost_usd": 0.0123, "calls": 4, "total_tokens": 900, "unpriced_calls": 1},
+        }
+
+    monkeypatch.setattr(costs.node, "rest_get", fake)
+    assert costs.by_agent("uutiset") == {
+        "uutiset": {"cost_usd": 0.0123, "calls": 4, "tokens": 900, "unpriced_calls": 1}
+    }
+    one = costs.for_agent("uutiset")
+    assert one["total"]["unpriced_calls"] == 1 and one["models"][0]["model"] == "deepseek/deepseek-v4-pro"
+
+
+def test_costs_need_their_scope_at_approval():
+    assert "wallet:read" in connect.REQUIRED_SCOPES
