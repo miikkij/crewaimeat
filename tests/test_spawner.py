@@ -484,3 +484,28 @@ def test_the_heartbeat_stays_quiet_when_nobody_spawned_this_worker(monkeypatch):
     before = threading.active_count()
     _start_rss_heartbeat("a", 0.0)
     assert threading.active_count() == before  # no thread, no writes
+
+
+def test_a_spawned_worker_gets_no_stdin(tmp_path, monkeypatch):
+    """A worker is never talked to. An inherited console made crewai's first-run trace-consent prompt
+    believe it was interactive and hold the run up to 20 s for an answer nobody could give."""
+    import subprocess
+    import sys
+
+    from crewaimeat import spawner as sp_mod
+
+    seen: dict = {}
+
+    class Proc:
+        pid = 4242
+
+    def fake_popen(argv, **kw):
+        seen.update(kw)
+        return Proc()
+
+    monkeypatch.setattr(sp_mod.subprocess, "Popen", fake_popen)
+    monkeypatch.delitem(sys.modules, "pytest")  # the real-spawn path refuses under pytest; this IS the real path
+    sp = sp_mod.Spawner(agents=["a"], root=tmp_path, wake_fn=lambda *_: False)
+    proc = sp._spawn("a", "run-1")
+    proc._crewaimeat_log.close()
+    assert seen.get("stdin") is subprocess.DEVNULL

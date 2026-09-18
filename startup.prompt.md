@@ -112,7 +112,8 @@ approved and the token lands in this repo's `.aimeat/` home (gitignored — neve
 - **Run mode** is also the owner's setting on the node: `spawn` (no process while idle, one worker
   per wake — the cheap default for a fleet) or `resident` (a thread in the fleet host).
 - **Whole fleet against one node** in one go:
-  `uv run python scripts/register_fleet.py --owner <OWNER> --url <NODE_URL>` (prints one approval
+  `uv run python scripts/register_fleet.py --owner <OWNER> --url <NODE_URL>` (each crew asks for its own
+  mode, task-runner unless its file declares `MODE`; prints one approval
   code per crew; `--agents a,b,c` for a subset).
 
 ## Step 5 — Start agents

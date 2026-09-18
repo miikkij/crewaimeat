@@ -74,6 +74,30 @@ def agent_local_name(identity: str) -> str:
     return str(identity or "").split("#", 1)[0].strip()
 
 
+# --- Agent mode ------------------------------------------------------------------------------ #
+# The node's five agent modes. Which one an agent HAS is the owner's standing instruction on the node;
+# the crew only states which one it EXPECTS, and registration asks for exactly that
+# (`aimeat connect ... --mode <mode>`, connector 3.x), for the owner to approve in the same consent.
+# task-runner is the default because it is what every crew here is: dm_serviceable and self_monitor
+# crews are task-runners too (owner, 2026-07-26). A crew that genuinely needs a person to press Start
+# declares MODE = "interactive".
+AGENT_MODES = ("task-runner", "interactive", "coordinator", "autonomous", "workstation")
+DEFAULT_AGENT_MODE = "task-runner"
+
+
+def normalise_agent_mode(value: object) -> str | None:
+    """The agent mode for `value`, or None when it is not one of the node's five."""
+    v = str(value or "").strip().lower()
+    return v if v in AGENT_MODES else None
+
+
+def expected_mode(agent: str, root: Path | None = None) -> str:
+    """The mode `agent` expects, read from its crew file. An agent with no crew file here (a node-backed
+    or button-created one) expects the default."""
+    m = manifest_for(agent_local_name(agent), root)
+    return m.expected_mode if m else DEFAULT_AGENT_MODE
+
+
 def normalise_run_mode(value: object) -> str | None:
     """The canonical run mode for `value`, or None when it is not a run mode at all.
 
@@ -98,6 +122,7 @@ _CONSTANTS = {
     "SCHEDULE": "schedule",
     "RUN_MODE": "run_mode",
     "MAX_CONCURRENT": "max_concurrent",
+    "MODE": "mode",
 }
 # The same fields as a JSON crew doc names them.
 _JSON_KEYS = {
@@ -109,6 +134,7 @@ _JSON_KEYS = {
     "schedule": "schedule",
     "run_mode": "run_mode",
     "max_concurrent": "max_concurrent",
+    "mode": "mode",
 }
 
 
@@ -131,6 +157,7 @@ class Manifest:
     #   None = undeclared -> `effective_run_mode` reads CONTINUOUS, today's behaviour for all 49 crews.
     max_concurrent: int | None = None  # static value for CrewSpec.max_concurrent_tasks. 1 = single-flight;
     #   >1 = a bounded pool INSIDE one worker. None = ask the node at daemon start (today's behaviour).
+    mode: str | None = None  # the AIMEAT agent MODE this crew expects (MODE / "mode"); None = task-runner.
     has_build_domain: bool = False
     has_run: bool = False
     is_brain_stub: bool = False
@@ -148,6 +175,15 @@ class Manifest:
         makes the typo LOUD; this property is what keeps the fleet running while it is fixed.
         """
         return normalise_run_mode(self.run_mode) or RUN_RESIDENT
+
+    @property
+    def expected_mode(self) -> str:
+        """The agent mode this crew expects: its declared MODE, else task-runner. Never None.
+
+        An unknown value reads task-runner, like `effective_run_mode` reads resident: a typo must not
+        register an agent in a mode nobody chose. `normalise_agent_mode` is what makes it loud.
+        """
+        return normalise_agent_mode(self.mode) or DEFAULT_AGENT_MODE
 
     @property
     def single_flight(self) -> bool:

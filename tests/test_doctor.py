@@ -467,3 +467,13 @@ def test_doctor_runs_clean_enough_on_this_repo_to_be_trusted():
     enforced, _stale = apply_baseline(raw, load_baseline(root))
     assert "registries" in raw.lenses_run and "conformance" in raw.lenses_run
     assert not enforced.errors, "unbaselined doctor errors: " + ", ".join(f.key for f in enforced.errors[:10])
+
+
+def test_an_unknown_mode_is_an_error_and_a_known_one_is_quiet(tmp_path):
+    """MODE is what registration asks the node for; a value the node does not have is registered as
+    task-runner without a word, so the typo has to be loud here."""
+    typo = CREW.format(agent="a").replace('AGENT_NAME = "a"', 'AGENT_NAME = "a"\nMODE = "task_runner"')
+    fine = CREW.format(agent="b").replace('AGENT_NAME = "b"', 'AGENT_NAME = "b"\nMODE = "interactive"')
+    report = run(_repo(tmp_path, crews={"a_crew.py": typo, "b_crew.py": fine}, served=["a", "b"]))
+    hits = [f for f in report.findings if f.rule == "mode.unknown"]
+    assert len(hits) == 1 and hits[0].subject.endswith("a_crew.py") and hits[0].severity == ERROR

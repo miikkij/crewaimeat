@@ -244,7 +244,7 @@ These are **local Python constants** — the data the fleet advertises and the T
 Since 2026-08-22 the per-agent half of it lives in the CREW FILE and the central lists are derived:
 
 - **the crew file** — `LLM_PROFILE`, `TAGS`, `CAPABILITIES`, `OFFERS`, `SKILLS` (and optionally
-  `RUN_MODE`, `PROMPT_INDEPENDENT`) at module level (a JSON crew states the same keys in its doc). `agent_manifest.py` reads them with `ast`, never by importing.
+  `RUN_MODE`, `MODE`, `PROMPT_INDEPENDENT`) at module level (a JSON crew states the same keys in its doc). `agent_manifest.py` reads them with `ast`, never by importing.
 - **`offers.py`** — the offer MACHINERY: `_OFFER_META` (contract-derived offers) plus `crew_offers()` /
   `crew_offer_agents()`, which assemble the authored offers from what the crews declare. An offer =
   `{id, title, ask, deliverable, signals, …}` — how other agents and humans discover what an agent does.

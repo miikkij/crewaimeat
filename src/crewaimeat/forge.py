@@ -283,7 +283,7 @@ AIMEAT_CONNECTOR_FLOOR = "3.13.4"  # below this a task can be created and produc
 
 
 def register_fleet(owner: str, url: str = "https://aimeat.io", agents: list[str] | None = None) -> str:
-    """Register every crew (or a given subset) as a task-runner against `url` under `owner`, surfacing
+    """Register every crew (or a given subset), each asking for its own expected mode, against `url` under `owner`, surfacing
     each agent's device-approval code/URL — the one-command way to stand the SAME fleet up on a SECOND
     node (e.g. a local dev node ``http://localhost:40050``) without hand-editing each crew.
 
@@ -310,7 +310,9 @@ def register_fleet(owner: str, url: str = "https://aimeat.io", agents: list[str]
 _REAL_POPEN = subprocess.Popen
 
 
-def register_agent(agent_name: str, owner: str, url: str = "https://aimeat.io") -> tuple[bool, str]:
+def register_agent(
+    agent_name: str, owner: str, url: str = "https://aimeat.io", mode: str | None = None
+) -> tuple[bool, str]:
     """Start device auth for a new task-runner agent and SURFACE its verification code + URL.
 
     Device auth is an OAuth device flow: it prints a verification code + URL and then polls until
@@ -330,9 +332,17 @@ def register_agent(agent_name: str, owner: str, url: str = "https://aimeat.io") 
 
     if not is_safe_agent_name(agent_name):
         return False, f"unusable agent name {agent_name!r} — letters, digits, dot, hyphen and underscore only"
-    # v1.33+ connector: device-auth is `connect --url --owner --agent`. The old `connect add … --mode
-    # task-runner` form is gone — the connector tolerated the extra args but the node rejected the request,
-    # so NO code was ever issued and our fallback misreported it as "already registered".
+    # Device auth is `connect --url --owner --agent [--mode]`. `connect add` is gone since v1.33 (the node
+    # rejected it, so NO code was ever issued and our fallback misreported it as "already registered").
+    # `--mode` came back in connector 3.x: the node shows the requested mode in the consent and the owner
+    # approves agent and mode together (measured 2026-09-18 on 3.17.0). So registration ASKS for the mode
+    # the crew expects and the owner decides; without it every new agent landed in `interactive` and its
+    # tasks waited for a Start click nobody knew to give. The runtime still never writes the mode.
+    from crewaimeat.agent_manifest import AGENT_MODES, expected_mode, normalise_agent_mode
+
+    wanted = normalise_agent_mode(mode) if mode is not None else expected_mode(agent_name, _project_root())
+    if not wanted:
+        return False, f"unknown agent mode {mode!r} — one of {', '.join(AGENT_MODES)}"
     # npx: resolved via node_engine — a JUST-installed Node.js is on the user PATH only after re-login,
     # and a machine without Node at all gets a clear message instead of a WinError 2 dump.
     from crewaimeat.node_engine import npx_bin
@@ -353,6 +363,8 @@ def register_agent(agent_name: str, owner: str, url: str = "https://aimeat.io") 
         owner,
         "--agent",
         agent_name,
+        "--mode",
+        wanted,
     ]
     cmd = ["cmd", "/c", *base] if os.name == "nt" else base
     logs = _project_root() / "logs"

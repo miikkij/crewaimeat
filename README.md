@@ -257,6 +257,7 @@ CAPABILITIES = {                          # `technical` entries are {name, type}
 }
 OFFERS = [{"id": "triage", "title": "...", "ask": "... — I do NOT do X."}]
 SKILLS = ["support-tone"]                 # SKILL.md packs from skills/
+MODE = "interactive"                      # optional; the agent mode registration asks for (default task-runner)
 ```
 
 **Why here and not in a central list.** These used to live in three shared files that nothing required

@@ -39,7 +39,9 @@ def test_register_agent_uses_current_connect_command_and_parses_code(tmp_path, m
 
     cmd = captured["cmd"]
     assert "add" not in cmd, "the removed 'connect add' subcommand must not come back"
-    assert "--mode" not in cmd and "task-runner" not in cmd, "the removed --mode flag must not come back"
+    # `--mode` is back in connector 3.x and the owner approves it in the same consent: registration
+    # asks for the mode the crew expects (task-runner unless its file declares MODE).
+    assert cmd[cmd.index("--mode") + 1] == "task-runner", cmd
     assert "connect" in cmd
     # The pin is read from the ONE constant, never restated here — a hardcoded version made this test
     # go red every time the pin moved, which is drift-generating noise rather than a contract. What IS
@@ -79,3 +81,77 @@ def test_register_agent_surfaces_raw_output_when_no_code(tmp_path, monkeypatch):
     assert ok is False
     assert "Authorization request failed" in msg  # the real reason, not "already registered"
     assert "already registered" not in msg
+
+
+def _fake_register_popen(monkeypatch, captured):
+    import crewaimeat.forge as forge
+
+    class FakeProc:
+        def poll(self):
+            return None
+
+    def fake_popen(cmd, **kw):
+        captured["cmd"] = cmd
+        out = kw.get("stdout")
+        if out is not None:
+            out.write(b"Verification code: ABCD-1234\nVisit https://aimeat.io/verify to approve.\n")
+            out.flush()
+        return FakeProc()
+
+    monkeypatch.setattr(forge.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(forge.time, "sleep", lambda *_a, **_k: None)
+
+
+def test_register_agent_asks_for_the_mode_the_crew_declares(monkeypatch):
+    """A crew that declares MODE = "interactive" is registered asking for interactive, not the default."""
+    import crewaimeat.forge as forge
+    from crewaimeat import agent_manifest
+
+    captured: dict = {}
+    _fake_register_popen(monkeypatch, captured)
+    monkeypatch.setattr(agent_manifest, "expected_mode", lambda agent, root=None: "interactive")
+    ok, _msg = forge.register_agent("desk-helper", "happydude500001", "https://aimeat.io")
+    cmd = captured["cmd"]
+    assert ok and cmd[cmd.index("--mode") + 1] == "interactive"
+
+
+def test_register_agent_refuses_a_mode_the_node_does_not_have(monkeypatch):
+    """An explicit mode is an argv element; anything but the node's five is refused before any spawn."""
+    import crewaimeat.forge as forge
+
+    captured: dict = {}
+    _fake_register_popen(monkeypatch, captured)
+    ok, msg = forge.register_agent("desk-helper", "happydude500001", "https://aimeat.io", mode="task-runner & x")
+    assert not ok and "unknown agent mode" in msg and "cmd" not in captured
+
+
+def test_expected_mode_reads_the_crew_file(tmp_path):
+    """MODE in the crew file is the one source: registration and the runtime both read it."""
+    from crewaimeat import agent_manifest
+
+    crews = tmp_path / "crews"
+    crews.mkdir()
+    (crews / "desk_crew.py").write_text(
+        'AGENT_NAME = "desk"\nMODE = "interactive"\n\ndef build_domain(ctx):\n    return [], []\n', encoding="utf-8"
+    )
+    (crews / "plain_crew.py").write_text(
+        'AGENT_NAME = "plain"\n\ndef build_domain(ctx):\n    return [], []\n', encoding="utf-8"
+    )
+    (crews / "typo_crew.py").write_text(
+        'AGENT_NAME = "typo"\nMODE = "task_runner"\n\ndef build_domain(ctx):\n    return [], []\n', encoding="utf-8"
+    )
+    agent_manifest._load.cache_clear() if hasattr(agent_manifest._load, "cache_clear") else None
+    assert agent_manifest.expected_mode("desk", tmp_path) == "interactive"
+    assert agent_manifest.expected_mode("desk#owner@node", tmp_path) == "interactive"  # a GAII finds it too
+    assert agent_manifest.expected_mode("plain", tmp_path) == "task-runner"
+    assert agent_manifest.expected_mode("typo", tmp_path) == "task-runner"  # an unknown value is not a mode
+    assert agent_manifest.expected_mode("not-here", tmp_path) == "task-runner"
+
+
+def test_every_live_crew_here_expects_task_runner():
+    """dm_serviceable and self_monitor crews are task-runners too (owner, 2026-07-26). If a crew ever
+    declares another mode on purpose, list it here with the reason."""
+    from crewaimeat import agent_manifest
+
+    modes = {m.agent: m.expected_mode for m in agent_manifest.all_manifests(refresh=True) if m.live and m.agent}
+    assert modes and set(modes.values()) == {"task-runner"}, {a: m for a, m in modes.items() if m != "task-runner"}

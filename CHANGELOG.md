@@ -4,6 +4,21 @@ Notable changes to crewaimeat. Format loosely follows [Keep a Changelog](https:/
 Dates are the working dates. A change reaches a running fleet only on its next restart, because the
 daemons import the modules at start. `git log` has the measurement behind each entry.
 
+## [Unreleased] — 2026-09-19 — registration asks for the mode; workers get no stdin
+
+### Changed
+- **Registration asks for the crew's own agent mode.** `forge.register_agent` (crew-forge, `/build`,
+  `register_fleet`) now runs `aimeat connect … --mode <mode>`. Connector 3.x accepts the flag again
+  and the node shows it in the consent, so the owner approves agent and mode together. Before, every
+  new agent landed in `interactive` and its tasks waited for a Start click nobody knew to give. The
+  mode comes from the crew file: `MODE = "..."` (JSON: `"mode"`), default `task-runner`, which every
+  crew here is (dm_serviceable and self_monitor included, owner 2026-07-26). The runtime plans from
+  the same value, so what the owner approved and what the daemon assumes cannot drift. It still
+  never WRITES the mode. An unknown value is refused at the argv and flagged by doctor (`mode.unknown`).
+- **Spawn workers start with no stdin** (`stdin=DEVNULL`). An inherited console made crewai's
+  first-run trace-consent prompt think it was interactive and hold a run up to 20 s for an answer
+  nobody could give.
+
 ## [Unreleased] — 2026-09-18 — soupsieve CVEs, example config
 
 ### Security

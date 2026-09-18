@@ -73,7 +73,8 @@ status cells, append decisions), so the two sides stay synced without drifting p
 - **The crew file is the ONE source for what an agent is.** Beside `build_domain`, a crew declares at
   module level: `LLM_PROFILE` (which `llm_providers.json` profile routes it), `TAGS` (charset-safe
   `[a-z0-9._-]`), `CAPABILITIES` ({technical: [{name,type}] OBJECTS, domain: [str], languages: [str]}),
-  `OFFERS` (a list), `SKILLS`. A JSON crew states the same keys in its `crew_defs/*.json` doc.
+  `OFFERS` (a list), `SKILLS`, and optionally `MODE` (the agent mode registration asks for; default
+  `task-runner`, which every crew here is). A JSON crew states the same keys in its `crew_defs/*.json` doc.
   `crewaimeat.agent_manifest` reads them STATICALLY (ast, never by importing); `fleet_identity`,
   `offers` and the routing map are DERIVED. This replaced three central lists that nothing required
   you to update — which is how 13 crews ended up with no identity, 13 with no offer and 20 with no

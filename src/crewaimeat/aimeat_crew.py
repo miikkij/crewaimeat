@@ -292,9 +292,10 @@ class CrewSpec:
     #   task-runner), so a runtime that stamped it on every start rewrote the owner's choice from a
     #   process nobody was watching. Kept so doctor can say when the declared mode and the node's
     #   disagree. One
-    #   of autonomous|interactive|task-runner|coordinator|workstation. None -> DERIVED: dm_serviceable /
-    #   self_monitor crews keep the interactive message surface; every other crewaimeat crew is a
-    #   "task-runner". WHY it matters: the node defaults a device-authed agent with no mode to 'interactive',
+    #   of autonomous|interactive|task-runner|coordinator|workstation. None -> the crew file's MODE
+    #   constant, else task-runner — dm_serviceable and self_monitor crews included (owner, 2026-07-26).
+    #   Registration asks the node for this same value (`connect --mode`), for the owner to approve.
+    #   WHY it matters: the node defaults a device-authed agent with no mode to 'interactive',
     #   which gates every created task behind a manual 'Start this task'. task-runner mode makes the node
     #   AUTO-ACTIVATE tasks on create (test runs + real work just run) and serves the shorter 7-step onboarding.
     tags: list[str] | None = None  # capability TAGS set on the agent via aimeat_agent_tags_set
@@ -2122,7 +2123,15 @@ def _effective_mode(spec: CrewSpec) -> str:
     the button. (Owner: these are task-runners, not interactive.)"""
     if spec.mode:
         return spec.mode
-    return "task-runner"
+    # The crew file's MODE constant is the same source registration reads, so the mode the owner was
+    # asked to approve and the mode this runtime plans for cannot drift apart.
+    from crewaimeat.agent_manifest import expected_mode
+
+    try:
+        return expected_mode(spec.agent_name)
+    except Exception:  # noqa: BLE001 — an unreadable crews/ dir must not stop a daemon; say what it assumes
+        print(f"[{spec.agent_name}] could not read the crew's MODE; assuming task-runner", file=sys.stderr)
+        return "task-runner"
 
 
 def run_crew(spec: CrewSpec) -> None:

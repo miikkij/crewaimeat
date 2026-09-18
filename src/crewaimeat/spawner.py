@@ -510,6 +510,10 @@ class Spawner:
             [sys.executable, "-m", "crewaimeat.run_once", agent, "--quiet"],
             cwd=str(self.root),
             env=env,
+            # No stdin. A worker is never talked to, and an inherited console makes crewai's first-run
+            # trace-consent prompt think it is interactive: it then holds the run up to 20 s for an
+            # answer nobody can give (seen 2026-09-18 on a local probe; the prompt is in 1.15.18 too).
+            stdin=subprocess.DEVNULL,
             stdout=handle,
             stderr=subprocess.STDOUT,
         )

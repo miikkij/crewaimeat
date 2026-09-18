@@ -42,6 +42,7 @@ def check(inv: Inventory, report: Report) -> None:
     _connector(inv, report)
     _skills_exist(inv, report)
     _run_mode(inv, report)
+    _agent_mode(inv, report)
     report.note(
         f"crews: {len(inv.live)} live, {len(inv.crews) - len(inv.live)} parked · "
         f"serve.json: {len(inv.served)} registered · "
@@ -328,6 +329,30 @@ def _crew_shape(inv: Inventory, report: Report) -> None:
                     "add build_domain(ctx), or make it a brain stub",
                 )
             )
+
+
+def _agent_mode(inv: Inventory, report: Report) -> None:
+    """A MODE constant the node does not know is registered as task-runner, silently.
+
+    Registration asks the node for the crew's expected mode (`connect --mode`) and the runtime plans
+    from the same value; an unknown one falls back to the default so a typo cannot put an agent in a
+    mode nobody chose. This is what makes the typo loud instead of quietly doing nothing.
+    """
+    from crewaimeat.agent_manifest import AGENT_MODES, DEFAULT_AGENT_MODE, normalise_agent_mode
+
+    for crew in inv.live:
+        if crew.agent is None or crew.mode is None or normalise_agent_mode(crew.mode):
+            continue
+        report.add(
+            Finding(
+                "mode.unknown",
+                ERROR,
+                crew.path.as_posix(),
+                f"MODE = {crew.mode!r} is not an agent mode, so the agent is registered as "
+                f"{DEFAULT_AGENT_MODE!r} and the declaration does nothing",
+                f"use one of {AGENT_MODES}, or drop the constant to stay {DEFAULT_AGENT_MODE}",
+            )
+        )
 
 
 def _run_mode(inv: Inventory, report: Report) -> None:
