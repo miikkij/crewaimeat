@@ -12,7 +12,7 @@ from typing import Any
 
 import requests
 
-from crewaimeat.agency2 import connect, engine, node, paths, procs, store
+from crewaimeat.agency2 import connect, engine, node, paths, problems, procs, store
 
 OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key"
 
@@ -89,7 +89,7 @@ def openrouter(key: str | None = None, *, timeout: float = 10, lang: str = "en")
     try:
         r = requests.get(OPENROUTER_KEY_URL, headers={"Authorization": f"Bearer {key}"}, timeout=timeout)
     except requests.RequestException as exc:
-        return {"ok": False, "detail": m["or_down"].format(e=type(exc).__name__)}
+        return {"ok": False, "detail": problems.say(exc, "health.openrouter", lang, kind="unreachable")}
     if r.status_code in (401, 403):
         return {"ok": False, "detail": m["or_refused"]}
     if r.status_code != 200:
@@ -186,30 +186,30 @@ def check(
             me = next((r for r in roster_fn(name) if r.get("name") == name), None)
         except node.Refused as exc:
             fix = f"reconnect:{name}" if exc.status in (401, 403) else None
-            rows.append(_row(rid, "error", name, m["refused"].format(e=exc), fix))
+            rows.append(_row(rid, "error", name, problems.say(exc, "health.roster", lang), fix))
             continue
         except node.NoDaemon as exc:
-            rows.append(_row(rid, "error", name, str(exc), "serve"))
+            rows.append(_row(rid, "error", name, problems.say(exc, "health.roster", lang), "serve"))
             continue
-        problems: list[str] = []
+        issues: list[str] = []
         fix = None
         scopes = set((me or {}).get("default_scopes") or [])
         missing = [s for s in connect.REQUIRED_SCOPES if s not in scopes and "*" not in scopes]
         if missing:
-            problems.append(m["scope"].format(s=", ".join(missing)))
+            issues.append(m["scope"].format(s=", ".join(missing)))
             fix = f"reconnect:{name}"
         if me and me.get("mode") != "task-runner":
-            problems.append(m["mode"].format(m=me.get("mode")))
+            issues.append(m["mode"].format(m=me.get("mode")))
         if not running_fn(name):
             if "holds no crew definition" in log_fn(name):
-                problems.append(m["no_def"])
+                issues.append(m["no_def"])
                 fix = fix or f"agent:{name}"
             else:
-                problems.append(m["stopped"])
+                issues.append(m["stopped"])
                 fix = fix or f"start:{name}"
-        if problems:
+        if issues:
             level = "error" if fix == f"reconnect:{name}" else "warn"
-            rows.append(_row(rid, level, name, "; ".join(problems), fix))
+            rows.append(_row(rid, level, name, "; ".join(issues), fix))
         else:
             rows.append(_row(rid, "ok", name, m["ok"].format(t=served[name].get("transport"))))
     return rows

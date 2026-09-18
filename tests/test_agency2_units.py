@@ -136,7 +136,11 @@ def test_author_reports_a_model_failure():
         raise TimeoutError("slow")
 
     res = author.author("uutiset", "x", call=boom)
-    assert not res["ok"] and "TimeoutError" in res["errors"][0]
+    assert not res["ok"] and "TimeoutError" not in res["errors"][0]  # the cause is behind the reference
+    from crewaimeat.agency2 import problems
+
+    ref = res["errors"][0].split("[ref:")[1].rstrip("]")
+    assert problems.detail(ref)["type"] == "TimeoutError"
 
 
 def test_summary_is_plain_language():
@@ -575,3 +579,28 @@ def test_a_url_name_the_app_does_not_know_is_404_everywhere():
     ]:
         r = c.request(method, path, headers=h)
         assert r.status_code == 404, (method, path, r.status_code)
+
+
+# ── failures: a sentence + a reference, the whole cause one click away ───────
+
+
+def test_a_failure_is_a_sentence_and_a_reference_never_the_exception_text():
+    from crewaimeat.agency2 import problems
+
+    exc = node.Refused(401, "UNAUTHORIZED", "secret-looking internals")
+    said = problems.say(exc, "test", "fi")
+    assert said.startswith("palvelin hylkäsi agentin tunnuksen [ref:") and "internals" not in said
+    ref = said.split("[ref:")[1].rstrip("]")
+    row = problems.detail(ref)
+    assert row["type"] == "Refused" and "internals" in row["text"] and row["where"] == "test"
+    assert problems.detail("../../etc") is None and problems.detail("deadbeef") is None
+
+
+def test_the_problems_route_gives_the_logged_cause():
+    from crewaimeat.agency2 import problems
+
+    ref = problems.say(node.NoDaemon("port 1 does not answer"), "t").split("[ref:")[1].rstrip("]")
+    c = _client()
+    r = c.get(f"/api/problems/{ref}", headers={"Authorization": "Bearer tok"})
+    assert r.status_code == 200 and "port 1" in r.json()["text"]
+    assert c.get("/api/problems/zzzzzzzz", headers={"Authorization": "Bearer tok"}).status_code == 404

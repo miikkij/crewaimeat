@@ -162,7 +162,9 @@ def start(name: str, instance_url: str, owner: str, *, on_done=None, fresh: bool
             try:
                 on_done(name, state(name))
             except Exception as exc:  # noqa: BLE001 — surfaced on the row, never swallowed
-                _set(name, status="failed", error=f"after approval: {type(exc).__name__}: {exc}")
+                from crewaimeat.agency2 import problems
+
+                _set(name, status="failed", error=problems.say(exc, "connect.after_approval"))
 
     threading.Thread(target=_pump, name=f"connect-{name}", daemon=True).start()
     return state(name) or {}

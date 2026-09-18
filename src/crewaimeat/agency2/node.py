@@ -89,7 +89,9 @@ def health(url: str, *, timeout: float = 8) -> dict:
             "detail": body.get("data"),
         }
     except (requests.RequestException, ValueError) as exc:
-        return {"ok": False, "node_id": None, "detail": f"{type(exc).__name__}: {exc}"}
+        from crewaimeat.agency2 import problems
+
+        return {"ok": False, "node_id": None, "detail": problems.say(exc, "instance.health", kind="unreachable")}
 
 
 def roster(agent: str) -> list[dict]:
@@ -126,7 +128,9 @@ def deliverable_text(agent: str, key: str, *, limit: int = 6000) -> str | None:
     try:
         data = call(agent, "aimeat_memory_read", {"key": key})
     except (Refused, NoDaemon) as exc:
-        return f"(the result could not be read: {exc})"
+        from crewaimeat.agency2 import problems
+
+        return "(" + problems.say(exc, "deliverable", kind="read") + ")"
     v = data.get("value", data) if isinstance(data, dict) else data
     if isinstance(v, dict):
         v = v.get("body") or v.get("content") or v.get("text") or v

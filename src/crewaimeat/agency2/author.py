@@ -89,7 +89,9 @@ def author(
             raw = call(_prompt(name, description, lang, current=current, errors=errors))
         except Exception as exc:  # noqa: BLE001 — a model/transport error is the answer, shown as is
             _log(name, attempt, model, t0, f"model call failed: {type(exc).__name__}")
-            err = [f"the model call failed: {type(exc).__name__}: {exc}"]
+            from crewaimeat.agency2 import problems
+
+            err = [problems.say(exc, "author.model_call", lang, kind="model")]
             if best[1] is None:
                 best = (10**6, None, err)
             return {"ok": False, "doc": best[1], "errors": best[2], "attempts": attempt}

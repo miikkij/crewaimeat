@@ -24,6 +24,7 @@ from crewaimeat.agency2 import (
     migrate,
     node,
     paths,
+    problems,
     procs,
     schedule,
     store,
@@ -228,7 +229,7 @@ def create_app(token: str | None = None) -> FastAPI:
     # ── agents: the roster of every instance, marked with where each one runs ──
 
     @app.get("/api/agents", dependencies=auth)
-    def agents() -> dict:
+    def agents(lang: str = "fi") -> dict:
         served = node.served_agents()
         local = {a["name"]: a for a in store.agents()}
         out = []
@@ -246,11 +247,11 @@ def create_app(token: str | None = None) -> FastAPI:
                 try:
                     roster = node.roster(asker["name"])
                 except (node.Refused, node.NoDaemon) as exc:
-                    note = str(exc)
+                    note = problems.say(exc, "agents.roster", lang)
                 try:
                     spend = costs.by_agent(asker["name"])
                 except (node.Refused, node.NoDaemon) as exc:
-                    cost_note = str(exc)
+                    cost_note = problems.say(exc, "agents.costs", lang)
             else:
                 note = "no connected agent on this machine yet — the instance's list appears after the first one"
             rows = []
@@ -310,22 +311,24 @@ def create_app(token: str | None = None) -> FastAPI:
                     if t.get("deliverableKey"):
                         t["output"] = node.deliverable_text(name, t["deliverableKey"])
             except (node.Refused, node.NoDaemon) as exc:
-                view["tasks_error"] = str(exc)
+                view["tasks_error"] = problems.say(exc, "agent.tasks", lang)
             try:
                 view["costs"] = costs.for_agent(name)
             except (node.Refused, node.NoDaemon) as exc:
-                view["costs_error"] = str(exc)
+                view["costs_error"] = problems.say(exc, "agent.costs", lang)
             try:
                 view["runtime"] = node.runtime_report(name)
             except (node.Refused, node.NoDaemon) as exc:
-                view["runtime_error"] = str(exc)
+                view["runtime_error"] = problems.say(exc, "agent.runtime", lang)
             try:
                 from crewaimeat.json_agent import load_def
 
                 doc, rev = load_def(name)
                 view["definition"] = {"revision": rev, "summary": author.summary(doc, lang), "doc": doc}
             except Exception as exc:  # noqa: BLE001 — shown in place of the definition
-                view["definition_error"] = f"{type(exc).__name__}: {exc}"
+                view["definition_error"] = problems.say(exc, "agent.definition", lang, kind="read")
+                if getattr(exc, "missing", False):
+                    view["definition_missing"] = True
         return view
 
     @app.post("/api/author", dependencies=auth)
@@ -343,7 +346,7 @@ def create_app(token: str | None = None) -> FastAPI:
             try:
                 current, _ = load_def(name)
             except Exception as exc:  # noqa: BLE001
-                raise _bad(f"could not read the current definition: {exc}") from exc
+                raise _bad(problems.say(exc, "author.current_definition", body.lang, kind="read")) from exc
         res = author.author(name, body.description, lang=body.lang, current=current)
         res["summary"] = author.summary(res["doc"], body.lang) if res.get("doc") else None
         return res
@@ -452,7 +455,7 @@ def create_app(token: str | None = None) -> FastAPI:
         ok, key, detail = publish_crew_def_live(dict(body.doc, agent_name=name), agent=name)
         if not ok:
             raise _bad(detail)
-        return {"ok": True, "key": key, "detail": detail}
+        return {"ok": True, "key": key}
 
     @app.delete("/api/agents/{name}", dependencies=auth)
     def remove(name: str) -> dict:
@@ -475,8 +478,11 @@ def create_app(token: str | None = None) -> FastAPI:
     def _node_error(exc: Exception) -> HTTPException:
         if isinstance(exc, node.Refused) and exc.code in ("SCOPE_DENIED", "INSUFFICIENT_SCOPE", "ACCESS_DENIED"):
             need = ", ".join(connect.REQUIRED_SCOPES)
-            return _bad(f"the agent was approved without the permissions schedules need ({need}) — reconnect it: {exc}")
-        return _bad(str(exc), 502)
+            return _bad(
+                f"the agent was approved without the permissions schedules need ({need}) — reconnect it. "
+                + problems.say(exc, "schedules", "en")
+            )
+        return _bad(problems.say(exc, "schedules", "en"), 502)
 
     @app.get("/api/agents/{name}/schedules", dependencies=auth)
     def schedules(name: str, lang: str = "fi") -> dict:
@@ -535,6 +541,14 @@ def create_app(token: str | None = None) -> FastAPI:
         doc = procs.restart_serve()
         procs.restart_spawner()
         return {"port": doc.get("port")}
+
+    @app.get("/api/problems/{ref}", dependencies=auth)
+    def problem(ref: str) -> dict:
+        """The whole cause behind a `[ref:…]` the UI showed — read back from the problems log."""
+        row = problems.detail(ref)
+        if row is None:
+            raise _bad("no such reference", 404)
+        return row
 
     @app.get("/api/migration", dependencies=auth)
     def migration() -> dict:

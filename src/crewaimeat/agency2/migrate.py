@@ -35,9 +35,9 @@ def old_agents() -> list[dict]:
         finally:
             con.close()
     except sqlite3.Error as exc:
-        return [
-            {"name": "?", "template": "", "description": "", "title": f"the old agent list could not be read: {exc}"}
-        ]
+        from crewaimeat.agency2 import problems
+
+        return [{"name": "?", "template": "", "description": "", "title": problems.say(exc, "migrate", kind="read")}]
     return [{"name": r[0], "template": r[1] or "", "description": r[2] or "", "title": r[3] or ""} for r in rows]
 
 

@@ -73,7 +73,7 @@ tr.click{cursor:pointer} tr.click:hover{background:var(--soft)}
 const TOKEN = "__AGENCY_TOKEN__";
 const T = {
  fi:{
-  sched:"Aikataulu", sched_add:"Lisää aikataulu", sched_what:"Mitä agentti tekee silloin", sched_save:"Tallenna aikataulu", sched_none:"Ei aikatauluja. Agentti tekee töitä, kun sille antaa tehtävän.", s_daily:"Joka päivä", s_weekdays:"Arkisin", s_weekly:"Kerran viikossa", s_hourly:"Joka tunti", day1:"maanantaisin", day2:"tiistaisin", day3:"keskiviikkoisin", day4:"torstaisin", day5:"perjantaisin", day6:"lauantaisin", day7:"sunnuntaisin", pause:"Keskeytä", resume:"Jatka", paused:"keskeytetty", costs:"Kulut", days:"pv", calls:"kutsua", unpriced:"ilman hintaa", tokens:"tokenia", cost_unavailable:"Kuluja ei voi näyttää: agentilta puuttuu oikeus wallet:read. Liitä se uudelleen Kunto-näkymästä.", nav_agents:"Agentit", nav_health:"Kunto", nav_instances:"Palvelimet",
+  sched:"Aikataulu", sched_add:"Lisää aikataulu", sched_what:"Mitä agentti tekee silloin", sched_save:"Tallenna aikataulu", sched_none:"Ei aikatauluja. Agentti tekee töitä, kun sille antaa tehtävän.", s_daily:"Joka päivä", s_weekdays:"Arkisin", s_weekly:"Kerran viikossa", s_hourly:"Joka tunti", day1:"maanantaisin", day2:"tiistaisin", day3:"keskiviikkoisin", day4:"torstaisin", day5:"perjantaisin", day6:"lauantaisin", day7:"sunnuntaisin", pause:"Keskeytä", resume:"Jatka", paused:"keskeytetty", costs:"Kulut", days:"pv", calls:"kutsua", unpriced:"ilman hintaa", tokens:"tokenia", cost_unavailable:"Kuluja ei voi näyttää: agentilta puuttuu oikeus wallet:read. Liitä se uudelleen Kunto-näkymästä.", show_details:"Näytä tiedot", details:"Tiedot", nav_agents:"Agentit", nav_health:"Kunto", nav_instances:"Palvelimet",
   mig_title:"Tämä on kokonaan uusi sovellus",
   mig_body:"AIMEAT Agency 2.0 toimii eri tavalla kuin aiempi versio. Mikään ei ole ennallaan: agentit tehdään kuvailemalla, ne liitetään AIMEAT-palvelimeen, ja niiden määritelmä on AIMEATissa, ei tällä koneella. Vanhat agenttisi eivät siirry itsestään, mutta voit tehdä ne uudelleen: kuvauksesi on valmiina.",
   mig_old:"Aiemmat agenttisi", mig_remake:"Tee uudelleen", mig_ok:"Selvä, jatketaan",
@@ -104,7 +104,7 @@ const T = {
   confirm_remove:"Poistetaanko agentti tältä koneelta? Se jää AIMEATiin.",
  },
  en:{
-  sched:"Schedule", sched_add:"Add a schedule", sched_what:"What the agent does then", sched_save:"Save the schedule", sched_none:"No schedules. The agent works when it is given a task.", s_daily:"Every day", s_weekdays:"On weekdays", s_weekly:"Once a week", s_hourly:"Every hour", day1:"on Mondays", day2:"on Tuesdays", day3:"on Wednesdays", day4:"on Thursdays", day5:"on Fridays", day6:"on Saturdays", day7:"on Sundays", pause:"Pause", resume:"Resume", paused:"paused", costs:"Costs", days:"days", calls:"calls", unpriced:"unpriced", tokens:"tokens", cost_unavailable:"Costs cannot be shown: the agent lacks the wallet:read permission. Reconnect it from the Health view.", nav_agents:"Agents", nav_health:"Health", nav_instances:"Instances",
+  sched:"Schedule", sched_add:"Add a schedule", sched_what:"What the agent does then", sched_save:"Save the schedule", sched_none:"No schedules. The agent works when it is given a task.", s_daily:"Every day", s_weekdays:"On weekdays", s_weekly:"Once a week", s_hourly:"Every hour", day1:"on Mondays", day2:"on Tuesdays", day3:"on Wednesdays", day4:"on Thursdays", day5:"on Fridays", day6:"on Saturdays", day7:"on Sundays", pause:"Pause", resume:"Resume", paused:"paused", costs:"Costs", days:"days", calls:"calls", unpriced:"unpriced", tokens:"tokens", cost_unavailable:"Costs cannot be shown: the agent lacks the wallet:read permission. Reconnect it from the Health view.", show_details:"Show details", details:"Details", nav_agents:"Agents", nav_health:"Health", nav_instances:"Instances",
   mig_title:"This is a completely new app",
   mig_body:"AIMEAT Agency 2.0 works differently from the previous version. Nothing is the same: agents are made by describing them, they are connected to an AIMEAT instance, and their definition lives in AIMEAT, not on this machine. Your old agents do not move over by themselves, but you can make them again: your description is ready.",
   mig_old:"Your earlier agents", mig_remake:"Make again", mig_ok:"Got it, continue",
@@ -140,7 +140,17 @@ let LANG = qs.get("lang") || (()=>{try{return localStorage.getItem("agencyLang")
 if(!T[LANG]) LANG="fi";
 const t = k => (T[LANG][k] ?? k);
 const $ = s => document.querySelector(s);
-const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const escRaw = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+// A failure the server logged shows as its sentence + "[ref:xxxxxxxx]"; the reference opens the whole cause.
+const esc = s => escRaw(s).replace(/\[ref:([0-9a-f]{8})\]/g, (m, r) => `<a href="#" class="ref" data-ref="${r}">${t("show_details")}</a>`);
+document.addEventListener("click", async ev => {
+  const a = ev.target.closest && ev.target.closest("a.ref"); if(!a) return;
+  ev.preventDefault();
+  try{ const d = await api("GET","/api/problems/"+a.dataset.ref);
+    $("#overlayCard").innerHTML = `<h2>${t("details")}</h2><p class="muted">${escRaw(d.at)} · ${escRaw(d.where)}</p><div class="log">${escRaw(d.type)}: ${escRaw(d.text)}</div><div class="row" style="margin-top:12px"><button class="btn" id="dClose">${t("close")}</button></div>`;
+    $("#overlay").classList.remove("hidden"); $("#dClose").onclick = () => $("#overlay").classList.add("hidden");
+  }catch(e){ alert(e.message); }
+});
 
 const money = c => c ? ("$" + c.cost_usd.toFixed(c.cost_usd && c.cost_usd < 0.1 ? 4 : 2)) : "";
 function costText(c){
@@ -208,7 +218,7 @@ function renderSetup(){
     ${instForm()}
   </div>`;
   $("#openKeys").onclick = () => openUrl("https://openrouter.ai/keys");
-  $("#saveKey").onclick = async () => { $("#keyErr").textContent=""; try{ await api("POST","/api/key",{key:$("#key").value}); render(); }catch(e){ $("#keyErr").textContent=e.message; } };
+  $("#saveKey").onclick = async () => { $("#keyErr").textContent=""; try{ await api("POST","/api/key",{key:$("#key").value}); render(); }catch(e){ $("#keyErr").innerHTML=esc(e.message); } };
   bindInstForm();
 }
 function instForm(){
@@ -217,7 +227,7 @@ function instForm(){
     <div class="row" style="margin-top:10px"><button class="btn" id="iadd">${t("inst_add")}</button></div><div class="err" id="iErr"></div>`;
 }
 function bindInstForm(){
-  $("#iadd").onclick = async () => { $("#iErr").textContent=""; try{ await api("POST","/api/instances",{url:$("#iurl").value, owner:$("#iowner").value}); render(); }catch(e){ $("#iErr").textContent=e.message; } };
+  $("#iadd").onclick = async () => { $("#iErr").textContent=""; try{ await api("POST","/api/instances",{url:$("#iurl").value, owner:$("#iowner").value}); render(); }catch(e){ $("#iErr").innerHTML=esc(e.message); } };
 }
 
 // ── agents ──
@@ -225,7 +235,7 @@ async function renderAgents(){
   if(DRAFT) return newAgent();  // a "make again" from the 0.8.x notice waits here until setup is done
   $("#main").innerHTML = `<div class="row" style="margin-bottom:14px"><span class="spacer"></span><button class="btn" id="newA">${t("new_agent")}</button></div><div id="lists"><p class="muted">…</p></div>`;
   $("#newA").onclick = () => newAgent();
-  let data; try{ data = await api("GET","/api/agents"); }catch(e){ $("#lists").innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+  let data; try{ data = await api("GET","/api/agents?lang="+LANG); }catch(e){ $("#lists").innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
   const local = Object.fromEntries(STATE.agents.map(a=>[a.name,a]));
   $("#lists").innerHTML = data.instances.map(block => `<div class="card"><h2>${esc(block.instance.label)} <span class="muted" style="font-weight:400">· ${esc(block.instance.owner)}</span></h2>
     ${block.note ? `<p class="muted">${esc(block.note.startsWith("no connected") ? t("no_list") : block.note)}</p>` : ""}
@@ -235,7 +245,7 @@ async function renderAgents(){
       let where;
       if(a.here){ where = lo && !lo.connected ? `<span class="pill warn">${t("waiting")}</span>` : `<span class="pill ${a.running_here?"ok":""}">${t("here")} · ${a.running_here?t("running"):t("stopped")}</span>`; }
       else if(a.connected_elsewhere){ where = `<span class="pill">${t("elsewhere")}</span>`; }
-      else { where = `<span class="pill">${t("notrunning")}</span> <button class="btn ghost small" data-runhere="${esc(a.name)}" data-inst="${esc(block.instance.url)}">${t("run_here")}</button>`; }
+      else { where = `<span class="pill">${t("notrunning")}</span> <button class="btn ghost small" data-runhere="${escRaw(a.name)}" data-inst="${escRaw(block.instance.url)}">${t("run_here")}</button>`; }
       return `<tr class="${a.here?"click":""}" data-name="${a.here?esc(a.name):""}"><td><b>${esc(a.name)}</b>${a.cost?`<div class="muted" style="font-size:13px">${esc(costText(a.cost))} / ${block.cost_days} ${t("days")}</div>`:""}</td><td style="text-align:right">${where}</td></tr>`;
     }).join("")}</table></div>`).join("");
   document.querySelectorAll("tr.click").forEach(tr => tr.onclick = () => tr.dataset.name && agentDetail(tr.dataset.name));
@@ -248,9 +258,9 @@ async function renderAgents(){
 function newAgent(){
   const d = DRAFT || {}; DRAFT = null;
   $("#main").innerHTML = `<div class="card"><h2>${t("na_title")}</h2>
-    <label>${t("na_name")}</label><input id="nName" value="${esc(d.name||"")}">
-    <label>${t("na_inst")}</label><select id="nInst">${STATE.instances.map(i=>`<option value="${esc(i.url)}">${esc(i.label)} · ${esc(i.owner)}</option>`).join("")}</select>
-    <label>${t("na_desc")}</label><textarea id="nDesc" placeholder="${esc(t("na_desc_ph"))}">${esc(d.description||"")}</textarea>
+    <label>${t("na_name")}</label><input id="nName" value="${escRaw(d.name||"")}">
+    <label>${t("na_inst")}</label><select id="nInst">${STATE.instances.map(i=>`<option value="${escRaw(i.url)}">${esc(i.label)} · ${esc(i.owner)}</option>`).join("")}</select>
+    <label>${t("na_desc")}</label><textarea id="nDesc" placeholder="${escRaw(t("na_desc_ph"))}">${esc(d.description||"")}</textarea>
     <div class="row" style="margin-top:10px"><button class="btn" id="nMake">${t("na_make")}</button><button class="btn ghost" id="nBack">${t("back")}</button><span class="muted" id="nBusy"></span></div>
     <div class="err" id="nErr"></div></div><div id="nPlan"></div>`;
   $("#nBack").onclick = () => render();
@@ -258,7 +268,7 @@ function newAgent(){
     $("#nErr").textContent=""; $("#nBusy").textContent=t("making"); $("#nMake").disabled=true;
     try{
       const res = await api("POST","/api/author",{name:$("#nName").value.trim(), description:$("#nDesc").value, lang:LANG});
-      if(!res.ok){ $("#nErr").textContent = t("failed")+":\n"+res.errors.join("\n"); }
+      if(!res.ok){ $("#nErr").innerHTML = esc(t("failed")+":\n"+res.errors.join("\n")); }
       else { showPlan({name:$("#nName").value.trim(), instance:$("#nInst").value, description:$("#nDesc").value, doc:res.doc, summary:res.summary}); }
     }catch(e){ $("#nErr").textContent=e.message; }
     $("#nBusy").textContent=""; $("#nMake").disabled=false;
@@ -281,7 +291,7 @@ function showPlan(p){
   $("#tRun").onclick = () => runTrial(p.doc, $("#tPrompt").value, null, "#tOut", "#tBusy", "#tRun");
   $("#pConnect").onclick = async () => {
     try{ await api("POST","/api/agents",{name:p.name, instance:p.instance, description:p.description, doc:p.doc}); showCode(p.name); }
-    catch(e){ $("#pErr").textContent = e.message; }
+    catch(e){ $("#pErr").innerHTML = esc(e.message); }
   };
 }
 
@@ -325,7 +335,7 @@ async function agentDetail(name){
   $("#main").innerHTML = `<p class="muted">…</p>`;
   let a; try{ a = await api("GET","/api/agents/"+encodeURIComponent(name)+"?lang="+LANG); }catch(e){ $("#main").innerHTML=`<p class="err">${esc(e.message)}</p>`; return; }
   const inst = STATE.instances.find(i=>i.url===a.instance) || {url:a.instance, label:a.instance};
-  const noDef = !a.definition && /holds no crew definition/.test(a.definition_error||"");
+  const noDef = !a.definition && !!a.definition_missing;
   const tasks = (a.tasks||[]).slice(0,15);
   const stLabel = s => ({done:t("st_done"),completed:t("st_done"),failed:t("st_failed"),active:t("st_active"),queued:t("st_queued")}[s] || s || "");
   const stCls = s => (s==="done"||s==="completed")?"ok":(s==="failed"?"err":"");
@@ -335,10 +345,10 @@ async function agentDetail(name){
       <button class="btn ghost small" id="dNode">${t("open_node")}</button><button class="btn ghost small" id="dBack">${t("back")}</button></div>
       <p class="muted" style="margin:6px 0 0">${t("open_node_hint")}${esc(name)} → Crew</p></div>
     ${noDef ? `<div class="card"><h2>${t("define_title")}</h2><p class="muted">${t("define_help")}</p>
-      <textarea id="fDesc" placeholder="${esc(t("na_desc_ph"))}"></textarea>
+      <textarea id="fDesc" placeholder="${escRaw(t("na_desc_ph"))}"></textarea>
       <div class="row" style="margin-top:8px"><button class="btn" id="fMake">${t("na_make")}</button><span class="muted" id="fBusy"></span></div><div class="err" id="fErr"></div><div id="fPlan"></div></div>` : ""}
     <div class="card ${noDef?"hidden":""}"><h2>${t("def")}</h2>${a.definition ? planHtml(a.definition.summary) : `<p class="err">${esc(a.definition_error||"")}</p>`}
-      <h3>${t("edit")}</h3><textarea id="eDesc" placeholder="${esc(t("edit_desc"))}"></textarea>
+      <h3>${t("edit")}</h3><textarea id="eDesc" placeholder="${escRaw(t("edit_desc"))}"></textarea>
       <div class="row" style="margin-top:8px"><button class="btn ghost" id="eMake">${t("edit_make")}</button><span class="muted" id="eBusy"></span></div><div class="err" id="eErr"></div><div id="ePlan"></div></div>
     <div class="card ${a.connected?"":"hidden"}" id="schedCard"><h2>${t("sched")}</h2><div id="schedList"><p class="muted">…</p></div>
       <h3>${t("sched_add")}</h3>
@@ -370,7 +380,7 @@ async function agentDetail(name){
     $("#fErr").textContent=""; $("#fBusy").textContent=t("making");
     try{
       const res = await api("POST","/api/author",{name, description:$("#fDesc").value, lang:LANG});
-      if(!res.ok){ $("#fErr").textContent = t("failed")+":\n"+res.errors.join("\n"); }
+      if(!res.ok){ $("#fErr").innerHTML = esc(t("failed")+":\n"+res.errors.join("\n")); }
       else {
         $("#fPlan").innerHTML = `${planHtml(res.summary)}<div class="row" style="margin-top:8px"><button class="btn" id="fUse">${t("publish")}</button></div>`;
         $("#fUse").onclick = async () => { try{ await api("POST",`/api/agents/${name}/define`,{doc:res.doc}); setTimeout(()=>agentDetail(name), 20000); $("#fPlan").innerHTML=`<p>${t("published")}</p>`; }catch(e){ $("#fErr").textContent=e.message; } };
@@ -392,9 +402,9 @@ async function agentDetail(name){
     $("#eErr").textContent=""; $("#eBusy").textContent=t("making");
     try{
       const res = await api("POST","/api/author",{name, description:$("#eDesc").value, lang:LANG, edit:true});
-      if(!res.ok){ $("#eErr").textContent = t("failed")+":\n"+res.errors.join("\n"); }
+      if(!res.ok){ $("#eErr").innerHTML = esc(t("failed")+":\n"+res.errors.join("\n")); }
       else {
-        $("#ePlan").innerHTML = `${planHtml(res.summary)}<h3>${t("try_title")}</h3><input id="etPrompt" placeholder="${esc(t("try_prompt"))}">
+        $("#ePlan").innerHTML = `${planHtml(res.summary)}<h3>${t("try_title")}</h3><input id="etPrompt" placeholder="${escRaw(t("try_prompt"))}">
           <div class="row" style="margin-top:8px"><button class="btn ghost" id="etRun">${t("try_btn")}</button><button class="btn" id="ePub">${t("publish")}</button><span class="muted" id="etBusy"></span></div><div id="etOut"></div>`;
         $("#etRun").onclick = () => runTrial(res.doc, $("#etPrompt").value, name, "#etOut", "#etBusy", "#etRun");
         $("#ePub").onclick = async () => { try{ await api("POST",`/api/agents/${name}/publish`,{doc:res.doc}); $("#ePlan").innerHTML=`<p>${t("published")}</p>`; }catch(e){ $("#eErr").textContent=e.message; } };
@@ -408,8 +418,8 @@ async function loadSchedules(name){
   let d; try{ d = await api("GET",`/api/agents/${name}/schedules?lang=${LANG}`); }catch(e){ $("#schedList").innerHTML=`<p class="err">${esc(e.message)}</p>`; return; }
   if(!d.schedules.length){ $("#schedList").innerHTML=`<p class="muted">${t("sched_none")}</p>`; return; }
   $("#schedList").innerHTML = `<table>${d.schedules.map(x=>`<tr><td><b>${esc(x.when)}</b>${x.enabled?"":` <span class="pill">${t("paused")}</span>`}<div class="muted">${esc(x.what)}</div></td>
-    <td style="text-align:right;white-space:nowrap;width:1%"><button class="btn ghost small" data-tog="${esc(x.id)}" data-en="${x.enabled?1:0}">${x.enabled?t("pause"):t("resume")}</button>
-    <button class="btn ghost small" data-del="${esc(x.id)}">${t("inst_remove")}</button></td></tr>`).join("")}</table>`;
+    <td style="text-align:right;white-space:nowrap;width:1%"><button class="btn ghost small" data-tog="${escRaw(x.id)}" data-en="${x.enabled?1:0}">${x.enabled?t("pause"):t("resume")}</button>
+    <button class="btn ghost small" data-del="${escRaw(x.id)}">${t("inst_remove")}</button></td></tr>`).join("")}</table>`;
   document.querySelectorAll("[data-tog]").forEach(b => b.onclick = async () => { try{ await api("PATCH",`/api/agents/${name}/schedules/${b.dataset.tog}`,{enabled: b.dataset.en!=="1"}); }catch(e){ alert(e.message); } loadSchedules(name); });
   document.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => { try{ await api("DELETE",`/api/agents/${name}/schedules/${b.dataset.del}`); }catch(e){ alert(e.message); } loadSchedules(name); });
 }
@@ -420,7 +430,7 @@ async function renderHealth(){
   $("#hRef").onclick = () => renderHealth();
   let data; try{ data = await api("GET","/api/health?lang="+LANG); }catch(e){ $("#hRows").innerHTML=`<p class="err">${esc(e.message)}</p>`; return; }
   $("#hRows").innerHTML = `<table>${data.rows.map((r,i)=>`<tr><td><span class="dot ${r.level}"></span><b>${esc(r.title)}</b><div class="muted">${esc(r.detail)}</div></td>
-     <td style="text-align:right;width:1%;white-space:nowrap">${r.fix?`<button class="btn small ${r.level==="error"?"":"ghost"}" data-fix="${esc(r.fix)}">${fixLabel(r.fix)}</button>`:""}</td></tr>`).join("")}</table>`;
+     <td style="text-align:right;width:1%;white-space:nowrap">${r.fix?`<button class="btn small ${r.level==="error"?"":"ghost"}" data-fix="${escRaw(r.fix)}">${fixLabel(r.fix)}</button>`:""}</td></tr>`).join("")}</table>`;
   document.querySelectorAll("[data-fix]").forEach(b => b.onclick = () => runFix(b.dataset.fix));
 }
 function fixLabel(f){ if(f.startsWith("agent:")) return t("open_agent"); if(f==="key") return t("fix_key"); if(f==="serve") return t("fix_serve"); if(f.startsWith("start:")) return t("start"); if(f.startsWith("reconnect:")) return t("reconnect"); return t("fix"); }
@@ -440,7 +450,7 @@ async function runFix(f){
 function renderInstances(){
   $("#main").innerHTML = `<div class="card"><h2>${t("inst_title")}</h2>
     <table>${STATE.instances.map(i=>`<tr><td><b>${esc(i.label)}</b><div class="muted">${esc(i.url)} · ${esc(i.owner)}</div></td>
-      <td style="text-align:right"><button class="btn ghost small" data-rm="${esc(i.url)}">${t("inst_remove")}</button></td></tr>`).join("")}</table>
+      <td style="text-align:right"><button class="btn ghost small" data-rm="${escRaw(i.url)}">${t("inst_remove")}</button></td></tr>`).join("")}</table>
     <h3>${t("inst_add")}</h3>${instForm()}</div>`;
   bindInstForm();
   document.querySelectorAll("[data-rm]").forEach(b => b.onclick = async () => { try{ await api("DELETE","/api/instances?url="+encodeURIComponent(b.dataset.rm)); render(); }catch(e){ alert(e.message); } });
