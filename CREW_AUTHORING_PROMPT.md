@@ -21,17 +21,17 @@ You are helping me create a new **CrewAI crew connected to AIMEAT.io**, built on
 - **Install (uv):** run `uv sync` in the project. Python 3.10 to 3.13. (`uv sync` pulls `crewai`, `aimeat-crewai` and the tools.) The npm `aimeat` connector must be installed globally at **3.13.4 or newer**.
 - **OpenRouter API key** (the LLM provider: one key, many models):
   - Get it at https://openrouter.ai/keys and put it in `.env` as `OPENROUTER_API_KEY`.
-  - Routing: if `llm_providers.json` exists, the crew's `LLM_PROFILE` picks its model chain there. Otherwise `.env`'s `OPENROUTER_MODEL` is used (the template ships `openrouter/x-ai/grok-4-fast`).
+  - Routing: if `llm_providers.json` exists, the crew's `LLM_PROFILE` picks its model chain there. Otherwise `.env`'s `OPENROUTER_MODEL` is used (the template ships `openrouter/deepseek/deepseek-v4-pro`).
     - **Testing / free:** an OpenRouter `:free` model such as `openai/gpt-oss-120b:free`. Free ids get retired; `uv run crewaimeat costs --prices` tells you when one is gone.
     - **Fast / reliable:** add credit on OpenRouter and use a stronger paid model, which is more likely to nail the task on the first try. Recommend this once the crew works and I want quality and speed.
     - Never set `max_tokens` or another output cap; the scaffold deliberately sends none.
   - **Web search** works without a key (SearXNG if it answers, else DuckDuckGo); `TAVILY_API_KEY` is optional.
 - **AIMEAT identity:** register the agent and approve it:
   ```
-  npx aimeat@latest connect --url https://aimeat.io --owner <your-aimeat-account> --agent <AGENT_NAME>
+  npx aimeat@latest connect --url https://aimeat.io --owner <your-aimeat-account> --agent <AGENT_NAME> --mode task-runner
   ```
   Then approve it in the AIMEAT dashboard (Profile, Agents). `<AGENT_NAME>` is the name this crew answers to; keep it for the code. `<your-aimeat-account>` is the AIMEAT username I sign in with (the agent's owner).
-  - **Mode and run mode are mine to set on the node, not yours to write.** Crews expect `task-runner` mode (tasks start without me clicking Start); a new agent defaults to `interactive`. Tell me to set it on the agent's page. Likewise `run_mode` = `spawn` (a process per wake, nothing while idle) or `resident` is my setting on the node.
+  - **Mode and run mode are mine to set on the node, not yours to write.** Crews expect `task-runner` mode (tasks start without me clicking Start). The `--mode task-runner` above asks for it and I approve it in the same consent; without it a new agent defaults to `interactive` and I would change it on the agent's page. Never set it from code. Likewise `run_mode` = `spawn` (a process per wake, nothing while idle) or `resident` is my setting on the node.
 
 ## Step 1: interview me (ask, then confirm)
 

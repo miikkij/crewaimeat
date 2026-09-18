@@ -71,7 +71,7 @@ to it by default and has to say out loud why it is different.
 
 - **Wire the guardrails** (`crews/_guardrails.py`) onto the prose-only task contracts (cortex-fixer
   artifacts, idea-feasibility score, researcher source-URLs) with `guardrail_max_retries`.
-- **L3** — `crewai test -n 3 -m openrouter/x-ai/grok-4-fast` baselines per crew (evaluator pinned to
+- **L3** — `crewai test -n 3 -m <the crew's profile model>` baselines per crew (evaluator pinned to
   the fleet model).
 - **L4** — the AIMEAT-wired regression: queue a known task → read the published key →
   `verify_render`/`verify_interaction` → assert the selection rollup did not regress. See

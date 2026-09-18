@@ -31,7 +31,7 @@ run_crew_daemon  ──poll──►  PROPOSE: tasks with no live plan → propo
 
 A task-runner agent's tasks are **auto-activated** on the node: created directly as `active`. PROPOSE still gives them a plan (aimeat-crewai >= 0.21 picks up active tasks with no plan; without it onboarding jams at 6/7), but the plan is written **deterministically** from the task's title, because nobody reads it before the work starts. An `interactive` or `coordinator` agent's task waits at `queued` until a person starts it, and that plan is what they read when they decide, so it keeps the model.
 
-The **mode** is the owner's setting on the node, and the scaffold never writes it. `CrewSpec.mode` declares what the crew expects (derived: `task-runner` for almost every crew).
+The **mode** is the owner's setting on the node, approved at registration (`connect … --mode task-runner`, connector 3.x) or changed later on the agent's page. The scaffold never writes it. `CrewSpec.mode` declares what the crew expects (derived: `task-runner` for almost every crew).
 
 ## 3. Built-in machinery and why to reuse it
 

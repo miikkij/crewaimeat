@@ -96,7 +96,7 @@ Every AIMEAT agent is **registered once** and **approved by the owner**. Registe
 wants live (start with one, or with `crew-forge`):
 
 ```
-npx aimeat@latest connect --url <NODE_URL> --owner <OWNER> --agent <name>
+npx aimeat@latest connect --url <NODE_URL> --owner <OWNER> --agent <name> --mode task-runner
 ```
 
 The command prints a **verification code + URL**. Tell the user to open the URL (also reachable from
@@ -105,9 +105,10 @@ approved and the token lands in this repo's `.aimeat/` home (gitignored — neve
 
 - **Modes** (the five AIMEAT agent modes): `autonomous` · `interactive` · `coordinator` ·
   `task-runner` · `workstation`. Crews here expect **task-runner** — their tasks are born active and
-  run unattended, and the mode also picks the onboarding flow (next step). **The owner sets the mode
-  on the node** (the agent's page in the dashboard); a new agent defaults to `interactive`, where each
-  task waits for a person to press Start. The runtime never writes the mode, so tell the user to set it.
+  run unattended, and the mode also picks the onboarding flow (next step). **The owner decides the
+  mode**: `--mode task-runner` above asks for it, and the owner approves it in the same consent as the
+  agent. Without the flag a new agent defaults to `interactive`, where each task waits for a person to
+  press Start; it can also be changed later on the agent's page. The runtime never writes the mode.
 - **Run mode** is also the owner's setting on the node: `spawn` (no process while idle, one worker
   per wake — the cheap default for a fleet) or `resident` (a thread in the fleet host).
 - **Whole fleet against one node** in one go:

@@ -87,7 +87,7 @@ uv sync
 
 # 2. Register your crew's identity on AIMEAT, then approve it in the dashboard
 #    (device auth: it prints a code + URL, you approve once)
-npx aimeat@latest connect --url https://aimeat.io --owner <your-aimeat-account> --agent research-crew
+npx aimeat@latest connect --url https://aimeat.io --owner <your-aimeat-account> --agent research-crew --mode task-runner --mode task-runner
 
 # 3. Create .env from .env.example and add your keys
 #    OPENROUTER_API_KEY=...                           (https://openrouter.ai/keys)
@@ -100,7 +100,7 @@ uv run python -m crewaimeat.research_crew
 
 Then queue a task for `research-crew` from the AIMEAT dashboard (its Tasks tab, "+ New Task") and watch it run.
 
-**The agent's mode is the owner's setting on the node.** Crews here expect **task-runner** mode, where the node activates a task as soon as it is created. The node's default for a new agent is `interactive`, where every task waits for you to start it. Set the mode on the agent's page in the dashboard. The runtime never writes it: `CrewSpec.mode` only declares what the crew expects, because stamping it on every start overwrote modes owners had chosen on purpose.
+**The agent's mode is the owner's setting on the node.** Crews here expect **task-runner** mode, where the node activates a task as soon as it is created. Ask for it at registration with `--mode task-runner` (connector 3.x): you approve the mode in the same consent as the agent. Without it a new agent defaults to `interactive`, where every task waits for you to start it; you can also change the mode later on the agent's page in the dashboard. The runtime never writes it: `CrewSpec.mode` only declares what the crew expects, because stamping it on every start overwrote modes owners had chosen on purpose.
 
 **The npm `aimeat` connector matters as much as the Python package.** Every crew reaches the node through `aimeat connect serve`, which runs from the machine's global npm install, and no lockfile here pins that install. **The fleet always runs the newest `aimeat` from npm**, and three things enforce it:
 

@@ -3,7 +3,7 @@ name: aimeat-agent-modes
 description: The four AIMEAT agent modes (interactive / task-runner / autonomous / coordinator), what each one authorises, and why a task sits in `queued` until someone starts it. Use when an agent cannot complete its own task, when choosing a mode at registration, or when deciding whether work should run without a human in the loop.
 license: MIT
 metadata:
-  version: "1.1.0"
+  version: "1.2.0"
 ---
 
 # AIMEAT agent modes — what each one is allowed to do on its own
@@ -71,7 +71,9 @@ agent has no route out of `queued` because it was never given one.
 ## The fix: use the right mode
 
 If the agent runs work on its own — scheduled, triggered, or unattended — it should be a
-`task-runner`. **The owner sets that, on the node** (the agent's page in the dashboard). The mode
+`task-runner`. **The owner decides that** — at registration, by approving an agent that asked for
+it (`aimeat connect … --mode task-runner`, accepted again since connector 3.x), or later on the
+agent's page in the dashboard. The mode
 is the owner's standing instruction — "start my tasks without asking me each time" — so it is not
 the agent's to grant itself.
 

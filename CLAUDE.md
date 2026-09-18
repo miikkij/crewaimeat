@@ -226,8 +226,10 @@ edition shipped with 21 articles and no front page. `write-a`/`write-b`/`editori
   worker process per wake (the whole fleet here is spawn); otherwise → a THREAD in `fleet_host`. Only
   APPROVED agents come online; an unapproved one waits and joins itself once approved.
 - **`task-runner` mode is load-bearing, not boilerplate — and the OWNER sets it on the node.**
-  Device auth no longer takes a `--mode` flag (removed in connector v1.33), and the runtime no longer
-  writes the mode either: `aimeat_agent_mode_set` left the start path on 2026-09-02, because stamping
+  The owner decides it in one of two places: at registration, where connector 3.x accepts
+  `connect … --mode task-runner` again and the owner approves the mode in the same device-auth consent
+  (measured 2026-09-18 on 3.17.0; it was removed in v1.33 and came back), or later on the agent's page.
+  The runtime never writes the mode: `aimeat_agent_mode_set` left the start path on 2026-09-02, because stamping
   it on every start silently overwrote `coordinator` modes an owner had set on purpose.
   `CrewSpec.mode` is a DECLARATION only (`None` derives `task-runner` for almost every crewaimeat
   crew); a new agent defaults to `interactive` on the node until its owner changes it. A task is
