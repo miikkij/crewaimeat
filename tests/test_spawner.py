@@ -509,3 +509,58 @@ def test_a_spawned_worker_gets_no_stdin(tmp_path, monkeypatch):
     proc = sp._spawn("a", "run-1")
     proc._crewaimeat_log.close()
     assert seen.get("stdin") is subprocess.DEVNULL
+
+
+def test_the_backlog_poll_sees_a_stalled_task(tmp_path, monkeypatch):
+    """A stalled task is work nobody is running. The poll asked for `active` only, so the tasks that
+    stalled on 2026-09-07 (postman's morning email among them) were never seen again."""
+    import requests
+
+    from crewaimeat import spawner as sp_mod
+
+    asked: list[str] = []
+
+    class Resp:
+        status_code = 200
+
+        def __init__(self, tasks):
+            self._tasks = tasks
+
+        def json(self):
+            return {"data": {"tasks": self._tasks}}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        asked.append(json["status"])
+        return Resp([{"id": "t1", "status": "stalled"}] if json["status"] == "stalled" else [])
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    sp = sp_mod.Spawner(agents=["postman"], root=tmp_path, wake_fn=lambda *_: False)
+    sp._allow_http_in_tests = True
+    sp._port = 12345
+    assert sp._has_open_work("postman") is True
+    assert asked == ["active", "stalled"]
+
+    def nothing_open(url, json=None, headers=None, timeout=None):
+        asked.append(json["status"])
+        return Resp([])
+
+    asked.clear()
+    monkeypatch.setattr(requests, "post", nothing_open)
+    assert sp._has_open_work("postman") is False
+    assert asked == list(sp_mod.OPEN_WORK_STATUSES)
+
+
+def test_the_backlog_poll_does_not_wake_on_a_refusal(tmp_path, monkeypatch):
+    """A 403 is not work. Spawning on an error would be worse than the gap the net covers."""
+    import requests
+
+    from crewaimeat import spawner as sp_mod
+
+    class Refused:
+        status_code = 403
+
+    monkeypatch.setattr(requests, "post", lambda *a, **k: Refused())
+    sp = sp_mod.Spawner(agents=["postman"], root=tmp_path, wake_fn=lambda *_: False)
+    sp._allow_http_in_tests = True
+    sp._port = 12345
+    assert sp._has_open_work("postman") is False

@@ -4,6 +4,17 @@ Notable changes to crewaimeat. Format loosely follows [Keep a Changelog](https:/
 Dates are the working dates. A change reaches a running fleet only on its next restart, because the
 daemons import the modules at start. `git log` has the measurement behind each entry.
 
+## [Unreleased] — 2026-09-19 — the morning email, and three other scheduled jobs, come back
+
+### Fixed
+- **The spawner's backlog poll sees `stalled` tasks, not only `active` ones.** Its safety net for work
+  no wake announced asked the node for `active` tasks alone, while a worker's EXECUTE takes both. The
+  tasks the schedules created the night of 2026-09-06/07 (the connector still lost wakes) went
+  `stalled`, nothing could see them, and each schedule then stopped producing: postman's 07:00 morning
+  email (last sent 2026-09-05), activity-reporter and feedback-wisdom since 09-07, workflow-inspector
+  with five stalled inspections since 09-16. On the next fleet start the spawner finds those tasks and
+  wakes the four agents; postman sends that day's email (it sends only the current day's).
+
 ## [Unreleased] — 2026-09-19 — registration asks for the mode; workers get no stdin
 
 ### Changed

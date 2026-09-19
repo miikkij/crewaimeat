@@ -107,6 +107,10 @@ ROSTER_INTERVAL_S = 30.0
 # this poll was what found news-writer's stranded task. Retire it against a measurement, never a
 # version number.
 WORK_POLL_S = float(os.environ.get("SPAWN_WORK_POLL_S", "120"))
+# The task states a worker's EXECUTE phase picks up, so the ones worth a wake. `queued` is not here:
+# a task-runner has none (the node activates on create), and an interactive agent's queued task is
+# waiting for a PERSON to press Start, which a wake cannot do.
+OPEN_WORK_STATUSES = ("active", "stalled")
 
 
 def _say(msg: str) -> None:
@@ -230,8 +234,16 @@ class Spawner:
         Deliberately the TOOL door, the same one a worker uses, so this sees exactly what the worker
         would see when it polls. A refusal or an unreachable node returns False and the next round
         tries again: this is a safety net, and a net that spawns on an error would be worse than the
-        gap it covers."""
-        if "pytest" in sys.modules:
+        gap it covers.
+
+        ACTIVE AND STALLED, because the worker's EXECUTE phase takes both. This asked for `active`
+        only, and a task that went `stalled` was invisible to it forever. Measured 2026-09-19: the
+        tasks the schedules created the night of 2026-09-06/07, when the connector still lost wakes,
+        all went stalled, and each schedule then stopped producing (last_run frozen at that task):
+        postman's 07:00 morning email, activity-reporter and feedback-wisdom since 09-07,
+        workflow-inspector with five stalled inspections since 09-16. Nothing ever woke those agents
+        again, because the only thing that looks for un-announced work could not see theirs."""
+        if "pytest" in sys.modules and not getattr(self, "_allow_http_in_tests", False):
             return False
         port = self._port or self._serve_port()
         if port is None:
@@ -239,21 +251,23 @@ class Spawner:
         self._port = port
         import requests
 
-        try:
-            r = requests.post(
-                f"http://127.0.0.1:{port}/local/call/aimeat_task_list",
-                json={"status": "active"},
-                headers={"X-Aimeat-Agent": agent},
-                timeout=20,
-            )
-            if r.status_code != 200:
+        for status in OPEN_WORK_STATUSES:
+            try:
+                r = requests.post(
+                    f"http://127.0.0.1:{port}/local/call/aimeat_task_list",
+                    json={"status": status},
+                    headers={"X-Aimeat-Agent": agent},
+                    timeout=20,
+                )
+                if r.status_code != 200:
+                    return False
+                data = (r.json() or {}).get("data") or {}
+            except Exception:  # noqa: BLE001 — a missed round is weather; the next one is WORK_POLL_S away
+                self._port = None
                 return False
-            data = (r.json() or {}).get("data") or {}
-        except Exception:  # noqa: BLE001 — a missed round is weather; the next one is WORK_POLL_S away
-            self._port = None
-            return False
-        tasks = data.get("tasks") or data.get("items") or []
-        return bool(tasks)
+            if data.get("tasks") or data.get("items"):
+                return True
+        return False
 
     def _work_poll_loop(self, agent: str) -> None:
         """Ask for work a push may never have announced. Skipped while a worker runs — it is already
