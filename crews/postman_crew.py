@@ -89,6 +89,15 @@ def run() -> None:
     # does not carry the marker, so the ordinary inbox is untouched; a marked one is validated,
     # saved and ANSWERED, because an order that vanished and an order that was rejected look the
     # same to the person who sent it.
+    # on_task: the 07:00 schedule's task, done in CODE. postman listened for `dms` only, so a task the
+    # node created for it could never be executed: the 2026-09-07 one sat `stalled` and the schedule
+    # stopped producing, which is why the morning email went quiet after 2026-09-05. `idle_pass` is the
+    # same deterministic pass the idle hook runs (report due + dedup by the day's record, then the
+    # pending mail sweep), so the task now finishes and the schedule keeps its cadence. No model.
+    def _on_task(task: dict) -> str:
+        res = idle_pass()
+        return f"morning report + mail sweep: {res}"
+
     def _on_dm(event: dict) -> None:
         from crewaimeat.subscriber_intake import handle_dm
 
@@ -102,9 +111,10 @@ def run() -> None:
             build_domain=build_domain,
             readme_md=README,
             temperature=0.3,
+            on_task=_on_task,
             idle_hook=_poll,
             idle_hook_seconds=120,
-            listen_for=["dms"],
+            listen_for=["tasks", "dms"],
             on_dm=_on_dm,
         )
     )

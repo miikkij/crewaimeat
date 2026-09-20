@@ -4,6 +4,24 @@ Notable changes to crewaimeat. Format loosely follows [Keep a Changelog](https:/
 Dates are the working dates. A change reaches a running fleet only on its next restart, because the
 daemons import the modules at start. `git log` has the measurement behind each entry.
 
+## [Unreleased] — 2026-09-20 — the runaway that cost $5.12 in a day, and the morning email's real cause
+
+### Fixed
+- **A backlog-poll wake happens once per task, not every two minutes.** Yesterday's poll change woke an
+  agent for a task that stayed open, and waking it did not move the task, so the wake repeated forever:
+  postman 239 worker starts in 16 h, and workflow-inspector re-running the Sanomat writing on each one
+  — $5.12 and 1 149 model calls in one day (measured on the node's ledger). The poll is a net for work
+  nobody announced; a task it has already woken for is somebody else's to finish.
+- **postman takes tasks.** It listened for `dms` only, so the 07:00 schedule's task could never be
+  executed by any worker: it sat stalled from 2026-09-07 and the morning email stopped after
+  2026-09-05. That, not the poll, is why the mail went quiet. It now listens for tasks and answers one
+  with `idle_pass()` deterministically — the same pass the idle hook runs, no model, and the task
+  finishes, which is what lets the schedule keep its cadence.
+- **A red workflow step is re-run at most once per 6 h**, per (date, edition, step), recorded in the
+  machine's own marks. Re-running a write step writes the articles again: worth it for a transient
+  miss, worth nothing while the step stays red — and it was being paid for on every hourly inspection.
+  The inspection still reports the step as red and says a person is needed.
+
 ## [Unreleased] — 2026-09-19 — the morning email, and three other scheduled jobs, come back
 
 ### Fixed

@@ -174,6 +174,10 @@ class Spawner:
         self.state: dict[str, AgentState] = {a: AgentState(a) for a in self.agents}
         self._lock = threading.Lock()
         self._stop = threading.Event()
+        # Task ids this spawner has already woken for (per agent). The backlog poll is for work
+        # nobody announced, not for work that will not move: a second wake for the same task
+        # only repeats whatever kept it open, at the price of another worker start.
+        self._woken_tasks: dict[str, set[str]] = {}
         self._queue: list[str] = []  # FIFO of agents waiting for a worker slot
         self._port: int | None = None
         self._threads: dict[str, list[threading.Thread]] = {}
@@ -228,8 +232,8 @@ class Spawner:
         time.sleep(10.0)
         return False
 
-    def _has_open_work(self, agent: str) -> bool:
-        """True when the node holds a task for this agent that nobody is running.
+    def _unwoken_work(self, agent: str) -> list[str]:
+        """Task ids the node holds for this agent that this spawner has NOT already woken for.
 
         Deliberately the TOOL door, the same one a worker uses, so this sees exactly what the worker
         would see when it polls. A refusal or an unreachable node returns False and the next round
@@ -242,15 +246,24 @@ class Spawner:
         all went stalled, and each schedule then stopped producing (last_run frozen at that task):
         postman's 07:00 morning email, activity-reporter and feedback-wisdom since 09-07,
         workflow-inspector with five stalled inspections since 09-16. Nothing ever woke those agents
-        again, because the only thing that looks for un-announced work could not see theirs."""
+        again, because the only thing that looks for un-announced work could not see theirs.
+
+        ONCE PER TASK, and that is the load-bearing half. A wake is not a promise that the task can be
+        run: postman listens for `dms` only, so its scheduled task could not be executed by any worker,
+        and waking on the open task every WORK_POLL_S gave 239 worker starts in 16 h — each one paying
+        the model for its start-up — while workflow-inspector re-ran the Sanomat writing every time
+        ($5.12 and 1 149 calls in one day, measured 2026-09-20). A task the spawner has already woken
+        for is somebody else's problem to finish; this net exists for work nobody has heard about, not
+        for work that will not move."""
         if "pytest" in sys.modules and not getattr(self, "_allow_http_in_tests", False):
-            return False
+            return []
         port = self._port or self._serve_port()
         if port is None:
-            return False
+            return []
         self._port = port
         import requests
 
+        seen: list[str] = []
         for status in OPEN_WORK_STATUSES:
             try:
                 r = requests.post(
@@ -260,14 +273,17 @@ class Spawner:
                     timeout=20,
                 )
                 if r.status_code != 200:
-                    return False
+                    return []
                 data = (r.json() or {}).get("data") or {}
             except Exception:  # noqa: BLE001 — a missed round is weather; the next one is WORK_POLL_S away
                 self._port = None
-                return False
-            if data.get("tasks") or data.get("items"):
-                return True
-        return False
+                return []
+            for task in data.get("tasks") or data.get("items") or []:
+                tid = str((task or {}).get("id") or "")
+                if tid:
+                    seen.append(tid)
+        woken = self._woken_tasks.setdefault(agent, set())
+        return [tid for tid in seen if tid not in woken]
 
     def _work_poll_loop(self, agent: str) -> None:
         """Ask for work a push may never have announced. Skipped while a worker runs — it is already
@@ -282,8 +298,10 @@ class Spawner:
                 return  # this generation is over; a re-join started its own poll
             if st.busy:
                 continue
-            if self._has_open_work(agent):
-                _say(f"[spawner] {agent}: open task with no wake — starting a worker")
+            fresh = self._unwoken_work(agent)
+            if fresh:
+                self._woken_tasks.setdefault(agent, set()).update(fresh)
+                _say(f"[spawner] {agent}: open task with no wake ({len(fresh)}) — starting a worker")
                 self.on_wake(agent, trigger="poll")
 
     def _wake_loop(self, agent: str) -> None:

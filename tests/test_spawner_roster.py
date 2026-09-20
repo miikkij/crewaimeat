@@ -520,9 +520,9 @@ def test_the_work_poll_stops_with_its_generation_too(monkeypatch):
         calls.append(agent)
         _bounded(calls, "the work poll")
         sp.state["a"].retired = True
-        return False
+        return []
 
-    monkeypatch.setattr(sp, "_has_open_work", has_work)
+    monkeypatch.setattr(sp, "_unwoken_work", has_work)
     sp._work_poll_loop("a")
     assert calls == ["a"]
 

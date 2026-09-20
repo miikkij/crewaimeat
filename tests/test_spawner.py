@@ -537,7 +537,7 @@ def test_the_backlog_poll_sees_a_stalled_task(tmp_path, monkeypatch):
     sp = sp_mod.Spawner(agents=["postman"], root=tmp_path, wake_fn=lambda *_: False)
     sp._allow_http_in_tests = True
     sp._port = 12345
-    assert sp._has_open_work("postman") is True
+    assert sp._unwoken_work("postman") == ["t1"]
     assert asked == ["active", "stalled"]
 
     def nothing_open(url, json=None, headers=None, timeout=None):
@@ -546,7 +546,7 @@ def test_the_backlog_poll_sees_a_stalled_task(tmp_path, monkeypatch):
 
     asked.clear()
     monkeypatch.setattr(requests, "post", nothing_open)
-    assert sp._has_open_work("postman") is False
+    assert sp._unwoken_work("postman") == []
     assert asked == list(sp_mod.OPEN_WORK_STATUSES)
 
 
@@ -563,4 +563,36 @@ def test_the_backlog_poll_does_not_wake_on_a_refusal(tmp_path, monkeypatch):
     sp = sp_mod.Spawner(agents=["postman"], root=tmp_path, wake_fn=lambda *_: False)
     sp._allow_http_in_tests = True
     sp._port = 12345
-    assert sp._has_open_work("postman") is False
+    assert sp._unwoken_work("postman") == []
+
+
+def test_the_poll_wakes_once_per_task_even_while_it_stays_open(tmp_path, monkeypatch):
+    """The runaway of 2026-09-19/20: postman cannot execute a task (it listens for dms only), so the
+    task stayed open and the poll woke it every WORK_POLL_S — 239 worker starts in 16 h, and
+    workflow-inspector re-ran the Sanomat writing on each one ($5.12, 1 149 calls in a day)."""
+    import requests
+
+    from crewaimeat import spawner as sp_mod
+
+    class Resp:
+        status_code = 200
+
+        def __init__(self, tasks):
+            self._tasks = tasks
+
+        def json(self):
+            return {"data": {"tasks": self._tasks}}
+
+    open_task = [{"id": "task-1", "status": "stalled"}]
+    monkeypatch.setattr(
+        requests, "post", lambda url, json=None, **k: Resp(open_task if json["status"] == "stalled" else [])
+    )
+    sp = sp_mod.Spawner(agents=["postman"], root=tmp_path, wake_fn=lambda *_: False)
+    sp._allow_http_in_tests = True
+    sp._port = 12345
+
+    assert sp._unwoken_work("postman") == ["task-1"]  # nobody has heard about it yet
+    sp._woken_tasks.setdefault("postman", set()).update(["task-1"])  # what the loop records on waking
+    assert sp._unwoken_work("postman") == []  # still open, already woken: no second worker
+    open_task.append({"id": "task-2", "status": "stalled"})
+    assert sp._unwoken_work("postman") == ["task-2"]  # a NEW task still gets its one wake

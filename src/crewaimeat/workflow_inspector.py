@@ -18,12 +18,20 @@ from __future__ import annotations
 import datetime
 from zoneinfo import ZoneInfo
 
+from crewaimeat import local_marks
 from crewaimeat.aimeat_crew import _aimeat_call
 from crewaimeat.workflow_spec import WORKFLOWS, _default_reader, check_workflow, loc
 
 AGENT = "workflow-inspector"
 _TZ = ZoneInfo("Europe/Helsinki")
 _MAX_RERUNS = 4  # bounded: one workflow has at most a handful of steps
+# A step that stays red is re-run at most once per this many hours, per (date, edition, step).
+# Re-running a write step means WRITING THE ARTICLES AGAIN — 20-25 minutes of a paid model. The
+# repair is for a transient miss; a step that is still red after one attempt is not transient, and
+# paying for the articles again on every hourly inspection buys nothing. Measured 2026-09-20:
+# 15 inspections of the same red step, $5.12 and 1 149 model calls in a day.
+_RERUN_COOLDOWN_H = 6.0
+_RERUN_MARK = "workflow-inspector-rerun"
 
 
 def _rerun_step(step_id: str, date: str, edition: str) -> str:
@@ -101,7 +109,15 @@ def inspect(wf_id: str, params: dict, *, repair: bool = True, lister=None) -> di
         if not target or not repair:
             break
         sid = target["id"]
+        rid = f"{date}:{edition}:{sid}"
+        if local_marks.ran_within(_RERUN_MARK, rid, _RERUN_COOLDOWN_H):
+            actions.append(
+                f"Tier-1 re-run `{sid}` SKIPPED — already re-run within {_RERUN_COOLDOWN_H:g} h and still "
+                "red, so it is not a transient miss. It needs a person, not another paid re-run."
+            )
+            break
         actions.append(f"Tier-1 re-run `{sid}` (output-RED, input-GREEN) …")
+        local_marks.mark_local_run(_RERUN_MARK, rid)
         try:
             rep = _rerun_step(sid, date, edition)
             actions.append(f"  → {str(rep)[:160]}")
