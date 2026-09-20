@@ -86,6 +86,65 @@ def test_unknown_tool_name():
     assert len(unknown) == 1 and "bogus-tool" in unknown[0]  # only the bogus name is flagged, not 'memory'
 
 
+# ── decision rules, which are the one tool id that takes a selector ───────────────────────────
+#
+# `decide` is every rule the owner allows this agent; `decide:<rule>` is one of them. The selector
+# cannot be a registry key, because a rule is the OWNER's -- written on their node, named by them,
+# different for every owner -- so there is nothing here to enumerate. What these tests protect is
+# that the VALIDATOR and the INTERPRETER agree: a name that validates must be a name that builds,
+# which was not guaranteed while the two did their own `TOOL_REGISTRY[...]` lookup.
+
+
+def test_decide_is_a_known_tool():
+    from crewaimeat.crew_def import TOOL_PURPOSES, TOOL_REGISTRY
+
+    assert "decide" in TOOL_REGISTRY
+    assert "decide" in TOOL_PURPOSES, "the resolver and its human-facing menu stay in lockstep"
+
+
+def test_a_named_decision_rule_validates():
+    doc = _minimal_doc()
+    doc["agents"][0]["tools"] = ["memory", "decide:sort-a-message"]
+    assert [e for e in validate_crew_doc(doc) if "unknown tool" in e] == []
+
+
+def test_a_rule_id_with_digits_and_hyphens_validates():
+    doc = _minimal_doc()
+    doc["agents"][0]["tools"] = ["decide:pay-an-invoice-over-500"]
+    assert [e for e in validate_crew_doc(doc) if "unknown tool" in e] == []
+
+
+def test_a_selector_on_a_tool_that_does_not_take_one_is_refused():
+    doc = _minimal_doc()
+    doc["agents"][0]["tools"] = ["memory:everything"]
+    unknown = [e for e in validate_crew_doc(doc) if "unknown tool" in e]
+    assert len(unknown) == 1 and "memory:everything" in unknown[0]
+
+
+def test_an_empty_selector_is_refused():
+    doc = _minimal_doc()
+    doc["agents"][0]["tools"] = ["decide:"]
+    assert len([e for e in validate_crew_doc(doc) if "unknown tool" in e]) == 1
+
+
+def test_the_refusal_teaches_the_selector_form():
+    doc = _minimal_doc()
+    doc["agents"][0]["tools"] = ["bogus-tool"]
+    unknown = [e for e in validate_crew_doc(doc) if "unknown tool" in e]
+    assert "decide:sort-a-message" in unknown[0], unknown
+
+
+def test_validator_and_interpreter_resolve_the_same_names():
+    # The guard this refactor exists for: every name the validator accepts must resolve to a
+    # factory, or a doc passes validation and then raises a KeyError deep inside the build.
+    from crewaimeat.crew_def import TOOL_REGISTRY, resolve_tool
+
+    for name in [*TOOL_REGISTRY, "decide:sort-a-message"]:
+        assert callable(resolve_tool(name)), name
+    for name in ["bogus-tool", "decide:", ":x", "memory:x"]:
+        assert resolve_tool(name) is None, name
+
+
 def test_task_references_missing_agent():
     doc = _minimal_doc()
     doc["tasks"][0]["agent"] = "nobody"

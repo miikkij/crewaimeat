@@ -163,6 +163,50 @@ def _tools_exchange(agent_name: str, ctx: Any) -> list:
     return list(make_exchange_tools(agent_name))
 
 
+#: The release that first carried `decide_tool`. The repo PIN is still `>=0.26.0`, because 0.27.0 is
+#: not on PyPI yet and a pin nothing can resolve breaks `uv sync` for every crew in the fleet, not
+#: just the ones that decide anything. So the floor is enforced where it is actually needed -- at the
+#: one import that needs it -- and the pin moves when 0.27.0 is published.
+_DECIDE_NEEDS = "0.27.0"
+
+
+def _decide_tools_fn():
+    """`aimeat_crewai.decide_tool.decide_tools`, or a refusal that names the version.
+
+    An ImportError from a lazy import inside a tool factory surfaces as "no module named
+    aimeat_crewai.decide_tool" in the middle of a crew build, which reads as a broken install rather
+    than an old one. Naming the version is the difference between a five-second fix and an hour.
+    """
+    try:
+        from aimeat_crewai.decide_tool import decide_tools
+    except ImportError as exc:
+        raise CrewDocError(
+            f"The tool 'decide' needs aimeat-crewai >= {_DECIDE_NEEDS}, which is where decision "
+            f"rules arrived; this environment has an older one. Upgrade it (uv sync after the "
+            f"release is on PyPI), or take 'decide' out of the crew definition."
+        ) from exc
+    return decide_tools
+
+
+def _tools_decide(agent_name: str, ctx: Any) -> list:
+    # The owner's DECISION RULES, one CrewAI tool each: the questions, the thresholds and the bands
+    # are theirs, written once on the node, and the crew sends only the state. The agent sees a tool
+    # named after the job ("decide_sort_a_message"), not a generic "ask the decision model".
+    # Read at BUILD time, so a rule the owner adds is there at the next restart with no crew to edit.
+    return list(_decide_tools_fn()(agent_name))
+
+
+def _make_decide_one(rule_id: str):
+    """A factory bound to ONE rule id, for the `decide:<rule>` form."""
+
+    def _factory(agent_name: str, ctx: Any) -> list:
+        # only= is FAIL-LOUD: a rule the owner does not allow this agent raises here, at build, and
+        # not later in the middle of a task where nothing points back to the crew definition.
+        return list(_decide_tools_fn()(agent_name, only=[rule_id]))
+
+    return _factory
+
+
 TOOL_REGISTRY: dict[str, Any] = {
     "memory": _tools_memory,
     "web": _tools_web,
@@ -176,7 +220,38 @@ TOOL_REGISTRY: dict[str, Any] = {
     "app_tools": _tools_app_tools,
     "crew_registry": _tools_crew_registry,
     "exchange": _tools_exchange,
+    "decide": _tools_decide,
 }
+
+# Tool ids that take a SELECTOR after a colon: `decide:sort-a-message` is one decision rule, and
+# `decide` on its own is every rule the owner allows this agent.
+#
+# WHY THIS IS NOT JUST MORE REGISTRY KEYS, the way the EXCHANGE verbs are. An exchange verb is a
+# fixed name this repo knows at import time. A decision rule is the OWNER's, written on their node,
+# named by them, and different for every owner and every day -- there is nothing to enumerate here
+# and nothing this file could enumerate that would not be out of date. So the head is registered and
+# the selector is passed through to the runtime, which asks the node what the owner actually allows.
+_SELECTOR_TOOLS: dict[str, Any] = {
+    "decide": _make_decide_one,
+}
+
+
+def resolve_tool(tool_id: str) -> Any | None:
+    """The factory that builds `tool_id`, or None when nothing here resolves it.
+
+    THE ONE RESOLVER, used by the validator and the interpreter alike, so a name that validates is a
+    name that builds. They were two `TOOL_REGISTRY[...]` lookups, which was correct only while every
+    tool id was a literal key; the moment one took a selector, a doc could pass validation and then
+    raise a KeyError deep in the build.
+    """
+    fn = TOOL_REGISTRY.get(tool_id)
+    if fn is not None:
+        return fn
+    head, sep, selector = tool_id.partition(":") if isinstance(tool_id, str) else ("", "", "")
+    if sep and selector and head in _SELECTOR_TOOLS:
+        return _SELECTOR_TOOLS[head](selector)
+    return None
+
 
 # One-line purpose per tool id — the single source the AI generators render into their tool menus, so an
 # author can only pick a tool the interpreter can actually resolve (TOOL_REGISTRY is the resolver, this is
@@ -194,6 +269,7 @@ TOOL_PURPOSES: dict[str, str] = {
     "app_tools": "find and CALL app-tools hosted on AIMEAT (list_app_tools reads how each is called; call_app_tool invokes one) — your own family's tools run free",
     "crew_registry": "publish a crew definition to the AIMEAT registry, and install one somebody shared by their GAII",
     "exchange": "trade on the AIMEAT EXCHANGE — browse/accept/run offerings, post needs + bid, renegotiate, run agent-work; plus deterministic band + I/O-match gates",
+    "decide": "ask the owner's DECISION RULES — one tool per rule, named after the job; the rule holds the questions, thresholds and bands and you send only the state. `decide:<rule>` picks one rule instead of all of them",
 }
 
 # The EXCHANGE bundle may be referenced whole (id "exchange") OR by any single tool name (the node
@@ -304,8 +380,11 @@ def _validate_agents(agents: Any) -> tuple[list[str], set[str]]:
                 errors.append(f"agents[{i}] ({key}): tools must be a list of tool names")
             else:
                 for tn in tools:
-                    if tn not in TOOL_REGISTRY:
-                        errors.append(f"agents[{i}] ({key}): unknown tool {tn!r} (known: {sorted(TOOL_REGISTRY)})")
+                    if resolve_tool(tn) is None:
+                        errors.append(
+                            f"agents[{i}] ({key}): unknown tool {tn!r} (known: {sorted(TOOL_REGISTRY)}"
+                            f"; and {sorted(_SELECTOR_TOOLS)} take a selector, e.g. 'decide:sort-a-message')"
+                        )
         ad = a.get("allow_delegation")
         if ad is not None and not isinstance(ad, bool):
             errors.append(f"agents[{i}] ({key}): allow_delegation must be a boolean")
@@ -524,7 +603,9 @@ def build_domain_from_json(doc: dict, ctx: Any) -> tuple[list, list]:
     for a in doc["agents"]:
         tools: list = []
         for tn in a.get("tools") or []:
-            tools.extend(TOOL_REGISTRY[tn](agent_name, ctx))
+            # validate_crew_doc has already refused an unresolvable name; this is the same resolver,
+            # so the two can never disagree about what a tool id means.
+            tools.extend(resolve_tool(tn)(agent_name, ctx))
         kwargs: dict[str, Any] = dict(
             role=a["role"],
             goal=a["goal"],
