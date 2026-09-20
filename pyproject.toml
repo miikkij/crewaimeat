@@ -23,7 +23,13 @@ dependencies = [
     "tzdata",  # zoneinfo tz database (needed on Windows for current-time injection)
     "pyfiglet>=1.0.0",  # deterministic ASCII-art for [[FIGLET]] README directives
     "trafilatura>=2.0.0",
-    "litellm>=1.87.1",
+    # UPPER BOUND ON PURPOSE (owner, 2026-09-20). litellm 1.102 makes boto3 + botocore hard
+    # dependencies -- ~27 MB of AWS SDK for Bedrock, a path none of our calls take: crewai picks its
+    # NATIVE OpenAICompatibleCompletion for an `openrouter/` model, so litellm is off the hot path
+    # entirely (see llm.py, `is_litellm`). Nothing here reads a 1.9x feature, and the measured gain
+    # of the jump was "general fixes". Raise the bound when a provider we ACTUALLY use needs it, and
+    # then say which one -- not because the number moved.
+    "litellm>=1.87.1,<1.88",
     "feedparser>=6.0.12",
     "pypdf>=5.0.0",
 ]

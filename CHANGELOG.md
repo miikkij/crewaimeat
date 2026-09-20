@@ -4,6 +4,25 @@ Notable changes to crewaimeat. Format loosely follows [Keep a Changelog](https:/
 Dates are the working dates. A change reaches a running fleet only on its next restart, because the
 daemons import the modules at start. `git log` has the measurement behind each entry.
 
+## [Unreleased] — 2026-09-20 — dependency refresh, minus the AWS SDK
+
+### Changed
+- **89 packages upgraded in `uv.lock`**, crewai 1.15.22, aimeat-crewai 0.27.0, pydantic and chromadb
+  unchanged. What our own work touches: ddgs 9.14.4 → 9.16.0 (keyless search), trafilatura 2.0 → 2.2
+  (article extraction), tavily-python 0.7.24 → 0.8.4, pypdf 6.16.2 → 6.19.0, playwright 1.60 → 1.63
+  (the verify gates' browser), openai 2.38 → 2.54, fastapi 0.138 → 0.141 and uvicorn 0.48 → 0.53 (the
+  agency cockpit), ruff 0.15 → 0.16, pytest 9.0 → 9.1. No open Dependabot alert prompted this; it is
+  drift, cleared while it is cheap.
+- **litellm is bounded at `<1.88`** and moved 1.87.1 → 1.87.5 instead of 1.102. 1.102 makes boto3 +
+  botocore hard dependencies — ~27 MB of AWS SDK for Bedrock, and our calls never reach litellm at all:
+  crewai picks its native OpenAI-compatible provider for an `openrouter/` model. The bound carries the
+  reason, so raising it means naming the provider that needs it.
+
+### Verified
+- Full floor, `doctor --strict`, ruff check and format: green. Live, on the upgraded set: one real model
+  call through our routing (gpt-oss-120b, answered in 5.6 s), a keyless web search, an article
+  extraction, and a Chromium launch. Install size stays at ~978 MB (a full upgrade would be ~1030 MB).
+
 ## [Unreleased] — 2026-09-20 — the runaway that cost $5.12 in a day, and the morning email's real cause
 
 ### Fixed
