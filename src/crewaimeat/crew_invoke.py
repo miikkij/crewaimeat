@@ -51,9 +51,10 @@ def handle(capability: str, payload: dict, *, agent_name: str) -> tuple[bool, di
         from crewaimeat.crew_def import TOOL_PURPOSES, TOOL_REGISTRY
         from crewaimeat.llm import available_models, known_profiles
 
+        tools = [{"id": name, "purpose": TOOL_PURPOSES.get(name, "")} for name in sorted(TOOL_REGISTRY)]
         return True, {
             "spec": "aimeat.crew-menu/1",
-            "tools": [{"id": name, "purpose": TOOL_PURPOSES.get(name, "")} for name in sorted(TOOL_REGISTRY)],
+            "tools": tools + _decide_rule_rows(agent_name),
             "llm": {"profiles": known_profiles(), "models": available_models()},
         }
 
@@ -80,6 +81,55 @@ def handle(capability: str, payload: dict, *, agent_name: str) -> tuple[bool, di
         return _run_trial(doc, prompt, agent_name=agent_name)
 
     return False, {"code": "UNKNOWN_CAPABILITY", "message": f"{capability!r} is not one of {list(_CAPABILITIES)}"}
+
+
+def _decide_rule_rows(agent_name: str) -> list[dict]:
+    """One `decide:<ruleId>` row per DECISION RULE the owner allows this agent, for the Crew tab.
+
+    ASKED, NOT LISTED, for the same reason the rest of this menu is: these rows cannot live in
+    TOOL_REGISTRY. A rule is the OWNER's -- written on their node, named by them, different for
+    every owner and changed whenever they like -- so any list compiled here would be a copy of
+    somebody else's vocabulary, which is the drift this whole capability exists to end. The runtime
+    holds the agent's own credential, so it is the one thing that can answer "which rules may THIS
+    agent run" truthfully.
+
+    The purpose line is the owner's own words: the rule's title and what they said it decides. That
+    is what a person picking a tool in the Crew tab needs to read, and nothing here can write it
+    better than they did.
+
+    DEGRADES RATHER THAN FAILS, and this is the one place in the decide work where that is right.
+    The menu's job is to let a person pick a tool; a node that cannot be reached, an owner with no
+    TypeSafe key, or a runtime older than the decide doors must cost the DECISION rows and nothing
+    else. Failing the whole invoke would empty the picker of memory, web and every other tool over a
+    feature the owner may not even use -- and the node's own fallback would then serve its stale
+    copy of the list, which is exactly what asking was meant to replace. The reason is printed, so a
+    missing group is never silent.
+    """
+    try:
+        from aimeat_crewai.decide import rules as _decide_rules
+    except ImportError:
+        # Below aimeat-crewai 0.27.0. The `decide` row itself still resolves (crew_def names the
+        # version in its own refusal); only the per-rule rows are missing.
+        return []
+    try:
+        allowed = _decide_rules(agent_name=agent_name)
+    except Exception as exc:  # noqa: BLE001 -- every reason is the same answer here: no rule rows
+        print(f"[crew.menu:{agent_name}] decision rules not listed: {exc}")
+        return []
+    rows: list[dict] = []
+    for r in allowed:
+        rule_id = str(r.get("id") or "").strip()
+        if not rule_id:
+            continue
+        title = str(r.get("title") or rule_id).strip()
+        decides = str(r.get("decides") or "").strip()
+        rows.append(
+            {
+                "id": f"decide:{rule_id}",
+                "purpose": f"{title} — decides {decides}" if decides else title,
+            }
+        )
+    return rows
 
 
 def _run_trial(doc: dict, prompt: str, *, agent_name: str) -> tuple[bool, dict]:

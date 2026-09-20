@@ -94,6 +94,102 @@ def test_a_trial_that_blows_up_answers_with_the_reason(monkeypatch):
     assert "duration_ms" in result
 
 
+# ── the menu's decision-rule rows ─────────────────────────────────────────────────────────────
+#
+# These cannot live in TOOL_REGISTRY: a rule is the OWNER's, named by them and changed whenever
+# they like, so any list compiled in this repo would be a copy of somebody else's vocabulary --
+# the drift `crew.menu` exists to end. The runtime holds the agent's credential, so it is the one
+# thing that can truthfully answer which rules THIS agent may run.
+
+
+def _rules_stub(*rules):
+    def _fake(agent_name=None, **kw):
+        return list(rules)
+
+    return _fake
+
+
+def _menu(monkeypatch, rules_fn):
+    # THE MODULE, not the attribute. `aimeat_crewai` exports a FUNCTION called `decide`, which
+    # shadows the submodule of the same name on the package object -- so `import
+    # aimeat_crewai.decide as m` hands back the function and `m.rules` is an AttributeError.
+    # importlib goes through sys.modules and gets the real module. The code under test uses
+    # `from aimeat_crewai.decide import rules`, which resolves the same way, and reads the
+    # attribute per call, so patching here reaches it.
+    import importlib
+
+    decide_mod = importlib.import_module("aimeat_crewai.decide")
+    monkeypatch.setattr(decide_mod, "rules", rules_fn)
+    ok, result = ci.handle("crew.menu", {}, agent_name="node-agent")
+    assert ok is True
+    return result
+
+
+def test_the_menu_offers_decide_itself():
+    ok, result = ci.handle("crew.menu", {}, agent_name="node-agent")
+    ids = {t["id"] for t in result["tools"]}
+    assert "decide" in ids, "the bare selector is a registry tool and must always be offered"
+    purpose = next(t["purpose"] for t in result["tools"] if t["id"] == "decide")
+    assert purpose, "a row with no purpose line is a row a person cannot choose from"
+
+
+def test_the_menu_lists_one_row_per_rule_the_owner_allows_this_agent(monkeypatch):
+    result = _menu(
+        monkeypatch,
+        _rules_stub(
+            {"id": "sort-a-message", "title": "Sort an incoming message", "decides": "which queue it goes to"},
+            {"id": "send-a-reply", "title": "Send a reply unread", "decides": "whether it is sent unread"},
+        ),
+    )
+    ids = [t["id"] for t in result["tools"]]
+    assert "decide:sort-a-message" in ids and "decide:send-a-reply" in ids
+
+
+def test_a_rule_row_carries_the_owners_own_words(monkeypatch):
+    # The Crew tab shows this to a person choosing a tool, and nothing here can write it better
+    # than the owner already did.
+    result = _menu(
+        monkeypatch,
+        _rules_stub(
+            {"id": "sort-a-message", "title": "Sort an incoming message", "decides": "which queue it goes to"},
+        ),
+    )
+    row = next(t for t in result["tools"] if t["id"] == "decide:sort-a-message")
+    assert "Sort an incoming message" in row["purpose"]
+    assert "which queue it goes to" in row["purpose"]
+
+
+def test_a_rule_without_a_decides_line_still_gets_a_readable_purpose(monkeypatch):
+    result = _menu(monkeypatch, _rules_stub({"id": "r", "title": "Just a title"}))
+    assert next(t for t in result["tools"] if t["id"] == "decide:r")["purpose"] == "Just a title"
+
+
+def test_a_rule_with_no_id_is_skipped_rather_than_offered_as_a_broken_row(monkeypatch):
+    result = _menu(monkeypatch, _rules_stub({"title": "nameless"}, {"id": "ok", "title": "Fine"}))
+    assert [t["id"] for t in result["tools"] if t["id"].startswith("decide:")] == ["decide:ok"]
+
+
+def test_an_unreachable_node_costs_the_decision_rows_and_nothing_else(monkeypatch, capsys):
+    # THE POINT OF DEGRADING HERE. The menu's job is to let a person pick a tool. Failing the whole
+    # invoke would empty the picker of memory, web and everything else over a feature the owner may
+    # not even use -- and the node would then serve its own stale copy of the list, which is what
+    # asking was meant to replace.
+    def _boom(agent_name=None, **kw):
+        raise RuntimeError("could not reach the node")
+
+    result = _menu(monkeypatch, _boom)
+    ids = {t["id"] for t in result["tools"]}
+    assert "memory" in ids and "web" in ids and "decide" in ids
+    assert not any(i.startswith("decide:") for i in ids)
+    assert "decision rules not listed" in capsys.readouterr().out, "a missing group is never silent"
+
+
+def test_the_llm_half_of_the_menu_is_unaffected_by_the_rules(monkeypatch):
+    result = _menu(monkeypatch, _rules_stub({"id": "r", "title": "T"}))
+    assert "profiles" in result["llm"] and "models" in result["llm"]
+    assert result["spec"] == "aimeat.crew-menu/1"
+
+
 @pytest.mark.parametrize("capability", ci._CAPABILITIES)
 def test_every_declared_capability_is_actually_handled(capability, monkeypatch):
     """The list in the module and the branches in `handle` must not drift apart."""

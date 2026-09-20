@@ -270,7 +270,7 @@ _VERIFY_URL_RE = re.compile(r"(https?://\S*(?:verif|activate|device|connect|auth
 # aimeat.io 2026-08-01 — see the aimeat-crewai note in pyproject.toml). Bumped 2026-08-22 from 2.0.0,
 # which sat BELOW that documented floor: every agent crew-forge registered went through a connector
 # that could not carry provenance.
-AIMEAT_CONNECTOR = "aimeat@3.17.0"  # bumped 2026-09-18 to npm latest by `crewaimeat connector --bump-pin`.
+AIMEAT_CONNECTOR = "aimeat@3.18.0"  # bumped 2026-09-20 to npm latest by `crewaimeat connector --bump-pin`.
 #   3.10.0 carries `vars` and `target` through the connector's workflow tool defs. Below it a
 #   workflow that takes input can only be run on its defaults, which makes a tool a constant — the
 #   whole point of a recipe is the argument. 3.9.0 remains the floor for the Crew tab: it is where
