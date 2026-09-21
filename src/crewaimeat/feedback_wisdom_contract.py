@@ -28,6 +28,7 @@ import json
 import os
 import re
 
+from crewaimeat import local_marks
 from crewaimeat.aimeat_crew import _aimeat_call, member_workspaces
 
 AGENT = "feedback-wisdom"
@@ -457,6 +458,17 @@ def mirror_chain(org: str, env: dict, stats: dict, advisories: list[dict], targe
 
 # ── the one run (used by the idle_hook AND the interactive crew tool) ─────────
 _LAST_SIG: dict = {"v": None}  # signature of the last snapshots fully processed (clean pass)
+# The same signature ON DISK. Under the spawner every run is a fresh process, so the in-memory one
+# above was always empty: every wake re-derived and rewrote the advisories, which also overwrote
+# the analyst's polished wording with the rules' raw text an hour after it was paid for.
+_SIG_MARK = "feedback-wisdom-stats"
+
+
+def stats_signature(snapshots: list | None = None, max_orgs: int = 10) -> str:
+    """A stable hash of every produced stats snapshot: it changes exactly when the desk publishes
+    something new, which is the only time there is anything to advise on."""
+    snaps = discover_stats()[:max_orgs] if snapshots is None else snapshots[:max_orgs]
+    return hashlib.sha1(json.dumps([(o, s) for o, _e, s in snaps], sort_keys=True, default=str).encode()).hexdigest()
 
 
 def process_feedback_stats(max_orgs: int = 10) -> dict:
@@ -468,8 +480,8 @@ def process_feedback_stats(max_orgs: int = 10) -> dict:
     reads, no outbox reads/writes, no workspace mirror). So an idle poll costs ONE memory_list and stops.
     The signature only "settles" on a clean pass (no outbox failure), so a transient write retries."""
     snapshots = discover_stats()[:max_orgs]
-    sig = hashlib.sha1(json.dumps([(o, s) for o, _e, s in snapshots], sort_keys=True, default=str).encode()).hexdigest()
-    if sig == _LAST_SIG["v"]:
+    sig = stats_signature(snapshots)
+    if sig == _LAST_SIG["v"] or local_marks.last_local_run(_SIG_MARK, sig) is not None:
         return {
             "orgs": len(snapshots),
             "advisories_written": 0,
@@ -497,6 +509,7 @@ def process_feedback_stats(max_orgs: int = 10) -> dict:
         per_org.append({"org": org, "window": window, "advisories": len(advs)})
     if failed == 0:
         _LAST_SIG["v"] = sig  # settle only on a clean pass; a transient outbox failure retries next cycle
+        local_marks.mark_local_run(_SIG_MARK, sig)
     return {
         "orgs": len(snapshots),
         "advisories_written": written,

@@ -4,6 +4,24 @@ Notable changes to crewaimeat. Format loosely follows [Keep a Changelog](https:/
 Dates are the working dates. A change reaches a running fleet only on its next restart, because the
 daemons import the modules at start. `git log` has the measurement behind each entry.
 
+## [Unreleased] — 2026-09-21 — feedback-wisdom pays the model only for new statistics
+
+### Changed
+- **`CrewSpec.on_task` may answer `None`**, meaning "this one needs the model": the crew then runs as it
+  would with no handler. Any string is still the deterministic deliverable. This is how a crew pays for
+  the model only when there is something for it to do.
+- **feedback-wisdom asks the model only for new statistics.** Its handler answers in code when there
+  are no statistics or when the current ones were already written up, and hands over to the analyst
+  once per new statistics signature. Measured 2026-09-21: the schedule woke it every hour, every wake
+  paid DeepSeek for a full crew (~$0.20/day on the ledger), and the tool's answer each time was
+  `NO STATS` — the Feedback Desk has not published any statistics yet. Its schedule is now daily at
+  09:00 Europe/Helsinki (was hourly), changed on the node.
+
+### Fixed
+- **The feedback-statistics signature persists on disk** (`local_marks`), not only in process memory.
+  Under the spawner every run is a fresh process, so the in-memory check never saw "unchanged": every
+  wake re-derived the advisories and overwrote the analyst's polished wording with the rules' raw text.
+
 ## [Unreleased] — 2026-09-20 — dependency refresh, minus the AWS SDK
 
 ### Changed

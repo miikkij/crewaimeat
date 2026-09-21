@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 
 from crewaimeat import feedback_wisdom_contract as fw
+from crewaimeat import local_marks
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, run_crew
 from crewaimeat.contract_adopt import build_adopt_domain, ensure_routed_workspaces, is_adopt_task, merge_targets
 
@@ -266,6 +267,36 @@ def build_domain(ctx: BuildContext):
     return ([analyst], [task])
 
 
+# The analyst polishes the wording of advisories derived from ONE set of statistics, once. The
+# desk publishes new statistics about once a day; the schedule used to wake this agent every hour and
+# every wake paid DeepSeek for a full crew (~$0.20 a day, measured 2026-09-21 on the ledger) to
+# re-polish advisories that had not changed.
+_POLISH_MARK = "feedback-wisdom-polish"
+
+
+def handle_task(task: dict) -> str | None:
+    """EXECUTE: the model only when there is something new. None = run the analyst crew.
+
+    No statistics, or statistics whose advisories were already polished: answer in code. New
+    statistics: record the signature and hand over to the analyst. The mark is written BEFORE the
+    crew runs, so a crew that fails leaves the rules' own advisories published (correct, just plainer)
+    and is not re-paid for on every wake; the next new statistics get a fresh attempt."""
+    if is_adopt_task(task):
+        return None  # "Adopt contract" is the domain's own path
+    snapshots = fw.discover_stats()
+    if not snapshots:
+        return "No feedback statistics have been published yet — nothing to advise on, no model asked."
+    sig = fw.stats_signature(snapshots)
+    if local_marks.last_local_run(_POLISH_MARK, sig) is not None:
+        res = fw.process_feedback_stats()
+        return (
+            f"No new feedback statistics since the advisories were last written (signature {sig[:10]}) — "
+            f"nothing for the model to do. Deterministic pass: {res}"
+        )
+    local_marks.mark_local_run(_POLISH_MARK, sig)
+    return None
+
+
 def run() -> None:
     # A POLL, not a record subscription: this agent's trigger is the memory key feedback.stats.<org>.latest
     # (the desk writes MEMORY, not a workspace record) — there is nothing to subscribe to with
@@ -285,6 +316,7 @@ def run() -> None:
             build_domain=build_domain,
             readme_md=README,
             temperature=0.3,
+            on_task=handle_task,
             idle_hook=_poll,
             idle_hook_seconds=1800,
             tags=CAPABILITY_TAGS,

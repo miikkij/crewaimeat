@@ -203,7 +203,8 @@ class CrewSpec:
     #   (promote the FREE nvidia tier ahead of paid qwen). None -> the EMBEDDER_BIAS env default ("privacy").
     owner: str | None = None  # AIMEAT owner; set only if the agent name is ambiguous
     max_idle_auth_failures: int = 10  # idle cycles with a rejected token before exiting for re-auth
-    on_task: Any = None  # DETERMINISTIC task handler: (task) -> str. When set, EXECUTE calls THIS
+    on_task: Any = None  # DETERMINISTIC task handler: (task) -> str | None. When set, EXECUTE calls THIS
+    #   (a None answer = "this one needs the model": the crew then runs as if no handler were set)
     #   instead of kicking off the domain crew, and the model is never asked anything. For a crew whose
     #   build_domain is one Agent wrapping one tool call, that Agent's only real job is parsing arguments
     #   out of a sentence — the expensive way to compute a date (see CLAUDE.md, "THE MODEL WRITES AND
@@ -2689,13 +2690,17 @@ def run_crew(spec: CrewSpec) -> None:
         # cascade, storage = per-instance scoped path). Fails loud if no embedder is reachable.
         if spec.memory:
             crew_kwargs["memory"] = _build_crew_memory(spec, task)
-        if spec.on_task is not None:
-            # DETERMINISTIC EXECUTE. Everything above still ran — the domain was built, the directives
-            # applied, and both callback chains wired — because those chains ARE the deliverable
-            # semantics and this path must go through them, not around them. What is skipped is the
-            # kickoff, i.e. the only part that costs tokens. `_make_complete_cb` ignores its argument
-            # and `_make_publish_cb` takes `.raw` or `str()`, so a plain string is what they want.
-            result = str(spec.on_task(task) or "")
+        # DETERMINISTIC EXECUTE. Everything above still ran — the domain was built, the directives
+        # applied, and both callback chains wired — because those chains ARE the deliverable semantics
+        # and this path must go through them, not around them. What is skipped is the kickoff, i.e. the
+        # only part that costs tokens. `_make_complete_cb` ignores its argument and `_make_publish_cb`
+        # takes `.raw` or `str()`, so a plain string is what they want.
+        # A None answer means "this one needs the model": nothing deterministic to say, so the crew
+        # below runs exactly as it would with no handler. That is how a crew pays for the model only
+        # when there is something for it to do (feedback-wisdom: only for new statistics).
+        answer = spec.on_task(task) if spec.on_task is not None else None
+        if answer is not None:
+            result = str(answer)
             print(
                 f"[{spec.agent_name}] EXECUTE ran deterministically ({len(result)} chars, NO model call)",
                 file=sys.stderr,
