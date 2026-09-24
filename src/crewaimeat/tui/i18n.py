@@ -11,6 +11,10 @@ import os
 LANGS = ("en", "fi")
 
 STRINGS: dict[str, dict[str, str]] = {
+    "intro.hint": {"en": "Enter / Esc: skip    q: quit", "fi": "Enter / Esc: ohita    q: lopeta"},
+    "startup.loading": {"en": "Loading fleet...  q: quit", "fi": "Ladataan agentteja...  q: lopeta"},
+    "d.loading": {"en": "Loading details...", "fi": "Ladataan lisätietoja..."},
+    "d.failed": {"en": "Details unavailable: {error}", "fi": "Lisätietojen lataus epäonnistui: {error}"},
     # status bar + versions
     "sb.watchdogs": {"en": "watchdogs", "fi": "vahdit"},
     "sb.locks": {"en": "locks", "fi": "lukot"},

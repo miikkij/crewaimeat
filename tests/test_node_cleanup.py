@@ -128,6 +128,13 @@ def test_listing_alone_changes_nothing(tmp_path, monkeypatch):
 
 # ── filtering + reporting ───────────────────────────────────────────────────────────────────────
 def test_older_than_keeps_the_recently_seen(tmp_path, monkeypatch):
+    class FixedDateTime(node_cleanup.datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 8, 23, tzinfo=tz)
+
+    # The fixture's "fresh" agent must not grow stale as the calendar advances.
+    monkeypatch.setattr(node_cleanup.datetime, "datetime", FixedDateTime)
     root = _repo(tmp_path, crews=["mine"], served=["mine"])
     _roster(
         monkeypatch,

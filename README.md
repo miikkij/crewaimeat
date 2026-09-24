@@ -586,7 +586,9 @@ What you see:
 - **Agent table** — every crew with a color-coded status: `running` · `down` · `orphan` (no watchdog) · `DUPLICATE` · `zombie` (running, no crew file) · **`stale-heartbeat`** (locally up but the node hasn't heard from it — the "connector up, daemon not polling" case) · **`parked`** (the spawner holds it and starts a worker on the next wake: the normal resting state of a spawn-mode agent) · `running N` (N spawn workers) · `attached (no runtime)` (on the tunnel, but nothing on this machine would pick up its work) · `down (stale lock)`. A host-threaded agent reads `running` with `host` in the wd/dae column.
 - **Detail tabs** for the selected agent — **Overview** (status + the crew's README), **Test** (fire a real task at the running agent and watch its deliverable), **Config** (LLM profile + provider→model chain + any pinned override + offers, contract schemas, capabilities, and the workflows the agent is a step in), **Logs** (watchdog log tail). Switch with `o` / `t` / `c` / `l`.
 
-Refresh is two-tier and off the UI thread: local state (~2 s, no network) and a cached node poll (~13 s, one read-only `agents_list`) — never a tight-loop AIMEAT call. `g` forces a node refresh.
+Startup shows a short ASCII **AIMEAT / AGENCY** reveal. Enter, Esc or Space skips it; `q` quits even during the intro or loading. Use `uv run crewaimeat-tui --no-intro` to open the monitor directly.
+
+Refresh is two-tier and off the UI thread: local state (~2 s, no network) and a cached node poll (~13 s, one read-only `agents_list`). Local state appears without waiting for the node. Agent details (including the owner's model choice on the node) and version checks also load in the background, so navigation and Quit stay responsive. Repeated refreshes share the pending read instead of starting more calls. `g` requests a node refresh.
 
 Actions (each behind a y/n confirm, run off the UI thread):
 

@@ -44,8 +44,9 @@ def _snap():
 
 def test_app_renders_injected_snapshot():
     async def go():
-        app = FleetApp(auto_node=False, snapshot_fn=lambda ni: _snap(), node_index_fn=lambda c: {})
+        app = FleetApp(show_intro=False, auto_node=False, snapshot_fn=lambda ni: _snap(), node_index_fn=lambda c: {})
         async with app.run_test() as pilot:
+            await app.workers.wait_for_complete()
             await pilot.pause()
             table = app.query_one("#agents", DataTable)
             assert table.row_count == 2
@@ -55,6 +56,7 @@ def test_app_renders_injected_snapshot():
             # the highlighted (first) row drives the Overview pane
             assert "news-fetcher" in str(app.query_one("#ov", Static).render())
             # Config pane shows the llm chain
+            await app.workers.wait_for_complete()
             assert "llm profile" in str(app.query_one("#cfg", Static).render())
             # statusbar reflects the snapshot
             status = app.query_one("#statusbar", Static)
@@ -67,7 +69,7 @@ def test_test_tab_exists_after_overview():
     """The Test tab is present and ordered right after Overview."""
 
     async def go():
-        app = FleetApp(auto_node=False, snapshot_fn=lambda ni: _snap(), node_index_fn=lambda c: {})
+        app = FleetApp(show_intro=False, auto_node=False, snapshot_fn=lambda ni: _snap(), node_index_fn=lambda c: {})
         async with app.run_test() as pilot:
             await pilot.pause()
             ids = [p.id for p in app.query(TabPane)]
@@ -97,7 +99,7 @@ def test_live_test_run_shows_result(monkeypatch):
     )
 
     async def go():
-        app = FleetApp(auto_node=False, snapshot_fn=lambda ni: _snap(), node_index_fn=lambda c: {})
+        app = FleetApp(show_intro=False, auto_node=False, snapshot_fn=lambda ni: _snap(), node_index_fn=lambda c: {})
         async with app.run_test() as pilot:
             await pilot.pause()
             await pilot.press("t")  # switch to Test tab + focus input
@@ -117,7 +119,7 @@ def test_test_run_guards_non_running_agent():
     """A test against a non-running agent is refused (no runner call)."""
 
     async def go():
-        app = FleetApp(auto_node=False, snapshot_fn=lambda ni: _snap(), node_index_fn=lambda c: {})
+        app = FleetApp(show_intro=False, auto_node=False, snapshot_fn=lambda ni: _snap(), node_index_fn=lambda c: {})
         async with app.run_test() as pilot:
             await pilot.pause()
             app.query_one("#agents", DataTable).move_cursor(row=1)  # image-maker = stale-heartbeat
@@ -152,7 +154,7 @@ def test_model_picker_opens_and_cancels(monkeypatch):
     monkeypatch.setattr(agent_meta, "current_override", lambda a: None)
 
     async def go():
-        app = FleetApp(auto_node=False, snapshot_fn=lambda ni: _snap(), node_index_fn=lambda c: {})
+        app = FleetApp(show_intro=False, auto_node=False, snapshot_fn=lambda ni: _snap(), node_index_fn=lambda c: {})
         async with app.run_test() as pilot:
             await pilot.pause()
             await pilot.press("m")
@@ -184,7 +186,7 @@ def test_config_pane_shows_offers_and_contracts():
             )
         ]
         snap = FleetSnapshot(serve_pid=1, serve_port=2, n_watchdogs=1, n_connectors=1, n_locks=0, zombies=[], rows=rows)
-        app = FleetApp(auto_node=False, snapshot_fn=lambda ni: snap, node_index_fn=lambda c: {})
+        app = FleetApp(show_intro=False, auto_node=False, snapshot_fn=lambda ni: snap, node_index_fn=lambda c: {})
         async with app.run_test() as pilot:
             await pilot.pause()
             cfg = str(app.query_one("#cfg", Static).render())
@@ -199,7 +201,7 @@ def test_restart_key_opens_confirm_modal_and_cancels():
     from crewaimeat.tui.app import ConfirmScreen
 
     async def go():
-        app = FleetApp(auto_node=False, snapshot_fn=lambda ni: _snap(), node_index_fn=lambda c: {})
+        app = FleetApp(show_intro=False, auto_node=False, snapshot_fn=lambda ni: _snap(), node_index_fn=lambda c: {})
         async with app.run_test() as pilot:
             await pilot.pause()
             await pilot.press("r")  # selected row 0 = news-fetcher (has a crew file)
@@ -218,7 +220,7 @@ def test_a_poll_with_the_same_roster_never_clears_the_table():
     picking an agent. Same roster -> update cells in place, no clear, no cursor move."""
 
     async def go():
-        app = FleetApp(auto_node=False, snapshot_fn=lambda ni: _snap(), node_index_fn=lambda c: {})
+        app = FleetApp(show_intro=False, auto_node=False, snapshot_fn=lambda ni: _snap(), node_index_fn=lambda c: {})
         async with app.run_test() as pilot:
             table = app.query_one("#agents", DataTable)
             await pilot.pause()
@@ -244,7 +246,7 @@ def test_a_roster_change_rebuilds_and_keeps_the_SELECTED_AGENT():
     number points at a different agent the moment the roster shrinks."""
 
     async def go():
-        app = FleetApp(auto_node=False, snapshot_fn=lambda ni: _snap(), node_index_fn=lambda c: {})
+        app = FleetApp(show_intro=False, auto_node=False, snapshot_fn=lambda ni: _snap(), node_index_fn=lambda c: {})
         async with app.run_test() as pilot:
             table = app.query_one("#agents", DataTable)
             await pilot.pause()

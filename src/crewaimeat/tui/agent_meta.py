@@ -1,4 +1,6 @@
-"""Per-agent config enrichment for the TUI detail pane — ALL local, no network.
+"""Per-agent config enrichment for the TUI detail pane, read in a background worker.
+
+The model chain also resolves the owner's cached node choice and may do network I/O.
 
 Two questions per agent, answered from the repo's own config:
   - which LLM profile + the ORDERED provider→model fallback chain (xai / openrouter / ollama)?
