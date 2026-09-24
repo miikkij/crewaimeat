@@ -23,6 +23,8 @@ from textual.widgets.option_list import Option
 
 from crewaimeat.tui import actions, agent_meta, i18n, render, test_run, versions
 from crewaimeat.tui import fleet_state as fs
+from crewaimeat.tui.background import read_in_background
+from crewaimeat.tui.intro import IntroScreen
 
 
 def _default_node_index(caller: str) -> dict:
@@ -152,12 +154,17 @@ class FleetApp(App):
         snapshot_fn=None,
         auto_node: bool = True,
         lang: str | None = None,
+        show_intro: bool = True,
     ) -> None:
         super().__init__()
         self.caller_agent = caller_agent
         self._node_index_fn = node_index_fn or _default_node_index
         self._snapshot_fn = snapshot_fn or _default_snapshot
         self._auto_node = auto_node
+        self._show_intro = show_intro
+        self._reading: set[str] = set()
+        self._detail_key = None
+        self._detail_data = None
         self._node_index: dict = {}
         self._snap = None
         self._test_busy = False
@@ -170,7 +177,7 @@ class FleetApp(App):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield Static("…", id="statusbar")
+        yield Static(self._t("startup.loading"), id="statusbar")
         yield Static(self._t("ver.loading"), id="versions")
         with Horizontal():
             yield DataTable(id="agents", cursor_type="row", zebra_stripes=True)
@@ -188,40 +195,77 @@ class FleetApp(App):
 
     def on_mount(self) -> None:
         self._col_keys = self.query_one("#agents", DataTable).add_columns(*render.columns(self.lang))
+        if self._show_intro:
+            self.push_screen(IntroScreen(self.lang), lambda _: self._start_loading())
+        else:
+            self._start_loading()
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if isinstance(self.screen, IntroScreen):
+            return action == "quit"
+        return True
+
+    def _start_loading(self) -> None:
+        self.query_one("#agents", DataTable).focus()
+        self.refresh_local()  # show local state without waiting for the node
         if self._auto_node:
             self.refresh_node()  # initial node fetch (worker)
             self.refresh_versions()  # version check (worker; cached, infrequent)
             self.set_interval(2.0, self.refresh_local)
             self.set_interval(13.0, self.refresh_node)
-        else:
-            # Deterministic, synchronous initial render — used by tests (no threads, no network).
-            self._apply(self._snapshot_fn(self._node_index))
 
     # ── refresh tiers (off the UI thread) ────────────────────────────────────
-    @work(thread=True, exclusive=True, group="local")
-    def refresh_local(self) -> None:
-        snap = self._snapshot_fn(self._node_index)
-        self.call_from_thread(self._apply, snap)
+    @work(group="local")
+    async def refresh_local(self) -> None:
+        if "local" in self._reading:
+            return
+        self._reading.add("local")
+        try:
+            index = self._node_index
+            snap = await read_in_background(lambda: self._snapshot_fn(index))
+            self._apply(snap)
+        except Exception as exc:  # noqa: BLE001 - a failed probe must leave Quit available
+            self.query_one("#statusbar", Static).update(f"Fleet refresh failed: {exc}")
+        finally:
+            self._reading.discard("local")
+        if index is not self._node_index:
+            self.refresh_local()  # a node read finished while this local snapshot was being built
 
-    @work(thread=True, exclusive=True, group="node")
-    def refresh_node(self) -> None:
-        self._node_index = self._node_index_fn(self.caller_agent)
-        snap = self._snapshot_fn(self._node_index)
-        self.call_from_thread(self._apply, snap)
+    @work(group="node")
+    async def refresh_node(self) -> None:
+        if "node" in self._reading:
+            return
+        self._reading.add("node")
+        try:
+            self._node_index = await read_in_background(lambda: self._node_index_fn(self.caller_agent))
+            self.refresh_local()
+        except Exception as exc:  # noqa: BLE001
+            self.notify(f"Node refresh failed: {exc}", severity="warning")
+        finally:
+            self._reading.discard("node")
 
     def action_refresh_node(self) -> None:
         self.refresh_node()
         self.refresh_versions()
 
-    @work(thread=True, exclusive=True, group="versions")
-    def refresh_versions(self) -> None:
-        vr = versions.version_report()
-        self.call_from_thread(lambda: self.query_one("#versions", Static).update(render.versions_line(vr, self.lang)))
+    @work(group="versions")
+    async def refresh_versions(self) -> None:
+        if "versions" in self._reading:
+            return
+        self._reading.add("versions")
+        try:
+            vr = await read_in_background(versions.version_report)
+            self.query_one("#versions", Static).update(render.versions_line(vr, self.lang))
+        except Exception as exc:  # noqa: BLE001
+            self.query_one("#versions", Static).update(f"Version check failed: {exc}")
+        finally:
+            self._reading.discard("versions")
 
     # ── language ──────────────────────────────────────────────────────────────
     def action_toggle_lang(self) -> None:
         self.lang = i18n.next_lang(self.lang)
         table = self.query_one("#agents", DataTable)
+        selected = self._cursor_agent(table)
         table.clear(columns=True)
         self._col_keys = table.add_columns(*render.columns(self.lang))
         tc = self.query_one("#detail", TabbedContent)
@@ -241,6 +285,8 @@ class FleetApp(App):
             pass
         if self._snap is not None:
             self._apply(self._snap)  # re-render status bar + table + detail in the new language
+            if selected in self._row_order:
+                table.move_cursor(row=self._row_order.index(selected))
 
     # ── navigation (vim keys; arrows work natively via DataTable) ─────────────
     def action_cursor_down(self) -> None:
@@ -312,16 +358,27 @@ class FleetApp(App):
         self.query_one("#detail", TabbedContent).active = "tab-logs"
 
     # ── model override (pick a model for the selected crew, then restart it) ──
-    def action_pick_model(self) -> None:
+    @work(group="model-picker")
+    async def action_pick_model(self) -> None:
         row = self._selected_row()
         if not row or not row.crew_file:
             self.notify(self._t("warn.select").format(action="model"), severity="warning")
             return
-        catalogue = agent_meta.model_catalogue()
+        if "model-picker" in self._reading:
+            return
+        self._reading.add("model-picker")
+        try:
+            catalogue, current = await read_in_background(
+                lambda: (agent_meta.model_catalogue(), agent_meta.current_override(row.agent))
+            )
+        finally:
+            self._reading.discard("model-picker")
+        selected = self._selected_row()
+        if not selected or selected.agent != row.agent:
+            return
         if not catalogue:
             self.notify(self._t("warn.no_models"), severity="warning")
             return
-        current = agent_meta.current_override(row.agent)
         agent = row.agent
 
         def _cb(choice: dict | None) -> None:
@@ -440,7 +497,7 @@ class FleetApp(App):
         agents = [r.agent for r in snap.rows]
         cols = getattr(self, "_col_keys", None)
 
-        if cols and agents == getattr(self, "_row_order", None):
+        if cols and agents == getattr(self, "_row_order", None) and table.row_count == len(agents):
             for r in snap.rows:  # same rows, same order: only the values can have moved
                 for col, value in zip(cols, self._cells_for(r), strict=False):
                     table.update_cell(r.agent, col, value, update_width=False)
@@ -472,6 +529,8 @@ class FleetApp(App):
         cfg = self.query_one("#cfg", Static)
         logs = self.query_one("#logs", Static)
         if not self._snap or not self._snap.rows:
+            self._detail_key = None
+            self._detail_data = None
             ov.update(self._t("d.none"))
             cfg.update("")
             logs.update("")
@@ -479,46 +538,73 @@ class FleetApp(App):
         table = self.query_one("#agents", DataTable)
         idx = max(0, min(table.cursor_row or 0, len(self._snap.rows) - 1))
         row = self._snap.rows[idx]
-        readme = None
-        profile, chain, n_off, n_wf = "?", [], 0, 0
-        override = offers = contracts = tags = caps = workflows = None
-        try:  # local enrichment (README + llm chain + offers + identity); defensive — never break panes
-            readme = agent_meta.read_readme(row.agent)
-            profile, chain = agent_meta.model_chain(row.agent)
-            n_off, n_wf = agent_meta.offer_summary(row.agent)
-            override = agent_meta.current_override(row.agent)
-            offers = agent_meta.offers_detail(row.agent)
-            contracts = agent_meta.contracts_for(row.agent)
-            tags, caps = agent_meta.identity(row.agent)
-            workflows = agent_meta.workflows_for(row.agent)
-        except Exception:  # noqa: BLE001
-            pass
-        ov.update("\n".join(render.overview_lines(row, readme, self.lang)))
-        cfg.update(
-            "\n".join(
-                render.meta_lines(
-                    profile,
-                    chain,
-                    n_off,
-                    n_wf,
-                    self.lang,
-                    override=override,
-                    offers=offers,
-                    contracts=contracts,
-                    tags=tags,
-                    capabilities=caps,
-                    workflows=workflows,
-                )
-            )
-        )
-        logs.update("\n".join(self._log_tail(row.agent, n=30)))
+        key = (row.agent, self.lang)
+        if key != self._detail_key:
+            self._detail_key = key
+            self._detail_data = None
+        data = self._detail_data
+        ov.update("\n".join(render.overview_lines(row, data["readme"] if data else None, self.lang)))
+        cfg.update(data["config"] if data else self._t("d.loading"))
+        logs.update(data["logs"] if data else self._t("d.loading"))
         # Test pane: per-agent "how to task me" guidance — but never clobber a running test or a
         # finished result that still belongs to the highlighted agent.
         if not self._test_busy and not (self._test_result_shown and self._test_result_agent == row.agent):
             self._test_result_shown = False
-            self.query_one("#test-out", Static).update(self._test_guidance(row.agent))
+            self.query_one("#test-out", Static).update(data["guidance"] if data else self._t("test.idle"))
+        self._refresh_detail(key)
 
-    def _test_guidance(self, agent: str) -> str:
+    @work(group="detail")
+    async def _refresh_detail(self, key: tuple[str, str]) -> None:
+        if "detail" in self._reading or key != self._detail_key:
+            return
+        self._reading.add("detail")
+        try:
+            data = await read_in_background(lambda: self._collect_detail(*key))
+        except Exception as exc:  # noqa: BLE001 - show the error without blocking navigation
+            data = dict(readme=None, config=i18n.t("d.failed", key[1]).format(error=exc), logs="", guidance="")
+        finally:
+            self._reading.discard("detail")
+        if key != self._detail_key:
+            if self._detail_key is not None:
+                self._refresh_detail(self._detail_key)
+            return  # a slow result must never replace the newly selected agent's details
+        self._detail_data = data
+        row = self._selected_row()
+        if row is None:
+            return
+        self.query_one("#ov", Static).update("\n".join(render.overview_lines(row, data["readme"], self.lang)))
+        self.query_one("#cfg", Static).update(data["config"])
+        self.query_one("#logs", Static).update(data["logs"])
+        if not self._test_busy and not (self._test_result_shown and self._test_result_agent == row.agent):
+            self.query_one("#test-out", Static).update(data["guidance"])
+
+    def _collect_detail(self, agent: str, lang: str) -> dict:
+        """All imports, filesystem reads and model-choice network reads stay off the UI thread."""
+        readme = agent_meta.read_readme(agent)
+        profile, chain = agent_meta.model_chain(agent)
+        n_off, n_wf = agent_meta.offer_summary(agent)
+        tags, caps = agent_meta.identity(agent)
+        config = render.meta_lines(
+            profile,
+            chain,
+            n_off,
+            n_wf,
+            lang,
+            override=agent_meta.current_override(agent),
+            offers=agent_meta.offers_detail(agent),
+            contracts=agent_meta.contracts_for(agent),
+            tags=tags,
+            capabilities=caps,
+            workflows=agent_meta.workflows_for(agent),
+        )
+        return dict(
+            readme=readme,
+            config="\n".join(config),
+            logs="\n".join(self._log_tail(agent, n=30, lang=lang)),
+            guidance=self._test_guidance(agent, lang=lang),
+        )
+
+    def _test_guidance(self, agent: str, *, lang: str | None = None) -> str:
         """Idle Test-pane text: the agent's own 'How to task me' hint (so a contract agent that wants
         a request record, not a free-text brief, says so) plus the generic instructions."""
         try:
@@ -526,23 +612,30 @@ class FleetApp(App):
         except Exception:  # noqa: BLE001
             how = None
         head = f"[b]{agent}[/] — {how}\n\n" if how else ""
-        return head + self._t("test.idle")
+        return head + i18n.t("test.idle", lang or self.lang)
 
-    def _log_tail(self, agent: str, n: int = 12) -> list[str]:
+    def _log_tail(self, agent: str, n: int = 12, *, lang: str | None = None) -> list[str]:
         """Last n lines of the agent's watchdog log, if present (defensive — no log is normal)."""
         candidates = [f"{agent}.watchdog.log", f"{agent.replace('-', '_')}_crew.watchdog.log"]
         for name in candidates:
             p = Path("logs") / name
             try:
                 if p.is_file():
-                    return p.read_text(encoding="utf-8", errors="replace").splitlines()[-n:] or [self._t("log.empty")]
+                    return p.read_text(encoding="utf-8", errors="replace").splitlines()[-n:] or [
+                        i18n.t("log.empty", lang or self.lang)
+                    ]
             except OSError:
                 pass
-        return [self._t("log.none")]
+        return [i18n.t("log.none", lang or self.lang)]
 
 
 def main() -> None:
-    FleetApp().run()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="AIMEAT fleet monitor")
+    parser.add_argument("--no-intro", action="store_true", help="Skip the opening animation")
+    args = parser.parse_args()
+    FleetApp(show_intro=not args.no_intro).run()
 
 
 if __name__ == "__main__":
