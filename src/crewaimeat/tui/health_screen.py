@@ -58,6 +58,13 @@ class HealthScreen(ModalScreen[None]):
     #health-box { width: 92%; height: 90%; background: #09141d; border: solid #ad233b; padding: 1 2; }
     #health-top { height: 3; }
     #health-title { width: 1fr; text-style: bold; color: #ffaaaa; }
+    /* Avoid tall button borders: their lower-block glyph can shift console rendering. */
+    #health-box Button {
+        border: none !important; height: 3; padding: 0 2;
+        content-align: center middle; background: #203440; color: #dce8f0;
+    }
+    #health-box Button:hover { background: #304d5e; }
+    #health-box Button:focus { text-style: bold underline; background: #304d5e; }
     #health-close { width: auto; min-width: 8; }
     #health-scroll { height: 1fr; }
     #health-content { height: auto; }
