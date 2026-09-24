@@ -18,17 +18,18 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, Footer, Header, Input, OptionList, Static, TabbedContent, TabPane
+from textual.widgets import Button, DataTable, Footer, Input, OptionList, Static, TabbedContent, TabPane
 from textual.widgets.option_list import Option
 
-from crewaimeat.tui import actions, agent_meta, i18n, render, test_run, versions
+from crewaimeat.tui import actions, agent_meta, health, i18n, render, test_run, versions
 from crewaimeat.tui import fleet_state as fs
 from crewaimeat.tui.background import read_in_background
+from crewaimeat.tui.health_screen import FleetHeader, HealthBeacon, HealthScreen
 from crewaimeat.tui.intro import IntroScreen
 
 
 def _default_node_index(caller: str) -> dict:
-    return fs.collect_node_index(caller)
+    return fs.collect_node_index(caller, strict=True)
 
 
 def _default_snapshot(node_index: dict):
@@ -125,6 +126,7 @@ class FleetApp(App):
     """
     BINDINGS = [
         ("q", "quit", "Quit"),
+        ("h", "show_health", "Status"),
         ("g", "refresh_node", "Refresh"),
         ("f", "toggle_lang", "FI/EN"),
         ("j", "cursor_down", "Down"),
@@ -165,6 +167,9 @@ class FleetApp(App):
         self._reading: set[str] = set()
         self._detail_key = None
         self._detail_data = None
+        self._health_errors: dict[str, str] = {}
+        self._health_pending = {"local", "node", "versions"} if auto_node else {"local"}
+        self._version_report = None
         self._node_index: dict = {}
         self._snap = None
         self._test_busy = False
@@ -176,7 +181,7 @@ class FleetApp(App):
         return i18n.t(key, self.lang)
 
     def compose(self) -> ComposeResult:
-        yield Header()
+        yield FleetHeader()
         yield Static(self._t("startup.loading"), id="statusbar")
         yield Static(self._t("ver.loading"), id="versions")
         with Horizontal():
@@ -203,10 +208,13 @@ class FleetApp(App):
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         if isinstance(self.screen, IntroScreen):
             return action == "quit"
+        if isinstance(self.screen, HealthScreen):
+            return action in {"quit", "show_health", "refresh_node", "toggle_lang"}
         return True
 
     def _start_loading(self) -> None:
         self.query_one("#agents", DataTable).focus()
+        self.update_health()
         self.refresh_local()  # show local state without waiting for the node
         if self._auto_node:
             self.refresh_node()  # initial node fetch (worker)
@@ -223,11 +231,15 @@ class FleetApp(App):
         try:
             index = self._node_index
             snap = await read_in_background(lambda: self._snapshot_fn(index))
+            self._health_errors.pop("local", None)
             self._apply(snap)
         except Exception as exc:  # noqa: BLE001 - a failed probe must leave Quit available
+            self._health_errors["local"] = str(exc)
             self.query_one("#statusbar", Static).update(f"Fleet refresh failed: {exc}")
         finally:
             self._reading.discard("local")
+            self._health_pending.discard("local")
+        self.update_health()
         if index is not self._node_index:
             self.refresh_local()  # a node read finished while this local snapshot was being built
 
@@ -238,13 +250,18 @@ class FleetApp(App):
         self._reading.add("node")
         try:
             self._node_index = await read_in_background(lambda: self._node_index_fn(self.caller_agent))
+            self._health_errors.pop("node", None)
             self.refresh_local()
         except Exception as exc:  # noqa: BLE001
+            self._health_errors["node"] = str(exc)
             self.notify(f"Node refresh failed: {exc}", severity="warning")
         finally:
             self._reading.discard("node")
+            self._health_pending.discard("node")
+        self.update_health()
 
     def action_refresh_node(self) -> None:
+        self.refresh_local()
         self.refresh_node()
         self.refresh_versions()
 
@@ -255,11 +272,33 @@ class FleetApp(App):
         self._reading.add("versions")
         try:
             vr = await read_in_background(versions.version_report)
+            self._version_report = vr
+            self._health_errors.pop("versions", None)
             self.query_one("#versions", Static).update(render.versions_line(vr, self.lang))
         except Exception as exc:  # noqa: BLE001
+            self._health_errors["versions"] = str(exc)
             self.query_one("#versions", Static).update(f"Version check failed: {exc}")
         finally:
             self._reading.discard("versions")
+            self._health_pending.discard("versions")
+        self.update_health()
+
+    def update_health(self) -> None:
+        if not self.is_running:
+            return
+        items = health.findings(self._snap, self._version_report, self._health_errors)
+        self.query_one(HealthBeacon).set_status(items, self._health_pending, self.lang)
+        if isinstance(self.screen, HealthScreen) and self.screen.is_mounted:
+            self.screen.show_report(items, self._health_pending, self.lang)
+
+    def action_show_health(self) -> None:
+        if not isinstance(self.screen, HealthScreen):
+            self.push_screen(HealthScreen())
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "health-beacon":
+            event.stop()
+            self.action_show_health()
 
     # ── language ──────────────────────────────────────────────────────────────
     def action_toggle_lang(self) -> None:
@@ -287,6 +326,7 @@ class FleetApp(App):
             self._apply(self._snap)  # re-render status bar + table + detail in the new language
             if selected in self._row_order:
                 table.move_cursor(row=self._row_order.index(selected))
+        self.update_health()
 
     # ── navigation (vim keys; arrows work natively via DataTable) ─────────────
     def action_cursor_down(self) -> None:
@@ -492,6 +532,7 @@ class FleetApp(App):
         A rebuild is kept for the case that genuinely needs one — an agent appearing or leaving —
         and even then the cursor returns to the AGENT it was on, not to the row number."""
         self._snap = snap
+        self.update_health()
         self.query_one("#statusbar", Static).update(render.statusbar_text(snap, self.lang))
         table = self.query_one("#agents", DataTable)
         agents = [r.agent for r in snap.rows]
@@ -531,6 +572,7 @@ class FleetApp(App):
         if not self._snap or not self._snap.rows:
             self._detail_key = None
             self._detail_data = None
+            self._health_errors.pop("detail", None)
             ov.update(self._t("d.none"))
             cfg.update("")
             logs.update("")
@@ -542,6 +584,8 @@ class FleetApp(App):
         if key != self._detail_key:
             self._detail_key = key
             self._detail_data = None
+            self._health_errors.pop("detail", None)
+            self.update_health()
         data = self._detail_data
         ov.update("\n".join(render.overview_lines(row, data["readme"] if data else None, self.lang)))
         cfg.update(data["config"] if data else self._t("d.loading"))
@@ -558,9 +602,11 @@ class FleetApp(App):
         if "detail" in self._reading or key != self._detail_key:
             return
         self._reading.add("detail")
+        error = None
         try:
             data = await read_in_background(lambda: self._collect_detail(*key))
         except Exception as exc:  # noqa: BLE001 - show the error without blocking navigation
+            error = f"{key[0]}: {exc}"
             data = dict(readme=None, config=i18n.t("d.failed", key[1]).format(error=exc), logs="", guidance="")
         finally:
             self._reading.discard("detail")
@@ -568,6 +614,11 @@ class FleetApp(App):
             if self._detail_key is not None:
                 self._refresh_detail(self._detail_key)
             return  # a slow result must never replace the newly selected agent's details
+        if error is None:
+            self._health_errors.pop("detail", None)
+        else:
+            self._health_errors["detail"] = error
+        self.update_health()
         self._detail_data = data
         row = self._selected_row()
         if row is None:
