@@ -418,13 +418,21 @@ def collect_serve() -> dict:
         return {}
 
 
-def collect_node_index(caller_agent: str = "news-fetcher") -> dict[str, dict]:
+def collect_node_index(caller_agent: str = "news-fetcher", *, strict: bool = False) -> dict[str, dict]:
     """{agent_name: {last_seen, mode}} from one read-only aimeat_agents_list call. Empty on any
-    failure — the TUI must render local state even when the node is unreachable."""
+    failure by default. The TUI uses strict=True so its health view can distinguish a failed
+    read from a successful empty roster while still rendering local state."""
     from crewaimeat.aimeat_crew import _aimeat_call
 
     r = _aimeat_call(caller_agent, "aimeat_agents_list", {}) or {}
-    agents = r.get("agents") or (r.get("data") or {}).get("agents") or []
+    data = r.get("data") if isinstance(r, dict) else None
+    agents = r.get("agents") if isinstance(r, dict) else None
+    if agents is None and isinstance(data, dict):
+        agents = data.get("agents")
+    if not isinstance(agents, list) or r.get("ok") is False or r.get("error"):
+        if strict:
+            raise RuntimeError("Agent list could not be read. Check the connection service and caller authentication.")
+        return {}
     return {a.get("name"): {"last_seen": a.get("last_seen"), "mode": a.get("mode")} for a in agents if a.get("name")}
 
 

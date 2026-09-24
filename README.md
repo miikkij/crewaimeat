@@ -588,6 +588,8 @@ What you see:
 
 Startup shows a short ASCII **AIMEAT / AGENCY** reveal. Enter, Esc or Space skips it; `q` quits even during the intro or loading. Use `uv run crewaimeat-tui --no-intro` to open the monitor directly.
 
+The top-right **status light** pulses red when a runtime problem or a failed check needs attention. Click it or press `h` for a live status page with affected agents and recovery instructions. Updates alone show a steady amber notice; pending checks stay visibly pending. Parked spawn agents are healthy. The page uses the existing background reads, and its instructions never execute actions automatically. Press `r` to refresh and Esc to return.
+
 Refresh is two-tier and off the UI thread: local state (~2 s, no network) and a cached node poll (~13 s, one read-only `agents_list`). Local state appears without waiting for the node. Agent details (including the owner's model choice on the node) and version checks also load in the background, so navigation and Quit stay responsive. Repeated refreshes share the pending read instead of starting more calls. `g` requests a node refresh.
 
 Actions (each behind a y/n confirm, run off the UI thread):
