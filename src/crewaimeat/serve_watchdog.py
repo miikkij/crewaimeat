@@ -64,6 +64,8 @@ def run() -> None:
     if lock_fh is None:
         _say("[serve-watchdog] another supervisor already holds the lock — exiting", err=True)
         return
+    from aimeat_crewai import serve_auth_headers  # ensure_single_serve loads the package anyway
+
     from crewaimeat.wake_spin import MIN_STUCK_SECONDS, SpinSweeper
 
     _say(f"[serve-watchdog] supervising the shared serve daemon (every {INTERVAL}s)")
@@ -100,7 +102,7 @@ def run() -> None:
                 port = doc.get("port")
                 names = [a.get("agent") for a in (doc.get("agents") or []) if isinstance(a, dict) and a.get("agent")]
                 if port and names:
-                    for agent, took in sweeper.sweep(int(port), names):
+                    for agent, took in sweeper.sweep(int(port), names, headers=serve_auth_headers(doc)):
                         _say(
                             f"[serve-watchdog] cleared a wake-queue spin on {agent!r}: consumed {took} "
                             f"stale element(s) after it read hot for over {MIN_STUCK_SECONDS}s"

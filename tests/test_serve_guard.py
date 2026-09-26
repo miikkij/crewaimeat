@@ -88,11 +88,14 @@ def test_assert_serve_json_owner_rewrites_stale(monkeypatch, tmp_path):
     sj.write_text(json.dumps({"pid": 999, "port": 1, "agents": []}), encoding="utf-8")  # stale: dead 999
     monkeypatch.setattr(mc, "serve_discovery_path", lambda: sj)
     monkeypatch.setattr(mc, "_pid_alive", lambda pid: pid == 42)
-    monkeypatch.setattr(mc, "_probe_serve", lambda port, pid, timeout=2.0: pid == 42)
-    doc = {"pid": 42, "port": 1234, "agents": [{"agent": "w"}], "_reaped_duplicates": 1}
+    # serve.json names the dead loser (port 1), so the probe of the kept daemon (port 1234) can only
+    # present that daemon's secret if it is handed the kept daemon's own doc — a lookup by port finds none.
+    monkeypatch.setattr(mc, "_probe_serve", lambda port, pid, timeout=2.0, secret=None: pid == 42 and secret == "s3")
+    doc = {"pid": 42, "port": 1234, "secret": "s3", "agents": [{"agent": "w"}], "_reaped_duplicates": 1}
     assert g._assert_serve_json_owner(doc) is True
     written = json.loads(sj.read_text(encoding="utf-8"))
     assert written["pid"] == 42 and written["port"] == 1234
+    assert written["secret"] == "s3"  # the re-pointed file still lets every client in
     assert "_reaped_duplicates" not in written  # internal markers stripped from the published file
 
 

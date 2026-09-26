@@ -17,7 +17,7 @@ def daemon(monkeypatch):
     calls = {"wake": 0, "take": 0}
     touched: list[str] = []  # which agents had tasks/next called on them at all
 
-    def _code(url: str):
+    def _code(url: str, headers=None):
         agent = url.split("agent=")[1]
         if "/local/wake/next" in url:
             calls["wake"] += 1
@@ -97,7 +97,7 @@ def test_a_clean_agent_is_probed_and_left_alone(daemon):
 
 def test_a_daemon_that_does_not_answer_is_not_an_error(monkeypatch):
     """It restarts often; the sweeper must skip the pass rather than kill the supervisor."""
-    monkeypatch.setattr(wake_spin, "_code", lambda _u: None)
+    monkeypatch.setattr(wake_spin, "_code", lambda _u, _h=None: None)
     assert SpinSweeper().sweep(1234, ["postman"], now=0.0) == []
 
 
@@ -113,3 +113,21 @@ def test_a_missing_or_half_written_serve_json_is_not_an_error(tmp_path):
     half = tmp_path / "serve.json"
     half.write_text('{"port": 1, "agents": [{"age', encoding="utf-8")
     assert wake_spin.agents_of(half) == (None, [])
+
+
+def test_every_probe_and_drain_carries_the_daemon_secret(monkeypatch):
+    """A current daemon answers 401 to a request without its secret, which reads here as "not spinning"
+    for every agent: the sweeper would go quietly blind. The watchdog's header reaches every request."""
+    seen: list[dict | None] = []
+    answers = iter([200, 200, 200, 204])  # wake (first sight), wake (hot), take, take -> empty
+
+    def _code(url, headers=None):
+        seen.append(headers)
+        return next(answers)
+
+    monkeypatch.setattr(wake_spin, "_code", _code)
+    auth = {"Authorization": "Bearer s3"}
+    s = SpinSweeper()
+    s.sweep(1234, ["stuck"], now=0.0, headers=auth)
+    assert s.sweep(1234, ["stuck"], now=MIN_STUCK_SECONDS, headers=auth) == [("stuck", 1)]
+    assert seen == [auth] * 4

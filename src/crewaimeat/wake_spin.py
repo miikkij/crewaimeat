@@ -37,10 +37,11 @@ MAX_DRAIN = 50  # per agent per pass — a bound, so a genuinely busy queue cann
 _TIMEOUT = 5
 
 
-def _code(url: str) -> int | None:
-    """HTTP status, or None when the daemon does not answer at all."""
+def _code(url: str, headers: dict[str, str] | None = None) -> int | None:
+    """HTTP status, or None when the daemon does not answer at all. `headers` carries the daemon's
+    secret (serve.json schema 3); without it a current daemon answers 401 to every probe."""
     try:
-        with urllib.request.urlopen(url, timeout=_TIMEOUT) as r:  # noqa: S310 — loopback, our own daemon
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers or {}), timeout=_TIMEOUT) as r:  # noqa: S310 — loopback, our own daemon
             return r.status
     except urllib.error.HTTPError as e:
         return e.code
@@ -48,16 +49,16 @@ def _code(url: str) -> int | None:
         return None
 
 
-def is_spinning(port: int, agent: str) -> bool:
+def is_spinning(port: int, agent: str, headers: dict[str, str] | None = None) -> bool:
     """True when the agent's wake answers immediately — 200 with `wait=0` means an element is queued."""
-    return _code(f"http://127.0.0.1:{port}/local/wake/next?wait=0&agent={agent}") == 200
+    return _code(f"http://127.0.0.1:{port}/local/wake/next?wait=0&agent={agent}", headers) == 200
 
 
-def drain(port: int, agent: str, *, max_items: int = MAX_DRAIN) -> int:
+def drain(port: int, agent: str, *, max_items: int = MAX_DRAIN, headers: dict[str, str] | None = None) -> int:
     """Consume queued elements until the queue is empty (204). Returns how many were taken."""
     taken = 0
     while taken < max_items:
-        code = _code(f"http://127.0.0.1:{port}/local/tasks/next?wait=0&agent={agent}")
+        code = _code(f"http://127.0.0.1:{port}/local/tasks/next?wait=0&agent={agent}", headers)
         if code != 200:  # 204 = clean, None = daemon gone
             break
         taken += 1
@@ -82,18 +83,20 @@ class SpinSweeper:
         self.min_stuck = min_stuck
         self._since: dict[str, float] = {}
 
-    def sweep(self, port: int, agents: list[str], *, now: float | None = None) -> list[tuple[str, int]]:
+    def sweep(
+        self, port: int, agents: list[str], *, now: float | None = None, headers: dict[str, str] | None = None
+    ) -> list[tuple[str, int]]:
         """Probe every agent; drain the ones stuck long enough. Returns [(agent, items_taken)]."""
         now = time.time() if now is None else now
         cleared: list[tuple[str, int]] = []
         for agent in agents:
-            if not is_spinning(port, agent):
+            if not is_spinning(port, agent, headers):
                 self._since.pop(agent, None)  # settled on its own: forget it, so the clock restarts
                 continue
             first = self._since.setdefault(agent, now)
             if now - first < self.min_stuck:
                 continue  # RULE 1: too young to be sure it is a spin rather than a real push
-            took = drain(port, agent)
+            took = drain(port, agent, headers=headers)
             self._since.pop(agent, None)
             if took:
                 cleared.append((agent, took))

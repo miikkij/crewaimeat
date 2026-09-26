@@ -46,6 +46,18 @@ def aimeat_home() -> Path:
     return _shared()
 
 
+def serve_auth_headers(doc: dict | None) -> dict[str, str]:
+    """The header the serve daemon requires, from its serve.json: `Authorization: Bearer <secret>`.
+
+    `aimeat_crewai.serve_auth_headers` answers the same, and a crew uses that one; this copy exists for
+    the same reason `aimeat_home` above does — importing the package loads crewai, which the idle
+    spawner and the agency cockpit must not hold. tests/test_serve_secret.py pins the two to one answer.
+    A daemon older than serve.json schema 3 writes no secret and checks none: the header is then empty.
+    """
+    secret = (doc or {}).get("secret")
+    return {"Authorization": f"Bearer {secret}"} if isinstance(secret, str) and secret else {}
+
+
 def spawn_dir() -> Path:
     return aimeat_home() / "spawn"
 

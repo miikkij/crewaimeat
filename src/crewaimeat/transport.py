@@ -10,6 +10,14 @@ from dataclasses import dataclass
 import requests
 
 
+def _daemon_refused_secret(response: requests.Response) -> bool:
+    """True for the serve daemon's own 401: the secret this process holds is from an earlier start.
+
+    Told apart from a node 401 passed through the proxy by the daemon's challenge realm, so a streamed
+    body is never read to decide it."""
+    return response.status_code == 401 and "aimeat connect serve" in response.headers.get("WWW-Authenticate", "")
+
+
 @dataclass
 class NodeTransport:
     serve_api: Callable
@@ -84,7 +92,7 @@ class NodeTransport:
                     raise
                 time.sleep(backoff * 2**attempt)
                 continue
-            if response.status_code >= 500 and attempt + 1 < attempts:
+            if (response.status_code >= 500 or _daemon_refused_secret(response)) and attempt + 1 < attempts:
                 response.close()
                 self.reset()
                 time.sleep(backoff * 2**attempt)

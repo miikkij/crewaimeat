@@ -16,7 +16,7 @@ resolution-markers = [
 
 [[package]]
 name = "aimeat-crewai"
-version = "0.27.0"
+version = "0.29.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "crewai" },
@@ -24,9 +24,9 @@ dependencies = [
     { name = "mcp" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/cf/4f/a77b09929fac0d94a3b61cb710fc51dc5d777eea9a35f4862c08f31b77ba/aimeat_crewai-0.27.0.tar.gz", hash = "sha256:fb079eea22163b1a7f32bc06ac8712df1fa662812cb30398e8271b42bae08aa7", size = 535049, upload-time = "2026-09-20T13:46:54.112Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/04/bb/dd60cc4d07b9858a785c3652505e6aa6076c62a201a1626235782fcc7ab3/aimeat_crewai-0.29.0.tar.gz", hash = "sha256:88e0d6230c93ac4997205f43466fe188350c30aeb8fd5188e3446692a0857f3f", size = 556525, upload-time = "2026-09-26T15:22:08.918Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/84/75/d119915c66922bd3913a5371963ba9f214fd493660a0748b96a9b8c59382/aimeat_crewai-0.27.0-py3-none-any.whl", hash = "sha256:c862621b14e70d996ed6f38fdd46cb93c270ea048f132068d3965809b40cf826", size = 139597, upload-time = "2026-09-20T13:46:52.294Z" },
+    { url = "https://files.pythonhosted.org/packages/2e/1b/4cfeaf30dc4c82bd889dcaa1bdd2e652e825ea83bc847e515392d9ba24b0/aimeat_crewai-0.29.0-py3-none-any.whl", hash = "sha256:b0783cf2ad2cf9ed53e06613790f68f7f06cba92268d43f5a3e735f705e3eddd", size = 145359, upload-time = "2026-09-26T15:22:07.011Z" },
 ]
 
 [package.optional-dependencies]
@@ -776,7 +776,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aimeat-crewai", extras = ["data", "parquet"], specifier = ">=0.27.0" },
+    { name = "aimeat-crewai", extras = ["data", "parquet"], specifier = ">=0.29.0" },
     { name = "crewai", extras = ["tools"], specifier = ">=1.15.22" },
     { name = "ddgs", specifier = ">=6.0" },
     { name = "fastapi", marker = "extra == 'agency'", specifier = ">=0.110" },
@@ -951,7 +951,7 @@ name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [

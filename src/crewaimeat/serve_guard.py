@@ -293,21 +293,30 @@ def _assert_serve_json_owner(doc: dict) -> bool:
     if not pid or not isinstance(port, int):
         return False
     try:
-        from aimeat_crewai.mcp_client import _pid_alive, _probe_serve, _read_discovery, serve_discovery_path
+        from aimeat_crewai.mcp_client import (
+            _pid_alive,
+            _probe_serve,
+            _read_discovery,
+            serve_discovery_path,
+            serve_secret,
+        )
     except Exception:  # noqa: BLE001 — a future version moving these -> skip (the Node daemon still owns the file)
         return False
     path = serve_discovery_path()
     cur = _read_discovery(path)
     if cur and cur.get("pid") == pid and _pid_alive(pid):
         return True  # serve.json already names the kept live daemon — nothing to do
-    # Only ever publish a doc for a daemon we can PROVE is live right now.
-    if not (_pid_alive(pid) and _probe_serve(port, pid)):
+    # Only ever publish a doc for a daemon we can PROVE is live right now. The probe carries the kept
+    # daemon's OWN secret: left to itself it looks the secret up in serve.json by port, and serve.json is
+    # exactly what names another daemon here, so it would send none and read the 401 as "not live".
+    if not (_pid_alive(pid) and _probe_serve(port, pid, secret=serve_secret(doc))):
         return False
     clean = {k: v for k, v in doc.items() if not str(k).startswith("_")}  # drop internal markers
     tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp.write_text(json.dumps(clean, ensure_ascii=False), encoding="utf-8")
+        os.chmod(tmp, 0o600)  # it carries the daemon's secret; the daemon writes it owner-only too
         os.replace(tmp, path)  # atomic on Windows + POSIX
         _say(f"[serve-guard] serve.json re-pointed to kept live daemon pid {pid} port {port}")
         return True

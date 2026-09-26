@@ -63,6 +63,7 @@ from aimeat_crewai import (  # noqa: E402
     ensure_serve,
     run_crew_daemon,
     run_hello_integration,
+    serve_auth_headers,
     serve_params,
     stdio_params,
 )
@@ -731,6 +732,10 @@ def _serve_api() -> tuple[str, requests.Session] | None:
             # full, discarding connection" (harmless, but it churns TCP). A bigger pool reuses instead.
             _sess = requests.Session()
             _sess.mount("http://", requests.adapters.HTTPAdapter(pool_connections=16, pool_maxsize=64))
+            # The daemon answers only a caller presenting the secret it made at THIS start (serve.json
+            # schema 3); an older daemon writes none and the header is empty. The secret lives as long
+            # as this session: a restarted daemon has a new one, and `_serve_reset` drops both together.
+            _sess.headers.update(serve_auth_headers(doc))
             _SERVE_STATE["session"] = _sess
             return _SERVE_STATE["base"], _SERVE_STATE["session"]
         except Exception as exc:  # noqa: BLE001
@@ -771,6 +776,10 @@ _TRANSIENT_ERR_MARKERS = (
     "504",
     "bad gateway",
     "service unavailable",
+    # The daemon refused the secret this process cached: it restarted and made a new one. Re-discovering
+    # reads the new secret from serve.json; the refusal comes before the body is read, so a retry of a
+    # write cannot apply it twice.
+    "loopback_secret_required",
 )
 
 
