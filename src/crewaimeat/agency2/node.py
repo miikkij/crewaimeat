@@ -17,6 +17,7 @@ from typing import Any
 import requests
 
 from crewaimeat.agency2 import paths
+from crewaimeat.spawn_state import serve_auth_headers
 
 
 @dataclass
@@ -42,6 +43,12 @@ def serve_port() -> int | None:
     return int(doc["port"]) if doc and doc.get("port") else None
 
 
+def daemon_headers(ident: str) -> dict[str, str]:
+    """Who is asking, and the secret the daemon made at its current start (read fresh: it changes with
+    every start)."""
+    return {"X-Aimeat-Agent": ident, **serve_auth_headers(serve_doc())}
+
+
 def served_agents() -> dict[str, dict]:
     """name -> {gaii, node_url, transport} for every agent the daemon carries."""
     doc = serve_doc() or {}
@@ -63,7 +70,7 @@ def call(agent: str, tool: str, args: dict | None = None, *, timeout: float = 30
         r = requests.post(
             f"http://127.0.0.1:{port}/local/call/{tool}",
             json=args or {},
-            headers={"X-Aimeat-Agent": ident},
+            headers=daemon_headers(ident),
             timeout=timeout,
         )
     except requests.ConnectionError as exc:
@@ -147,7 +154,7 @@ def rest_get(agent: str, path: str, params: dict | None = None, *, timeout: floa
     ident = served_agents().get(agent, {}).get("gaii") or agent
     try:
         r = requests.get(
-            f"http://127.0.0.1:{port}{path}", params=params or {}, headers={"X-Aimeat-Agent": ident}, timeout=timeout
+            f"http://127.0.0.1:{port}{path}", params=params or {}, headers=daemon_headers(ident), timeout=timeout
         )
     except requests.ConnectionError as exc:
         raise NoDaemon(f"serve daemon on port {port} does not answer") from exc

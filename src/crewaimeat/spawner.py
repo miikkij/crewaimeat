@@ -191,6 +191,11 @@ class Spawner:
         port = (doc or {}).get("port")
         return int(port) if isinstance(port, int) else None
 
+    def _daemon_headers(self, agent: str) -> dict[str, str]:
+        """Who is asking, and the daemon's secret. Re-read each call like the port: every daemon start
+        makes a new secret, and a spawner outlives any number of daemon restarts."""
+        return {"X-Aimeat-Agent": agent, **spawn_state.serve_auth_headers(_serve_doc())}
+
     def _park(self, agent: str, timeout_s: float) -> bool:
         """Park on this agent's unified wake. True = something arrived; False = timeout/unreachable.
 
@@ -214,7 +219,7 @@ class Spawner:
             resp = requests.get(
                 f"http://127.0.0.1:{port}/local/wake/next",
                 params={"agent": agent, "wait": int(timeout_s * 1000)},
-                headers={"X-Aimeat-Agent": agent},
+                headers=self._daemon_headers(agent),
                 timeout=timeout_s + 10,
             )
         except Exception as exc:  # noqa: BLE001 — a dropped loopback connection is weather, not news
@@ -269,7 +274,7 @@ class Spawner:
                 r = requests.post(
                     f"http://127.0.0.1:{port}/local/call/aimeat_task_list",
                     json={"status": status},
-                    headers={"X-Aimeat-Agent": agent},
+                    headers=self._daemon_headers(agent),
                     timeout=20,
                 )
                 if r.status_code != 200:
@@ -359,7 +364,7 @@ class Spawner:
             resp = requests.get(
                 f"http://127.0.0.1:{port}/local/invoke/next",
                 params={"agent": agent, "wait": int(timeout_s * 1000)},
-                headers={"X-Aimeat-Agent": agent},
+                headers=self._daemon_headers(agent),
                 timeout=timeout_s + 10,
             )
         except Exception:  # noqa: BLE001 — a dropped loopback connection is weather, not news
@@ -402,7 +407,7 @@ class Spawner:
         try:
             requests.post(
                 f"http://127.0.0.1:{port}/local/invoke/{inv_id}/result",
-                headers={"X-Aimeat-Agent": agent},
+                headers=self._daemon_headers(agent),
                 json=payload,
                 timeout=30,
             )
@@ -985,7 +990,7 @@ def read_node_roster() -> tuple[list[str], list[str], set[str]]:
             resp = requests.get(
                 f"http://127.0.0.1:{port}/v1/agents",
                 params={"run_mode": agent_manifest.RUN_SPAWN},
-                headers={"X-Aimeat-Agent": caller},
+                headers={"X-Aimeat-Agent": caller, **spawn_state.serve_auth_headers(doc)},
                 timeout=30,
             )
         except Exception as exc:  # noqa: BLE001 — an unreachable node must not empty the roster
