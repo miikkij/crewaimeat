@@ -58,6 +58,12 @@ status cells, append decisions), so the two sides stay synced without drifting p
   every detached crew), so all processes share ONE serve.json regardless of cwd — isolated from other
   projects' fleets (no global `~/.aimeat` collision). Resolve it via `crewaimeat._home.aimeat_home()`,
   never re-derive the path. `.aimeat/` is gitignored (it holds tokens).
+- **Every call to the serve daemon carries its secret** (`aimeat-crewai>=0.29.0`). The daemon writes a
+  new one into `serve.json` (schema 3) at every start and expects `Authorization: Bearer <secret>`.
+  aimeat 3.19.x still admits a caller without it and names it once per start in `.aimeat/serve.log`;
+  **aimeat 3.20.0 refuses it with 401**. A crew gets it for free through `_serve_api()`; code that builds
+  its own request to the daemon adds `serve_auth_headers(doc)` (or, where crewai must not be imported,
+  `spawn_state.serve_auth_headers`). A new `/local/` call without it is a 3.20.0 outage waiting.
 - One crew = `crews/<name>_crew.py`; `build_domain(ctx) -> ([agents], [tasks])`; `AGENT_NAME` matches
   the name used in `aimeat connect --agent`.
 - **Skills** = portable SKILL.md expertise packs in `skills/<name>/` (see `skills/README.md`; contract
