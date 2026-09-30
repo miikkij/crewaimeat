@@ -270,7 +270,7 @@ _VERIFY_URL_RE = re.compile(r"(https?://\S*(?:verif|activate|device|connect|auth
 # aimeat.io 2026-08-01 — see the aimeat-crewai note in pyproject.toml). Bumped 2026-08-22 from 2.0.0,
 # which sat BELOW that documented floor: every agent crew-forge registered went through a connector
 # that could not carry provenance.
-AIMEAT_CONNECTOR = "aimeat@3.19.0"  # bumped 2026-09-27 to npm latest by `crewaimeat connector --bump-pin`.
+AIMEAT_CONNECTOR = "aimeat@3.21.0"  # bumped 2026-09-30 to npm latest by `crewaimeat connector --bump-pin`.
 #   3.10.0 carries `vars` and `target` through the connector's workflow tool defs. Below it a
 #   workflow that takes input can only be run on its defaults, which makes a tool a constant — the
 #   whole point of a recipe is the argument. 3.9.0 remains the floor for the Crew tab: it is where
@@ -310,8 +310,39 @@ def register_fleet(owner: str, url: str = "https://aimeat.io", agents: list[str]
 _REAL_POPEN = subprocess.Popen
 
 
+def _has_credential(agent_name: str, owner: str) -> bool:
+    """True when this home already holds a credential for `agent_name@owner` (either family).
+
+    A held credential means the agent already exists, so this registration is a RE-approval -- and for
+    an existing agent the node REPLACES its scopes with whatever is requested. That is why the caller
+    asks for scopes only when this is False.
+    """
+    from crewaimeat._home import aimeat_home
+
+    home = aimeat_home()
+    return (home / "tokens" / f"{agent_name}@{owner}.token").is_file() or (
+        home / "keys" / f"{agent_name}@{owner}.key"
+    ).is_file()
+
+
+def _crew_capability_scopes(agent_name: str) -> list[str]:
+    """The node scopes the catalog tools in this agent's crew file need, or [] when it has none here."""
+    path = _project_root() / "crews" / _fname(agent_name)
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    from crewaimeat.forge_catalog import capabilities_in_source, required_scopes
+
+    return required_scopes(capabilities_in_source(source))
+
+
 def register_agent(
-    agent_name: str, owner: str, url: str = "https://aimeat.io", mode: str | None = None
+    agent_name: str,
+    owner: str,
+    url: str = "https://aimeat.io",
+    mode: str | None = None,
+    scopes: list[str] | None = None,
 ) -> tuple[bool, str]:
     """Start device auth for a new task-runner agent and SURFACE its verification code + URL.
 
@@ -366,6 +397,19 @@ def register_agent(
         "--mode",
         wanted,
     ]
+    # ASK FOR THE PERMISSIONS, ON A NEW AGENT ONLY (connector >= 3.21.0, which the pin guarantees). A new
+    # agent that names nothing gets the node's four defaults, and the scaffold's own identity push is then
+    # refused on its first start -- the sold seat of 2026-09-29. The list carries the defaults too, because
+    # for a new agent the node grants what was requested INSTEAD of its default. A held credential means a
+    # RE-approval, where requested scopes replace what the owner granted, so that case names nothing and
+    # the node keeps what the agent has (crewaimeat.agent_scopes says why in full).
+    asked: list[str] = []
+    if not _has_credential(agent_name, owner):
+        from crewaimeat.agent_scopes import requested_scopes, scopes_args
+
+        extra = list(scopes) if scopes is not None else _crew_capability_scopes(agent_name)
+        base += scopes_args(extra)
+        asked = requested_scopes(extra)
     cmd = ["cmd", "/c", *base] if os.name == "nt" else base
     logs = _project_root() / "logs"
     logs.mkdir(exist_ok=True)
@@ -413,9 +457,10 @@ def register_agent(
             break
 
     if code and verify_url:
+        what = f" It asks for: {', '.join(asked)}." if asked else ""
         return (
             True,
-            f"APPROVE to activate: open {verify_url} and enter code {code} (it registers automatically once approved).",
+            f"APPROVE to activate: open {verify_url} and enter code {code} (it registers automatically once approved).{what}",
         )
     # No code parsed — surface what the connector ACTUALLY printed instead of guessing "already
     # registered" (that misled diagnosis when the device-auth request itself was failing).

@@ -637,6 +637,18 @@ class Spawner:
             )
             st.dirty = False
             return
+        if code == 3:
+            # The node refused calls of that run for a missing permission (run_once's refused exit). A
+            # wake that arrived while it ran would re-spawn it straight into the same refusal, and every
+            # one of those runs is paid for: the permission is the owner's to give, not the runtime's to
+            # wait out. The next genuine wake still starts a worker, so the agent comes back by itself
+            # once the permission is given.
+            _say(
+                f"[spawner] {agent}: the node refused calls of that run (exit 3) — NOT re-running on its "
+                f"own. The owner gives the missing permission in Profile > Agents > Manage access rights.",
+            )
+            st.dirty = False
+            return
         if killed and not st.killed_last:
             # A reaped worker leaves its task ACTIVE on the node, and the only thing that starts a
             # worker is a PUSH — which already happened, for the task that is still sitting there. So

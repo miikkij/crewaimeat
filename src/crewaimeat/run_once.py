@@ -23,6 +23,11 @@ EXIT CODES (the spawner reads these):
   0  the cycle completed — including the case where another daemon holds the agent's single-instance
      lock, which is a correct, expected outcome and not a failure.
   2  the token was rejected (the daemon's own auth-failure exit) — re-auth needed, do not hot-loop.
+  3  the node REFUSED calls of this run for a missing permission (SCOPE_DENIED). The task was failed with
+     each call and permission named, or could not even be failed (an agent refused task:write cannot).
+     Not a crash and not a success: running it again meets the same refusal until the owner gives the
+     permission, so the spawner does not re-run it on its own. Measured 2026-09-29 on a sold seat, where
+     such a run exited 0 and the customer's task stayed queued with nothing saying why.
   1  anything else: the crew raised, the crew file has no run(), the agent is unknown.
 """
 
@@ -90,6 +95,29 @@ def _run_node_backed(agent: str, *, quiet: bool = False) -> int:
         print(f"[run-once] {agent}: FAILED {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
     return 0
+
+
+EXIT_REFUSED = 3
+
+
+def _refused_exit(agent: str, code: int) -> int:
+    """3 when the node refused this run anything, else `code` unchanged.
+
+    A token rejection (2) keeps its own code: re-approval comes before any permission can matter. A
+    crash (1) that happened in a refused run becomes 3, because the refusal is the thing that has to be
+    fixed first and re-running would meet it again. The reasons are printed here, once, because this
+    line is what a person reading the spawner's log sees beside the exit code.
+    """
+    if code == 2:
+        return code
+    from crewaimeat.lifecycle import refused_runs
+
+    refused = refused_runs()
+    if not refused:
+        return code
+    for task_id, reason in refused.items():
+        print(f"[run-once] {agent}: REFUSED ({task_id}): {reason}", file=sys.stderr)
+    return EXIT_REFUSED
 
 
 RSS_HEARTBEAT_S = 30  # how often a running worker records its own peak memory
@@ -160,6 +188,13 @@ def run_once(agent: str, *, root: Path | None = None, quiet: bool = False) -> in
     """Run one cycle for `agent`. Returns the process exit code (see the module docstring)."""
     root = root or Path.cwd()
     started = time.monotonic()
+    # THE RUN'S WINDOW OPENS NOW, before run_crew's start-up touches the node. The start-up pushes the
+    # agent's identity (tags, capabilities, offer, README), and on the sold seat that push was the
+    # refused write: `PATCH /v1/agents/concierge/tags` needs agent:write. The first task this worker
+    # builds takes this start, so what the start-up was refused counts against the run it was made for.
+    from crewaimeat import lifecycle
+
+    lifecycle.set_worker_run_start(lifecycle.run_started_iso())
     _start_rss_heartbeat(agent, started)
 
     # I AM A MANAGED RUNTIME, SAY SO. `forge.reconcile_fleet` launches one watchdog process per crew
@@ -178,7 +213,7 @@ def run_once(agent: str, *, root: Path | None = None, quiet: bool = False) -> in
         # `crews.registry.<agent>`. json_agent.run_json_agent loads it from there and runs the same
         # scaffold, so a spawned worker serves it exactly like a repo crew.
         _install_preamble()
-        return _finish(agent, started, _run_node_backed(agent, quiet=quiet))
+        return _finish(agent, started, _refused_exit(agent, _run_node_backed(agent, quiet=quiet)))
     if man.parked:
         # A parked crew is parked on purpose. Running it from the side door would defeat the one
         # mechanism the repo has for taking an agent out of service.
@@ -250,7 +285,7 @@ def run_once(agent: str, *, root: Path | None = None, quiet: bool = False) -> in
     except Exception as exc:  # noqa: BLE001 — the spawner needs the real cause, not a stack in a log
         print(f"[run-once] {agent}: FAILED {type(exc).__name__}: {exc}", file=sys.stderr)
         code = 1
-    return _finish(agent, started, code)
+    return _finish(agent, started, _refused_exit(agent, code))
 
 
 def answer_invoke(path: Path) -> int:

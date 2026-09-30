@@ -87,7 +87,10 @@ CATALOG: tuple[Capability, ...] = (
         when_to_use="the agent must run itself or another agent on a recurring clock",
         imports=("from crewaimeat.scheduler import make_schedule_tools",),
         expr="[*make_schedule_tools(AGENT_NAME)]",
-        scopes=("schedule",),
+        # Node scope words, read off the routes: GET /v1/schedules needs workflow:read, and creating an
+        # `agent_task` schedule needs task:write (services/schedule-gate.ts). This said "schedule", which
+        # is not a scope the node knows, so the registration checklist asked the owner for nothing real.
+        scopes=("workflow:read", "task:write"),
     ),
     Capability(
         id="delegate",
@@ -117,7 +120,10 @@ CATALOG: tuple[Capability, ...] = (
         imports=("from crewaimeat.author_tool import make_author_tools",),
         setup=("_author_tools, _author_state = make_author_tools(AGENT_NAME, task_id=tid)",),
         expr="[*_author_tools]",
-        scopes=("generator",),
+        # POST /v1/apps needs app:write; installing and activating a cortex needs cortex:write, an
+        # extension's activation ext:write (routes/apps/publish.ts, cortex.ts, extensions/crud.ts). This
+        # said "generator", which is not a scope the node knows.
+        scopes=("app:write", "cortex:write", "ext:write"),
         owner_action="install_cortex / install_extension are owner-gated on the node until granted; publish_app works for agents.",
         notes="Start the app HTML from read_app_template() (correct auth/boot order) and end on a verify_render gate.",
     ),

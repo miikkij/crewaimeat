@@ -155,3 +155,69 @@ def test_every_live_crew_here_expects_task_runner():
 
     modes = {m.agent: m.expected_mode for m in agent_manifest.all_manifests(refresh=True) if m.live and m.agent}
     assert modes and set(modes.values()) == {"task-runner"}, {a: m for a, m in modes.items() if m != "task-runner"}
+
+
+# ── the permissions a new agent asks for (connector >= 3.21.0, `connect --scopes`) ─────────────
+
+
+def _capture_register(monkeypatch, tmp_path):
+    """Run register_agent against a fake connector and return the argv it would have run."""
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    import crewaimeat.forge as forge
+
+    captured: dict = {}
+
+    class FakeProc:
+        def poll(self):
+            return None
+
+    def fake_popen(cmd, **kw):
+        captured["cmd"] = cmd
+        out = kw.get("stdout")
+        if out is not None:
+            out.write(b"Verification code: ABCD-1234\nVisit https://aimeat.io/v1/agents/verify to approve.\n")
+            out.flush()
+        return FakeProc()
+
+    monkeypatch.setattr(forge.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(forge.time, "sleep", lambda *_a, **_k: None)
+    return forge, captured
+
+
+def test_a_new_agent_asks_for_its_scopes_defaults_included(monkeypatch, tmp_path):
+    forge, captured = _capture_register(monkeypatch, tmp_path)
+    ok, msg = forge.register_agent("fresh-agent", "owner1", "https://aimeat.io", scopes=[])
+    cmd = captured["cmd"]
+    assert "--scopes" in cmd, cmd
+    asked = cmd[cmd.index("--scopes") + 1].split(",")
+    # For a NEW agent the node grants what was requested INSTEAD of its default, so the defaults must
+    # be in the request or the agent is approved without memory access.
+    assert {"memory:read", "memory:write", "memory:delete", "catalogue:read"} <= set(asked)
+    assert "agent:write" in asked, "the identity push that was refused on the sold seat"
+    assert ok and "It asks for:" in msg, "the person approving sees what is being asked"
+
+
+def test_a_new_agent_asks_for_what_its_crews_tools_need(monkeypatch, tmp_path):
+    forge, captured = _capture_register(monkeypatch, tmp_path)
+    monkeypatch.setattr(forge, "_crew_capability_scopes", lambda name: ["app:write", "cortex:write"])
+    forge.register_agent("app-maker", "owner1", "https://aimeat.io")
+    asked = captured["cmd"][captured["cmd"].index("--scopes") + 1].split(",")
+    assert "app:write" in asked and "cortex:write" in asked
+
+
+def test_a_reapproval_names_no_scopes_so_the_owners_grant_stands(monkeypatch, tmp_path):
+    # For an agent that already exists, requested scopes REPLACE what it holds: asking again would cut
+    # an agent the owner gave `*` down to this list. A held credential means it exists.
+    forge, captured = _capture_register(monkeypatch, tmp_path)
+    (tmp_path / "tokens").mkdir()
+    (tmp_path / "tokens" / "old-agent@owner1.token").write_text("t", encoding="utf-8")
+    forge.register_agent("old-agent", "owner1", "https://aimeat.io")
+    assert "--scopes" not in captured["cmd"]
+
+
+def test_a_v2_key_credential_also_counts_as_existing(monkeypatch, tmp_path):
+    forge, captured = _capture_register(monkeypatch, tmp_path)
+    (tmp_path / "keys").mkdir()
+    (tmp_path / "keys" / "old-agent@owner1.key").write_text("{}", encoding="utf-8")
+    forge.register_agent("old-agent", "owner1", "https://aimeat.io")
+    assert "--scopes" not in captured["cmd"]

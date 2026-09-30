@@ -7,9 +7,13 @@ it: the node records the requested mode and the person approves it in the same c
 2026-09-18). The runtime never writes the mode itself (commit 1db112d) — a task-runner is what lets the
 agent start its tasks without the person pressing Start each time.
 
-The connector sends no scopes, so the node grants its four defaults unless the person ticks more on the
-consent page. `REQUIRED_SCOPES` is what the scaffold needs beyond those; the UI lists them next to the
-code, and the health view flags an agent that was approved without them.
+`--scopes` names what the agent needs (connector >= 3.21.0): the node's defaults plus `REQUIRED_SCOPES`,
+so the consent page shows them and the person approves them in one step instead of having to know to tick
+more. The defaults are in the list because for a new agent the node grants what was requested INSTEAD of
+its default (crewaimeat.agent_scopes). A reconnect here exists to change the scopes, so it asks too. A
+bundled connector older than 3.21.0 would refuse the option and fail the whole registration, so there the
+flow runs as it did before and the state row says the person has to tick the scopes themselves. The UI
+still lists `REQUIRED_SCOPES` next to the code, and the health view flags an agent approved without them.
 
 After approval the serve daemon is restarted: the connector loads its agent set only at startup
 (`serve_guard.restart_serve`, which touches THIS home's daemon only).
@@ -25,12 +29,31 @@ import time
 
 from crewaimeat.agency2 import engine
 
-# Beyond the node defaults (memory:read/write/delete, catalogue:read):
-#   agent:write     the scaffold's identity push (tags) — measured: without it tags_set answers SCOPE_DENIED
-#   task:write      creating the agent's own `agent_task` schedule (services/schedule-gate.ts)
-#   workflow:read   listing schedules (GET /v1/schedules)
-#   wallet:read     reading what the agents spent (GET /v1/ledger/usage, routes/ledger.ts)
-REQUIRED_SCOPES = ("agent:write", "task:write", "workflow:read", "wallet:read")
+# Beyond the node defaults. ONE list for every place that registers an agent (crewaimeat.agent_scopes, where
+# each word is tied to the route that needs it); re-exported here because health.py and app.py read it as
+# `connect.REQUIRED_SCOPES`.
+from crewaimeat.agent_scopes import REQUIRED_SCOPES, SCOPES_FLAG_SINCE, scopes_args  # noqa: E402
+
+__all__ = ["REQUIRED_SCOPES", "parse", "start", "state"]
+
+
+def _scopes_argv() -> tuple[list[str], str | None]:
+    """(argv to add, a note for the state row or None).
+
+    The bundled connector's version is known, so an older one is detected before it can refuse an option
+    it does not declare. Outside the shell the machine's own connector is used, which start_fleet keeps at
+    npm latest; that one is not second-guessed.
+    """
+    from crewaimeat.connector_version import older
+
+    bundled_version = engine.connector_version() if engine.bundled() else None
+    if bundled_version and older(bundled_version, SCOPES_FLAG_SINCE):
+        return [], (
+            f"The bundled connector is {bundled_version}, which cannot ask for permissions (that came in "
+            f"{SCOPES_FLAG_SINCE}). On the consent page, tick: {', '.join(REQUIRED_SCOPES)}."
+        )
+    return scopes_args(), None
+
 
 _CODE_RE = re.compile(r"Verification code:\s*([A-Z0-9]{3,}-[A-Z0-9]{3,})")
 _URL_RE = re.compile(r"Open\s+(https?://\S+/v1/agents/verify)\S*")
@@ -103,8 +126,9 @@ def start(name: str, instance_url: str, owner: str, *, on_done=None, fresh: bool
     if cur and cur.get("status") in ("starting", "waiting"):
         return cur
     aside = _set_aside(name, owner) if fresh else None
+    ask, scopes_note = _scopes_argv()
     argv = engine.connector_argv(
-        "connect", "--url", instance_url, "--owner", owner, "--agent", name, "--mode", "task-runner"
+        "connect", "--url", instance_url, "--owner", owner, "--agent", name, "--mode", "task-runner", *ask
     )
     _set(
         name,
@@ -116,6 +140,7 @@ def start(name: str, instance_url: str, owner: str, *, on_done=None, fresh: bool
         error=None,
         instance=instance_url,
         owner=owner,
+        scopes_note=scopes_note,
     )
     proc = subprocess.Popen(
         argv,

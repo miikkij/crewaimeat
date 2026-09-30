@@ -1676,10 +1676,60 @@ def _eval_ctx(eval_info: dict | None) -> dict:
     return ctx
 
 
+def _run_refusals(agent_name: str, since: str) -> list[dict] | None:
+    """What the node refused this agent for a missing permission at or after `since`, still unresolved.
+
+    [] when there were none, and ALSO when the route answers 404: it arrived in aimeat-protocol
+    4edff2d9d, and a node running an older release has no such door. That is "no refusals known", not a
+    failure -- the run is completed exactly as it was before this check existed. None when the node could
+    not be asked at all (no daemon, a dropped tunnel, any other answer): the caller completes the task and
+    says on it that the check did not happen, rather than guessing either way.
+
+    The route is owner-or-self, so the agent reads its own refusals with its own credential. The path
+    takes the bare NAME (`/v1/agents/:name/...` is scoped by the caller the header names); the header
+    carries whatever identity `_aimeat_rest` was handed.
+    """
+    from urllib.parse import quote
+
+    from crewaimeat.agent_manifest import agent_local_name
+
+    path = f"/v1/agents/{agent_local_name(agent_name)}/refusals?since={quote(since, safe='')}"
+    res = _aimeat_rest(agent_name, "GET", path, retries=2, return_error=True)
+    if res is None:
+        return None
+    if isinstance(res, dict) and res.get("ok") is False:
+        if res.get("http_status") == 404:
+            return []
+        return None
+    items = res.get("refusals") if isinstance(res, dict) else None
+    if not isinstance(items, list):
+        return None
+    return [r for r in items if isinstance(r, dict)]
+
+
+def _on_daemon_error(exc: BaseException) -> None:
+    """The package's `on_error`: a crash it already printed and already failed the task for, OR a run it
+    found refused after the kickoff (aimeat-crewai 0.31.0, NodeRefusedDuringRun).
+
+    Most refused runs never reach here -- lifecycle.complete_callback fails them first, INSIDE the
+    kickoff. This catches the ones that do not go through that callback: a message task, a crew whose
+    finalize never ran. Recording it is what lets run_once exit 3, because the package swallows the
+    exception to keep the daemon alive and nothing else carries it out of the cycle.
+    """
+    try:
+        from aimeat_crewai.daemon import NodeRefusedDuringRun
+    except ImportError:  # below 0.31.0 there is no such exception, so nothing here can be one
+        return
+    if isinstance(exc, NodeRefusedDuringRun):
+        from crewaimeat.lifecycle import note_refused
+
+        note_refused("(found after the kickoff)", str(exc))
+
+
 def _lifecycle_callbacks():
     from crewaimeat.lifecycle import LifecycleCallbacks
 
-    return LifecycleCallbacks(_aimeat_call, _eval_ctx, _mark_todos_done, _RUN_DELIVERABLE_KEYS)
+    return LifecycleCallbacks(_aimeat_call, _eval_ctx, _mark_todos_done, _RUN_DELIVERABLE_KEYS, refusals=_run_refusals)
 
 
 def _make_publish_cb(
@@ -1784,9 +1834,13 @@ def _make_complete_cb(
     require_verify: bool = False,
     owner: str | None = None,
     auto_revert: bool = False,
+    since: str | None = None,
 ):
-    """Compatibility entry point for deterministic task lifecycle callbacks."""
-    return _lifecycle_callbacks().complete_callback(agent_name, tid, mem_key, require_verify, owner, auto_revert)
+    """Compatibility entry point for deterministic task lifecycle callbacks. `since` is the run's start:
+    with it, a run the node refused is failed instead of completed (lifecycle.complete_callback)."""
+    return _lifecycle_callbacks().complete_callback(
+        agent_name, tid, mem_key, require_verify, owner, auto_revert, since=since
+    )
 
 
 def _finalize_message_task(agent_name: str, mem_key: str, sender: str | None, liaison: Agent) -> Task:
@@ -2381,6 +2435,12 @@ def run_crew(spec: CrewSpec) -> None:
 
     # 2) Per-task crew builder handed to the daemon.
     def _build(task: dict, liaison: Agent) -> Crew:
+        # THE RUN STARTS HERE, before anything below touches the node: the smoke test and the
+        # deterministic on_task path complete the task INSIDE this builder, before any kickoff, and a
+        # refusal met on the way belongs to this run. Every completion below is handed this `since`.
+        from crewaimeat.lifecycle import take_run_since
+
+        run_since = take_run_since()
         tid = task.get("id")
         raw_prompt = task.get("description") or task.get("title") or ""
 
@@ -2399,7 +2459,7 @@ def run_crew(spec: CrewSpec) -> None:
                 f"[{spec.agent_name}] onboarding smoke test task {tid} -> deterministic complete (no crew/LLM/todos)",
                 file=sys.stderr,
             )
-            _complete = _make_complete_cb(spec.agent_name, tid, owner=spec.owner)
+            _complete = _make_complete_cb(spec.agent_name, tid, owner=spec.owner, since=run_since)
             try:
                 _complete(None)
             except Exception as exc:  # noqa: BLE001 — a still-active task is simply re-dispatched on restart
@@ -2654,6 +2714,7 @@ def run_crew(spec: CrewSpec) -> None:
                 require_verify=spec.require_verify_pass,
                 owner=spec.owner,
                 auto_revert=spec.auto_revert_on_fail,
+                since=run_since,
             )
 
         # Self-evolution monitor (doc 20 P1): after the task, read own reputation and, if a gated
@@ -2874,6 +2935,7 @@ def run_crew(spec: CrewSpec) -> None:
                 max_concurrent_tasks=spec.max_concurrent_tasks,  # None = read owner-set value from AIMEAT
                 one_shot=spec.one_shot,  # spawned mode: one cycle, then exit and give the memory back
                 serve_options={"auto_start": False},  # crews never spawn the daemon — only start_fleet does
+                on_error=_on_daemon_error,  # the package's own post-kickoff refusal check reports here
             )
             return
         except AimeatServeError as exc:

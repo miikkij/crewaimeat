@@ -75,8 +75,10 @@ def test_emit_empty_when_nothing_usable():
 
 
 def test_required_scopes_and_owner_actions():
-    assert forge_catalog.required_scopes(["schedule", "web"]) == ["schedule"]
-    assert forge_catalog.required_scopes(["app_build"]) == ["generator"]
+    # Real node scope words, read off the routes -- these were "schedule" and "generator", which the node
+    # does not know, so the registration checklist asked the owner to grant nothing real.
+    assert forge_catalog.required_scopes(["schedule", "web"]) == ["workflow:read", "task:write"]
+    assert forge_catalog.required_scopes(["app_build"]) == ["app:write", "cortex:write", "ext:write"]
     assert forge_catalog.owner_actions(["delegate"])  # non-empty: the shared Data-Access tag note
 
 
@@ -157,7 +159,9 @@ def test_is_toollike_flags_containers_and_unpacked_tuples():
 def test_registration_checklist_surfaces_scopes_and_owner_setup():
     assert forge_catalog.registration_checklist("web") == ""  # nothing extra needed
     sched = forge_catalog.registration_checklist("schedule")
-    assert "schedule" in sched and "grant" in sched.lower()
+    # The owner is told the node's own scope words. This used to pass because the checklist echoed the
+    # word "schedule" -- a label the node does not grant, so the owner was asked to tick nothing real.
+    assert "workflow:read" in sched and "task:write" in sched and "grant" in sched.lower()
     deleg = forge_catalog.registration_checklist("delegate")
     assert "Owner setup" in deleg
 

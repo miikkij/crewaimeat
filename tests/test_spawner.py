@@ -291,6 +291,29 @@ def test_auth_failure_exit_2_does_not_respawn():
     assert sp.state["a"].dirty is False
 
 
+def test_a_refused_run_exit_3_does_not_respawn_into_the_same_refusal():
+    """Exit 3 is run_once's 'the node refused calls of this run'. A wake that came in while it ran would
+    re-spawn it straight into the same refusal, paid for every time, until the owner gives the
+    permission -- which is the owner's to give, not the runtime's to wait out."""
+    sp, spawned = make_spawner(["a"])
+    sp.on_wake("a")
+    sp.on_wake("a")  # would normally re-run via dirty
+    spawned[0][2].finish(3)
+    sp.reap()
+    assert len(spawned) == 1
+    assert sp.state["a"].dirty is False
+
+
+def test_after_a_refused_run_a_new_wake_still_starts_a_worker():
+    """Not a dead end: once the owner gives the permission, the next real wake brings the agent back."""
+    sp, spawned = make_spawner(["a"])
+    sp.on_wake("a")
+    spawned[0][2].finish(3)
+    sp.reap()
+    sp.on_wake("a")
+    assert len(spawned) == 2
+
+
 def test_orphan_sweep_leaves_workers_of_a_live_manager_alone(tmp_path, monkeypatch):
     monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
     from crewaimeat import spawn_state

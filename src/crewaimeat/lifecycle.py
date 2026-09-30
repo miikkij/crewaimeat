@@ -1,10 +1,93 @@
-"""Deterministic publish and completion transitions, independent of CrewAI construction."""
+"""Deterministic publish and completion transitions, independent of CrewAI construction.
+
+A RUN THE NODE REFUSED IS NOT A RUN THAT WORKED. A crew that meets a 403 SCOPE_DENIED usually carries
+on: the model reads the refusal as one more tool result, the kickoff returns, and the scaffold's own
+completion callback closes the task as done. Measured 2026-09-29 on a sold seat: exit 0, every write
+refused, and the customer's task stayed queued with nothing on screen saying why.
+
+The node keeps every refusal of an agent (GET /v1/agents/{name}/refusals?since=<run start>), and
+aimeat-crewai 0.31.0 asks it after each kickoff. That is too late HERE: this module completes the task
+INSIDE the kickoff (the finalize task's callback) and, on the deterministic `on_task` path and the
+onboarding smoke test, inside the builder before any kickoff at all. By the time the package asked, the
+task was already done and its /fail was refused as an invalid state. So `complete_callback` asks first,
+and a refused run is FAILED with each call and permission named instead of being completed.
+"""
 
 from __future__ import annotations
 
 import sys
+import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
+
+# The runtime's clock and the node's clock are not the same clock. Asking from a little before the run
+# started keeps a node a few seconds behind from hiding the run's own refusals. The SAME margin
+# aimeat-crewai 0.31.0 uses (daemon._RUN_CLOCK_MARGIN_S), so both sides ask about one window.
+RUN_CLOCK_MARGIN_S = 5.0
+
+# Where the owner gives a missing permission, in the words the task failure and the log both use.
+_WHERE_THE_OWNER_GIVES_IT = "the owner gives it in Profile > Agents > Manage access rights"
+
+_LOCK = threading.Lock()
+# The start of the WORKER's run, when this process is one (run_once sets it). Consumed by the first task
+# the worker builds: a spawn worker exists because of that task, so the refusals of its start-up -- the
+# identity push, where the sold seat's `PATCH /v1/agents/concierge/tags` was refused -- belong to it.
+_WORKER_RUN_START: dict[str, str | None] = {"at": None}
+# Tasks this process refused, task id -> the sentence that says why. run_once reads it for its exit code.
+_REFUSED: dict[str, str] = {}
+
+
+def run_started_iso(now: float | None = None) -> str:
+    """The `since` for a run starting now, in the ISO form the node parses (millisecond, Z)."""
+    started = (time.time() if now is None else now) - RUN_CLOCK_MARGIN_S
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(started)) + f".{int((started % 1) * 1000):03d}Z"
+
+
+def set_worker_run_start(iso: str) -> None:
+    """Called by run_once at the top of the worker, before anything touches the node."""
+    with _LOCK:
+        _WORKER_RUN_START["at"] = iso
+
+
+def take_run_since() -> str:
+    """The window start for the task being built now.
+
+    The first task a spawn worker builds takes the WORKER's start, so the refusals of its own start-up
+    count against it; every later task, and every task of a continuous daemon (where start-up happened
+    once, maybe days ago), takes its own start. Taken at the top of the builder, which is where
+    aimeat-crewai 0.31.0 takes its own: "the run starts before the crew is built".
+    """
+    with _LOCK:
+        worker = _WORKER_RUN_START["at"]
+        _WORKER_RUN_START["at"] = None
+    return worker or run_started_iso()
+
+
+def note_refused(task_id: str, reason: str) -> None:
+    with _LOCK:
+        _REFUSED.setdefault(task_id or "(unknown task)", reason)
+
+
+def refused_runs() -> dict[str, str]:
+    with _LOCK:
+        return dict(_REFUSED)
+
+
+def refusal_summary(refusals: list[dict]) -> str:
+    """One sentence for the task's failure and the log: which call, which permission, who fixes it."""
+    parts = []
+    for r in refusals[:5]:
+        needed = [str(s) for s in (r.get("needed") or [])] or ["an unnamed permission"]
+        joined = (" or " if r.get("any_of") else " and ").join(needed)
+        parts.append(f"{r.get('call') or 'a call'} needs {joined}")
+    more = f" (and {len(refusals) - 5} more)" if len(refusals) > 5 else ""
+    return (
+        "AIMEAT refused calls of this run for a missing permission: "
+        + "; ".join(parts)
+        + more
+        + f". {_WHERE_THE_OWNER_GIVES_IT[0].upper()}{_WHERE_THE_OWNER_GIVES_IT[1:]}, and then the task can run again."
+    )
 
 
 @dataclass
@@ -13,6 +96,9 @@ class LifecycleCallbacks:
     eval_ctx: Callable
     mark_todos_done: Callable
     deliverable_keys: dict[str, str]
+    # (agent_name, since_iso) -> the refusals since then, [] for none, None when the node could not be
+    # asked. None of this is known to the dataclass: aimeat_crew wires the node route in.
+    refusals: Callable | None = None
 
     def publish_callback(
         self,
@@ -102,9 +188,19 @@ class LifecycleCallbacks:
         require_verify: bool = False,
         owner: str | None = None,
         auto_revert: bool = False,
+        since: str | None = None,
     ):
         """Task callback: close the AIMEAT task deterministically (no LLM). Attached to the finalize
         task so the task is completed even if the liaison never calls aimeat_task_complete.
+
+        When `since` (the run's start) is given, the node is asked FIRST what it refused this agent
+        since then. A refused run is FAILED (aimeat_task_fail) with each call and permission named, and
+        is not completed: the refusal comes before the verify gate, because a write that never landed is
+        the more fundamental reason and a verify verdict read on top of it would be about the wrong thing.
+        A node without the route answers 404 until its release is deployed, which reads as "no refusals
+        known" and completes as before. A node that could not be asked at all completes too, and SAYS so
+        on the task: turning a good run into a failed one because the check itself failed would trade one
+        silent lie for another.
 
         When require_verify is True (CrewSpec.require_verify_pass — SYS-1), completion is GATED on the app
         verify gates' deterministic outcome: a build whose verify_render / verify_interaction FAILED, or that
@@ -117,6 +213,29 @@ class LifecycleCallbacks:
         kept a SEPARATE opt-in from the safe status gate."""
 
         def _cb(_task_output) -> None:
+            unchecked = ""
+            if since and self.refusals is not None:
+                try:
+                    refused = self.refusals(agent_name, since)
+                except Exception as exc:  # noqa: BLE001 — the check must never be what breaks finalize
+                    print(f"[{agent_name}] refusal check raised ({exc!r}); completing without it", file=sys.stderr)
+                    refused = None
+                if refused:
+                    reason = refusal_summary(refused)
+                    # Recorded BEFORE the /fail, and whatever it answers: an agent refused task:write
+                    # cannot fail its own task either, and then the exit code is the only thing left
+                    # that says the run was refused.
+                    note_refused(tid, reason)
+                    fr = self.call(agent_name, "aimeat_task_fail", {"task_id": tid, "message": reason})
+                    print(
+                        f"[{agent_name}] run REFUSED by the node -> task_fail {tid} "
+                        f"({'failed' if fr is not None else 'the /fail was not accepted either'}): {reason}",
+                        file=sys.stderr,
+                    )
+                    return
+                if refused is None:
+                    unchecked = " The node could not be asked whether it refused any of this run's calls."
+                    print(f"[{agent_name}] refusal check unavailable for {tid}; completing", file=sys.stderr)
             if require_verify:
                 try:
                     from crewaimeat.author_tool import get_verify_verdicts
@@ -180,6 +299,7 @@ class LifecycleCallbacks:
                 # deliverable in memory and its outcome carried state/message/at but no deliverable_key.
                 payload["deliverable_key"] = key
                 payload["message"] = f"Crew finished; deliverable published to memory at {key}."
+            payload["message"] += unchecked
             res = self.call(agent_name, "aimeat_task_complete", payload)
             if res is None:
                 raise RuntimeError(f"Task completion failed for {tid}")
