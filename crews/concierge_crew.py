@@ -46,6 +46,7 @@ from crewaimeat import (
 )
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, _aimeat_call, _valid_chat_commands, run_crew
 from crewaimeat.crew import _web_tools
+from crewaimeat.decline import make_decline_tool
 from crewaimeat.llm import get_llm
 
 AGENT_NAME = "concierge"
@@ -363,8 +364,10 @@ def _concierge_tools(sink: dict, *, ask_to: str | None = None, ask_conv: str | N
         `name`: lowercase-with-hyphens, 3-40 chars, e.g. 'morning-deals'. `display_name`: what they see.
         `purpose`: one sentence naming their data, e.g. 'Reads the open deals in CADENCE every morning and
         names the ones to act on today'. `instructions`: what the agent does on each run, in plain words.
-        `workspace`: the workspace it reads (its name, e.g. 'CADENCE'). `tools`: comma-separated, only from
-        memory, workspace, web, article_fetch, schedule, dm (a named workspace adds 'workspace' itself).
+        `workspace`: the workspace it works on (its name, e.g. 'CADENCE'). `tools`: comma-separated, only
+        from memory, workspace, workspace_write, web, article_fetch, schedule, dm. A named workspace adds
+        'workspace' (read only) itself; give 'workspace_write' when the agent must ADD or CHANGE records
+        there (contacts, deals, tasks), which also asks the owner for organism:write.
         `delivers`: what each run hands back. `schedule_cron`: a 5-field cron when it should run on a clock
         ('0 7 * * *' = 07:00 daily), with `timezone`. Then relay EXACTLY what this returns -- it carries the
         address where they approve. Do not ask them yes/no as well: their press there is the approval."""
@@ -646,7 +649,9 @@ def _republish_chat_commands(agent_name: str) -> bool:
     return bool(res)
 
 
-def _agent(llm, sink: dict, *, ask_to: str | None = None, ask_conv: str | None = None) -> Agent:
+def _agent(
+    llm, sink: dict, *, ask_to: str | None = None, ask_conv: str | None = None, extra_tools: list | None = None
+) -> Agent:
     return Agent(
         role="Concierge",
         goal="Understand the user's request and fulfil it with the right tool(s), then reply concisely.",
@@ -665,13 +670,13 @@ def _agent(llm, sink: dict, *, ask_to: str | None = None, ask_conv: str | None =
             "automation service or product for that -- the agent is made here, on their node, and runs here."
         ),
         llm=llm,
-        tools=_concierge_tools(sink, ask_to=ask_to, ask_conv=ask_conv),
+        tools=[*_concierge_tools(sink, ask_to=ask_to, ask_conv=ask_conv), *(extra_tools or [])],
         allow_delegation=False,
         verbose=False,
     )
 
 
-def _task(request: str, context: str, agent: Agent, today: str, directory: str = "") -> Task:
+def _task(request: str, context: str, agent: Agent, today: str, directory: str = "", declinable: bool = False) -> Task:
     delegation = (
         (
             "\n\nSpecialists you can delegate to (use delegate_to_specialist with the EXACT name) when one "
@@ -710,7 +715,16 @@ def _task(request: str, context: str, agent: Agent, today: str, directory: str =
             "'start it' about an agent you proposed with a schedule, call start_proposed_agent. "
             "When a request is about their own data, look_at_my_workspaces shows where it lives -- say which "
             "workspace it belongs in rather than naming an outside product. "
-            "Reply concisely in markdown; cite source links for any web results. Answer ONLY the message "
+            + (
+                # The task path only: a task the person handed over is on their list, and "I cannot" must
+                # not land there as done (crewaimeat.decline). A DM has no list; the reply is the answer.
+                "If you will NOT carry out this request -- you have no tool or access for it, or it is not "
+                "yours to do -- call decline_request with the reason (and who or what can do it), then reply. "
+                "Proposing an agent for it IS doing it; do not decline then. "
+                if declinable
+                else ""
+            )
+            + "Reply concisely in markdown; cite source links for any web results. Answer ONLY the message "
             "above — ignore earlier topics unless asked to continue."
         ),
         expected_output="A concise, friendly markdown reply. Attachments are added by the tools.",
@@ -722,8 +736,9 @@ def build_domain(ctx: BuildContext):
     # Task path (an assigned task rather than a DM): same crew; attachments aren't delivered (no thread to
     # reply to), so the reply carries links/text. The DM path (run() below) collects + delivers attachments.
     sink: dict = {"attachments": []}
-    agent = _agent(ctx.llm, sink)
-    return ([agent], [_task(ctx.prompt, "", agent, ctx.today)])
+    decline = make_decline_tool(ctx.identity or AGENT_NAME, (ctx.task or {}).get("id"))
+    agent = _agent(ctx.llm, sink, extra_tools=[decline])
+    return ([agent], [_task(ctx.prompt, "", agent, ctx.today, declinable=True)])
 
 
 def _dm_request_and_context(event: dict) -> tuple[str, str, list]:

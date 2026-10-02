@@ -197,6 +197,24 @@ def _tools_workspace(agent_name: str, ctx: Any) -> list:
     return list(make_workspace_tools(agent_name))
 
 
+def _tools_workspace_write(agent_name: str, ctx: Any) -> list:
+    # The read tools PLUS writing: create or update a record (published in the same call, an update
+    # merged onto the record as it stands) and append or replace rows. A separate id from `workspace`
+    # because writing is a separate decision the owner approves; the node enforces organism:write.
+    from crewaimeat.workspace_tools import make_workspace_write_tools
+
+    return list(make_workspace_write_tools(agent_name))
+
+
+def _tools_decline(agent_name: str, ctx: Any) -> list:
+    # `decline_request`: the agent says it will not carry out this request, and the task ends as
+    # DECLINED with its reason instead of done (crewaimeat.decline). Bound to THIS run's task.
+    from crewaimeat.decline import make_decline_tool
+
+    task = getattr(ctx, "task", None) or {}
+    return [make_decline_tool(agent_name, task.get("id") if isinstance(task, dict) else None)]
+
+
 def _tools_decide(agent_name: str, ctx: Any) -> list:
     # The owner's DECISION RULES, one CrewAI tool each: the questions, the thresholds and the bands
     # are theirs, written once on the node, and the crew sends only the state. The agent sees a tool
@@ -231,6 +249,8 @@ TOOL_REGISTRY: dict[str, Any] = {
     "exchange": _tools_exchange,
     "decide": _tools_decide,
     "workspace": _tools_workspace,
+    "workspace_write": _tools_workspace_write,
+    "decline": _tools_decline,
 }
 
 # Tool ids that take a SELECTOR after a colon: `decide:sort-a-message` is one decision rule, and
@@ -281,6 +301,8 @@ TOOL_PURPOSES: dict[str, str] = {
     "exchange": "trade on the AIMEAT EXCHANGE — browse/accept/run offerings, post needs + bid, renegotiate, run agent-work; plus deterministic band + I/O-match gates",
     "decide": "ask the owner's DECISION RULES — one tool per rule, named after the job; the rule holds the questions, thresholds and bands and you send only the state. `decide:<rule>` picks one rule instead of all of them",
     "workspace": "READ the owner's organisms and workspaces by name: list them, read one workspace's index (spaces + record titles), then the records you need. Read-only",
+    "workspace_write": "everything `workspace` reads, PLUS create or update a record (published at once; an update is merged onto the record as it stands) and append or replace rows. Needs organism:write",
+    "decline": "say you will NOT carry out this request (no tool or access for it, or not yours to do), with the reason; the task then ends as declined, not done",
 }
 
 # The EXCHANGE bundle may be referenced whole (id "exchange") OR by any single tool name (the node

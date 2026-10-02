@@ -79,6 +79,7 @@ except Exception:  # pragma: no cover
 from crewaimeat.directives import fetch_directives, format_directives  # noqa: E402
 from crewaimeat.llm import get_llm  # noqa: E402
 from crewaimeat.progress import install_progress  # noqa: E402
+from crewaimeat.verify_report import report_message, split_verify  # noqa: E402
 
 # run_crew() exits with this code when the agent's token is no longer accepted by the
 # node (needs re-approval). The watchdog scripts treat it as "stop, don't restart".
@@ -1542,6 +1543,59 @@ _VERIFY_SCORE_RE = re.compile(r"score\s*=\s*([1-5])", re.I)
 _VERIFY_UNSUP_RE = re.compile(r"unsupported\s*=\s*(\d+)", re.I)
 
 
+def _without_verify_report(then: Callable[[str], str] | None) -> Callable[[str], str]:
+    """The publish step's cleaner when a verify pass ran: the report out first, then the crew's own."""
+
+    def _clean(text: str) -> str:
+        body, _report = split_verify(text)
+        body = body if body.strip() else text  # never publish an empty deliverable
+        return then(body) if then else body
+
+    return _clean
+
+
+def _record_verify_report(agent_name: str, tid: str | None, report: dict) -> None:
+    """The verify report where the run is examined: the run log, and the task's `verification` event."""
+    message = report_message(report)
+    print(f"[{agent_name}] verify report (kept out of the deliverable): {message}", file=sys.stderr)
+    for line in report.get("flagged") or []:
+        print(f"[{agent_name}]   unverified: {line[:300]}", file=sys.stderr)
+    if tid and not str(tid).startswith("msg-"):
+        _aimeat_call(
+            agent_name,
+            "aimeat_task_event",
+            {"task_id": tid, "type": "verification", "message": message, "details": report},
+            quiet=True,
+        )
+
+
+def _keep_verify_report_out(agent_name: str, tid: str | None, verify_task: Any) -> None:
+    """Make the verify task's callback keep its report -- verdict line, [unverified] marks -- out of
+    everything after it (crewaimeat.verify_report).
+
+    The OUTERMOST link, so its order is fixed: the report goes to the run log and the task's
+    `verification` event first; then the chain below runs -- the publish, whose cleaner strips the report
+    from what is published, and the score link, which still reads the score from the raw text; then the
+    output itself is replaced by the clean text, which is what the finalize step and the kickoff result
+    carry, so no later step puts the report back.
+    """
+    inner = _chain(agent_name, getattr(verify_task, "callback", None), "deliverable publish chain", critical=True)
+
+    def _cb(out) -> None:
+        raw = getattr(out, "raw", None) or str(out)
+        clean, report = split_verify(raw)
+        if report:
+            _record_verify_report(agent_name, tid, report)
+        inner(out)  # critical: the publish sits behind this link
+        if report and clean.strip():
+            try:
+                out.raw = clean
+            except Exception as exc:  # noqa: BLE001 -- the published copy is already clean
+                print(f"[{agent_name}] could not clean the task output in place: {exc}", file=sys.stderr)
+
+    verify_task.callback = _cb
+
+
 def _write_verify_stat(agent_name: str, tid: str | None, output_text: str, dimension: str) -> None:
     """Parse the factcheck Reviewer's score line and write it as the agent's OWN introspection under
     agents.<agent>.statistics.custom.<short>.verify (owner-visible). This is a SELF assessment of the
@@ -2567,7 +2621,8 @@ def run_crew(spec: CrewSpec) -> None:
         # and FIXES any gap, producing the final deliverable. ONE pass, no loop — so it cannot
         # reintroduce step-repetition (FM-1.3). Enabled by CrewSpec.verify="on" or a <<VERIFY>> task
         # directive; becomes the new last domain task, so publish/directives attach to it below.
-        if verify_mode in ("on", "factcheck") and tasks:
+        verified = verify_mode in ("on", "factcheck") and bool(tasks)
+        if verified:
             reviewer = Agent(
                 role="Deliverable Reviewer",
                 goal="Verify the deliverable and return a corrected, trustworthy final version",
@@ -2591,8 +2646,9 @@ def run_crew(spec: CrewSpec) -> None:
                     "NOT ask for them or refuse for lack of them. A claim is SUPPORTED if it appears in the "
                     "contributions (a source named/cited WITHIN the contributions counts as support). A claim is "
                     "UNSUPPORTED only if it is not in the contributions at all — an invented name, number, date, "
-                    "organisation, or citation. Work claim by claim: remove or mark '[unverified]' anything not in "
-                    "the contributions; never invent; never attach a citation that is not in the contributions; do "
+                    "organisation, or citation. Work claim by claim: REMOVE anything not in the contributions (do "
+                    "not leave it in with a mark -- the reader is the customer); never invent; never attach a "
+                    "citation that is not in the contributions; do "
                     "not add anything new. If only one crew contributed, return its content faithfully. ALWAYS "
                     "output the corrected deliverable ITSELF — never a commentary about your process or about "
                     "missing materials — ending with EXACTLY this line: "
@@ -2649,7 +2705,7 @@ def run_crew(spec: CrewSpec) -> None:
                 shared_tag,
                 eval_info,
                 task_id=tid,
-                clean=spec.clean_deliverable,
+                clean=_without_verify_report(spec.clean_deliverable) if verified else spec.clean_deliverable,
                 offer_id=(ctx.offer or {}).get("id"),
             )
 
@@ -2698,6 +2754,10 @@ def run_crew(spec: CrewSpec) -> None:
                         print(f"[{spec.agent_name}] verify-score skipped: {exc}", file=sys.stderr)
 
                 tasks[-1].callback = _score_cb
+
+            # The verify pass's REPORT is ours, not the customer's: the outermost link (verify_report).
+            if verified:
+                _keep_verify_report_out(spec.agent_name, tid, tasks[-1])
 
         if task.get("_source") == "message":
             original = task.get("_original") or {}

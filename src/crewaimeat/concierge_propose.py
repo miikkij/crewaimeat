@@ -39,6 +39,11 @@ import time
 
 from crewaimeat.agent_scopes import RUNTIME_WRITE_SCOPES
 from crewaimeat.aimeat_crew import _aimeat_call, _aimeat_rest
+from crewaimeat.workspace_tools import READ_SCOPES, WRITE_SCOPES
+
+# Every proposed agent gets `decline_request`: asked for something outside its purpose, it says so and the
+# task ends as declined rather than done (crewaimeat.decline). It needs no scope, so it is not a choice.
+ALWAYS_TOOLS = ("decline",)
 
 # The node's own name rule (services/agent-proposals.ts NAME_SHAPE): 3-40 characters, lowercase letters,
 # digits and hyphens, starting with a letter. Checked here so a bad name costs a sentence, not a call.
@@ -53,13 +58,17 @@ NAME_RE = re.compile(r"^[a-z][a-z0-9-]{2,39}$")
 #               (routes/organisms/workspace-read.ts); only the LIST is membership-gated. Assumed otherwise
 #               from the list route alone, and the live test caught it: the approved agent could list CADENCE
 #               and read nothing in it.
+#   workspace_write  the above, plus create/update records    + memory:write, organism:write (the draft is a
+#               and append rows                            memory write; publishing and rows take
+#               organism:write). workspace_tools.READ_SCOPES / WRITE_SCOPES are the one source.
 #   web         search the live web                       (no node call)
 #   article_fetch  read the article behind a link         (no node call)
 #   schedule    manage its own node schedules              workflow:read, task:write (schedule-gate.ts)
 #   dm          read and reply in its inbox                messages:read, messages:send
 PROPOSABLE_TOOLS: dict[str, tuple[str, ...]] = {
     "memory": ("memory:read", "memory:write"),
-    "workspace": ("organism:read",),
+    "workspace": READ_SCOPES,
+    "workspace_write": WRITE_SCOPES,
     "web": (),
     "article_fetch": (),
     "schedule": ("workflow:read", "task:write"),
@@ -143,6 +152,12 @@ def build_crew_def(
             "answer. Name the records your answer is based on, and say so plainly when they hold nothing "
             "that answers the request.\n\n"
         )
+        if "workspace_write" in tools:
+            data += (
+                "When the request is to add or change something, look the record up first so you update it "
+                "rather than create a duplicate, write it with write_workspace_record, and say which records "
+                "you created or updated. Never claim a write the tool did not confirm.\n\n"
+            )
     task = {
         "id": "run",
         "agent": role,
@@ -155,9 +170,11 @@ def build_crew_def(
         "goal": _plain(purpose),
         "backstory": (
             f"You are {role}, an agent on your owner's AIMEAT node. {_plain(instructions)} You work only from "
-            "the data your owner keeps on this node and what your tools return; you never invent a record."
+            "the data your owner keeps on this node and what your tools return; you never invent a record. "
+            "When a request is outside what you do, or needs access you do not have, call decline_request with "
+            "the reason and say who or what can do it instead."
         ),
-        "tools": list(tools),
+        "tools": [*tools, *(t for t in ALWAYS_TOOLS if t not in tools)],
         "allow_delegation": False,
     }
     return {
@@ -244,7 +261,7 @@ def propose(
         found_ws = find_workspace(seen, workspace)
         if found_ws is None:
             return f"I cannot find a workspace called '{workspace}'. {render_workspaces(seen)}"
-        if "workspace" not in chosen:
+        if "workspace" not in chosen and "workspace_write" not in chosen:
             chosen.append("workspace")
     if not chosen:
         chosen = ["memory"]

@@ -11,6 +11,9 @@ INSIDE the kickoff (the finalize task's callback) and, on the deterministic `on_
 onboarding smoke test, inside the builder before any kickoff at all. By the time the package asked, the
 task was already done and its /fail was refused as an invalid state. So `complete_callback` asks first,
 and a refused run is FAILED with each call and permission named instead of being completed.
+
+A RUN THAT TURNED THE REQUEST DOWN IS NOT DONE EITHER. When the agent called `decline_request`
+(crewaimeat.decline), the task is failed with "Declined: <its reason>" instead of completed.
 """
 
 from __future__ import annotations
@@ -20,6 +23,8 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+
+from crewaimeat.decline import declined_message, take_declined
 
 # The runtime's clock and the node's clock are not the same clock. Asking from a little before the run
 # started keeps a node a few seconds behind from hiding the run's own refusals. The SAME margin
@@ -210,9 +215,15 @@ class LifecycleCallbacks:
 
         When auto_revert is True (CrewSpec.auto_revert_on_fail), a gate-fail ALSO restores each app this run
         published to its pre-run last-good version (revert_apps_to_baseline) — an outward-facing live rollback,
-        kept a SEPARATE opt-in from the safe status gate."""
+        kept a SEPARATE opt-in from the safe status gate.
+
+        A task the agent DECLINED (crewaimeat.decline) is failed with "Declined: <reason>" instead of
+        completed: after the refusal check (a node refusal is the more fundamental reason, and is often
+        WHY it declined), before the verify gate (there is no build to verify)."""
 
         def _cb(_task_output) -> None:
+            # Taken first, whichever way this run ends, so a long-lived daemon never carries it over.
+            declined = take_declined(tid) if tid else None
             unchecked = ""
             if since and self.refusals is not None:
                 try:
@@ -236,6 +247,15 @@ class LifecycleCallbacks:
                 if refused is None:
                     unchecked = " The node could not be asked whether it refused any of this run's calls."
                     print(f"[{agent_name}] refusal check unavailable for {tid}; completing", file=sys.stderr)
+            if declined:
+                key = self.deliverable_keys.pop(tid, None) or mem_key
+                message = declined_message(declined, key) + unchecked
+                fr = self.call(agent_name, "aimeat_task_fail", {"task_id": tid, "message": message})
+                if fr is None:
+                    # Left active it would be run again, and turned down again, for nothing.
+                    raise RuntimeError(f"Declining task {tid} failed")
+                print(f"[{agent_name}] task DECLINED -> task_fail {tid}: {message}", file=sys.stderr)
+                return
             if require_verify:
                 try:
                     from crewaimeat.author_tool import get_verify_verdicts
