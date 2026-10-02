@@ -43,6 +43,7 @@ _M = {
         "mode": "tila on '{m}': jokainen tehtävä odottaa, kunnes painat palvelimella Aloita",
         "stopped": "ei käynnissä tällä koneella",
         "no_def": "ei käynnissä: agentilla ei ole vielä määritelmää — kuvaile se agentin sivulla",
+        "refused_def": "ei käynnissä: palvelin esti agenttia lukemasta omaa määritelmäänsä — liitä uudelleen ja valitse memory:read hyväksyntäsivulla",
         "ok": "käynnissä, yhteys: {t}",
     },
     "en": {
@@ -71,6 +72,7 @@ _M = {
         "mode": "mode is '{m}': each task waits until you press Start on the instance",
         "stopped": "not running on this machine",
         "no_def": "not running: the agent has no definition yet — describe it on its page",
+        "refused_def": "not running: the instance refused the agent its own definition — reconnect and tick memory:read on the approval page",
         "ok": "running, {t} connection",
     },
 }
@@ -201,7 +203,12 @@ def check(
         if me and me.get("mode") != "task-runner":
             issues.append(m["mode"].format(m=me.get("mode")))
         if not running_fn(name):
-            if "holds no crew definition" in log_fn(name):
+            log = log_fn(name)
+            if "REFUSED this agent the read of crews.registry" in log:
+                # The definition is there and the agent may not read it: a permission, not a page.
+                issues.append(m["refused_def"])
+                fix = fix or f"reconnect:{name}"
+            elif "holds no crew definition" in log:
                 issues.append(m["no_def"])
                 fix = fix or f"agent:{name}"
             else:

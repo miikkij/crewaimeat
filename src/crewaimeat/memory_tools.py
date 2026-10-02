@@ -17,10 +17,77 @@ Usage (in a crew's build_domain — crew-forge wires this for content/writer/edi
 from __future__ import annotations
 
 import json
+import re
 
 from crewai.tools import tool
 
 from crewaimeat.aimeat_crew import _aimeat_call
+
+# The codes a node answers when the CALLER may not read, as against the key holding nothing. The
+# connector's /local/call passes the node's envelope through, so these are the node's own words
+# (aimeat/src/auth/deny.ts: `errorEnvelope('SCOPE_DENIED', message)`).
+_REFUSAL_CODES = frozenset({"SCOPE_DENIED", "INSUFFICIENT_SCOPE", "ACCESS_DENIED", "FORBIDDEN"})
+# A scope as the node writes one into its message: `memory:read`, `organism:write`, `ai:use`. The body
+# does not carry the needed scope as a field -- only the WWW-Authenticate header does, and that does not
+# survive the connector's envelope -- so the message is where it is read from.
+_SCOPE_RE = re.compile(r"[a-z][a-z0-9_-]*:[a-z0-9_*-]+")
+
+
+class MemoryReadRefused(RuntimeError):
+    """The node REFUSED a memory read for a missing permission. That is not an absent key: the key may
+    well hold a value, and this agent is not allowed to see it.
+
+    Measured 2026-10-02 on a hosted place: a chat-proposed agent had only memory:write, its read of
+    `crews.registry.<name>` answered SCOPE_DENIED, and the runtime reported "holds no crew definition
+    ... Publish one" -- the wrong defect, sending the person to publish a definition that was there.
+    """
+
+    def __init__(self, key: str, *, code: str, message: str, needed: list[str]):
+        self.key = key
+        self.code = code or "REFUSED"
+        self.message = message
+        self.needed = [str(s) for s in needed if s]
+        super().__init__(self._sentence())
+
+    def _sentence(self) -> str:
+        from crewaimeat.lifecycle import WHERE_THE_OWNER_GIVES_IT
+
+        needs = " and ".join(self.needed) if self.needed else "a permission the node did not name"
+        detail = f"{self.code}: {self.message}" if self.message else self.code
+        return (
+            f"the node refused this agent the read of {self.key} ({detail}). "
+            f"This agent needs {needs}, and {WHERE_THE_OWNER_GIVES_IT}."
+        )
+
+
+class MemoryReadFailed(RuntimeError):
+    """The read's answer never arrived (no daemon, a dropped tunnel that outlasted the retries). Not
+    absent and not refused: nothing is known about what the key holds."""
+
+
+def read_owner_key_strict(agent_name: str, key: str, *, needs: str | None = None):
+    """`read_owner_key` that tells a REFUSED read from an EMPTY key, for a read whose answer decides
+    whether an agent can start at all.
+
+    Returns the value, or None only when the node answered that the key holds nothing. Raises
+    `MemoryReadRefused` when the node refused the caller (the message names the scope; `needs` is the
+    scope the caller knows the read takes, used when the node's message names none), and
+    `MemoryReadFailed` when no answer arrived at all. `read_owner_key` folds all three into None, which
+    is right for a pipeline stage asking "is the upstream key there yet" and wrong for a runtime asking
+    "do I have a definition": for that one, None sent the person to publish a definition that existed.
+    """
+    r = _aimeat_call(agent_name, "aimeat_memory_read", {"key": key, "owner_scope": True}, return_error=True)
+    if r is None:
+        raise MemoryReadFailed(f"no answer to the read of {key} (no daemon, or the tunnel stayed down)")
+    if isinstance(r, dict) and r.get("ok") is False:
+        err = r.get("error")
+        code = str((err.get("code") if isinstance(err, dict) else err) or "").upper()
+        message = str(err.get("message") or "") if isinstance(err, dict) else str(err or "")
+        if code in _REFUSAL_CODES or r.get("http_status") == 403:
+            needed = _SCOPE_RE.findall(message) or ([needs] if needs else [])
+            raise MemoryReadRefused(key, code=code, message=message, needed=needed)
+        return None  # NOT_FOUND and its kin: the node answered, and the key holds nothing
+    return r.get("value") if isinstance(r, dict) else r
 
 
 def owner_scope_value(agent_name: str, key: str):

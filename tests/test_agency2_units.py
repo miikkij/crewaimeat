@@ -363,6 +363,31 @@ def test_health_says_a_stopped_agent_has_no_definition(_isolated):
     assert "no definition" in row["detail"] and row["fix"] == "agent:myyntiraportti"
 
 
+def test_health_says_a_refused_definition_is_a_permission_not_a_page(_isolated):
+    """The definition is there and the agent may not read it: sending the person to describe the
+    agent would have them publish over a definition that exists (hosted place, 2026-10-02)."""
+    store.add_instance("http://localhost:40561", "teemu")
+    store.add_agent("myyntiraportti", "http://localhost:40561")
+    store.update_agent("myyntiraportti", connected=True)
+    _serve_json(_isolated / "home", [{"agent": "myyntiraportti", "gaii": "g", "node_url": "u", "transport": "tunnel"}])
+    rows = health.check(
+        "en",
+        openrouter_fn=lambda: {"ok": True, "detail": ""},
+        health_fn=lambda url: {"ok": True, "node_id": "n", "detail": {}},
+        roster_fn=lambda n: [
+            {"name": "myyntiraportti", "mode": "task-runner", "default_scopes": list(connect.REQUIRED_SCOPES)}
+        ],
+        running_fn=lambda n: None,
+        log_fn=lambda n: (
+            "[myyntiraportti] CANNOT START — the node REFUSED this agent the read of "
+            "crews.registry.myyntiraportti: SCOPE_DENIED: This needs memory:read."
+        ),
+    )
+    row = next(r for r in rows if r["id"] == "agent:myyntiraportti")
+    assert "refused" in row["detail"] and "memory:read" in row["detail"]
+    assert row["fix"] == "reconnect:myyntiraportti", "the fix is the approval page, not the Describe page"
+
+
 # ── schedules ────────────────────────────────────────────────────────────────
 
 

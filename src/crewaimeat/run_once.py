@@ -29,6 +29,13 @@ EXIT CODES (the spawner reads these):
      permission, so the spawner does not re-run it on its own. Measured 2026-09-29 on a sold seat, where
      such a run exited 0 and the customer's task stayed queued with nothing saying why.
   1  anything else: the crew raised, the crew file has no run(), the agent is unknown.
+
+A RUNTIME THAT CANNOT START FAILS THE TASK IT WAS STARTED FOR. The worker exists because a task is
+waiting; when it cannot even begin (its definition refused or invalid, its crew file broken), every task
+the node holds open for the agent is failed with the reason and what the owner does about it
+(lifecycle.fail_open_tasks). Measured 2026-10-02 on a hosted place: a chat-proposed agent was refused
+the read of its own definition, exited 1 on each wake, and the customer's task stayed "active" for good
+with no word on it. A refused start exits 3 like a refused run, so the spawner does not re-run it.
 """
 
 from __future__ import annotations
@@ -93,8 +100,44 @@ def _run_node_backed(agent: str, *, quiet: bool = False) -> int:
         return int(exc.code or 0)
     except Exception as exc:  # noqa: BLE001 — the spawner needs the real cause, not a stack in a log
         print(f"[run-once] {agent}: FAILED {type(exc).__name__}: {exc}", file=sys.stderr)
+        _cannot_start(agent, exc)
         return 1
     return 0
+
+
+def _cannot_start_reason(why: BaseException | str) -> str:
+    """The sentence the task carries: what stopped the runtime, and what the owner does about it."""
+    from crewaimeat.crew_def import CrewDocError
+    from crewaimeat.memory_tools import MemoryReadRefused
+
+    if isinstance(why, str):
+        return why
+    if isinstance(why, MemoryReadRefused):
+        return str(why)  # names the key, the node's answer, the scope, and where the owner gives it
+    if isinstance(why, CrewDocError):
+        if why.missing:
+            return (
+                "the agent is registered but not yet defined (its definition key is empty). "
+                "Describe it on the agent's page so a definition is published"
+            )
+        return "the agent's definition was rejected: " + "; ".join(why.errors) + ". Fix it on the agent's page"
+    return f"{type(why).__name__}: {why}"
+
+
+def _cannot_start(agent: str, why: BaseException | str) -> list[str]:
+    """Fail the tasks this worker was started for, with the reason. Never raises: the exit code and the
+    log are still owed whatever the node answers."""
+    from crewaimeat.aimeat_crew import _aimeat_call
+    from crewaimeat.lifecycle import fail_open_tasks
+    from crewaimeat.memory_tools import MemoryReadRefused
+
+    reason = _cannot_start_reason(why)
+    print(f"[run-once] {agent}: CANNOT START — {reason}", file=sys.stderr)
+    try:
+        return fail_open_tasks(_aimeat_call, agent, reason, refused=isinstance(why, MemoryReadRefused))
+    except Exception as exc:  # noqa: BLE001 — the task stays as it is; say so beside the exit code
+        print(f"[run-once] {agent}: could not fail its open tasks ({exc!r}); they stay as they are", file=sys.stderr)
+        return []
 
 
 EXIT_REFUSED = 3
@@ -242,22 +285,30 @@ def run_once(agent: str, *, root: Path | None = None, quiet: bool = False) -> in
         spec_ = importlib.util.spec_from_file_location(f"_once_{man.path.stem}", man.path)
         if spec_ is None or spec_.loader is None:
             print(f"[run-once] {agent}: cannot load {man.path}", file=sys.stderr)
-            return 1
+            _cannot_start(agent, f"the crew file {man.path.name} cannot be loaded")
+            return _finish(agent, started, 1)
         mod = importlib.util.module_from_spec(spec_)
         sys.modules[spec_.name] = mod
-        spec_.loader.exec_module(mod)  # this is where `import crewai` is actually paid for
-        runner = getattr(mod, "run", None)
-        if not callable(runner):
-            print(f"[run-once] {agent}: {man.path.name} has no run() — nothing to spawn.", file=sys.stderr)
-            return 1
-        runner()  # builds the CrewSpec and calls our shim instead of the real run_crew
+        try:
+            spec_.loader.exec_module(mod)  # this is where `import crewai` is actually paid for
+            runner = getattr(mod, "run", None)
+            if not callable(runner):
+                print(f"[run-once] {agent}: {man.path.name} has no run() — nothing to spawn.", file=sys.stderr)
+                _cannot_start(agent, f"the crew file {man.path.name} has no run()")
+                return _finish(agent, started, 1)
+            runner()  # builds the CrewSpec and calls our shim instead of the real run_crew
+        except Exception as exc:  # noqa: BLE001 — a broken crew file; the task must not wait on it forever
+            print(f"[run-once] {agent}: {man.path.name} failed to load: {type(exc).__name__}: {exc}", file=sys.stderr)
+            _cannot_start(agent, f"the crew file {man.path.name} failed to load ({type(exc).__name__}: {exc})")
+            return _finish(agent, started, 1)
     finally:
         aimeat_crew.run_crew = real_run_crew
 
     spec = captured.get("spec")
     if spec is None:
         print(f"[run-once] {agent}: run() did not call run_crew — cannot determine the crew spec.", file=sys.stderr)
-        return 1
+        _cannot_start(agent, f"the crew file {man.path.name}'s run() did not build a crew")
+        return _finish(agent, started, 1)
 
     if not quiet:
         print(

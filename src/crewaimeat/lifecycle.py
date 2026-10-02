@@ -32,7 +32,13 @@ from crewaimeat.decline import declined_message, take_declined
 RUN_CLOCK_MARGIN_S = 5.0
 
 # Where the owner gives a missing permission, in the words the task failure and the log both use.
-_WHERE_THE_OWNER_GIVES_IT = "the owner gives it in Profile > Agents > Manage access rights"
+WHERE_THE_OWNER_GIVES_IT = "the owner gives it in Profile > Agents > Manage access rights"
+_WHERE_THE_OWNER_GIVES_IT = WHERE_THE_OWNER_GIVES_IT
+
+# The statuses of a task the node is waiting on this agent for. The daemon's own vocabulary
+# (aimeat_crewai.daemon polls "active" and "stalled"); a queued task of a non-task-runner is the
+# OWNER's to start and is left alone.
+_OPEN_STATUSES = frozenset({"active", "stalled", "in_progress"})
 
 _LOCK = threading.Lock()
 # The start of the WORKER's run, when this process is one (run_once sets it). Consumed by the first task
@@ -78,6 +84,66 @@ def note_refused(task_id: str, reason: str) -> None:
 def refused_runs() -> dict[str, str]:
     with _LOCK:
         return dict(_REFUSED)
+
+
+def cannot_start_message(reason: str) -> str:
+    """The sentence a task carries when the runtime that was to run it never got going."""
+    reason = reason.strip().rstrip(".")
+    return f"The agent's runtime could not start, so this task did not run: {reason}. Once that is fixed, the task can run again."
+
+
+def fail_open_tasks(call: Callable, agent_name: str, reason: str, *, refused: bool = False) -> list[str]:
+    """Fail every task the node holds OPEN for this agent, naming `reason`. Returns the ids it failed.
+
+    A RUNTIME THAT CANNOT START MUST NOT LEAVE ITS TASK ACTIVE. Measured 2026-10-02 on a hosted place:
+    a chat-proposed agent was refused the read of its own definition, the worker exited 1 on each wake
+    (two runs, 11 s each), and the customer's task stayed "active" for good with no word on it. The
+    task is the one surface the customer sees, so the reason -- and what the owner does about it --
+    goes THERE, not only into a log on a machine they cannot open.
+
+    `refused=True` records each task under lifecycle's refused set, so run_once exits 3 and the spawner
+    does not re-run a start the owner has to unblock. An agent refused task:write cannot fail its own
+    task either; then the record and the exit code are what is left, and the log says so.
+    """
+    message = cannot_start_message(reason)
+    data = call(agent_name, "aimeat_task_list", {})
+    tasks = data.get("tasks") if isinstance(data, dict) else data
+    if not isinstance(tasks, list):
+        print(
+            f"[{agent_name}] could not list its tasks, so none could be failed with the reason; "
+            f"an open task stays as it is: {reason}",
+            file=sys.stderr,
+        )
+        if refused:
+            note_refused("(start-up)", reason)
+        return []
+    failed: list[str] = []
+    noted = False
+    for t in tasks:
+        if not isinstance(t, dict) or str(t.get("status") or "") not in _OPEN_STATUSES:
+            continue
+        tid = str(t.get("id") or "")
+        if not tid:
+            continue
+        if refused:
+            note_refused(tid, reason)
+            noted = True
+        fr = call(agent_name, "aimeat_task_fail", {"task_id": tid, "message": message})
+        if fr is None:
+            print(
+                f"[{agent_name}] runtime cannot start -> task_fail {tid} was NOT accepted "
+                "(an agent without task:write cannot fail its own task); the task stays active until "
+                f"the owner acts: {reason}",
+                file=sys.stderr,
+            )
+            continue
+        failed.append(tid)
+        print(f"[{agent_name}] runtime cannot start -> task_fail {tid}: {reason}", file=sys.stderr)
+    if refused and not noted:
+        note_refused("(start-up)", reason)
+    if not failed and not any(isinstance(t, dict) and str(t.get("status") or "") in _OPEN_STATUSES for t in tasks):
+        print(f"[{agent_name}] runtime cannot start, and the node holds no open task for it: {reason}", file=sys.stderr)
+    return failed
 
 
 def refusal_summary(refusals: list[dict]) -> str:

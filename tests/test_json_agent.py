@@ -5,7 +5,7 @@ routine rather than exceptional — a read that does not answer, and a definitio
 and neither may take a working agent down. An agent that goes dark because of a typo is worse than
 one running yesterday's definition while the typo is fixed.
 
-No node and no model here: `read_owner_key` and `_aimeat_call` are stubbed, so every assertion is
+No node and no model here: `read_owner_key_strict` and `_aimeat_call` are stubbed, so every assertion is
 about what the runtime decides.
 """
 
@@ -58,7 +58,7 @@ def node(monkeypatch):
             raise v
         return v
 
-    monkeypatch.setattr(ja, "read_owner_key", _read)
+    monkeypatch.setattr(ja, "read_owner_key_strict", lambda agent, key, **_kw: _read(agent, key))
     monkeypatch.setattr(
         "crewaimeat.aimeat_crew._aimeat_call",
         lambda a, tool, payload: state["writes"].append({"agent": a, "tool": tool, **payload}) or {"ok": True},
@@ -102,6 +102,47 @@ def test_an_agent_with_no_definition_says_exactly_that(node):
     with pytest.raises(CrewDocError) as e:
         ja.load_def("node-agent")
     assert "registered but not yet defined" in " ".join(e.value.errors)
+
+
+def _refused():
+    from crewaimeat.memory_tools import MemoryReadRefused
+
+    return MemoryReadRefused(
+        "crews.registry.node-agent", code="SCOPE_DENIED", message="This needs memory:read.", needed=["memory:read"]
+    )
+
+
+def test_a_refused_read_is_called_refused_and_not_no_definition(node, monkeypatch, capsys):
+    """Hosted place, 2026-10-02: an agent with only memory:write was answered SCOPE_DENIED here, and the
+    log said "holds no crew definition (got NoneType) ... Publish one" -- the wrong defect. A refused
+    read says it was refused and which scope is missing; "no definition" is for an EMPTY key only."""
+    from crewaimeat.memory_tools import MemoryReadRefused
+
+    node["value"] = _refused()
+    monkeypatch.setattr("crewaimeat.aimeat_crew.run_crew", lambda spec: None)
+    with pytest.raises(MemoryReadRefused):
+        ja.run_json_agent("node-agent")
+
+    err = capsys.readouterr().err
+    assert "REFUSED this agent the read of crews.registry.node-agent" in err
+    assert "memory:read" in err and "Manage access rights" in err
+    assert "holds no crew definition" not in err and "Publish one" not in err
+    status = [w for w in node["writes"] if w["tool"] == "aimeat_memory_write"][-1]["value"]
+    assert status["ok"] is False and any("memory:read" in e for e in status["errors"]), (
+        "the Crew tab shows the refusal -- the status key takes memory:write, which such an agent has"
+    )
+
+
+def test_a_refused_read_mid_flight_keeps_the_last_definition_and_says_why(node, capsys):
+    """A permission the agent lost is not a tunnel blip: the floor holds, and the tab is told why,
+    because the owner is the one who can end it."""
+    node["value"] = _refused()
+    live = ja.Definition("node-agent", DOC_V1, 3)
+
+    assert live.refresh() == DOC_V1 and live.revision == 3
+    assert "REFUSED this agent the read" in capsys.readouterr().err
+    status = [w for w in node["writes"] if w["tool"] == "aimeat_memory_write"][-1]["value"]
+    assert status["ok"] is False and status["revision"] == 3 and any("memory:read" in e for e in status["errors"])
 
 
 def test_a_new_revision_is_picked_up_on_the_next_build(node):

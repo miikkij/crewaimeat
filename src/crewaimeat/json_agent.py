@@ -45,7 +45,7 @@ from typing import Any
 
 from crewaimeat.crew_def import CrewDocError, build_domain_from_json, validate_crew_doc
 from crewaimeat.crew_registry import registry_key
-from crewaimeat.memory_tools import read_owner_key
+from crewaimeat.memory_tools import MemoryReadRefused, read_owner_key_strict
 
 # Where the runtime says what it actually loaded. One key, overwritten — this is a live status, not a
 # history, and the history of DEFINITIONS lives in the node's own `.version.N` keys.
@@ -82,20 +82,27 @@ def load_def(agent_name: str) -> tuple[dict, int | None]:
     outside this tab" — and it needs the field ABSENT, not filled with something else.
     """
     key = registry_key(agent_name)
-    value = read_owner_key(agent_name, key)
+    # STRICT: a read the node REFUSED raises `MemoryReadRefused` and never reads as an empty key.
+    # Measured 2026-10-02 on a hosted place: an agent with only memory:write was answered SCOPE_DENIED
+    # here, and the runtime told the person "holds no crew definition ... Publish one" -- the wrong
+    # defect, for a definition that was there. "No definition" is said only when the read succeeded and
+    # the key is empty.
+    value = read_owner_key_strict(agent_name, key, needs="memory:read")
     if isinstance(value, str):
         try:
             value = json.loads(value)
         except ValueError as exc:
             raise CrewDocError([f"{key} is not JSON: {exc}"]) from exc
-    if not isinstance(value, dict):
+    if value is None:
         raise CrewDocError(
             [
-                f"{key} holds no crew definition (got {type(value).__name__}). This agent is "
-                "registered but not yet defined — publish a definition to that key."
+                f"{key} holds no crew definition — the key is empty. This agent is registered but "
+                "not yet defined: publish a definition to that key."
             ],
             missing=True,
         )
+    if not isinstance(value, dict):
+        raise CrewDocError([f"{key} holds no crew definition (got {type(value).__name__}, not a document)."])
     doc = value["doc"] if isinstance(value.get("doc"), dict) else value
     raw = value.get("revision") if doc is not value else None
     # `bool` is an int in Python, and `True` as a revision would print as a plausible "1".
@@ -165,6 +172,16 @@ class Definition:
                 file=sys.stderr,
             )
             report_runtime(self.agent_name, revision=self.revision, ok=False, errors=errs)
+            return self.doc
+        except MemoryReadRefused as exc:
+            # A permission the agent lost, not a tunnel blip and not a bad document: the floor holds,
+            # and the tab is told WHY, because the owner is the one who can end it.
+            print(
+                f"[{self.agent_name}] the node REFUSED this agent the read of "
+                f"{registry_key(self.agent_name)}; staying on revision {self.revision}. {exc}",
+                file=sys.stderr,
+            )
+            report_runtime(self.agent_name, revision=self.revision, ok=False, errors=[str(exc)])
             return self.doc
         except Exception as exc:  # noqa: BLE001 — transport, not content: same floor, different reason
             print(
@@ -264,6 +281,19 @@ def run_json_agent(agent_name: str, **overrides: Any) -> None:
 
     try:
         doc, revision = load_def(agent_name)
+    except MemoryReadRefused as exc:
+        # REFUSED is not EMPTY. The definition may well be there; this agent may not read it. Saying
+        # "publish one" here sent a person the wrong way (hosted place, 2026-10-02). The runtime
+        # status key takes memory:write, which such an agent usually has, so the Crew tab shows the
+        # refusal; the task the worker was woken for is failed with it by run_once.
+        print(
+            f"[{agent_name}] CANNOT START — the node REFUSED this agent the read of "
+            f"{registry_key(agent_name)}: {exc.code}: {exc.message or '(no message)'}",
+            file=sys.stderr,
+        )
+        print(f"[{agent_name}] {exc}", file=sys.stderr)
+        report_runtime(agent_name, revision=None, ok=False, errors=[str(exc)])
+        raise
     except CrewDocError as exc:
         # An EMPTY key on an agent the forge just built is not a failure yet: the definition was
         # staged on disk because nothing could publish it before this agent held its own token.
