@@ -188,6 +188,15 @@ def _decide_tools_fn():
     return decide_tools
 
 
+def _tools_workspace(agent_name: str, ctx: Any) -> list:
+    # READ the owner's organisms and workspaces by name -- the index, then the records. What an agent
+    # needs to work on the person's own data (a CRM in a workspace) without being handed a raw memory key
+    # the proposer reconstructed. Read-only; access is the node's organism membership.
+    from crewaimeat.workspace_tools import make_workspace_tools
+
+    return list(make_workspace_tools(agent_name))
+
+
 def _tools_decide(agent_name: str, ctx: Any) -> list:
     # The owner's DECISION RULES, one CrewAI tool each: the questions, the thresholds and the bands
     # are theirs, written once on the node, and the crew sends only the state. The agent sees a tool
@@ -221,6 +230,7 @@ TOOL_REGISTRY: dict[str, Any] = {
     "crew_registry": _tools_crew_registry,
     "exchange": _tools_exchange,
     "decide": _tools_decide,
+    "workspace": _tools_workspace,
 }
 
 # Tool ids that take a SELECTOR after a colon: `decide:sort-a-message` is one decision rule, and
@@ -270,6 +280,7 @@ TOOL_PURPOSES: dict[str, str] = {
     "crew_registry": "publish a crew definition to the AIMEAT registry, and install one somebody shared by their GAII",
     "exchange": "trade on the AIMEAT EXCHANGE — browse/accept/run offerings, post needs + bid, renegotiate, run agent-work; plus deterministic band + I/O-match gates",
     "decide": "ask the owner's DECISION RULES — one tool per rule, named after the job; the rule holds the questions, thresholds and bands and you send only the state. `decide:<rule>` picks one rule instead of all of them",
+    "workspace": "READ the owner's organisms and workspaces by name: list them, read one workspace's index (spaces + record titles), then the records you need. Read-only",
 }
 
 # The EXCHANGE bundle may be referenced whole (id "exchange") OR by any single tool name (the node

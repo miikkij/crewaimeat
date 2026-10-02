@@ -34,6 +34,15 @@ NODE_DEFAULT_SCOPES: tuple[str, ...] = ("memory:read", "memory:write", "memory:d
 #   wallet:read     reading what the agents spent (GET /v1/ledger/usage, routes/ledger.ts)
 REQUIRED_SCOPES: tuple[str, ...] = ("agent:write", "task:write", "workflow:read", "wallet:read")
 
+# What EVERY agent this runtime runs writes with, whatever its job: the deliverable goes to memory
+# (memory:write) and the scaffold pushes the agent's identity on every start (agent:write). Measured
+# 2026-10-02 by aimeat-protocol on a sandbox: an agent proposed with memory:read alone read its data and
+# then failed -- the node refused aimeat_memory_write and aimeat_agent_tags_set, the task ended `failed`
+# and the spawner logged exit 3; the same definition with these two added finished `done` in 64 s. So a
+# proposal carries these beside what the job needs, and `crew.menu` states them as `required_scopes` so a
+# proposer reads them from the runtime instead of carrying a copy that falls behind.
+RUNTIME_WRITE_SCOPES: tuple[str, ...] = ("memory:write", "agent:write")
+
 # The connector release whose `connect` takes `--scopes`. An older CLI refuses an undeclared option and
 # the whole registration fails, so a caller that cannot vouch for its connector checks this first.
 SCOPES_FLAG_SINCE = "3.21.0"

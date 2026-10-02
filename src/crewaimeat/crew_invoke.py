@@ -48,6 +48,7 @@ def handle(capability: str, payload: dict, *, agent_name: str) -> tuple[bool, di
     # picked. A list the node does not own can only ever be behind, so it asks. Takes no `doc`, which
     # is why it is answered before the doc check below.
     if capability == "crew.menu":
+        from crewaimeat.agent_scopes import RUNTIME_WRITE_SCOPES
         from crewaimeat.crew_def import TOOL_PURPOSES, TOOL_REGISTRY
         from crewaimeat.llm import available_models, known_profiles
 
@@ -56,6 +57,10 @@ def handle(capability: str, payload: dict, *, agent_name: str) -> tuple[bool, di
             "spec": "aimeat.crew-menu/1",
             "tools": tools + _decide_rule_rows(agent_name),
             "llm": {"profiles": known_profiles(), "models": available_models()},
+            # What EVERY agent this runtime runs writes with, whatever its job -- so a proposer reads it
+            # from the runtime instead of the node's guidance carrying a copy that can fall behind. Measured
+            # 2026-10-02: a proposal holding memory:read alone failed its first run on exactly these two.
+            "required_scopes": list(RUNTIME_WRITE_SCOPES),
         }
 
     doc = payload.get("doc") if isinstance(payload, dict) else None

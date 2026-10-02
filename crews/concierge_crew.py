@@ -22,6 +22,7 @@ Run: uv run python crews/concierge_crew.py
 from __future__ import annotations
 
 import ipaddress
+import json
 import os
 import re
 import socket
@@ -32,7 +33,17 @@ import requests
 from crewai import Agent, Crew, Process, Task
 from crewai.tools import tool
 
-from crewaimeat import dm, hitl, image_contract, orchestrator, seedream_gen, session_store, vision
+from crewaimeat import (
+    concierge_propose,
+    dm,
+    hitl,
+    image_contract,
+    orchestrator,
+    seedream_gen,
+    session_store,
+    vision,
+    workspace_tools,
+)
 from crewaimeat.aimeat_crew import BuildContext, CrewSpec, _aimeat_call, _valid_chat_commands, run_crew
 from crewaimeat.crew import _web_tools
 from crewaimeat.llm import get_llm
@@ -83,6 +94,8 @@ CAPABILITIES_TEXT = (
     "then summarise or answer questions about them.\n"
     "- **Delegate to a specialist** in my fleet when your request needs deep expertise (e.g. detailed "
     "research on a Finnish company, a jingle) — I hand it to the right agent and relay their answer back here.\n"
+    "- **Propose a new agent** for a job you want done, or done regularly — you approve it on your Agents "
+    "page and it runs here. I look at your own workspaces first, so it works on your data.\n"
     "- **Save a request you use a lot as a command** — ask me to 'save that as a command' and, once you "
     "approve it, it becomes a one-click chip in your composer.\n"
     "- If I'm unsure what you mean, I'll **ask you a quick multiple-choice question** to get it right.\n\n"
@@ -96,7 +109,7 @@ README = """[[FIGLET:slant]["Concierge"]]
 A conversational agent you **DM**. It searches the web (returns links), finds images and attaches them
 moodboard-style, **finds a document (a PDF form/application) on the web and attaches it**, fetches a file
 from a URL, generates an image from a description, and **delegates to fleet specialists** (handing a
-request to the right agent and relaying its reply back) — then replies right in the thread. Ask
+request to the right agent and relaying its reply back) — then replies right in the thread. I can propose a new agent for you; you approve it on your Agents page and it runs here. Ask
 **"what can you do?"** and it tells you.
 
 **How to talk to me:** DM me a request — "find 4 cosy cabins", "find me a Business Finland funding
@@ -114,6 +127,7 @@ CAPABILITY_TAGS = [
     "file-analysis",
     "image-gen",
     "delegation",
+    "agent-proposals",
 ]
 CAPABILITIES = {
     # NB technical[].type MUST be one of mcp|skill|tool — the node REJECTS anything else (e.g. "messaging"/
@@ -126,6 +140,7 @@ CAPABILITIES = {
         {"name": "file-analysis", "type": "skill"},  # reads attached PDFs/docs
         {"name": "federated-dm", "type": "skill"},
         {"name": "delegation", "type": "skill"},  # routes to fleet specialists
+        {"name": "agent-proposals", "type": "tool"},  # proposes a new agent on the node; the owner approves
     ],
     "domain": [
         "assistant",
@@ -145,7 +160,7 @@ OFFERS = [
         "id": "concierge-chat",
         "title": "A conversational assistant you DM",
         "ask": "DM me anything: I search the live web and return links, build a moodboard, read a file you "
-        "attach, generate an image, or describe one you send. I am a conversation, NOT a task-runner — "
+        "attach, generate an image, or describe one you send. I can propose a new agent for you; you approve it on your Agents page and it runs here. I am a conversation, NOT a task-runner — "
         "I do not run scheduled jobs, and I do not act on the node without being asked.",
         "example": "«etsi kolme lähdettä EU:n AI-asetuksen läpinäkyvyysvelvoitteista ja tiivistä ne»",
         "cost": "cheap",
@@ -309,7 +324,81 @@ def _concierge_tools(sink: dict, *, ask_to: str | None = None, ask_conv: str | N
         """Explain what I can do and what I can return to the user."""
         return CAPABILITIES_TEXT
 
-    tools = [*_web_tools(), find_images, fetch_file, find_file, generate_image, describe_capabilities]
+    # ── A new agent is made HERE, on the person's own node -- on BOTH paths (a DM and an assigned task).
+    # Asked for "an agent that every morning gathers the CRM's open deals", this concierge used to search
+    # the web and recommend CrewAI Studio and HubSpot (2026-10-02), because web search was all it had. The
+    # node makes, runs and credentials the agent itself in one owner press; these three tools are the road.
+    @tool("look_at_my_workspaces")
+    def look_at_my_workspaces(name: str = "") -> str:
+        """List the organisms and workspaces the person keeps on this node, by name. Give `name` (e.g.
+        'CADENCE', 'CRM') to also see that workspace's index: its spaces and record titles. Call this
+        FIRST whenever a request is about the person's own data or about a new agent, so you name THEIR
+        data instead of an outside product."""
+        found = workspace_tools.list_workspaces(AGENT_NAME)
+        text = workspace_tools.render_workspaces(found)
+        if not name:
+            return text
+        hit = workspace_tools.find_workspace(found, name)
+        if hit is None:
+            return f"No workspace matches '{name}'.\n\n{text}"
+        index = workspace_tools.workspace_index(AGENT_NAME, hit["organism_id"], hit["ws"])
+        shown = json.dumps(index, ensure_ascii=False) if index is not None else "(empty, or not readable for me)"
+        return f"{text}\n\nThe workspace {hit['name']}:\n{shown}"
+
+    @tool("propose_agent")
+    def propose_agent(
+        name: str,
+        display_name: str,
+        purpose: str,
+        instructions: str,
+        workspace: str = "",
+        tools: str = "",
+        delivers: str = "",
+        schedule_cron: str = "",
+        timezone: str = "Europe/Helsinki",
+    ) -> str:
+        """Propose a NEW AGENT on this node for the person to approve. Use it whenever they ask for a new
+        agent, a helper for one job, or work that should happen regularly ('every morning...', 'keep an eye
+        on...'). Look at their workspaces first (look_at_my_workspaces) so it works on THEIR data.
+        `name`: lowercase-with-hyphens, 3-40 chars, e.g. 'morning-deals'. `display_name`: what they see.
+        `purpose`: one sentence naming their data, e.g. 'Reads the open deals in CADENCE every morning and
+        names the ones to act on today'. `instructions`: what the agent does on each run, in plain words.
+        `workspace`: the workspace it reads (its name, e.g. 'CADENCE'). `tools`: comma-separated, only from
+        memory, workspace, web, article_fetch, schedule, dm (a named workspace adds 'workspace' itself).
+        `delivers`: what each run hands back. `schedule_cron`: a 5-field cron when it should run on a clock
+        ('0 7 * * *' = 07:00 daily), with `timezone`. Then relay EXACTLY what this returns -- it carries the
+        address where they approve. Do not ask them yes/no as well: their press there is the approval."""
+        return concierge_propose.propose(
+            AGENT_NAME,
+            name=name,
+            display_name=display_name,
+            purpose=purpose,
+            instructions=instructions,
+            tools=tools,
+            workspace=workspace,
+            delivers=delivers,
+            schedule_cron=schedule_cron,
+            timezone=timezone,
+        )
+
+    @tool("start_proposed_agent")
+    def start_proposed_agent(name: str) -> str:
+        """After the person has APPROVED an agent you proposed with a schedule and says 'start it' / 'start
+        <name>': set it to run on the schedule you proposed. It checks the agent exists first and refuses
+        if it does not yet -- never set a schedule before the approval."""
+        return concierge_propose.start_proposed(AGENT_NAME, name)
+
+    tools = [
+        *_web_tools(),
+        find_images,
+        fetch_file,
+        find_file,
+        generate_image,
+        describe_capabilities,
+        look_at_my_workspaces,
+        propose_agent,
+        start_proposed_agent,
+    ]
 
     if ask_to and ask_conv:
 
@@ -567,7 +656,13 @@ def _agent(llm, sink: dict, *, ask_to: str | None = None, ask_conv: str | None =
             "it, fetch a file from a URL, and generate an image from a description. When the user asks what "
             "you can do, you call describe_capabilities. If a request is genuinely ambiguous (a wrong guess "
             "would waste effort), you ask ONE structured clarifying question with ask_user instead of "
-            "guessing. You keep replies concise and always cite source links for web results."
+            "guessing. You keep replies concise and always cite source links for web results. "
+            "You live on the person's own AIMEAT node, which keeps their organisms and workspaces (their CRM, "
+            "their documents, their records) and which makes, runs and credentials agents itself. When the "
+            "person asks for a new agent, a helper for one job, or work that should happen regularly "
+            "('every morning...', 'keep an eye on...'), you look at their workspaces with "
+            "look_at_my_workspaces and call propose_agent. Never recommend an outside agent builder, "
+            "automation service or product for that -- the agent is made here, on their node, and runs here."
         ),
         llm=llm,
         tools=_concierge_tools(sink, ask_to=ask_to, ask_conv=ask_conv),
@@ -606,6 +701,15 @@ def _task(request: str, context: str, agent: Agent, today: str, directory: str =
             "what's in the file; don't claim I can't open files. "
             "If the user explicitly asks to SAVE or REMEMBER a request as a reusable command, call "
             "propose_command (then STOP — they'll get a Yes/No to approve it). "
+            "When the person asks for a NEW AGENT, a helper for one job, or work that should happen regularly "
+            "('every morning...', 'keep an eye on...'): first call look_at_my_workspaces (with the name of the "
+            "data they mention, e.g. their CRM) to see what they keep, then call propose_agent with a purpose "
+            "that names THEIR workspace, and reply with exactly what propose_agent returned. This node makes, "
+            "runs and credentials the agent itself. Never recommend an outside agent builder, automation "
+            "service or product (no CrewAI Studio, Zapier, HubSpot or the like) for that. When they later say "
+            "'start it' about an agent you proposed with a schedule, call start_proposed_agent. "
+            "When a request is about their own data, look_at_my_workspaces shows where it lives -- say which "
+            "workspace it belongs in rather than naming an outside product. "
             "Reply concisely in markdown; cite source links for any web results. Answer ONLY the message "
             "above — ignore earlier topics unless asked to continue."
         ),
