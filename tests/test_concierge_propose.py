@@ -404,3 +404,35 @@ def test_a_proposal_on_the_owners_node_road_asks_for_ai_use(node, monkeypatch):
     _propose()
     assert "ai:use" in n.proposal()["scopes"]
     assert "agent:write" not in n.proposal()["scopes"], "no longer needed by the runtime (aimeat-protocol bcd4027ed)"
+
+
+# ── an empty node still gets its proposal (ruling 2026-10-02) ───────────────────────────────
+
+
+def test_on_a_node_with_no_workspace_the_proposal_is_filed_and_the_assumption_is_said(node, monkeypatch):
+    """Asked on an empty place, the concierge asked for the workspace name, the language and the time
+    instead of proposing. The customer asked for a proposal and must get one: the agent reads memory
+    until the workspace exists, and the reply says so as an assumption to correct."""
+    n = node()
+    monkeypatch.setattr(workspace_tools, "list_workspaces", lambda agent: [])
+    reply = _propose(workspace="CADENCE")
+    p = n.proposal()
+    assert p["name"] == "morning-deals", "proposed, not asked"
+    assert "workspace" not in p["crew_def"]["agents"][0]["tools"] and "memory" in p["crew_def"]["agents"][0]["tools"]
+    assert "no workspace called 'CADENCE' yet" in reply and "reads memory until one exists" in reply
+    assert NEXT_STEP in reply
+
+
+def test_when_workspaces_exist_but_none_matches_nothing_is_guessed(node):
+    n = node()
+    reply = _propose(workspace="Pipeline")
+    assert "aimeat_agent_propose" not in n.tools()
+    assert "cannot find a workspace called 'Pipeline'" in reply and "CADENCE" in reply
+
+
+def test_the_prompt_tells_it_to_propose_on_an_empty_node_with_stated_assumptions(concierge):
+    task = concierge._task("Haluan agentin, joka kerää joka aamu CRM:n avoimet kaupat.", "", None, "2026-10-02")
+    text = task.description
+    assert "ALWAYS file the proposal in THIS run" in text
+    assert "07:00 Europe/Helsinki" in text and "reads memory until one exists" in text
+    assert "Never ask the workspace name, the language or the time INSTEAD of proposing" in text

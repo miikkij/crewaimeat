@@ -597,3 +597,42 @@ def test_the_reviewer_is_told_that_authored_content_is_not_a_claim():
     src = (Path(__file__).resolve().parents[1] / "src" / "crewaimeat" / "aimeat_crew.py").read_text(encoding="utf-8")
     assert "AUTHORED content is not a claim" in src
     assert "text a tool returned to the agent" in src
+
+
+# ── a tool's no-information phrase is not the opening of a customer's reply ────────────────
+
+
+@pytest.mark.parametrize(
+    "opener",
+    ["Ei julkista tietoa löytynyt.", "**Ei julkista tietoa löytynyt.**", "No public information found.", "Not found"],
+)
+def test_a_stock_no_information_opener_is_taken_off_the_top(opener):
+    from crewaimeat.verify_report import split_stock_opener
+
+    body, taken = split_stock_opener(f"{opener}\n\nTässä on ehdotus uudesta agentista: aamun-kaupat.\n")
+    assert body.startswith("Tässä on ehdotus") and taken
+
+
+def test_a_reply_that_is_nothing_found_stays_as_the_honest_answer():
+    from crewaimeat.verify_report import split_stock_opener
+
+    assert split_stock_opener("Ei julkista tietoa löytynyt.\n") == ("Ei julkista tietoa löytynyt.\n", "")
+    assert split_stock_opener("Not found anywhere in the sources we checked, sorry.\n") == (
+        "Not found anywhere in the sources we checked, sorry.\n",
+        "",
+    )
+
+
+def test_the_publish_cleaner_drops_the_opener_for_every_crew(capsys):
+    from crewaimeat.aimeat_crew import _for_the_reader
+
+    out = _for_the_reader(None, verified=False)("Ei julkista tietoa löytynyt.\n\nEhdotan agenttia aamun-kaupat.\n")
+    assert out == "Ehdotan agenttia aamun-kaupat.\n"
+    assert "no-information phrase off the top" in capsys.readouterr().err
+
+
+def test_the_grounding_rule_dictates_no_stock_phrase():
+    from crewaimeat.aimeat_crew import _GROUNDING_RULE
+
+    assert "löytynyt" not in _GROUNDING_RULE and "'not found'" not in _GROUNDING_RULE
+    assert "a reply never opens with one" in _GROUNDING_RULE

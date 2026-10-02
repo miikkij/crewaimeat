@@ -79,7 +79,7 @@ except Exception:  # pragma: no cover
 from crewaimeat.directives import fetch_directives, format_directives  # noqa: E402
 from crewaimeat.llm import get_llm  # noqa: E402
 from crewaimeat.progress import install_progress  # noqa: E402
-from crewaimeat.verify_report import report_message, split_provenance, split_verify  # noqa: E402
+from crewaimeat.verify_report import report_message, split_provenance, split_stock_opener, split_verify  # noqa: E402
 
 # run_crew() exits with this code when the agent's token is no longer accepted by the
 # node (needs re-approval). The watchdog scripts treat it as "stop, don't restart".
@@ -1238,7 +1238,19 @@ _ONBOARDING_TOOL_FILTER: tuple[str, ...] = (
 # The node's canonical TODO plan for the onboarding test task (accept_test_task's howTo.args template).
 # Proposed DETERMINISTICALLY (never via the LLM) wherever the scaffold touches the test task.
 _TEST_TASK_TODOS: tuple[dict, ...] = (
-    {"title": "Complete the onboarding test task", "verification": "Task status becomes done"},
+    # EVERY FIELD OF THE TOOL'S SCHEMA, FILLED. The liaison's MCP adapter sends a field the caller
+    # left out as null, and the connector's zod schema (cli/connect/mcp/tools/agent-tasks.ts) takes
+    # `optional()` strings, not null: "Input validation error: expected string, received null at
+    # todos[0].description". Measured 2026-10-02 on a sold place and again against a local node: the
+    # plan never landed, the driver read the refusal as "ok", and accept_test_task was repeated
+    # thirteen times.
+    {
+        "title": "Complete the onboarding test task",
+        "description": "Run the Hello Integration smoke test to its end.",
+        "verification": "Task status becomes done",
+        "estimate_minutes": 1,
+        "effects": [],
+    },
 )
 
 
@@ -1258,6 +1270,114 @@ def _resolve_test_task_id(agent_name: str) -> str | None:
         if "onboarding" in title or "verification" in title or expects.startswith("Agent completes the onboarding"):
             return t.get("id")
     return None
+
+
+def _test_task_id_from_status(tools, agent_name: str) -> str | None:
+    """The test task the node's onboarding WATCHES: `hints.test_task_id`, else the accept_test_task
+    step's own `details.testTaskId`. None when the status cannot be read or names neither."""
+    status_tool = next((t for t in tools if getattr(t, "name", None) == "aimeat_onboarding_status"), None)
+    if status_tool is None:
+        return None
+    try:
+        raw = status_tool.run()
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception as exc:  # noqa: BLE001 -- the scan below is the fallback
+        print(f"[{agent_name}] onboarding: status read for the test task id failed ({exc!r})", file=sys.stderr)
+        return None
+    if not isinstance(data, dict):
+        return None
+    hinted = (data.get("hints") or {}).get("test_task_id")
+    if hinted and "{" not in str(hinted):
+        return str(hinted)
+    for s in (data.get("onboarding") or {}).get("steps") or []:
+        if isinstance(s, dict) and s.get("id") == "accept_test_task":
+            tid = (s.get("details") or {}).get("testTaskId")
+            return str(tid) if tid else None
+    return None
+
+
+class _OnceTool:
+    """A task tool that answers an IDENTICAL repeat of a call that already answered ok with a failure
+    the driver stops on, instead of sending it again.
+
+    The package driver repeats the node's next step every round; when the node answers ok and still
+    names the same step, nothing in that loop ends it before `max_rounds` (18). Measured 2026-10-02 on a
+    sold place: thirteen identical propose_todos calls in twelve seconds, every one "ok". The second
+    identical call is answered here with STEP_NOT_ADVANCING, and the third with the same code, which is
+    the driver's own "failed the same way twice" stop. The failure text names the task the call used so
+    a log answers which id the plan landed on.
+    """
+
+    def __init__(self, inner: Any, agent_name: str) -> None:
+        self._inner = inner
+        self._agent = agent_name
+        self.name = getattr(inner, "name", None)
+        self._done: dict[str, Any] = {}
+
+    def __getattr__(self, item: str) -> Any:  # everything else is the real tool's
+        return getattr(self._inner, item)
+
+    def run(self, *args: Any, **kwargs: Any) -> Any:
+        key = json.dumps([args, kwargs], sort_keys=True, default=str)
+        if key in self._done:
+            tid = kwargs.get("task_id") or "(no task_id)"
+            print(
+                f"[{self._agent}] onboarding: {self.name} for task {tid} already answered ok and the node "
+                "still names the same step; not sending it again. The node's onboarding watches the task "
+                "its status names (hints.test_task_id).",
+                file=sys.stderr,
+            )
+            return json.dumps(
+                {
+                    "code": "STEP_NOT_ADVANCING",
+                    "message": f"{self.name} for task {tid} already answered ok in this run and the step is "
+                    "still pending; the same call is not repeated.",
+                }
+            )
+        result = self._inner.run(*args, **kwargs)
+        parsed = result
+        if isinstance(result, str):
+            try:
+                parsed = json.loads(result)
+            except ValueError:
+                parsed = None
+        # The node's answer, in the log beside the step: "ok" on the driver's line says only that no
+        # failure shape came back, and a task left without its plan after an "ok" needs the words.
+        shown = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, default=str)
+        print(f"[{self._agent}] onboarding: {self.name} answered: {shown[:400]}", file=sys.stderr)
+        failure = _tool_failure(result, parsed)
+        if failure:
+            # ONE FAILURE SHAPE for both drivers. The MCP adapter's own refusal ("MCP error -32602:
+            # Input validation error: ...") and the node's envelope ({ok: false, error: {code, message}})
+            # both read as "ok" to a driver that knows only `CODE: message` and a bare {code, message};
+            # that is how a refused plan was logged "ok" thirteen times (2026-10-02).
+            return json.dumps(failure)
+        self._done[key] = result
+        return result
+
+
+def _tool_failure(result: Any, parsed: Any) -> dict | None:
+    """`{"code", "message"}` when a task tool's answer is a refusal in any of the shapes that reach us, else None."""
+    if isinstance(parsed, dict):
+        if parsed.get("ok") is False:
+            err = parsed.get("error") if isinstance(parsed.get("error"), dict) else {}
+            return {
+                "code": str(err.get("code") or parsed.get("code") or "REFUSED"),
+                "message": str(err.get("message") or parsed.get("message") or json.dumps(parsed, default=str)[:400]),
+            }
+        if parsed.get("code") and parsed.get("message") and "ok" not in parsed:
+            return {"code": str(parsed["code"]), "message": str(parsed["message"])}
+        return None
+    text = result if isinstance(result, str) else ""
+    if text.lstrip().lower().startswith("mcp error"):
+        return {"code": "MCP_ERROR", "message": text.strip()[:600]}
+    return None
+
+
+def _once_per_run(tools, agent_name: str) -> list:
+    """The liaison's tools, with the test-task tools made once-per-identical-call (`_OnceTool`)."""
+    guarded = {"aimeat_task_propose_todos", "aimeat_task_complete"}
+    return [_OnceTool(t, agent_name) if getattr(t, "name", None) in guarded else t for t in tools]
 
 
 def _finish_pending_onboarding(tools, agent_name: str, step_args: dict, *, attempts: int = 4) -> None:
@@ -1343,9 +1463,10 @@ def _finish_pending_onboarding(tools, agent_name: str, step_args: dict, *, attem
                     parsed = json.loads(res)
                 except ValueError:
                     parsed = None
-            if isinstance(parsed, dict) and parsed.get("code") and parsed.get("message"):
+            refused = _tool_failure(res, parsed)
+            if refused:
                 print(
-                    f"[{agent_name}]   {sid} -> {tool_name} REJECTED by node: {parsed['code']}: {parsed['message']}",
+                    f"[{agent_name}]   {sid} -> {tool_name} REJECTED by node: {refused['code']}: {refused['message']}",
                     file=sys.stderr,
                 )
             else:
@@ -1409,7 +1530,13 @@ def _run_onboarding_only(
             # pass (the 15×accept_test_task stall). Pre-resolve the real id into step_args overrides
             # (an override replaces howTo.args verbatim). No open test task yet -> leave the howTo args;
             # the safety net below resolves from step details on a later pass.
-            _test_tid = _resolve_test_task_id(agent_name)
+            # THE NODE'S OWN ID FIRST. The node now ships `hints.test_task_id` on every status (routes/
+            # agent-onboarding.ts: "ALWAYS present when a test task exists") and the step's own
+            # details.testTaskId; the scan of the task list is the fallback for a node that ships neither.
+            # An override built from the scan can name a task the step does not watch, and then the plan
+            # lands, the node answers ok, and the step stays pending -- measured 2026-10-02 on a sold place:
+            # accept_test_task -> aimeat_task_propose_todos thirteen times in twelve seconds, each "ok".
+            _test_tid = _test_task_id_from_status(liaison.tools, agent_name) or _resolve_test_task_id(agent_name)
             if _test_tid:
                 step_args.setdefault(
                     "accept_test_task", {"task_id": _test_tid, "todos": [dict(t) for t in _TEST_TASK_TODOS]}
@@ -1417,9 +1544,10 @@ def _run_onboarding_only(
                 step_args.setdefault(
                     "complete_test_task", {"task_id": _test_tid, "message": "Onboarding test task completed."}
                 )
+            tools_once = _once_per_run(liaison.tools, agent_name)
             try:
                 run_hello_integration(
-                    liaison.tools,
+                    tools_once,
                     agent_name=agent_name,
                     step_args=step_args,
                     sleep_seconds=1.0,  # a beat between rounds so passive steps (configure_delivery) register
@@ -1435,7 +1563,7 @@ def _run_onboarding_only(
                 )
             # Safety net: if the mode-change re-derivation landed after the driver's first status read,
             # the driver may have returned on a stale completable=true — drive any leftover required step.
-            _finish_pending_onboarding(liaison.tools, agent_name, step_args)
+            _finish_pending_onboarding(tools_once, agent_name, step_args)
             # declare_services is OPTIONAL (the required-only driver skips it) — seed it for discoverability.
             if services:
                 ds = next(
@@ -1600,6 +1728,12 @@ def _for_the_reader(then: Callable[[str], str] | None, *, verified: bool) -> Cal
         body, taken = split_provenance(body)
         if taken:
             print(f"[publish] took a provenance declaration out of the deliverable: {taken[0][:120]}", file=sys.stderr)
+        body, opener = split_stock_opener(body)
+        if opener:
+            print(
+                f"[publish] took a tool's no-information phrase off the top of the deliverable: {opener}",
+                file=sys.stderr,
+            )
         if not body.strip():
             # Nothing is left once what is ours is taken out. The verdict line NEVER ships as the
             # deliverable, whatever remains (hosted place 2026-10-02: a customer's answer to "propose an
@@ -2138,11 +2272,18 @@ _NATURE_CREATIVE_HINTS = (
     "hauska",
     "tarina",
 )
+# NO STOCK PHRASE. This rule used to dictate the words "ei julkista tietoa löytynyt" / "not found", and
+# the concierge opened a customer's reply with exactly "Ei julkista tietoa löytynyt." before proposing
+# the agent they asked for (hosted place, 2026-10-02): a request to make something has no fact to find,
+# and a tool's wording is not an answer. The rule now asks for honesty in the deliverable's own words,
+# about a specific the deliverable actually makes a claim on, and never as its opening line.
 _GROUNDING_RULE = (
     "GROUNDING (this work involves factual claims): state only what your sources/inputs actually support. If you "
-    "cannot confirm a specific (name, number, date, organisation) from a source, write 'ei julkista "
-    "tietoa löytynyt' / 'not found' — do NOT invent estimate-ranges, and NEVER attach a citation to "
-    "anything you did not actually find. Never present an invented specific as a verified fact."
+    "cannot confirm a specific (name, number, date, organisation) from a source, leave it out or say in your own "
+    "words, in the language of the reply and at the place where it would have stood, that it is not confirmed — "
+    "do NOT invent estimate-ranges, and NEVER attach a citation to anything you did not actually find. Never "
+    "present an invented specific as a verified fact. This is about claims you make; what you create or propose "
+    "for the person (a plan, a name, a schedule) needs no such note, and a reply never opens with one."
 )
 
 

@@ -104,6 +104,28 @@ def split_provenance(text: str) -> tuple[str, list[str]]:
     return body, [t.strip() for t in taken]
 
 
+# A search tool's "nothing found" wording standing alone as the deliverable's FIRST line, with the real
+# answer below it. Measured 2026-10-02 on a hosted place: a customer's reply to "propose an agent" opened
+# with "Ei julkista tietoa löytynyt." -- the grounding rule had dictated the phrase, and the model put it
+# first before proposing. Only an opener is taken, and only when something follows: a reply that IS
+# "nothing was found" is an honest answer and stays.
+_STOCK_OPENER = re.compile(
+    r"^[ \t>*_`-]*(?:ei (?:julkista )?tietoa löytynyt|ei tuloksia|no (?:public )?information (?:was )?found|"
+    r"no results(?: found)?|nothing (?:was )?found|not found)[ \t]*[.!]?[ \t]*[*_`]*[ \t]*\n+",
+    re.IGNORECASE,
+)
+
+
+def split_stock_opener(text: str) -> tuple[str, str]:
+    """(the text without a tool's no-information phrase on its first line, that phrase or "")."""
+    if not text:
+        return text, ""
+    m = _STOCK_OPENER.match(text)
+    if not m or not text[m.end() :].strip():
+        return text, ""
+    return text[m.end() :], m.group(0).strip().strip("*_`-> ").strip()
+
+
 def report_message(report: dict) -> str:
     """One line for the task event and the log."""
     msg = report.get("verdict") or "Verify: (no verdict line)"

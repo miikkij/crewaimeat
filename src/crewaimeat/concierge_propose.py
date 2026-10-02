@@ -210,13 +210,15 @@ def _valid_cron(cron: str) -> bool:
     return len(parts) == 5 and all(_CRON_FIELD.match(p) for p in parts)
 
 
-def _relay(answer: dict, left_out: list[str], name: str, scheduled: str) -> str:
+def _relay(answer: dict, left_out: list[str], name: str, scheduled: str, assumption: str = "") -> str:
     """The node's own words first, then what only this side knows."""
     next_step = str(answer.get("next_step") or "").strip()
     url = str(answer.get("approval_url") or "").strip()
     lines = [next_step or f"I have proposed the agent {name}."]
     if url and url not in next_step:
         lines.append(f"Approve it here: {url}")
+    if assumption:
+        lines.append(assumption)
     if left_out:
         lines.append(
             f"I left out {', '.join(left_out)}: I do not hold {'it' if len(left_out) == 1 else 'them'} myself, "
@@ -263,14 +265,24 @@ def propose(
         return f"I cannot give an agent {', '.join(unknown)}. The tools I can give: {', '.join(offered)}."
 
     found_ws = None
+    no_workspace_yet = ""
     if workspace:
         from crewaimeat.workspace_tools import find_workspace, list_workspaces, render_workspaces
 
         seen = list_workspaces(agent_name)
         found_ws = find_workspace(seen, workspace)
-        if found_ws is None:
+        if found_ws is None and seen:
             return f"I cannot find a workspace called '{workspace}'. {render_workspaces(seen)}"
-        if "workspace" not in chosen and "workspace_write" not in chosen:
+        if found_ws is None:
+            # AN EMPTY NODE STILL GETS ITS PROPOSAL (ruling 2026-10-02): the person asked for one. The
+            # agent reads memory until the workspace exists, and the reply says so as an assumption to
+            # correct, instead of a question in place of the proposal.
+            no_workspace_yet = (
+                f"Your node has no workspace called '{workspace}' yet, so the agent reads memory until one "
+                "exists. When you have created it, tell me and I attach the agent to it."
+            )
+            chosen = [t for t in chosen if t not in ("workspace", "workspace_write")]
+        elif "workspace" not in chosen and "workspace_write" not in chosen:
             chosen.append("workspace")
     if not chosen:
         chosen = ["memory"]
@@ -339,11 +351,11 @@ def propose(
         )
         scheduled = f"on the schedule '{schedule_cron}' ({record['timezone']})" if saved is not None else ""
         if saved is None:
-            return _relay(answer, left_out, name, "") + (
+            return _relay(answer, left_out, name, "", no_workspace_yet) + (
                 "\n\nI could not note the schedule you asked for. After approving, tell me again when it "
                 "should run and I will set it."
             )
-    return _relay(answer, left_out, name, scheduled)
+    return _relay(answer, left_out, name, scheduled, no_workspace_yet)
 
 
 def _pending(agent_name: str, name: str) -> dict | None:

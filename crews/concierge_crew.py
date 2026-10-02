@@ -360,7 +360,10 @@ def _concierge_tools(sink: dict, *, ask_to: str | None = None, ask_conv: str | N
     ) -> str:
         """Propose a NEW AGENT on this node for the person to approve. Use it whenever they ask for a new
         agent, a helper for one job, or work that should happen regularly ('every morning...', 'keep an eye
-        on...'). Look at their workspaces first (look_at_my_workspaces) so it works on THEIR data.
+        on...'). Look at their workspaces first (look_at_my_workspaces) so it works on THEIR data. Call it
+        in the SAME run as the request, even on a node with no workspace yet (leave `workspace` empty: the
+        agent reads memory until one exists) -- state your assumptions beside the proposal and ask the
+        person to correct them; never ask for the details instead of proposing.
         `name`: lowercase-with-hyphens, 3-40 chars, e.g. 'morning-deals'. `display_name`: what they see.
         `purpose`: one sentence naming their data, e.g. 'Reads the open deals in CADENCE every morning and
         names the ones to act on today'. `instructions`: what the agent does on each run, in plain words.
@@ -709,7 +712,13 @@ def _task(request: str, context: str, agent: Agent, today: str, directory: str =
             "When the person asks for a NEW AGENT, a helper for one job, or work that should happen regularly "
             "('every morning...', 'keep an eye on...'): first call look_at_my_workspaces (with the name of the "
             "data they mention, e.g. their CRM) to see what they keep, then call propose_agent with a purpose "
-            "that names THEIR workspace, and reply with exactly what propose_agent returned. This node makes, "
+            "that names THEIR workspace, and reply with exactly what propose_agent returned. ALWAYS file the "
+            "proposal in THIS run, also when their node has no workspace yet or a detail is missing: the "
+            "person asked for a proposal and gets one. Decide the open details yourself and SAY them as "
+            "assumptions beside the proposal -- the agent writes in the language of their request, a clock "
+            "job runs at 07:00 Europe/Helsinki, and with no workspace yet the agent reads memory until one "
+            "exists (leave `workspace` empty then) -- and ask them to correct any of it in their reply. Never "
+            "ask the workspace name, the language or the time INSTEAD of proposing. This node makes, "
             "runs and credentials the agent itself. Never recommend an outside agent builder, automation "
             "service or product (no CrewAI Studio, Zapier, HubSpot or the like) for that. When they later say "
             "'start it' about an agent you proposed with a schedule, call start_proposed_agent. "
