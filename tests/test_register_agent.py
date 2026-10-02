@@ -193,7 +193,9 @@ def test_a_new_agent_asks_for_its_scopes_defaults_included(monkeypatch, tmp_path
     # For a NEW agent the node grants what was requested INSTEAD of its default, so the defaults must
     # be in the request or the agent is approved without memory access.
     assert {"memory:read", "memory:write", "memory:delete", "catalogue:read"} <= set(asked)
-    assert "agent:write" in asked, "the identity push that was refused on the sold seat"
+    # The identity push needs no word of its own since aimeat-protocol bcd4027ed, and agent:write is the
+    # word that lets an agent approve a new agent by itself -- never asked for by default.
+    assert "agent:write" not in asked
     assert ok and "It asks for:" in msg, "the person approving sees what is being asked"
 
 

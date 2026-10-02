@@ -37,7 +37,8 @@ _WHERE_THE_OWNER_GIVES_IT = "the owner gives it in Profile > Agents > Manage acc
 _LOCK = threading.Lock()
 # The start of the WORKER's run, when this process is one (run_once sets it). Consumed by the first task
 # the worker builds: a spawn worker exists because of that task, so the refusals of its start-up -- the
-# identity push, where the sold seat's `PATCH /v1/agents/concierge/tags` was refused -- belong to it.
+# identity push, where the sold seat's `PATCH /v1/agents/concierge/tags` was refused (an agent's own
+# tags take no word since aimeat-protocol bcd4027ed, and are written only when they differ) -- belong to it.
 _WORKER_RUN_START: dict[str, str | None] = {"at": None}
 # Tasks this process refused, task id -> the sentence that says why. run_once reads it for its exit code.
 _REFUSED: dict[str, str] = {}

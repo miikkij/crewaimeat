@@ -5,7 +5,9 @@ to tick more on the consent page. Nobody did: on a sold seat the crew's identity
 (`PATCH /v1/agents/concierge/tags`) needed agent:write, the agent held the four defaults, and the run
 exited 0 with every write refused (2026-09-29). Since aimeat 3.21.0, `aimeat connect --scopes a,b,c`
 puts the scopes in the device-authorization request, the consent page shows them, and the node keeps
-what was asked beside what was granted.
+what was asked beside what was granted. (That push needs no word of its own since aimeat-protocol
+bcd4027ed, and is skipped when the node already holds the tags; what remains to ask for is what a
+crew's TOOLS need, and the defaults.)
 
 THE DEFAULTS ARE IN THE LIST ON PURPOSE. For a NEW agent the node grants what was requested INSTEAD of
 its default (routes/agents/device-auth.ts v1.9.0), so a request that named only what the scaffold needs
@@ -27,23 +29,38 @@ from collections.abc import Iterable
 # The node's stock default for an agent that names nothing (aimeat config.ts, defaultAgentScopes).
 NODE_DEFAULT_SCOPES: tuple[str, ...] = ("memory:read", "memory:write", "memory:delete", "catalogue:read")
 
-# What the scaffold needs beyond the defaults, measured against the routes that answer it:
-#   agent:write     the identity push on every start (tags) — without it tags_set answers SCOPE_DENIED
-#   task:write      closing its own tasks, and creating its own `agent_task` schedule (schedule-gate.ts)
-#   workflow:read   listing schedules (GET /v1/schedules)
-#   wallet:read     reading what the agents spent (GET /v1/ledger/usage, routes/ledger.ts)
-REQUIRED_SCOPES: tuple[str, ...] = ("agent:write", "task:write", "workflow:read", "wallet:read")
+# What a run of EVERY agent needs beyond the defaults: NOTHING, measured against the routes a run
+# calls (aimeat-protocol main, 2026-10-02):
+#   the deliverable, the README, `crews.runtime.<name>`     aimeat_memory_write        memory:write (a default)
+#   its own tags, on every start                            aimeat_agent_tags_set      no word for its OWN record
+#                                                           since bcd4027ed (requireScopeUnlessSelf); an older
+#                                                           node wants agent:write, and the push is SKIPPED
+#                                                           when the node already holds the tags
+#                                                           (aimeat_crew._set_tags_if_changed)
+#   its own capabilities, runtime, onboarding steps         ..._capabilities_report,   no word (SCOPE_EXEMPT_TOOLS)
+#                                                           ..._runtime_report
+#   its own tasks: list, plan, close, fail                  aimeat_task_*              no word (isOwnTask)
+# The four words that were here, and why each left:
+#   agent:write     the tags push -- no longer needed for the agent's own record, and it is also the word
+#                   that lets an agent approve a new agent by itself (routes/agents/device-auth.ts), which
+#                   the basic agents must never hold: the concierge reads messages from strangers.
+#   task:write      creating an `agent_task` schedule (schedule-gate.ts) and starting a sibling's task --
+#                   a crew that wires `schedule` asks for it through forge_catalog; closing its OWN task
+#                   never needed it.
+#   workflow:read   GET /v1/schedules -- the same `schedule` capability, the retire probe and agency 2.0.
+#   wallet:read     GET /v1/ledger/usage -- `crewaimeat costs`, pulse and agency 2.0's costs view, all
+#                   read by a probe or a product, not by a crew's run.
+# A crew's EXTRA needs come from the tools it wired (forge_catalog.required_scopes); agency 2.0 names what
+# its own features call as every agent it manages (agency2.connect.REQUIRED_SCOPES).
+REQUIRED_SCOPES: tuple[str, ...] = ()
 
 # What EVERY agent this runtime runs writes with, whatever its job: the deliverable goes to memory.
 # Measured 2026-10-02 by aimeat-protocol on a sandbox: an agent proposed with memory:read alone read its
 # data and then failed -- the node refused aimeat_memory_write, the task ended `failed` and the spawner
 # logged exit 3. So a proposal carries this beside what the job needs, and `crew.menu` states it as
-# `required_scopes` so a proposer reads it from the runtime instead of carrying a copy that falls behind.
-# agent:write WAS here, for the identity push (tags) and the runtime report on every start. Since
-# aimeat-protocol bcd4027ed and 6e999056d an agent sets its OWN tags and reports its OWN runtime with no
-# permission word, and agent:write is also the word that lets an agent approve a new agent by itself --
-# so an agent that does not need it must not be asked for it (the node's own list, data/crew-runtime-scopes.ts,
-# is memory:write alone). REQUIRED_SCOPES above keeps it for registering against an older node.
+# `required_scopes` so a proposer reads it from the runtime instead of carrying a copy that falls behind
+# (the node keeps its own copy, data/crew-runtime-scopes.ts, only as the fallback for an agent with no
+# runtime yet). agent:write is NOT in it and must not be: see REQUIRED_SCOPES above.
 RUNTIME_WRITE_SCOPES: tuple[str, ...] = ("memory:write",)
 
 # THE NODE ROAD (llm_choice `{kind:'node'}`): the crew's model calls go to the node's /v1/llm, which

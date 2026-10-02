@@ -30,7 +30,7 @@ def test_the_request_starts_with_the_node_defaults():
 def test_extra_scopes_are_appended_once():
     asked = agent_scopes.requested_scopes(["app:write", "task:write", " app:write ", ""])
     assert asked.count("task:write") == 1
-    assert asked.count("app:write") == 1 and asked[-1] == "app:write"
+    assert asked.count("app:write") == 1 and asked[-2:] == ["app:write", "task:write"]
     assert "" not in asked
 
 
@@ -63,10 +63,22 @@ def test_the_scopes_a_forged_crew_asks_for_come_from_the_tools_it_wired():
     assert forge_catalog.capabilities_in_source("AGENT_NAME = 'x'\n") == []
 
 
-def test_the_agency_reexports_the_one_list():
+def test_a_run_of_every_agent_needs_nothing_beyond_the_defaults():
+    # Measured against the routes a run calls (aimeat-protocol main, 2026-10-02): the deliverable is a
+    # memory write (a default), the agent's own tags, capabilities, runtime and tasks take no word.
+    # agent:write in particular: the word that lets an agent approve a new agent by itself.
+    assert agent_scopes.REQUIRED_SCOPES == ()
+    assert "agent:write" not in agent_scopes.requested_scopes()
+    assert agent_scopes.runtime_scopes(node_road=False) == ["memory:write"]
+
+
+def test_the_agency_builds_on_the_runtimes_list_and_names_what_its_features_call():
     from crewaimeat.agency2 import connect
 
-    assert connect.REQUIRED_SCOPES is agent_scopes.REQUIRED_SCOPES
+    assert set(agent_scopes.REQUIRED_SCOPES) <= set(connect.REQUIRED_SCOPES)
+    # schedules (POST/GET /v1/schedules) and costs (GET /v1/ledger/usage), made as every agent it manages
+    assert set(connect.AGENCY_SCOPES) == {"task:write", "workflow:read", "wallet:read"}
+    assert "agent:write" not in connect.REQUIRED_SCOPES
 
 
 def test_an_old_bundled_connector_is_not_handed_an_option_it_would_refuse(monkeypatch):
@@ -78,7 +90,7 @@ def test_an_old_bundled_connector_is_not_handed_an_option_it_would_refuse(monkey
     monkeypatch.setattr(engine, "connector_version", lambda: "3.20.0")
     args, note = connect._scopes_argv()
     assert args == []
-    assert note and "3.20.0" in note and "agent:write" in note
+    assert note and "3.20.0" in note and "task:write" in note
 
 
 def test_a_current_bundled_connector_asks_for_the_scopes(monkeypatch):
@@ -87,7 +99,7 @@ def test_a_current_bundled_connector_asks_for_the_scopes(monkeypatch):
     monkeypatch.setattr(engine, "bundled", lambda: True)
     monkeypatch.setattr(engine, "connector_version", lambda: "3.21.0")
     args, note = connect._scopes_argv()
-    assert args == agent_scopes.scopes_args() and note is None
+    assert args == agent_scopes.scopes_args(connect.AGENCY_SCOPES) and note is None
 
 
 def test_the_machines_own_connector_asks_for_the_scopes(monkeypatch):

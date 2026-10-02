@@ -1029,6 +1029,51 @@ def record_event_targets(event: dict) -> list[tuple[str, str]] | None:
     return [(oid, wid)] if oid and wid else None
 
 
+def _node_tags(agent_name: str, call=None) -> list[str] | None:
+    """The tags the node holds for this agent, read off its OWN row of aimeat_agents_list (the connector's
+    GET /v1/agents, which carries `tags` on every row). None when the node could not say: no answer, no
+    list, or no row for this agent."""
+    from crewaimeat.agent_manifest import agent_local_name
+
+    call = call or _aimeat_call
+    data = call(agent_name, "aimeat_agents_list", {}, quiet=True)
+    rows = data.get("agents") if isinstance(data, dict) else data
+    if not isinstance(rows, list):
+        return None
+    me = agent_local_name(agent_name)
+    for row in rows:
+        if isinstance(row, dict) and agent_local_name(str(row.get("name") or "")) == me:
+            tags = row.get("tags")
+            return [str(t) for t in tags] if isinstance(tags, list) else []
+    return None
+
+
+def _set_tags_if_changed(agent_name: str, tags: list[str], call=None) -> str:
+    """Write the agent's tags only when the node does not already hold exactly these.
+
+    Returns 'unchanged' (the node holds them, nothing written), 'written' (set now) or 'failed' (the
+    write went out and the node did not take it -- the transport already said why, and on a run the
+    refusal is what fails the task).
+
+    WHY READ FIRST. On a node older than aimeat-protocol bcd4027ed, `PATCH /v1/agents/:name/tags` needs
+    agent:write for the agent's OWN record. The basic agents (concierge, workflow-manager) hold no
+    agent:write and will not get it: that word also lets an agent approve a new agent by itself. Since
+    aimeat-crewai 0.31.0 one refused call fails the run, so on such a node a basic agent could finish
+    no task (measured on a hosted place, 2026-10-02). The button that makes those agents seeds the same
+    tags the definition declares, so reading first is what lets the run finish there. On a node at
+    bcd4027ed an agent sets its own tags with no permission word, and the read merely saves a write.
+    Not knowing (no list, no row) is not "unchanged": the write goes out, and a node that refuses it
+    says so.
+    """
+    call = call or _aimeat_call
+    wanted = [str(t) for t in tags]
+    held = _node_tags(agent_name, call)
+    if held is not None and set(held) == set(wanted):
+        return "unchanged"
+    res = call(agent_name, "aimeat_agent_tags_set", {"target_agent_name": agent_name, "tags": wanted})
+    return "written" if res else "failed"
+
+
 def _onboarding_completed(agent_name: str) -> bool:
     data = _aimeat_call(agent_name, "aimeat_onboarding_status", {})
     if not data:
@@ -2440,15 +2485,12 @@ def run_crew(spec: CrewSpec) -> None:
     _tags = spec.tags if spec.tags is not None else _ident.get("tags")
     _caps = spec.capabilities if spec.capabilities is not None else _ident.get("capabilities")
 
-    # 1b2) Set the agent's capability TAGS (idempotent, every start — so they survive re-onboarding)
-    #      so the ecosystem-app agent picker recommends it by TAG, not only by exact name.
+    # 1b2) The agent's capability TAGS, on every start (so they survive re-onboarding), so the
+    #      ecosystem-app agent picker recommends it by TAG, not only by exact name. WRITTEN ONLY WHEN
+    #      THEY DIFFER from what the node holds: `_set_tags_if_changed` reads the agent's own row first.
     if _tags:
-        res = _aimeat_call(
-            spec.agent_name,
-            "aimeat_agent_tags_set",
-            {"target_agent_name": spec.agent_name, "tags": list(_tags)},
-        )
-        print(f"[{spec.agent_name}] set capability tags {list(_tags)}: {bool(res)}", file=sys.stderr)
+        verdict = _set_tags_if_changed(spec.agent_name, list(_tags))
+        print(f"[{spec.agent_name}] capability tags {list(_tags)}: {verdict}", file=sys.stderr)
 
     # 1b3) Re-declare this agent's services (capabilities) on EVERY start — idempotent — so a plain
     #      restart refreshes them with no full re-onboard. The onboarding-only path declares them the

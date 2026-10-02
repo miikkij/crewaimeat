@@ -4,6 +4,43 @@ Notable changes to crewaimeat. Format loosely follows [Keep a Changelog](https:/
 Dates are the working dates. A change reaches a running fleet only on its next restart, because the
 daemons import the modules at start. `git log` has the measurement behind each entry.
 
+## [0.8.0] — 2026-10-02 — a basic agent's run needs no agent:write
+
+Follows aimeat-protocol bcd4027ed (an agent sets its OWN tags with no scope; another agent's still
+need agent:write) and the coordination-board decision
+`decision-an-agent-sets-its-own-tags-without-agent-write-the-basic-age`. The basic agents (concierge,
+workflow-manager) hold no agent:write and will not get it: that word also lets an agent approve a new
+agent by itself, and the concierge reads messages from strangers.
+
+### Changed
+- **`agent_scopes.REQUIRED_SCOPES` is empty.** A run of every agent needs nothing beyond the node's four
+  defaults, measured against the routes it calls: the deliverable, README and runtime record are memory
+  writes (a default); its own tags, capabilities, runtime report and tasks take no permission word. Each
+  word that left says which call wanted it: `agent:write` (the tags push, no longer), `task:write` (an
+  `agent_task` schedule, asked for by a crew that wires `schedule`), `workflow:read` (listing schedules),
+  `wallet:read` (`crewaimeat costs`, pulse). Agency 2.0 keeps the last three as `connect.AGENCY_SCOPES`,
+  because its own schedule and costs features call them as every agent it manages.
+- **The identity push writes the agent's tags only when they differ** from what the node holds
+  (`aimeat_crew._set_tags_if_changed` reads the agent's own row of `aimeat_agents_list` first). A hosted
+  node not yet at bcd4027ed still refuses the push without agent:write, and since aimeat-crewai 0.31.0 one
+  refusal fails the run; the basic-agents button seeds the tags the definition declares, so on those
+  nodes the skip is what lets the run finish. Not knowing (no list, no row) is not "unchanged": the write
+  goes out, and a node that refuses it says so.
+- **`crew.menu` answers `required_scopes` as the scope words the runtime writes with for itself**, today
+  `["memory:write"]` (plus `ai:use` when the owner's default road is the node). The node reads it from
+  there and keeps its own copy (`data/crew-runtime-scopes.ts`) only as the fallback for an agent with no
+  runtime yet. The concierge's proposals carry the same list beside what the job's tools need; no
+  proposable tool needs agent:write.
+
+### Tests
+- Offline: `test_identity_push.py` holds the skip at its seam. Live (`test_run_refusals_live.py`,
+  `AIMEAT_PROTOCOL_DIR` at a checkout of each node commit): an agent holding memory:read, memory:write,
+  task:read and task:write runs a task to `done` with `GET /v1/agents/<name>/refusals?since=<run start>`
+  empty, on a node at bcd4027ed with its tags differing (written, no word needed) and on a node at
+  082689e72 with its tags already equal (skipped). On the older node, differing tags are still refused
+  and the run ends failed naming the call. The "own write refused" cases now use the agent's mode, which
+  wants agent:write on every node.
+
 ## [Unreleased] — 2026-09-21 — feedback-wisdom pays the model only for new statistics
 
 ### Changed

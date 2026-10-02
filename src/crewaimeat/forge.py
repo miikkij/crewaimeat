@@ -398,8 +398,10 @@ def register_agent(
         wanted,
     ]
     # ASK FOR THE PERMISSIONS, ON A NEW AGENT ONLY (connector >= 3.21.0, which the pin guarantees). A new
-    # agent that names nothing gets the node's four defaults, and the scaffold's own identity push is then
-    # refused on its first start -- the sold seat of 2026-09-29. The list carries the defaults too, because
+    # agent that names nothing gets the node's four defaults, and what its crew's TOOLS need beyond them
+    # (a schedule's task:write, say) is then refused on its first run -- the sold seat of 2026-09-29 was
+    # the identity push, which has needed no word of its own since aimeat-protocol bcd4027ed. The list
+    # carries the defaults too, because
     # for a new agent the node grants what was requested INSTEAD of its default. A held credential means a
     # RE-approval, where requested scopes replace what the owner granted, so that case names nothing and
     # the node keeps what the agent has (crewaimeat.agent_scopes says why in full).

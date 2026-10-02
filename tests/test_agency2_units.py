@@ -181,7 +181,7 @@ def test_health_flags_scope_mode_and_stopped_runtime(_isolated):
     )
     row = next(r for r in rows if r["id"] == "agent:uutiset")
     assert row["level"] == "error" and row["fix"] == "reconnect:uutiset"
-    assert "agent:write" in row["detail"] and "interactive" in row["detail"] and "not running" in row["detail"]
+    assert "task:write" in row["detail"] and "interactive" in row["detail"] and "not running" in row["detail"]
 
 
 def test_health_names_a_revoked_key_as_a_refusal(_isolated):

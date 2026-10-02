@@ -190,8 +190,10 @@ def run_once(agent: str, *, root: Path | None = None, quiet: bool = False) -> in
     started = time.monotonic()
     # THE RUN'S WINDOW OPENS NOW, before run_crew's start-up touches the node. The start-up pushes the
     # agent's identity (tags, capabilities, offer, README), and on the sold seat that push was the
-    # refused write: `PATCH /v1/agents/concierge/tags` needs agent:write. The first task this worker
-    # builds takes this start, so what the start-up was refused counts against the run it was made for.
+    # refused write: `PATCH /v1/agents/concierge/tags` needed agent:write (it no longer does for the
+    # agent's own record since aimeat-protocol bcd4027ed, and the tags are written only when they differ
+    # from what the node holds). The first task this worker builds takes this start, so what the
+    # start-up was refused counts against the run it was made for.
     from crewaimeat import lifecycle
 
     lifecycle.set_worker_run_start(lifecycle.run_started_iso())

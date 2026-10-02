@@ -27,14 +27,21 @@ import subprocess
 import threading
 import time
 
+from crewaimeat import agent_scopes  # noqa: E402
 from crewaimeat.agency2 import engine
+from crewaimeat.agent_scopes import SCOPES_FLAG_SINCE, scopes_args  # noqa: E402
 
-# Beyond the node defaults. ONE list for every place that registers an agent (crewaimeat.agent_scopes, where
-# each word is tied to the route that needs it); re-exported here because health.py and app.py read it as
-# `connect.REQUIRED_SCOPES`.
-from crewaimeat.agent_scopes import REQUIRED_SCOPES, SCOPES_FLAG_SINCE, scopes_args  # noqa: E402
+# Beyond the node defaults: what the runtime needs for every run (agent_scopes.REQUIRED_SCOPES, nothing
+# today) PLUS what the agency's own features call AS EVERY AGENT it manages, each word tied to the call:
+#   task:write      schedule.py creates the agent's `agent_task` schedule (POST /v1/schedules, schedule-gate.ts)
+#   workflow:read   schedule.py lists them (GET /v1/schedules)
+#   wallet:read     costs.py reads what the agent spent (GET /v1/ledger/usage, routes/ledger.ts)
+# health.py and app.py read this as `connect.REQUIRED_SCOPES`. agent:write is not here: no feature of the
+# agency acts on another agent, and the word also lets an agent approve a new agent by itself.
+AGENCY_SCOPES: tuple[str, ...] = ("task:write", "workflow:read", "wallet:read")
+REQUIRED_SCOPES: tuple[str, ...] = (*agent_scopes.REQUIRED_SCOPES, *AGENCY_SCOPES)
 
-__all__ = ["REQUIRED_SCOPES", "parse", "start", "state"]
+__all__ = ["AGENCY_SCOPES", "REQUIRED_SCOPES", "parse", "start", "state"]
 
 
 def _scopes_argv() -> tuple[list[str], str | None]:
@@ -52,7 +59,7 @@ def _scopes_argv() -> tuple[list[str], str | None]:
             f"The bundled connector is {bundled_version}, which cannot ask for permissions (that came in "
             f"{SCOPES_FLAG_SINCE}). On the consent page, tick: {', '.join(REQUIRED_SCOPES)}."
         )
-    return scopes_args(), None
+    return scopes_args(AGENCY_SCOPES), None
 
 
 _CODE_RE = re.compile(r"Verification code:\s*([A-Z0-9]{3,}-[A-Z0-9]{3,})")
