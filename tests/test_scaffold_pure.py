@@ -118,3 +118,17 @@ def test_classify_nature_keyword_fallback_when_llm_errors():
     assert creative["nature"] == "creative" and creative["verify"] == "off"
     fact = ac._classify_task_nature("Research the audited financials of Nokia Oyj", llm)
     assert fact["nature"] == "fact" and fact["verify"] == "factcheck"
+
+
+def test_a_factcheck_with_a_single_task_becomes_a_goal_review(capsys):
+    """A fact-check needs contributions. With one task the reviewer's only contribution is the deliverable
+    itself, and what the agent learned from its tools is in none -- so every specific reads as invented
+    (hosted place 2026-10-02: a proposal's workspace, schedule and approval link were struck, and the
+    customer was answered with the verdict line)."""
+    from crewaimeat.aimeat_crew import _verify_mode_for
+
+    assert _verify_mode_for("factcheck", 1, "concierge") == "on"
+    assert "no contributions to check a single task against" in capsys.readouterr().err
+    assert _verify_mode_for("factcheck", 2, "concierge") == "factcheck"
+    assert _verify_mode_for("on", 1, "concierge") == "on"
+    assert _verify_mode_for(None, 1, "concierge") is None

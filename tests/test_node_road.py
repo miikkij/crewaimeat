@@ -623,6 +623,21 @@ def test_a_provider_chain_records_the_model_that_answered(node):
     assert llmmod.resolved_provider() == "openai"
 
 
+@pytest.mark.loopback
+def test_on_the_node_road_the_log_names_the_model_of_every_call(node, capsys):
+    """The node picks the model, so the configured id says nothing; a hosted log has to answer "which
+    model wrote this" per call (2026-10-02: the node served openrouter/free and only the Finnish said so)."""
+    from crewai import LLM
+
+    llm = LLM(model="openai/configured-id", base_url=node.url + "/v1", api_key="k")
+    llmmod._install_response_model_capture(llm, say_for="crm")
+    llm.call([{"role": "user", "content": "hei"}])
+    llm.call([{"role": "user", "content": "hei taas"}])
+    err = capsys.readouterr().err
+    assert err.count("[llm] crm: the node answered with m") == 2
+    assert llmmod.resolved_model(llm) == "m"
+
+
 @needs_032
 def test_a_local_profile_pin_stays_above_the_node_too(monkeypatch, node, reports, tmp_path):
     (tmp_path / "llm_providers.json").write_text(

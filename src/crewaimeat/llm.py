@@ -76,15 +76,25 @@ def resolved_model(llm) -> str | None:
     return last_response_model() or getattr(llm, "model", None)
 
 
-def _install_response_model_capture(inner) -> None:
+def _install_response_model_capture(inner, *, say_for: str | None = None) -> None:
     """Wrap one provider client so each completion records the model the response reports.
 
     Best-effort by design: a CrewAI/OpenAI-SDK internal moved or made read-only must never break a
     crew's writing. It degrades to "not observed", the caller falls back to the configured id, and
-    the failure is printed ONCE rather than per call."""
+    the failure is printed ONCE rather than per call.
+
+    `say_for` names the agent whose run log should carry the model of EVERY call. On the node road the
+    node picks the model, so the configured id says nothing and a hosted log could not answer "which
+    model wrote this" (2026-10-02: the node served openrouter/free, and only the broken Finnish said so).
+    """
     getter = getattr(inner, "_get_sync_client", None)
     if getter is None or getattr(inner, "_aimeat_model_capture", False):
         return
+
+    def _note(reported: str) -> None:
+        _LAST_RESPONSE_MODEL.set(reported)
+        if say_for:
+            print(f"[llm] {say_for}: the node answered with {reported}", file=sys.stderr)
 
     def patched(*a, **k):
         client = getter(*a, **k)
@@ -97,7 +107,7 @@ def _install_response_model_capture(inner) -> None:
                     resp = original_create(*ca, **ck)
                     reported = getattr(resp, "model", None)
                     if reported:
-                        _LAST_RESPONSE_MODEL.set(str(reported))
+                        _note(str(reported))
                     return resp
 
                 completions.create = create
@@ -114,7 +124,7 @@ def _install_response_model_capture(inner) -> None:
                     except Exception:  # noqa: BLE001 — an unreadable body is "not observed", never an error
                         reported = None
                     if reported:
-                        _LAST_RESPONSE_MODEL.set(str(reported))
+                        _note(str(reported))
                     return resp
 
                 raw.create = raw_create
@@ -693,7 +703,7 @@ def _node_road_llm(choice: dict, agent_name: str, temperature: float) -> BaseLLM
         ) from exc
     # The node chooses the model, so the configured id is a placeholder: record the one its answer
     # names, for the deliverable's provenance (resolved_model).
-    _install_response_model_capture(llm)
+    _install_response_model_capture(llm, say_for=agent_name)
     role = choice.get("role")
     print(f"[llm] {agent_name} -> node road{f' (role {role})' if role else ''}", file=sys.stderr)
     return llm

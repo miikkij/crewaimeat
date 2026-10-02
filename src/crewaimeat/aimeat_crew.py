@@ -1600,7 +1600,12 @@ def _for_the_reader(then: Callable[[str], str] | None, *, verified: bool) -> Cal
         body, taken = split_provenance(body)
         if taken:
             print(f"[publish] took a provenance declaration out of the deliverable: {taken[0][:120]}", file=sys.stderr)
-        body = body if body.strip() else text  # never publish an empty deliverable
+        if not body.strip():
+            # Nothing is left once what is ours is taken out. The verdict line NEVER ships as the
+            # deliverable, whatever remains (hosted place 2026-10-02: a customer's answer to "propose an
+            # agent" was "Verify: faithfulness | score=1 | unsupported=5 | ..."). An empty clean is the
+            # publish step's to decide on (lifecycle.publish_callback), not to paper over with the raw text.
+            return ""
         return then(body) if then else body
 
     return _clean
@@ -1636,6 +1641,23 @@ def _keep_verify_report_out(agent_name: str, tid: str | None, verify_task: Any) 
     def _cb(out) -> None:
         raw = getattr(out, "raw", None) or str(out)
         clean, report = split_verify(raw)
+        if report and not clean.strip():
+            # THE REVIEWER REMOVED EVERYTHING. Measured 2026-10-02 on a hosted place: asked for a new
+            # agent, the concierge proposed one, and the reviewer struck the whole reply as "invented
+            # specifics (agent name, schedule, timezone, output format)" -- the proposal's own authorship,
+            # not claims about sources -- leaving the verdict line as the customer's answer. WRITTEN beats
+            # EMPTY: the author's reply stands, published as it was, and the report says what happened.
+            author = _author_reply(verify_task)
+            if author.strip():
+                report["verdict"] += " | the reviewer left nothing; the author's reply was kept as it was"
+                _record_verify_report(agent_name, tid, report)
+                print(f"[{agent_name}] verify pass removed the whole reply; keeping the author's", file=sys.stderr)
+                try:
+                    out.raw = author
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[{agent_name}] could not restore the author's reply in place: {exc}", file=sys.stderr)
+                inner(out)  # critical: publishes the author's reply (the cleaner finds no verdict in it)
+                return
         if report:
             _record_verify_report(agent_name, tid, report)
         inner(out)  # critical: the publish sits behind this link
@@ -1646,6 +1668,19 @@ def _keep_verify_report_out(agent_name: str, tid: str | None, verify_task: Any) 
                 print(f"[{agent_name}] could not clean the task output in place: {exc}", file=sys.stderr)
 
     verify_task.callback = _cb
+
+
+def _author_reply(verify_task: Any) -> str:
+    """The deliverable as the crew wrote it before the reviewer: the output of the last task in the
+    verify task's context. "" when there is none to read."""
+    for prev in reversed(list(getattr(verify_task, "context", None) or [])):
+        output = getattr(prev, "output", None)
+        text = getattr(output, "raw", None) if output is not None else None
+        if text is None and output is not None:
+            text = str(output)
+        if text and str(text).strip():
+            return str(text)
+    return ""
 
 
 def _write_verify_stat(agent_name: str, tid: str | None, output_text: str, dimension: str) -> None:
@@ -2149,6 +2184,28 @@ def _classify_task_nature(prompt: str, llm: Any) -> dict:
         "ground": nature in ("fact", "mixed"),
         "verify": "factcheck" if nature in ("fact", "mixed") else "off",
     }
+
+
+def _verify_mode_for(verify_mode: str | None, task_count: int, agent_name: str) -> str | None:
+    """The review the crew can actually run: a FACT-CHECK NEEDS CONTRIBUTIONS.
+
+    The factcheck reviewer checks the deliverable against the outputs of the tasks before it. With ONE
+    task those are the deliverable itself, and what the agent learned from its TOOLS (a workspace it
+    read, the address a proposal returned) is in no contribution at all -- so every specific reads as
+    invented. Measured 2026-10-02 on a hosted place, and again here on the same Finnish request: the
+    concierge proposed an agent, and the reviewer struck the workspace name, the schedule and the approval
+    link as "not in the contributions"; on the hosted place it struck everything, and the customer was
+    answered with the verdict line. The goal review ("does it answer the goal; return it verbatim if
+    so") is the one that has something to check a single task against.
+    """
+    if verify_mode == "factcheck" and task_count < 2:
+        print(
+            f"[{agent_name}] verify=factcheck has no contributions to check a single task against; "
+            "reviewing against the goal instead",
+            file=sys.stderr,
+        )
+        return "on"
+    return verify_mode
 
 
 def _liaison_tool_filter(discover: bool):
@@ -2683,6 +2740,7 @@ def run_crew(spec: CrewSpec) -> None:
         # reintroduce step-repetition (FM-1.3). Enabled by CrewSpec.verify="on" or a <<VERIFY>> task
         # directive; becomes the new last domain task, so publish/directives attach to it below.
         verified = verify_mode in ("on", "factcheck") and bool(tasks)
+        verify_mode = _verify_mode_for(verify_mode, len(tasks), spec.agent_name)
         if verified:
             reviewer = Agent(
                 role="Deliverable Reviewer",
@@ -2710,7 +2768,12 @@ def run_crew(spec: CrewSpec) -> None:
                     "organisation, or citation. Work claim by claim: REMOVE anything not in the contributions (do "
                     "not leave it in with a mark -- the reader is the customer); never invent; never attach a "
                     "citation that is not in the contributions; do "
-                    "not add anything new. If only one crew contributed, return its content faithfully. ALWAYS "
+                    "not add anything new. AUTHORED content is not a claim: a name, schedule, format, plan or "
+                    "proposal the deliverable itself creates for the person (something that does not exist "
+                    "yet), and text a tool returned to the agent (an address to approve at, a listing of their "
+                    "own data) are the deliverable's own work -- leave them exactly as written. Only a statement "
+                    "about the world presented as fact is checked. If only one crew contributed, return its "
+                    "content faithfully. ALWAYS "
                     "output the corrected deliverable ITSELF — never a commentary about your process or about "
                     "missing materials — ending with EXACTLY this line: "
                     "'Verify: faithfulness | score=<1-5> | unsupported=<N> | <short note>' "

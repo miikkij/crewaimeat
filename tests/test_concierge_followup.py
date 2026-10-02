@@ -233,10 +233,81 @@ def test_the_published_deliverable_is_the_clean_one_and_the_crew_s_cleaner_still
     assert published.startswith("ACME OY"), "the crew's own cleaner ran after"
 
 
-def test_a_report_only_output_is_published_as_it_is_rather_than_empty():
+def test_a_report_only_output_ships_no_verdict_line():
+    """Hosted place 2026-10-02: a customer who asked for a new agent was answered with
+    "Verify: faithfulness | score=1 | unsupported=5 | ..." alone. The verdict is never the deliverable,
+    whatever remains; the cleaner hands back nothing, and the publish step decides what stands in."""
     from crewaimeat.aimeat_crew import _for_the_reader
 
-    assert _for_the_reader(None, verified=True)("Verify: pass") == "Verify: pass"
+    assert _for_the_reader(None, verified=True)("Verify: pass") == ""
+    assert (
+        _for_the_reader(str.upper, verified=True)("Verify: faithfulness | score=1 | unsupported=5 | all invented") == ""
+    )
+
+
+VERDICT_ONLY = (
+    "Verify: faithfulness | score=1 | unsupported=5 | Multiple invented specifics not in the contributions.\n"
+)
+
+
+def test_when_the_clean_leaves_nothing_the_original_stands_in_without_the_report():
+    from crewaimeat.aimeat_crew import _for_the_reader
+
+    rec = Recorder()
+    cb = _callbacks(rec).publish_callback(
+        "concierge", "crews.concierge.t1", task_id="t1", clean=_for_the_reader(lambda _t: "", verified=True)
+    )
+    cb(SimpleNamespace(raw="The proposal.\n\n" + VERDICT_ONLY))
+    assert rec.calls[0][1]["value"].strip() == "The proposal."
+
+
+def test_a_verdict_only_deliverable_fails_the_publish_with_a_reason():
+    from crewaimeat.aimeat_crew import _for_the_reader
+
+    rec = Recorder()
+    cb = _callbacks(rec).publish_callback(
+        "concierge", "crews.concierge.t1", task_id="t1", clean=_for_the_reader(None, verified=True)
+    )
+    with pytest.raises(RuntimeError, match="verify pass removed the whole deliverable"):
+        cb(SimpleNamespace(raw=VERDICT_ONLY))
+    assert rec.calls == [], "the verdict line was not published as the answer"
+
+
+def test_when_the_reviewer_removes_everything_the_authors_reply_is_kept(monkeypatch, capsys):
+    """A proposal's name, schedule and format are the agent's own authorship, not claims about sources.
+    When the reviewer strikes the whole reply, the author's reply is published as it was, and the task's
+    verification event says so."""
+    from crewaimeat import aimeat_crew
+
+    rec = Recorder()
+    monkeypatch.setattr(aimeat_crew, "_aimeat_call", rec)
+    author = "Ehdotin agentin morning-deals. Hyväksy se täällä: http://node/agents/proposals/morning-deals\n"
+    published = []
+    task = SimpleNamespace(
+        callback=lambda out: published.append(out.raw),
+        context=[SimpleNamespace(output=SimpleNamespace(raw=author))],
+    )
+    aimeat_crew._keep_verify_report_out("concierge", "t1", task)
+    out = SimpleNamespace(raw=VERDICT_ONLY)
+    task.callback(out)
+
+    assert published == [author], "the publish chain got the author's reply, not the verdict"
+    assert out.raw == author, "and so does the finalize step"
+    [(tool, ev)] = rec.calls
+    assert tool == "aimeat_task_event" and ev["type"] == "verification"
+    assert "the author's reply was kept" in ev["message"] and ev["details"]["score"] == 1
+    assert "removed the whole reply; keeping the author's" in capsys.readouterr().err
+
+
+def test_without_an_author_reply_a_verdict_only_output_goes_down_the_chain_as_before(monkeypatch):
+    from crewaimeat import aimeat_crew
+
+    monkeypatch.setattr(aimeat_crew, "_aimeat_call", Recorder())
+    seen = []
+    task = SimpleNamespace(callback=lambda out: seen.append(out.raw), context=[])
+    aimeat_crew._keep_verify_report_out("concierge", "t1", task)
+    task.callback(SimpleNamespace(raw=VERDICT_ONLY))
+    assert seen == [VERDICT_ONLY], "the chain's own cleaner and publish step decide; nothing is invented here"
 
 
 def test_the_verify_link_logs_the_report_feeds_the_chain_raw_and_leaves_the_output_clean(monkeypatch, capsys):
@@ -516,3 +587,13 @@ def test_the_build_wires_both_halves_when_a_verify_pass_runs():
         and "_keep_verify_report_out(spec.agent_name, tid, tasks[-1])" in ast.unparse(n)
     ]
     assert guarded, "the verify task's report link is attached, and only when a verify pass ran"
+
+
+def test_the_reviewer_is_told_that_authored_content_is_not_a_claim():
+    """A proposal's name, schedule and format, and the address a tool returned, are the deliverable's own
+    work, not claims about sources (hosted place 2026-10-02)."""
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1] / "src" / "crewaimeat" / "aimeat_crew.py").read_text(encoding="utf-8")
+    assert "AUTHORED content is not a claim" in src
+    assert "text a tool returned to the agent" in src

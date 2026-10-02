@@ -25,6 +25,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from crewaimeat.decline import declined_message, take_declined
+from crewaimeat.verify_report import split_verify
 
 # The runtime's clock and the node's clock are not the same clock. Asking from a little before the run
 # started keeps a node a few seconds behind from hiding the run's own refusals. The SAME margin
@@ -209,10 +210,22 @@ class LifecycleCallbacks:
             if clean:  # deterministic post-processor (e.g. strip an editor's leaked KEPT/CUT notes)
                 try:
                     cleaned = clean(text)
-                    if cleaned:  # never publish an empty deliverable; fall back to the original
-                        text = cleaned
                 except Exception as exc:  # noqa: BLE001 — cleaning is best-effort, must not block publish
                     print(f"[{agent_name}] clean_deliverable skipped: {exc}", file=sys.stderr)
+                    cleaned = text
+                if cleaned.strip():
+                    text = cleaned
+                else:
+                    # The clean left nothing. The original stands in -- WITHOUT the verify pass's report,
+                    # which is never the deliverable (hosted place 2026-10-02: a customer was answered with
+                    # the verdict line alone). When even that is empty there is nothing to publish, and the
+                    # task fails with that reason rather than shipping a report as an answer.
+                    text = split_verify(text)[0]
+                    if not text.strip():
+                        raise RuntimeError(
+                            f"Nothing to publish at {primary_key}: the verify pass removed the whole deliverable"
+                        )
+                    print(f"[{agent_name}] clean_deliverable left nothing; publishing the original", file=sys.stderr)
             r1 = self.call(
                 agent_name,
                 "aimeat_memory_write",
