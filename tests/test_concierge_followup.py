@@ -17,6 +17,13 @@ from crewaimeat import decline, workspace_tools
 from crewaimeat.lifecycle import LifecycleCallbacks
 from crewaimeat.verify_report import report_message, split_verify
 
+
+@pytest.fixture(autouse=True)
+def _owner_default_is_not_the_node(monkeypatch):
+    """The owner's default road is read from the node; offline it is the machine road unless a test says."""
+    monkeypatch.setattr("crewaimeat.llm_choice.default_is_node_road", lambda agent_name: False)
+
+
 # ── 1. a declined request ends as declined, not done ────────────────────────────────────────
 
 
@@ -214,11 +221,11 @@ def test_text_without_a_report_is_untouched():
 
 
 def test_the_published_deliverable_is_the_clean_one_and_the_crew_s_cleaner_still_runs():
-    from crewaimeat.aimeat_crew import _without_verify_report
+    from crewaimeat.aimeat_crew import _for_the_reader
 
     rec = Recorder()
     cb = _callbacks(rec).publish_callback(
-        "concierge", "crews.concierge.t1", task_id="t1", clean=_without_verify_report(str.upper)
+        "concierge", "crews.concierge.t1", task_id="t1", clean=_for_the_reader(str.upper, verified=True)
     )
     cb(SimpleNamespace(raw=MEASURED))
     published = rec.calls[0][1]["value"]
@@ -227,9 +234,9 @@ def test_the_published_deliverable_is_the_clean_one_and_the_crew_s_cleaner_still
 
 
 def test_a_report_only_output_is_published_as_it_is_rather_than_empty():
-    from crewaimeat.aimeat_crew import _without_verify_report
+    from crewaimeat.aimeat_crew import _for_the_reader
 
-    assert _without_verify_report(None)("Verify: pass") == "Verify: pass"
+    assert _for_the_reader(None, verified=True)("Verify: pass") == "Verify: pass"
 
 
 def test_the_verify_link_logs_the_report_feeds_the_chain_raw_and_leaves_the_output_clean(monkeypatch, capsys):
@@ -308,6 +315,10 @@ class WsNode:
         self.calls.append((tool, payload))
         if tool in self.refuse:
             return {"ok": False, "error": {"code": "SCOPE_DENIED", "message": "This needs organism:write."}}
+        if tool == "aimeat_organism_list":
+            return {"organisms": [{"id": "o", "name": "Koe Oy"}]}
+        if tool == "aimeat_workspace_list":
+            return {"workspaces": [{"id": "w", "name": "CADENCE"}]}
         if tool == "aimeat_workspace_read":
             return {"manifest": MANIFEST, "objects": self.objects, "drafts": self.drafts}
         if tool == "aimeat_workspace_write":
@@ -433,20 +444,18 @@ def test_the_tools_answer_the_model_in_words_and_never_raise(ws):
     ws(refuse={"aimeat_workspace_publish"})
     tools = {t.name: t for t in workspace_tools.make_workspace_write_tools("crm")}
     assert set(tools) == {"list_workspaces", "read_workspace", "write_workspace_record", "append_workspace_rows"}
-    out = tools["write_workspace_record"].run(organism_id="o", ws="w", space="contact", fields_json='{"name": "X"}')
+    out = tools["write_workspace_record"].run(workspace="CADENCE", space="contact", fields_json='{"name": "X"}')
     assert out.startswith("NOT WRITTEN.") and "organism:write" in out
-    out = tools["write_workspace_record"].run(organism_id="o", ws="w", space="contact", fields_json="{not json")
+    out = tools["write_workspace_record"].run(workspace="CADENCE", space="contact", fields_json="{not json")
     assert out.startswith("NOT WRITTEN.") and "not valid JSON" in out
 
 
 def test_the_tools_say_what_they_did(ws):
     ws()
     tools = {t.name: t for t in workspace_tools.make_workspace_write_tools("crm")}
-    out = tools["write_workspace_record"].run(organism_id="o", ws="w", space="contact", fields_json='{"name": "X"}')
-    assert re.fullmatch(r"Created and published contact contact-[0-9a-f]{12} in workspace w\.", out)
-    out = tools["append_workspace_rows"].run(
-        organism_id="o", ws="w", space="mailmessage", rows_json='{"body": {"a": 1}}'
-    )
+    out = tools["write_workspace_record"].run(workspace="CADENCE", space="contact", fields_json='{"name": "X"}')
+    assert re.fullmatch(r"Created and published contact contact-[0-9a-f]{12} in workspace CADENCE\.", out)
+    out = tools["append_workspace_rows"].run(workspace="CADENCE", space="mailmessage", rows_json='{"body": {"a": 1}}')
     assert out.startswith("Wrote 1 row(s) to mailmessage")
 
 
@@ -498,7 +507,7 @@ def test_the_build_wires_both_halves_when_a_verify_pass_runs():
     tree = ast.parse(inspect.getsource(aimeat_crew.run_crew))
     build = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_build")
     src = ast.unparse(build)
-    assert "clean=_without_verify_report(spec.clean_deliverable) if verified else spec.clean_deliverable" in src
+    assert "clean=_for_the_reader(spec.clean_deliverable, verified=verified)" in src
     guarded = [
         n
         for n in ast.walk(build)

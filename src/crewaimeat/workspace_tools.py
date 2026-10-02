@@ -98,6 +98,33 @@ def find_workspace(found: list[dict], name: str) -> dict | None:
     return partial[0] if len(partial) == 1 else None
 
 
+def resolve_workspace(agent_name: str, workspace: str, organism: str = "") -> tuple[dict | None, str]:
+    """`(the workspace, "")`, or `(None, what to say instead)`, for a workspace NAMED by the model.
+
+    THE MODEL NAMES; CODE LOOKS UP. The tools used to take raw organism and workspace ids, and a proposed
+    agent with no ids in its prompt guessed them -- "default", "owner", "aimeat" -- instead of listing what
+    its owner has (hosted place, 2026-10-02). Now the model says which workspace in words (its name or
+    id, and the organism's name or id when two organisms have one of that name), the owner's real list is
+    read here, and a miss answers with that list, so the next step is a choice from it rather than
+    another guess.
+    """
+    found = list_workspaces(agent_name)
+    org = (organism or "").strip().lower()
+    if org:
+        found = [w for w in found if org in (w["organism_id"].lower(), str(w["organism"]).lower())]
+    want = (workspace or "").strip().lower()
+    exact = [w for w in found if want and want in (w["name"].lower(), w["ws"].lower())]
+    if len(exact) > 1:
+        return None, (
+            f"More than one workspace is called '{workspace}'. Say which organism it is in.\n"
+            + render_workspaces(exact)
+        )
+    hit = exact[0] if exact else find_workspace(found, workspace)
+    if hit is None:
+        return None, f"There is no workspace '{workspace}' here. {render_workspaces(list_workspaces(agent_name))}"
+    return hit, ""
+
+
 def workspace_index(agent_name: str, organism_id: str, ws: str):
     """The workspace's index: its spaces and, per space, each record's id and title. No bodies.
 
@@ -129,22 +156,26 @@ def make_workspace_tools(agent_name: str) -> list:
 
     @tool("list_workspaces")
     def list_workspaces_tool() -> str:
-        """List the organisms and workspaces you can read, by name, with the ids read_workspace needs."""
+        """List the organisms and workspaces your owner keeps, by name. Call this FIRST when you do not
+        know the workspace's exact name; never guess one."""
         return render_workspaces(list_workspaces(agent_name))
 
     @tool("read_workspace")
-    def read_workspace(organism_id: str, ws: str, ids: str = "") -> str:
-        """Read a workspace. Without `ids`: its index (the spaces and every record's id and title). With
-        `ids` (comma-separated record ids from the index): those records in full. Read the index first,
-        then the records you need."""
+    def read_workspace(workspace: str, ids: str = "", organism: str = "") -> str:
+        """Read a workspace, named as list_workspaces shows it (e.g. "CADENCE"). Without `ids`: its index
+        (the spaces and every record's id and title). With `ids` (comma-separated record ids from the
+        index): those records in full. `organism` only when two organisms have a workspace of that name."""
+        hit, why = resolve_workspace(agent_name, workspace, organism)
+        if hit is None:
+            return why
         wanted = [i.strip() for i in (ids or "").split(",") if i.strip()]
         data = (
-            workspace_records(agent_name, organism_id, ws, wanted)
+            workspace_records(agent_name, hit["organism_id"], hit["ws"], wanted)
             if wanted
-            else workspace_index(agent_name, organism_id, ws)
+            else workspace_index(agent_name, hit["organism_id"], hit["ws"])
         )
         if data is None:
-            return f"Could not read workspace {ws} in organism {organism_id} (not visible to me, or it is empty)."
+            return f"Could not read the workspace {hit['name']} (not readable for me, or it is empty)."
         return json.dumps(data, ensure_ascii=False)
 
     return [list_workspaces_tool, read_workspace]
@@ -262,31 +293,42 @@ def make_workspace_write_tools(agent_name: str) -> list:
     from crewai.tools import tool
 
     @tool("write_workspace_record")
-    def write_workspace_record(organism_id: str, ws: str, space: str, fields_json: str, record_id: str = "") -> str:
+    def write_workspace_record(
+        workspace: str, space: str, fields_json: str, record_id: str = "", organism: str = ""
+    ) -> str:
         """Create or update ONE record in a workspace's record space, and publish it so apps show it.
-        `space` is the space's name from the workspace index (e.g. "contact", "deal", "task").
+        `workspace` is named as list_workspaces shows it (e.g. "CADENCE"); `organism` only when two
+        organisms have one of that name. `space` is the space's name from its index ("contact", "deal").
         `fields_json` is a JSON object of the fields to set. To UPDATE, pass the record's `record_id` and
         only the fields that change: they are merged onto the record as it stands (a field set to null is
         removed). To CREATE, leave `record_id` empty (an id is made) or pass a new one. Look the record up first so you
         do not create a duplicate. The answer says whether it was created or updated."""
+        hit, why = resolve_workspace(agent_name, workspace, organism)
+        if hit is None:
+            return f"NOT WRITTEN. {why}"
         try:
             fields = _json_arg(fields_json, "fields_json")
-            done = write_record(agent_name, organism_id, ws, space, fields, record_id)
+            done = write_record(agent_name, hit["organism_id"], hit["ws"], space, fields, record_id)
         except WorkspaceWriteError as exc:
             return f"NOT WRITTEN. {exc}"
         verb = "Created" if done["created"] else "Updated"
-        return f"{verb} and published {done['space']} {done['id']} in workspace {ws}."
+        return f"{verb} and published {done['space']} {done['id']} in workspace {hit['name']}."
 
     @tool("append_workspace_rows")
-    def append_workspace_rows(organism_id: str, ws: str, space: str, rows_json: str) -> str:
+    def append_workspace_rows(workspace: str, space: str, rows_json: str, organism: str = "") -> str:
         """Append rows to a workspace's ROW space (e.g. mail messages). `rows_json` is a JSON list of
         {"body": {...}, "row_id": optional, "occurred_at": optional ISO time}. A row whose `row_id`
         already exists is replaced, which is how a row is updated."""
+        hit, why = resolve_workspace(agent_name, workspace, organism)
+        if hit is None:
+            return f"NOT WRITTEN. {why}"
         try:
             rows = _json_arg(rows_json, "rows_json")
-            done = append_rows(agent_name, organism_id, ws, space, rows if isinstance(rows, list) else [rows])
+            done = append_rows(
+                agent_name, hit["organism_id"], hit["ws"], space, rows if isinstance(rows, list) else [rows]
+            )
         except WorkspaceWriteError as exc:
             return f"NOT WRITTEN. {exc}"
-        return f"Wrote {done.get('written', 0)} row(s) to {space} in workspace {ws}: {done.get('row_ids')}."
+        return f"Wrote {done.get('written', 0)} row(s) to {space} in workspace {hit['name']}: {done.get('row_ids')}."
 
     return [*make_workspace_tools(agent_name), write_workspace_record, append_workspace_rows]

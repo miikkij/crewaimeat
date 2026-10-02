@@ -32,6 +32,9 @@ def _no_local_override(monkeypatch):
     """No `llm_overrides.json` in the picture unless a test puts one there."""
     monkeypatch.setattr(llmmod, "agent_override", lambda name: None)
     monkeypatch.setattr(llmmod, "_declared_profile", lambda name: None)
+    # An older node, with no effective-choice route: these tests are about the stored keys.
+    monkeypatch.setattr(llm_choice, "_effective", lambda name: llm_choice._NO_ANSWER)
+    llm_choice.forget()
     llmmod._DOC_PROFILES.clear()
     yield
     llmmod._DOC_PROFILES.clear()
@@ -104,7 +107,7 @@ def test_the_crews_own_declaration_beats_the_owners_default(monkeypatch):
 def test_the_owners_default_beats_the_files_default(monkeypatch):
     _node(monkeypatch, {"kind": "profile", "profile": "news"}, "default")
     providers, label = llmmod._select_chain(CFG, "unopinionated-agent")
-    assert label == "news"
+    assert label == "node-default:news"  # the owner's, so never swapped for another key
     assert providers[0]["name"] == "news-p"
 
 

@@ -114,6 +114,15 @@ status cells, append decisions), so the two sides stay synced without drifting p
   prose, weak at code and weak in Finnish); Finnish prose → the `news` profile (DeepSeek V4 Pro);
   code/app crews → `coding`. A crew that declares no profile falls to `default` silently; doctor
   reports it and the fleet host names it at start-up.
+- **THE NODE ROAD (`{kind:'node'}`).** The owner's choice on the node can send an agent's model calls to
+  the node's `/v1/llm` with the agent's own credential; the node picks the model and the key (the
+  agent's, the owner's, then the place's) and records the call. `llm_choice.node_choice` asks the node
+  for its EFFECTIVE answer (`GET /v1/agents/{name}/crew/llm`: needs `ai:use`, skips an agent without
+  it, defaults to the node when a key pays) and reads the `crews.llm.*` keys only on a node without
+  that route. `get_llm` resolves it before the providers file (a local `llm_overrides.json` pin stays
+  above it) and reports the road (`llm_road`). It NEVER falls back to this machine's key, and neither
+  does a profile or model the owner chose: a choice that cannot run here fails the run with why. A
+  stored `model` choice is checked with the node's guard (`unsafe_choice_reason`) before use.
 - **NO OUTPUT LIMITS. Never cap `max_tokens` on a cloud model.** Not "generously", not "just to be
   safe" — a number nobody measured is a guess, and the failure is SILENT: the reply stops mid-JSON,
   or never starts. `max_tokens` is a CEILING, not a spend; a model that writes 800 tokens costs 800

@@ -19,7 +19,7 @@ the line this repo draws everywhere: THE MODEL WRITES AND JUDGES, EVERYTHING ELS
       the task naming the agent that exists, tool ids only from the runtime's own registry -- the node's
       three INVALID_CREW_DEF rules hold by construction, and crewaimeat's own validator runs before sending;
     - the scopes are COMPUTED: what the tools need, plus what this runtime writes with on every run
-      (agent_scopes.RUNTIME_WRITE_SCOPES), CAPPED at what the concierge itself holds -- the node refuses a
+      (agent_scopes.runtime_scopes: memory:write, and ai:use when the owner's default road is the node), CAPPED at what the concierge itself holds -- the node refuses a
       proposal wider than the proposer (SCOPE_ESCALATION), and what was left out is said, not dropped;
     - the node's answer is relayed in the node's words (`next_step`, `approval_url`), and a refusal in its
       own code and sentence. No second yes/no question: the press on the Agents page IS the approval.
@@ -37,7 +37,7 @@ from __future__ import annotations
 import re
 import time
 
-from crewaimeat.agent_scopes import RUNTIME_WRITE_SCOPES
+from crewaimeat.agent_scopes import runtime_scopes
 from crewaimeat.aimeat_crew import _aimeat_call, _aimeat_rest
 from crewaimeat.workspace_tools import READ_SCOPES, WRITE_SCOPES
 
@@ -112,13 +112,15 @@ def own_scopes(agent_name: str) -> list[str] | None:
     return [str(s) for s in held] if isinstance(held, list) else None
 
 
-def compute_scopes(tools: list[str], held: list[str] | None) -> tuple[list[str], list[str]]:
+def compute_scopes(tools: list[str], held: list[str] | None, *, node_road: bool = False) -> tuple[list[str], list[str]]:
     """(the scopes to ask for, the ones left out because the concierge does not hold them).
 
-    Always memory:read (an agent reads its own work) and the runtime's write scopes, then each tool's.
+    Always memory:read (an agent reads its own work) and the runtime's write scopes -- with ai:use when
+    the new agent will think through the node (`node_road`: the owner's default) -- then each tool's.
     """
     wanted: list[str] = []
-    for s in ("memory:read", *RUNTIME_WRITE_SCOPES, *(s for t in tools for s in PROPOSABLE_TOOLS.get(t, ()))):
+    runtime = runtime_scopes(node_road=node_road)
+    for s in ("memory:read", *runtime, *(s for t in tools for s in PROPOSABLE_TOOLS.get(t, ()))):
         if s not in wanted:
             wanted.append(s)
     if held is None:
@@ -145,19 +147,26 @@ def build_crew_def(
     role = _plain(display_name) or name
     data = ""
     if workspace:
+        org = workspace.get("organism") or workspace["organism_id"]
         data = (
-            f'Your data is the workspace "{workspace["name"]}" (organism {workspace["organism_id"]}, '
-            f"workspace {workspace['ws']}). Read its index first with read_workspace(organism_id="
-            f'"{workspace["organism_id"]}", ws="{workspace["ws"]}"), then the records you need, before you '
-            "answer. Name the records your answer is based on, and say so plainly when they hold nothing "
-            "that answers the request.\n\n"
+            f'Your data is the workspace "{workspace["name"]}" in the organism "{org}". Read its index first '
+            f'with read_workspace(workspace="{workspace["name"]}", organism="{workspace["organism_id"]}"), then '
+            "the records you need, before you answer. Name the records your answer is based on, and say so "
+            "plainly when they hold nothing that answers the request.\n\n"
         )
-        if "workspace_write" in tools:
-            data += (
-                "When the request is to add or change something, look the record up first so you update it "
-                "rather than create a duplicate, write it with write_workspace_record, and say which records "
-                "you created or updated. Never claim a write the tool did not confirm.\n\n"
-            )
+    elif {"workspace", "workspace_write"} & set(tools):
+        # No workspace was named when it was proposed: it finds them, it never guesses one (a proposed agent
+        # tried "default", "owner" and "aimeat" as organism names on a hosted place, 2026-10-02).
+        data = (
+            "Your owner's data is in their workspaces. Call list_workspaces first and use the names it "
+            "shows; never guess a workspace or organism name.\n\n"
+        )
+    if "workspace_write" in tools:
+        data += (
+            "When the request is to add or change something, look the record up first so you update it "
+            "rather than create a duplicate, write it with write_workspace_record, and say which records "
+            "you created or updated. Never claim a write the tool did not confirm.\n\n"
+        )
     task = {
         "id": "run",
         "agent": role,
@@ -281,7 +290,9 @@ def propose(
     if problems:  # assembled here, so this is a bug in us -- say it rather than send it
         return "I could not put together a definition the runtime accepts: " + "; ".join(problems)
 
-    scopes, left_out = compute_scopes(chosen, own_scopes(agent_name))
+    from crewaimeat.llm_choice import default_is_node_road
+
+    scopes, left_out = compute_scopes(chosen, own_scopes(agent_name), node_road=default_is_node_road(agent_name))
     payload = {
         "name": name,
         "display_name": _plain(display_name) or name,

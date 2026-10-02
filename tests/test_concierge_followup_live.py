@@ -292,7 +292,7 @@ def test_the_crew_definition_tool_writes_through_the_same_road(live):
 
     tools = {t.name: t for t in resolve_tool("workspace_write")(CLERK, SimpleNamespace(task={"id": "t"}))}
     out = tools["write_workspace_record"].run(
-        organism_id=live.org, ws=live.ws, space="contact", fields_json='{"name": "Toinen Asiakas"}'
+        workspace="CADENCE", space="contact", fields_json='{"name": "Toinen Asiakas"}'
     )
     assert out.startswith("Created and published contact "), out
     rid = out.split("contact ", 1)[1].split(" ", 1)[0]

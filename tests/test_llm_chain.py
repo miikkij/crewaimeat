@@ -11,6 +11,13 @@ import pytest
 from crewaimeat import llm as llmmod
 
 
+@pytest.fixture(autouse=True)
+def _offline_owner_choice(monkeypatch):
+    """get_llm reads the owner's choice from the node and reports the road to it; offline, neither."""
+    monkeypatch.setattr("crewaimeat.llm_choice.node_choice", lambda agent_name: (None, None))
+    monkeypatch.setattr("crewaimeat.llm_road.report", lambda agent_name, road: False)
+
+
 def _eps(*specs):
     # spec = (label, model, context)
     return [{"label": lbl, "model": m, "context": ctx} for lbl, m, ctx in specs]

@@ -389,6 +389,14 @@ def handle_dm_event(agent: str, event: dict, responder, *, seen: set | None = No
         reply_text, attachments = result.get("text") or "", result.get("attachments")
     else:
         reply_text, attachments = result or "", None
+    # What the person reads: a provenance declaration the model wrote into its reply is metadata, not
+    # an answer (crewaimeat.verify_report.split_provenance).
+    from crewaimeat.verify_report import split_provenance
+
+    cleaned, taken = split_provenance(str(reply_text))
+    if taken and cleaned.strip():
+        print(f"[{agent}] took a provenance declaration out of the reply: {taken[0][:120]}", file=sys.stderr)
+        reply_text = cleaned
     if not reply_text and not attachments:
         return False
     return bool(dm_reply(agent, sender, reply_text, conversation_id=conv, attachments=attachments))

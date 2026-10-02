@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -599,6 +600,47 @@ def _inject(text: str, ctx: Any) -> str:
     return _PLACEHOLDER_RE.sub(repl, text)
 
 
+def _unique_tools(tools: list, agent_label: str) -> list:
+    """The tools with each NAME once, the first kept; what was dropped is said in the build log.
+
+    Two tool ids can bring the same tool: `workspace_write` carries `list_workspaces` and `read_workspace`
+    because a writer has to read, and `workspace` is those two. A crew naming both handed the model each
+    one twice, and a model API may refuse a request whose tools share a name (found by aimeat-apps,
+    2026-10-02). The first is kept because the doc's order is the author's.
+    """
+    seen: set[str] = set()
+    kept: list = []
+    dropped: list[str] = []
+    for t in tools:
+        name = getattr(t, "name", None)
+        if name is not None and name in seen:
+            dropped.append(str(name))
+            continue
+        if name is not None:
+            seen.add(name)
+        kept.append(t)
+    if dropped:
+        print(
+            f"[crew-def] {agent_label}: dropped duplicate tool(s) {', '.join(dropped)} "
+            "(an earlier tool id already gives them)",
+            file=sys.stderr,
+        )
+    return kept
+
+
+def _dated(description: str, ctx: Any) -> str:
+    """The task's description with today's date in it, on every run.
+
+    A proposed agent's first run dated its briefing "2026-03-20 (arvio)" -- an estimate, because nothing
+    in its prompt said what day it was (hosted place, 2026-10-02). A definition may place the date
+    itself with {{ctx.today}}; when it does not, the date goes first. Empty only in offline validation.
+    """
+    today = str(getattr(ctx, "today", "") or "")
+    if not today or re.search(r"\{\{\s*ctx\.today\s*\}\}", description):
+        return description
+    return f"{today}\n\n{description}"
+
+
 def build_domain_from_json(doc: dict, ctx: Any) -> tuple[list, list]:
     """Interpret ``doc`` into ``([Agent], [Task])`` — the pure, exec-free equivalent of a hand-written
     ``build_domain(ctx)``. Validates first and raises ``CrewDocError`` on ANY problem (so a bad def
@@ -639,6 +681,7 @@ def build_domain_from_json(doc: dict, ctx: Any) -> tuple[list, list]:
             # validate_crew_doc has already refused an unresolvable name; this is the same resolver,
             # so the two can never disagree about what a tool id means.
             tools.extend(resolve_tool(tn)(agent_name, ctx))
+        tools = _unique_tools(tools, f"{doc['agent_name']}/{a['role']}")
         kwargs: dict[str, Any] = dict(
             role=a["role"],
             goal=a["goal"],
@@ -661,7 +704,7 @@ def build_domain_from_json(doc: dict, ctx: Any) -> tuple[list, list]:
     for tk in doc["tasks"]:
         context = [tasks_by_id[r] for r in (tk.get("context") or [])]
         kwargs = dict(
-            description=_inject(tk["description"], ctx),
+            description=_inject(_dated(tk["description"], ctx), ctx),
             expected_output=tk["expected_output"],
             agent=agents_by_key[tk["agent"]],
         )

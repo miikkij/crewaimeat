@@ -18,6 +18,12 @@ DOC = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _owner_default_is_not_the_node(monkeypatch):
+    """The owner's default road is read from the node; offline it is the machine road unless a test says."""
+    monkeypatch.setattr("crewaimeat.llm_choice.default_is_node_road", lambda agent_name: False)
+
+
 def test_validate_answers_with_the_validators_own_errors():
     """The node renders these verbatim and anchors them to fields, so they must arrive unedited."""
     ok, result = ci.handle("crew.validate", {"doc": {**DOC, "temperature": 9}}, agent_name="node-agent")

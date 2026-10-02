@@ -38,6 +38,13 @@ class Recorder:
 
 
 @pytest.fixture(autouse=True)
+def _offline_owner_choice(monkeypatch):
+    """get_llm reads the owner's choice from the node and reports the road to it; offline, neither."""
+    monkeypatch.setattr("crewaimeat.llm_choice.node_choice", lambda agent_name: (None, None))
+    monkeypatch.setattr("crewaimeat.llm_road.report", lambda agent_name, road: False)
+
+
+@pytest.fixture(autouse=True)
 def _fresh_cache():
     d.clear_cache()
     yield

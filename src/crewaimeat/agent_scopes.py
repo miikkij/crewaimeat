@@ -34,14 +34,27 @@ NODE_DEFAULT_SCOPES: tuple[str, ...] = ("memory:read", "memory:write", "memory:d
 #   wallet:read     reading what the agents spent (GET /v1/ledger/usage, routes/ledger.ts)
 REQUIRED_SCOPES: tuple[str, ...] = ("agent:write", "task:write", "workflow:read", "wallet:read")
 
-# What EVERY agent this runtime runs writes with, whatever its job: the deliverable goes to memory
-# (memory:write) and the scaffold pushes the agent's identity on every start (agent:write). Measured
-# 2026-10-02 by aimeat-protocol on a sandbox: an agent proposed with memory:read alone read its data and
-# then failed -- the node refused aimeat_memory_write and aimeat_agent_tags_set, the task ended `failed`
-# and the spawner logged exit 3; the same definition with these two added finished `done` in 64 s. So a
-# proposal carries these beside what the job needs, and `crew.menu` states them as `required_scopes` so a
-# proposer reads them from the runtime instead of carrying a copy that falls behind.
-RUNTIME_WRITE_SCOPES: tuple[str, ...] = ("memory:write", "agent:write")
+# What EVERY agent this runtime runs writes with, whatever its job: the deliverable goes to memory.
+# Measured 2026-10-02 by aimeat-protocol on a sandbox: an agent proposed with memory:read alone read its
+# data and then failed -- the node refused aimeat_memory_write, the task ended `failed` and the spawner
+# logged exit 3. So a proposal carries this beside what the job needs, and `crew.menu` states it as
+# `required_scopes` so a proposer reads it from the runtime instead of carrying a copy that falls behind.
+# agent:write WAS here, for the identity push (tags) and the runtime report on every start. Since
+# aimeat-protocol bcd4027ed and 6e999056d an agent sets its OWN tags and reports its OWN runtime with no
+# permission word, and agent:write is also the word that lets an agent approve a new agent by itself --
+# so an agent that does not need it must not be asked for it (the node's own list, data/crew-runtime-scopes.ts,
+# is memory:write alone). REQUIRED_SCOPES above keeps it for registering against an older node.
+RUNTIME_WRITE_SCOPES: tuple[str, ...] = ("memory:write",)
+
+# THE NODE ROAD (llm_choice `{kind:'node'}`): the crew's model calls go to the node's /v1/llm, which
+# requires `ai:use` (aimeat routes/llm-proxy.ts). Asked for whenever the owner routes the agent there.
+NODE_ROAD_SCOPES: tuple[str, ...] = ("ai:use",)
+
+
+def runtime_scopes(*, node_road: bool) -> list[str]:
+    """What every run writes with, plus what the node road needs when the agent takes it."""
+    return [*RUNTIME_WRITE_SCOPES, *(NODE_ROAD_SCOPES if node_road else ())]
+
 
 # The connector release whose `connect` takes `--scopes`. An older CLI refuses an undeclared option and
 # the whole registration fails, so a caller that cannot vouch for its connector checks this first.

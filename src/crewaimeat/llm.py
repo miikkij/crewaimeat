@@ -101,6 +101,23 @@ def _install_response_model_capture(inner) -> None:
                     return resp
 
                 completions.create = create
+                # crewai 1.15 calls `with_raw_response.create` and parses the answer itself, so the wrap
+                # above never ran and every record named the CONFIGURED id (found 2026-10-02 on the node
+                # road, where the configured id is a placeholder). The raw answer's own body says the model.
+                raw = completions.with_raw_response
+                original_raw_create = raw.create
+
+                def raw_create(*ca, **ck):
+                    resp = original_raw_create(*ca, **ck)
+                    try:
+                        reported = json.loads(resp.text).get("model")
+                    except Exception:  # noqa: BLE001 — an unreadable body is "not observed", never an error
+                        reported = None
+                    if reported:
+                        _LAST_RESPONSE_MODEL.set(str(reported))
+                    return resp
+
+                raw.create = raw_create
                 completions._aimeat_wrapped = True
         except Exception as exc:  # noqa: BLE001 — never let telemetry break generation
             if not getattr(inner, "_aimeat_capture_warned", False):
@@ -422,13 +439,13 @@ def _select_chain(cfg: dict, agent_name: str | None) -> tuple[list, str]:
         node_default = (
             choice.get("profile") if (choice and scope == "default" and choice.get("kind") == "profile") else None
         )
-        name = (
-            (cfg.get("crews") or {}).get(agent_name or "")
-            or _profile_declared_anywhere(agent_name)
-            or node_default
-            or cfg.get("default")
-            or next(iter(profiles))
-        )
+        machine_or_crew = (cfg.get("crews") or {}).get(agent_name or "") or _profile_declared_anywhere(agent_name)
+        if not machine_or_crew and isinstance(profiles.get(node_default), dict):
+            # The owner's default decides here, so it is labelled the owner's: _build_llm runs it or says
+            # why it cannot, and never swaps its key for this machine's. A profile name this machine has
+            # never had still falls through below, to run on something rather than nothing (as before).
+            return ((profiles[node_default].get("providers") or []), f"node-default:{node_default}")
+        name = machine_or_crew or cfg.get("default") or next(iter(profiles))
         prof = profiles.get(name)
         if not isinstance(prof, dict):  # bad mapping → fall back to default, then first profile
             name = cfg.get("default") or next(iter(profiles))
@@ -627,7 +644,71 @@ def get_llm(
     credential on a daemon that serves more than one owner; the scaffold passes it, a pipeline may omit it.
     With no agent_name there is nobody to fetch for, and the instance is returned bare.
     """
-    return install_directives(_build_llm(for_tool_use, temperature, agent_name), agent_name, owner)
+    llm = _build_llm(for_tool_use, temperature, agent_name)
+    if agent_name:
+        from crewaimeat import llm_road
+
+        llm_road.report(agent_name, "node" if _node_road_choice(agent_name) else "machine")
+    return install_directives(llm, agent_name, owner)
+
+
+class OwnerChoiceUnavailable(RuntimeError):
+    """The owner chose how this agent thinks, and that choice cannot run here. Never answered by running
+    something else: the something else is this machine's key, which is the place's, not the owner's."""
+
+
+def _node_road_choice(agent_name: str | None) -> dict | None:
+    """The owner's `{kind:'node'}` choice for this agent (its own, else their default), unless a person
+    at this machine pinned a model locally (llm_overrides.json), which stays above everything."""
+    if not agent_name or agent_override(agent_name):
+        return None
+    from crewaimeat.llm_choice import is_node_road, node_choice
+
+    choice, _scope = node_choice(agent_name)
+    return choice if is_node_road(choice) else None
+
+
+def _node_road_llm(choice: dict, agent_name: str, temperature: float) -> BaseLLM:
+    """THE NODE ROAD: the crew's calls go to the node's /v1/llm with the agent's own credential, and the
+    node picks the model and the key -- the agent's own, the owner's own, then the place's from the
+    owner's allowance -- and records the call under the agent (aimeat-crewai 0.32.0 `llm_for_choice`).
+
+    Nothing here falls back. No token, a refused `ai:use`, a node that does not answer: each one is the
+    node's answer, and the run fails with it. A provider key on this machine would be the place's key
+    paying for a run the owner routed to their own.
+    """
+    try:
+        from aimeat_crewai import llm_for_choice
+    except ImportError as exc:
+        raise OwnerChoiceUnavailable(
+            f"{agent_name}: the owner routes this agent's model calls through the node, and this runtime "
+            "cannot (aimeat-crewai 0.32.0 has the node road). Not using this machine's key instead."
+        ) from exc
+    try:
+        llm = llm_for_choice(choice, agent_name=agent_name, temperature=temperature)
+    except Exception as exc:  # noqa: BLE001 -- AiError and its kin: no token, no address
+        raise OwnerChoiceUnavailable(
+            f"{agent_name}: the owner routes this agent's model calls through the node, and the node "
+            f"cannot be reached as this agent: {exc}. Not using this machine's key instead."
+        ) from exc
+    # The node chooses the model, so the configured id is a placeholder: record the one its answer
+    # names, for the deliverable's provenance (resolved_model).
+    _install_response_model_capture(llm)
+    role = choice.get("role")
+    print(f"[llm] {agent_name} -> node road{f' (role {role})' if role else ''}", file=sys.stderr)
+    return llm
+
+
+def _unrunnable(profile: str, providers: list) -> str:
+    """Why the owner's chosen chain has nothing to run, in words they can act on."""
+    unset = sorted(
+        {str(p.get("api_key_env")) for p in providers or [] if p.get("api_key_env") and not os.getenv(p["api_key_env"])}
+    )
+    if unset:
+        return f"its key variable{'s' if len(unset) > 1 else ''} {', '.join(unset)} {'are' if len(unset) > 1 else 'is'} not set on this machine"
+    if not providers:
+        return "this machine has no such profile"
+    return "none of its models could be started here"
 
 
 def _build_llm(for_tool_use: bool, temperature: float | None, agent_name: str | None) -> BaseLLM:
@@ -649,18 +730,41 @@ def _build_llm(for_tool_use: bool, temperature: float | None, agent_name: str | 
             )
             return MultiProviderLLM(eps, temperature)
 
+    # --- THE NODE ROAD: the owner's {kind:'node'} choice, before the providers file and the environment. ---
+    road = _node_road_choice(agent_name)
+    if road is not None:
+        return _node_road_llm(road, str(agent_name), temperature)
+
     # --- Provider config (per-crew profile -> priority chain across providers + models) — wins when present ---
     pf = _providers_file()
     if pf:
         try:
             cfg = json.loads(open(pf, encoding="utf-8").read())
             providers, profile = _select_chain(cfg, agent_name)
+            # `node:` / `node-default:` -- the OWNER chose this, on their node. If it cannot run here the
+            # run fails with why; it is never quietly replaced by the env fallback below, whose key is
+            # this machine's (on a hosted place: the place's), not the one the owner picked.
+            owners = profile.startswith(("node:", "node-default:"))
             eps = _flatten_endpoints(providers, for_tool_use)
             if eps:
                 if agent_name:
                     print(f"[llm] {agent_name} -> profile '{profile}' (primary {eps[0]['label']})", file=sys.stderr)
-                return MultiProviderLLM(eps, temperature)
+                try:
+                    return MultiProviderLLM(eps, temperature)
+                except RuntimeError as exc:
+                    if owners:
+                        raise OwnerChoiceUnavailable(
+                            f"{agent_name}: the owner's model choice '{profile}' cannot run here: {exc}"
+                        ) from exc
+                    raise
+            if owners:
+                raise OwnerChoiceUnavailable(
+                    f"{agent_name}: the owner's model choice '{profile}' cannot run here: "
+                    f"{_unrunnable(profile, providers)}. Not using another key instead."
+                )
             print(f"[llm] {pf}: profile '{profile}' has no usable endpoints; using env config", file=sys.stderr)
+        except OwnerChoiceUnavailable:
+            raise
         except Exception as e:
             print(f"[llm] failed to load {pf} ({e}); using env config", file=sys.stderr)
 

@@ -66,6 +66,44 @@ def split_verify(text: str) -> tuple[str, dict | None]:
     return body, report
 
 
+# A provenance DECLARATION written into the text: "*ai_provenance*: {...}", "AI provenance: ai-generated",
+# '"ai_provenance": {...}'. The node's standing directive "Say how content was made ... declare
+# `ai_provenance`" is about a WRITE's metadata, and it reaches every task; a domain agent writes nothing
+# itself (the runtime publishes its answer), so a model obeying it put the declaration in the answer --
+# measured 2026-10-02, the last line a customer read was `*ai_provenance*: {"level":"ai-generated"}`.
+_PROVENANCE_LINE = re.compile(r"^[ \t>*_`\"-]*ai[_ -]?provenance[*_`\"]*[ \t]*[:=]", re.IGNORECASE)
+
+
+def split_provenance(text: str) -> tuple[str, list[str]]:
+    """(the text without provenance declarations, the declarations taken out).
+
+    A declaration whose value opens a brace and continues on the next lines is taken out to its close.
+    Only whole declaration lines go: a sentence that merely mentions provenance stays.
+    """
+    if not text or "provenance" not in text.lower():
+        return text, []
+    kept: list[str] = []
+    taken: list[str] = []
+    depth = 0
+    for line in text.splitlines(keepends=True):
+        if depth > 0:
+            taken[-1] += line
+            depth += line.count("{") - line.count("}")
+            continue
+        if _PROVENANCE_LINE.match(line):
+            taken.append(line)
+            depth = max(0, line.count("{") - line.count("}"))
+            continue
+        kept.append(line)
+    if not taken:
+        return text, []
+    body = "".join(kept)
+    # A declaration at the end usually sits under a rule or after a blank line; they go with it.
+    body = re.sub(r"(?:\n[ \t]*(?:-{3,}|\*{3,}|_{3,})?[ \t]*)+\Z", "", body.rstrip())
+    body += "\n" if text.endswith("\n") else ""
+    return body, [t.strip() for t in taken]
+
+
 def report_message(report: dict) -> str:
     """One line for the task event and the log."""
     msg = report.get("verdict") or "Verify: (no verdict line)"

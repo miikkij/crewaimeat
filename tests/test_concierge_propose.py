@@ -28,6 +28,12 @@ NEXT_STEP = (
 APPROVAL_URL = "http://node/v1/profile?tab=agents"
 
 
+@pytest.fixture(autouse=True)
+def _owner_default_is_not_the_node(monkeypatch):
+    """The owner's default road is read from the node; offline it is the machine road unless a test says."""
+    monkeypatch.setattr("crewaimeat.llm_choice.default_is_node_road", lambda agent_name: False)
+
+
 class FakeNode:
     """Answers the tools and routes the concierge uses, and records every call in order."""
 
@@ -127,7 +133,7 @@ def test_the_proposal_works_on_the_named_workspace(node):
     _propose()
     p = n.proposal()
     task = p["crew_def"]["tasks"][0]["description"]
-    assert "CADENCE" in task and "org-1" in task and "ws-crm" in task, "the agent is told where its data is"
+    assert 'read_workspace(workspace="CADENCE", organism="org-1")' in task, "it is told where its data is, by name"
     assert "workspace" in p["crew_def"]["agents"][0]["tools"], "and is given the tool to read it"
     assert "CADENCE" in p["purpose"]
 
@@ -389,3 +395,12 @@ def test_what_it_says_about_itself_mentions_proposals_and_keeps_its_negative_sco
     # Still true: the agent it proposes runs the job, not the concierge.
     assert "I do not run scheduled jobs" in ask
     assert "Propose a new agent" in concierge.CAPABILITIES_TEXT
+
+
+def test_a_proposal_on_the_owners_node_road_asks_for_ai_use(node, monkeypatch):
+    """The new agent takes the owner's default road; on the node road it calls /v1/llm, which needs ai:use."""
+    monkeypatch.setattr("crewaimeat.llm_choice.default_is_node_road", lambda agent_name: True)
+    n = node()
+    _propose()
+    assert "ai:use" in n.proposal()["scopes"]
+    assert "agent:write" not in n.proposal()["scopes"], "no longer needed by the runtime (aimeat-protocol bcd4027ed)"

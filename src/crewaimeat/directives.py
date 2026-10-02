@@ -85,6 +85,15 @@ def format_directives(data: dict | None) -> str:
     label = {"system": "policy", "owner": "policy", "agent": "standing"}
     for r in rules:
         lines.append(f"- [{label.get(r.get('source'), 'rule')}] {r.get('description', '').strip()}")
+    # The node's provenance rule is about a WRITE's metadata, and an agent whose answer the runtime
+    # publishes obeyed it by writing `*ai_provenance*: {...}` as the last line a customer read
+    # (2026-10-02). Said where it applies, next to the rule, so the rule stays the owner's as written.
+    if any("provenance" in (r.get("description") or "").lower() for r in rules):
+        lines.append(
+            "- [runtime] Your final answer is published for you, and the runtime records how it was made. "
+            "Never write ai_provenance or any other declaration into the answer itself; it belongs only in "
+            "the arguments of a tool that writes to the node."
+        )
     return "\n".join(lines)
 
 

@@ -79,7 +79,7 @@ except Exception:  # pragma: no cover
 from crewaimeat.directives import fetch_directives, format_directives  # noqa: E402
 from crewaimeat.llm import get_llm  # noqa: E402
 from crewaimeat.progress import install_progress  # noqa: E402
-from crewaimeat.verify_report import report_message, split_verify  # noqa: E402
+from crewaimeat.verify_report import report_message, split_provenance, split_verify  # noqa: E402
 
 # run_crew() exits with this code when the agent's token is no longer accepted by the
 # node (needs re-approval). The watchdog scripts treat it as "stop, don't restart".
@@ -1543,11 +1543,18 @@ _VERIFY_SCORE_RE = re.compile(r"score\s*=\s*([1-5])", re.I)
 _VERIFY_UNSUP_RE = re.compile(r"unsupported\s*=\s*(\d+)", re.I)
 
 
-def _without_verify_report(then: Callable[[str], str] | None) -> Callable[[str], str]:
-    """The publish step's cleaner when a verify pass ran: the report out first, then the crew's own."""
+def _for_the_reader(then: Callable[[str], str] | None, *, verified: bool) -> Callable[[str], str]:
+    """The publish step's cleaner, for every crew: what the person reads, and nothing that is ours.
+
+    The verify pass's report when one ran (crewaimeat.verify_report.split_verify), and on every run a
+    provenance declaration the model wrote into its answer (split_provenance); then the crew's own.
+    """
 
     def _clean(text: str) -> str:
-        body, _report = split_verify(text)
+        body = split_verify(text)[0] if verified else text
+        body, taken = split_provenance(body)
+        if taken:
+            print(f"[publish] took a provenance declaration out of the deliverable: {taken[0][:120]}", file=sys.stderr)
         body = body if body.strip() else text  # never publish an empty deliverable
         return then(body) if then else body
 
@@ -1702,6 +1709,18 @@ def _eval_ctx(eval_info: dict | None) -> dict:
     ctx: dict = {}
     if eval_info.get("model"):
         ctx["model"] = eval_info["model"]
+    # WHO ANSWERED, beside what was configured. A profile is a chain that falls through to its next
+    # endpoint on a failure, and on the node road the node picks the model, so the configured id can be
+    # the wrong one. A hosted reply with broken words (2026-10-02) could not be traced to the model that
+    # wrote it. Read here because this runs at publish, straight after the deliverable's own last call.
+    if eval_info.get("llm") is not None:
+        from crewaimeat.llm import resolved_model, resolved_provider
+
+        served = resolved_model(eval_info["llm"])
+        if served and served != ctx.get("model"):
+            ctx["served_model"] = served
+        if resolved_provider():
+            ctx["served_provider"] = resolved_provider()
     if eval_info.get("temperature") is not None:
         ctx["temperature"] = eval_info["temperature"]
     if eval_info.get("nature"):
@@ -2686,6 +2705,7 @@ def run_crew(spec: CrewSpec) -> None:
         _crew_holder: dict = {}
         eval_info = {
             "model": getattr(llm, "model", None),
+            "llm": llm,  # read at publish: the model that actually answered (_eval_ctx)
             "temperature": getattr(llm, "temperature", None),
             "nature": gate["nature"] if gate else None,
             "task": _short,
@@ -2705,7 +2725,7 @@ def run_crew(spec: CrewSpec) -> None:
                 shared_tag,
                 eval_info,
                 task_id=tid,
-                clean=_without_verify_report(spec.clean_deliverable) if verified else spec.clean_deliverable,
+                clean=_for_the_reader(spec.clean_deliverable, verified=verified),
                 offer_id=(ctx.offer or {}).get("id"),
             )
 

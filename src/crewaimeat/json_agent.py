@@ -183,8 +183,10 @@ class Definition:
             # The profile can change with the definition, and a stale one would keep routing the new
             # crew to the old model — the kind of wrong that produces plausible output.
             from crewaimeat import llm as _llm
+            from crewaimeat import llm_road
 
             _llm.set_doc_profile(self.agent_name, doc.get("llm_profile"))
+            llm_road.note_definition(self.agent_name, revision)
             report_runtime(self.agent_name, revision=revision, ok=True)
         return self.doc
 
@@ -288,8 +290,10 @@ def run_json_agent(agent_name: str, **overrides: Any) -> None:
     # the Crew tab was ignored, silently, on every task. crew_def.py's own scope note called this "a
     # later phase"; this is it, and `Definition.refresh` re-states it whenever the definition changes.
     from crewaimeat import llm as _llm
+    from crewaimeat import llm_road
 
     _llm.set_doc_profile(agent_name, doc.get("llm_profile"))
+    llm_road.note_definition(agent_name, revision)
 
     # And tell the node which profiles and models this machine can actually reach, so the picker on
     # the Agents page offers what exists here rather than a free-text box. Best-effort.
