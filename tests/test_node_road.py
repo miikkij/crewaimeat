@@ -118,6 +118,9 @@ class StandInNode:
 @pytest.fixture
 def node(monkeypatch):
     n = StandInNode()
+    # The OpenAI SDK's request headers ask platform.processor(), which runs `uname -p` on Linux: a
+    # subprocess the offline guard refuses (it passed on Windows and failed on CI).
+    monkeypatch.setattr("openai._base_client.get_platform", lambda: "Linux")
     monkeypatch.setenv("AIMEAT_NODE_URL", n.url)
     monkeypatch.setenv("AIMEAT_AGENT_TOKEN", "agent-token-1")
     yield n
