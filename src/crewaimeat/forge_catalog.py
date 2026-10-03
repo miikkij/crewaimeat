@@ -13,8 +13,10 @@ calls, tuple-unpacks, or tool-name filters — crew-forge owns those (see `emit_
 keeps the fragile wiring in one tested place instead of in every LLM-authored crew.
 
 Preflight is deliberately conservative (minimal + preflight-gated): a capability whose ENVIRONMENT
-prerequisite is missing (e.g. no OPENROUTER_API_KEY for image generation) is not offered to the
-Architect at all, so it can never select a tool that would only fail at run time. Prerequisites that
+prerequisite is missing is not offered to the Architect at all, so it can never select a tool that would
+only fail at run time. A capability the node can serve (`node_capability`, image generation) follows the
+owner's road instead: offered when its key is on this machine, or when the owner's road is the node and
+the node reports that capability on -- never when neither. Prerequisites that
 cannot be checked before the agent is approved — the AIMEAT token SCOPES — are surfaced at
 registration instead of gated here, and an `owner_action` (a manual node/owner step) is reported, not
 silently assumed.
@@ -54,6 +56,10 @@ class Capability:
     scopes: tuple[str, ...] = ()  # AIMEAT token scopes → SURFACED at registration (unknown until approval)
     owner_action: str = ""  # a manual owner/node step → SURFACED, never silently assumed
     notes: str = ""
+    # An AI capability the NODE can serve in place of `env_required` (crewaimeat.node_ai): when the owner's
+    # road is the node and the node reports this capability on, the env prerequisite does not apply,
+    # because the generated crew's calls go to the node with its own credential and the node's key pays.
+    node_capability: str = ""
 
 
 # The v1 catalog: capabilities whose factory exists today and is safe to construct during validation.
@@ -106,11 +112,12 @@ CATALOG: tuple[Capability, ...] = (
     ),
     Capability(
         id="image",
-        purpose="generate an image from a text prompt (ByteDance Seedream 4.5) and get back its public URL",
+        purpose="generate an image from a text prompt and get back its public URL",
         when_to_use="the deliverable includes a generated image",
         imports=("from crewaimeat.seedream_gen import make_image_tools as _make_image_gen_tools",),
         expr="[*_make_image_gen_tools(AGENT_NAME)]",
         env_required=("OPENROUTER_API_KEY",),
+        node_capability="image",
         notes="Costs ~$0.04/image; the agent must be registered and on the tunnel for public storage.",
     ),
     Capability(
@@ -165,7 +172,59 @@ def _importable(module: str) -> bool:
         return False
 
 
-def preflight(cap: Capability) -> tuple[bool, str]:
+# (asker, capability) -> (time asked, (served, reason)). One forge run asks the same question several
+# times (the menu, the resolve, the validator); the node's answer does not change within a minute.
+_NODE_ANSWERS: dict[tuple[str, str], tuple[float, tuple[bool, str]]] = {}
+_NODE_ANSWER_TTL_S = 60.0
+
+
+def _node_serves(capability: str, asker: str | None) -> tuple[bool, str]:
+    """(True, "") when the owner's road is the node AND the node reports `capability` on; else (False, why).
+
+    THE NEW AGENT'S ROAD IS THE OWNER'S DEFAULT: it has no choice of its own yet, so the question is asked
+    as the agent doing the forging (`asker`, else the kickoff's own agent), the same way the concierge's
+    proposal asks it (llm_choice.default_is_node_road). Whether the node can serve the capability is the
+    node's own answer (GET /v1/ai/capabilities): a node with no image model is not a road to images.
+    """
+    import time
+
+    from crewaimeat import node_ai
+
+    who = node_ai.agent_of(asker)
+    if not who:
+        return False, "no agent to ask the node as"
+    hit = _NODE_ANSWERS.get((who, capability))
+    if hit and time.monotonic() - hit[0] < _NODE_ANSWER_TTL_S:
+        return hit[1]
+    answer = _ask_node(capability, who)
+    _NODE_ANSWERS[(who, capability)] = (time.monotonic(), answer)
+    return answer
+
+
+def _ask_node(capability: str, who: str) -> tuple[bool, str]:
+    from crewaimeat.llm_choice import default_is_node_road
+
+    try:
+        if not default_is_node_road(who):
+            return False, "the owner's model road is not the node"
+    except Exception as exc:  # noqa: BLE001 -- unknown is not "the node"; say it
+        return False, f"the owner's model road could not be read ({exc!r})"
+    from crewaimeat.aimeat_crew import _aimeat_rest
+
+    res = _aimeat_rest(who, "GET", "/v1/ai/capabilities", retries=2, return_error=True)
+    if not isinstance(res, dict):
+        return False, "the node did not answer which AI capabilities it serves"
+    if res.get("ok") is False:
+        err = res.get("error") if isinstance(res.get("error"), dict) else {}
+        return False, f"the node refused the capability read ({err.get('code')}: {err.get('message')})"
+    entry = (res.get("capabilities") or {}).get(capability) or {}
+    if entry.get("on"):
+        return True, ""
+    why = entry.get("message") or entry.get("reason") or "it reports the capability off"
+    return False, f"the node does not serve {capability} ({why})"
+
+
+def preflight(cap: Capability, asker: str | None = None) -> tuple[bool, str]:
     """Is this capability usable on THIS machine right now? Only ENV + DEPENDENCY prerequisites gate here.
 
     Taxonomy: env vars and importable packages are checkable now, so a capability missing either is
@@ -174,6 +233,14 @@ def preflight(cap: Capability) -> tuple[bool, str]:
     `owner_action` is likewise surfaced. Returns (ok, reason) — reason names what is missing.
     """
     missing_env = [e for e in cap.env_required if not os.getenv(e)]
+    if missing_env and cap.node_capability:
+        # The capability follows the owner's ROAD: the env prerequisite is the machine road, and the node
+        # serving it on the owner's node road satisfies it equally.
+        served, why = _node_serves(cap.node_capability, asker)
+        if served:
+            missing_env = []
+        else:
+            return False, "needs env " + ", ".join(missing_env) + f", or the node road ({why})"
     if missing_env:
         return False, "needs env " + ", ".join(missing_env)
     missing_dep = [d for d in cap.deps if not _importable(d)]
@@ -182,9 +249,9 @@ def preflight(cap: Capability) -> tuple[bool, str]:
     return True, "available"
 
 
-def available_capabilities() -> list[Capability]:
-    """The capabilities offered to the Architect: every catalog entry whose env preflight passes."""
-    return [c for c in CATALOG if preflight(c)[0]]
+def available_capabilities(asker: str | None = None) -> list[Capability]:
+    """The capabilities offered to the Architect: every catalog entry whose preflight passes."""
+    return [c for c in CATALOG if preflight(c, asker)[0]]
 
 
 def parse_ids(raw: str | list[str] | None) -> list[str]:
@@ -200,7 +267,7 @@ def parse_ids(raw: str | list[str] | None) -> list[str]:
     return out
 
 
-def resolve(ids: str | list[str] | None) -> tuple[list[str], list[str]]:
+def resolve(ids: str | list[str] | None, asker: str | None = None) -> tuple[list[str], list[str]]:
     """Split requested ids into (usable, dropped). Usable = known AND env-available; dropped = the rest.
 
     Fail-loud: an unknown or env-unavailable id is DROPPED (never silently attached), and returned so
@@ -209,7 +276,7 @@ def resolve(ids: str | list[str] | None) -> tuple[list[str], list[str]]:
     usable, dropped = [], []
     for pid in parse_ids(ids):
         cap = _BY_ID.get(pid)
-        if cap is not None and preflight(cap)[0]:
+        if cap is not None and preflight(cap, asker)[0]:
             if pid not in usable:
                 usable.append(pid)
         else:
@@ -392,7 +459,9 @@ def render_catalog_brief(caps: list[Capability] | None = None) -> str:
     ]
     for c in caps:
         extra = ""
-        if c.env_required:
+        if c.node_capability and not all(os.getenv(e) for e in c.env_required):
+            extra += "  [through the node, which picks the model and the key]"
+        elif c.env_required:
             extra += f"  [needs env {', '.join(c.env_required)}]"
         if c.notes:
             extra += f"  Note: {c.notes}"

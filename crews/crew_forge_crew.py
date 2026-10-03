@@ -318,10 +318,13 @@ def _command_domain(ctx: BuildContext, cmd: str, arg: str) -> tuple[list[Agent],
 def _build_domain(ctx: BuildContext, request: str | None = None) -> tuple[list[Agent], list[Task]]:
     llm, today = ctx.llm, ctx.today
     request = request if request is not None else ctx.prompt
-    # Preflight-before-design: the brief lists ONLY the tools actually usable on this machine right
-    # now (e.g. image generation is hidden without OPENROUTER_API_KEY), so the Architect can never
-    # pick a tool that would fail at run time.
-    catalog_brief = forge_catalog.render_catalog_brief()
+    # Preflight-before-design: the brief lists ONLY the tools actually usable right now, so the
+    # Architect can never pick a tool that would fail at run time. Image generation follows the owner's
+    # road: offered with OPENROUTER_API_KEY on this machine, or on the node road when the node serves
+    # images (forge_catalog._node_serves), asked as this forge agent.
+    catalog_brief = forge_catalog.render_catalog_brief(
+        forge_catalog.available_capabilities(asker=ctx.identity or AGENT_NAME)
+    )
     # Precedent-before-design (deterministic): the most similar past builds + their live field
     # ratings become the Architect's priors. "" when forge memory is unavailable/empty.
     precedent = forge_precedent_block(request)
