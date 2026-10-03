@@ -9,8 +9,18 @@ Two channels:
   + timestamp).
 
 Signals come from CrewAI's framework events (crewai.events), not from LLM
-decisions -> fully deterministic. Writes go through ``aimeat connect call`` (its
-own short-lived REST client, independent of the serve process).
+decisions -> fully deterministic.
+
+**ONE WRITER, THROUGH THE SERVE DAEMON, NEVER A PROCESS PER CALL.** Writes used to go through
+``aimeat connect call`` -- one Node process per milestone and per heartbeat, 110-130 MB each, fired from
+CrewAI's event handlers in parallel. Measured 2026-10-03 on a Solo place during one run: six at once
+(five task events and a heartbeat), 1783 MB peak with ONE agent; the run before, the cgroup OOM killer
+took the daemon and the worker at the 2048 MB limit. The place already runs ``aimeat connect serve
+--http`` for exactly these calls, so every write now goes to its ``/local/call`` door (with the
+serve.json secret) through ``_aimeat_call``, from ONE writer thread per process, in order:
+milestones are queued as they come, and the live status keeps only its LATEST snapshot per task, so a
+slow node never piles heartbeats up. With no daemon there is no write and one line says so -- the
+progress view is not worth a Node process per event.
 
 **Concurrency (aimeat-crewai >= 0.3.8 pool).** Several EXECUTE tasks may run at
 once, each in its OWN worker thread (``executor.submit(_execute_worker, task)``
@@ -30,10 +40,8 @@ with ``requests.post`` without a subprocess.
 
 from __future__ import annotations
 
+import atexit
 import contextvars
-import json
-import os
-import subprocess
 import sys
 import threading
 import time
@@ -68,15 +76,111 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+class _Writer:
+    """One background thread per process that sends progress writes, one at a time, through the serve
+    daemon. Milestones keep their order; a live status replaces the one still waiting for its key."""
+
+    def __init__(self) -> None:
+        self._cond = threading.Condition()
+        self._events: list[tuple[str, dict, str]] = []  # (tool, payload, agent), in arrival order
+        self._live: dict[tuple[str, str], dict] = {}  # (agent, key) -> the latest payload not yet sent
+        self._thread: threading.Thread | None = None
+        self._said_no_daemon = False
+        self._sending = False  # a write popped from the queue and not finished yet
+        self.sent = 0  # for tests and for a person reading a stall: how many writes left this process
+
+    def event(self, agent: str, payload: dict) -> None:
+        with self._cond:
+            self._events.append(("aimeat_task_event", payload, agent))
+            self._wake()
+
+    def live(self, agent: str, payload: dict) -> None:
+        with self._cond:
+            self._live[(agent, payload["key"])] = payload
+            self._wake()
+
+    def _wake(self) -> None:  # caller holds the lock
+        if self._thread is None or not self._thread.is_alive():
+            self._thread = threading.Thread(target=self._run, name="aimeat-progress-writer", daemon=True)
+            self._thread.start()
+        self._cond.notify()
+
+    def _next(self) -> tuple[str, dict, str] | None:  # caller holds the lock
+        if self._events:
+            return self._events.pop(0)
+        if self._live:
+            (agent, _key), payload = self._live.popitem()
+            return "aimeat_memory_write", payload, agent
+        return None
+
+    def _run(self) -> None:
+        while True:
+            with self._cond:
+                item = self._next()
+                while item is None:
+                    if not self._cond.wait(timeout=30):
+                        self._thread = None  # idle for 30 s: the thread ends, the next write starts one
+                        return
+                    item = self._next()
+                self._sending = True
+            try:
+                self._send(*item)
+            finally:
+                with self._cond:
+                    self._sending = False
+
+    def _send(self, tool: str, payload: dict, agent: str) -> None:
+        from crewaimeat import aimeat_crew
+
+        if aimeat_crew._serve_api() is None:
+            if not self._said_no_daemon:
+                self._said_no_daemon = True
+                print(
+                    "[progress] no serve daemon: task events and live status are not written (a CLI "
+                    "process per event is not worth it). Start the daemon to see progress.",
+                    file=sys.stderr,
+                )
+            return
+        try:
+            aimeat_crew._aimeat_call(agent, tool, payload, retries=1, quiet=True)
+            self.sent += 1
+        except Exception as exc:  # noqa: BLE001 -- progress must never break the crew
+            print(f"[progress] {tool} failed: {exc!r}", file=sys.stderr)
+
+    def flush(self, timeout: float = 10.0) -> bool:
+        """Wait until nothing is waiting (tests, and a worker about to exit). True when drained.
+
+        When the writer thread is gone (it ended idle, or the interpreter is shutting down and cannot
+        start one), what is still queued is sent from the calling thread, in order."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with self._cond:
+                if not self._events and not self._live and not self._sending:
+                    return True
+                alive = self._thread is not None and self._thread.is_alive()
+                item = None if (alive or self._sending) else self._next()
+            if item is not None:
+                self._send(*item)
+                continue
+            time.sleep(0.05)
+        return False
+
+
+_WRITER = _Writer()
+
+# A spawn worker exits right after its run, and the writer is a daemon thread: without this the last
+# milestone ("crew finished") and the last live status could die with the process. The old bridge
+# wrote synchronously, so those always landed.
+atexit.register(_WRITER.flush, 15.0)
+
+
 def _aimeat_fire(tool: str, payload: dict, agent: str) -> None:
-    """Fire-and-forget AIMEAT call via the connector. Best-effort: progress must
-    never crash the crew, so all errors are swallowed (logged to stderr)."""
-    base = ["aimeat", "connect", "call", tool, "--agent", agent, "--stdin"]
-    cmd = ["cmd", "/c", *base] if os.name == "nt" else base
-    try:
-        subprocess.run(cmd, input=json.dumps(payload), capture_output=True, text=True, timeout=20)
-    except Exception as exc:  # noqa: BLE001
-        print(f"[progress] {tool} failed: {exc}", file=sys.stderr)
+    """Queue a progress write; the writer thread sends it through the serve daemon. Never blocks the
+    crew and never starts a process."""
+    if tool == "aimeat_memory_write":
+        _WRITER.live(agent, payload)
+    else:
+        _WRITER.event(agent, payload)
 
 
 class ProgressReporter:

@@ -16,6 +16,7 @@ from __future__ import annotations
 import base64
 import io
 import os
+import sys
 
 import requests
 
@@ -36,12 +37,26 @@ _IMG_PREFIXES = ("image/",)
 def analyze_image(image_bytes: bytes, mime: str, *, prompt: str | None = None, agent: str | None = None) -> str:
     """Send one image to a vision model and return its text read. Fails soft -> a short error string.
     `agent` (when known) attributes the direct OpenRouter call to the AIMEAT usage ledger."""
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
-        return "(vision unavailable: OPENROUTER_API_KEY not set)"
+    from crewaimeat import node_ai
+
     if not image_bytes:
         return "(empty image)"
+    route = node_ai.road(agent)
+    if route == node_ai.NONE:
+        msg = node_ai.no_route("vision", agent)
+        print(f"[vision] {msg}", file=sys.stderr)
+        return f"({msg})"
     b64 = base64.b64encode(image_bytes).decode("ascii")
+    if route == node_ai.NODE:
+        # The node picks its vision model and its key pays (POST /v1/ai/complete with images).
+        try:
+            text = node_ai.complete_with_images(
+                node_ai.agent_of(agent), prompt or _VISION_PROMPT, [f"data:{mime};base64,{b64}"]
+            )
+        except node_ai.NodeAiError as exc:
+            return f"(vision on the node failed: {exc})"
+        return text.strip() or "(vision returned no text)"
+    api_key = os.getenv("OPENROUTER_API_KEY")
     body = {
         "model": _VISION_MODEL,
         "messages": [

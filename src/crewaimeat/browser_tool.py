@@ -36,16 +36,29 @@ _RETRYABLE = {"navigate", "get_content", "wait"}
 _DEFAULT_VISION_MODEL = "qwen/qwen3-vl-30b-a3b-instruct"
 
 
-def _describe_image(path: str, prompt: str) -> str:
-    """Describe a screenshot with a vision-language model via OpenRouter.
+def _describe_image(path: str, prompt: str, agent: str | None = None) -> str:
+    """Describe a screenshot with a vision-language model.
 
-    Reuses OPENROUTER_API_KEY / OPENROUTER_BASE_URL; the model id comes from VISION_MODEL
-    (default qwen-vl, free). Sends the PNG inline as a base64 data URI. Returns the model's
+    On the agent's node road the node describes it (POST /v1/ai/complete with the image; the node picks
+    its vision model and its key pays). Otherwise OPENROUTER_API_KEY / OPENROUTER_BASE_URL with
+    VISION_MODEL (default qwen-vl). Sends the PNG inline as a base64 data URI. Returns the model's
     description, or an explanatory message on any failure (never raises).
     """
+    from crewaimeat import node_ai
+
+    route = node_ai.road(agent)
+    if route == node_ai.NONE:
+        return f"(describe unavailable — {node_ai.no_route('screenshot describe', agent)})"
+    if route == node_ai.NODE:
+        try:
+            uri = "data:image/png;base64," + base64.b64encode(Path(path).read_bytes()).decode()
+            text = node_ai.complete_with_images(node_ai.agent_of(agent), prompt, [uri])
+        except node_ai.NodeAiError as exc:
+            return f"(describe failed on the node: {exc})"
+        except OSError as exc:
+            return f"(describe failed: {exc})"
+        return text.strip() or "(describe returned empty)"
     api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
-        return "(describe unavailable — OPENROUTER_API_KEY not set)"
     base = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
     # VISION_MODEL is the OpenRouter REST id ("provider/model"); strip a litellm-style "openrouter/" prefix.
     model = os.getenv("VISION_MODEL", _DEFAULT_VISION_MODEL)
@@ -126,6 +139,9 @@ class PlaywrightBrowserTool(BaseTool):
     # Config — overridable when a crew constructs the tool.
     storage_dir: str = "logs/.browser"
     allowed_domains: tuple[str, ...] = ()  # empty = allow all; else only these hosts may be navigated
+    # Who the screenshot describe runs as: the node's door needs the agent, and the owner's road for
+    # THIS agent decides which pocket pays (crewaimeat.node_ai). Unset, the kickoff's own agent is used.
+    agent_name: str | None = None
 
     # --- helpers ---
     def _domain_ok(self, url: str) -> bool:
@@ -187,7 +203,7 @@ class PlaywrightBrowserTool(BaseTool):
                             "Describe what is visible on this web page: layout, key text, buttons, form "
                             "fields, and any error or success messages. Be concise and concrete."
                         )
-                        out += "\nVision (qwen-vl):\n" + _describe_image(path, prompt)
+                        out += "\nVision:\n" + _describe_image(path, prompt, self.agent_name)
                     return out
                 return f"✗ unknown action: {a.action}"
             except PWTimeout:

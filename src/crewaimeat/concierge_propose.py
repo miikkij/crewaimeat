@@ -35,6 +35,7 @@ tool-dispatch/tool-call-defs-agent.ts (aimeat_agent_propose on /local/call).
 from __future__ import annotations
 
 import re
+import sys
 import time
 
 from crewaimeat.agent_scopes import runtime_scopes
@@ -263,6 +264,17 @@ def propose(
     unknown = [t for t in chosen if t not in offered]
     if unknown:
         return f"I cannot give an agent {', '.join(unknown)}. The tools I can give: {', '.join(offered)}."
+    if schedule_cron and "schedule" in chosen:
+        # ASK ONLY FOR WHAT ITS RUNS CALL. "Every morning" is a clock the CONCIERGE sets once the agent
+        # exists (start_proposed, POST /v1/agents/<name>/schedules with the concierge's own credential);
+        # the agent's runs never call a schedule route. The `schedule` tool brought workflow:read and
+        # task:write into a morning-brief proposal on a sold place (2026-10-03) for nothing.
+        chosen = [t for t in chosen if t != "schedule"]
+        print(
+            f"[{agent_name}] propose {name}: the clock is set after approval, so the agent is not given the "
+            "schedule tool (no workflow:read, no task:write)",
+            file=sys.stderr,
+        )
 
     found_ws = None
     no_workspace_yet = ""

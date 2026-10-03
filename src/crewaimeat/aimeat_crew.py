@@ -936,6 +936,9 @@ def _aimeat_rest(
     )
 
 
+_SUBPROCESS_LOCK = threading.Lock()
+
+
 def _aimeat_call_subprocess(agent_name: str, tool: str, payload: dict) -> dict | None:
     """Legacy one-shot `aimeat connect call` subprocess (Windows: cmd /c). Kept as the fallback
     for environments without the loopback daemon."""
@@ -949,19 +952,24 @@ def _aimeat_call_subprocess(agent_name: str, tool: str, payload: dict) -> dict |
         return None
     base = ["aimeat", "connect", "call", tool, "--agent", agent_name, "--stdin"]
     cmd = ["cmd", "/c", *base] if os.name == "nt" else base
-    try:
-        proc = subprocess.run(
-            cmd,
-            input=json.dumps(payload),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=90,
-        )
-    except Exception as exc:  # noqa: BLE001
-        print(f"[{agent_name}] {tool} failed: {exc}", file=sys.stderr)
-        return None
+    # ONE AT A TIME. Each `connect call` is a Node process of 110-130 MB; parallel callers (event
+    # handlers, worker threads) used to start several at once, and on a Solo place six of them took
+    # one agent to 1783 MB and the cgroup OOM killer to the container (2026-10-03). This path exists
+    # for a machine with no daemon, where nothing else is running either: waiting is the cheap side.
+    with _SUBPROCESS_LOCK:
+        try:
+            proc = subprocess.run(
+                cmd,
+                input=json.dumps(payload),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=90,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[{agent_name}] {tool} failed: {exc}", file=sys.stderr)
+            return None
     out = (proc.stdout or "").strip()
     if not out:
         return None  # empty result (e.g. memory_read of a key that doesn't exist yet) — not an error

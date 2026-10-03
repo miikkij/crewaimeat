@@ -161,6 +161,15 @@ def offline_search_discovery(monkeypatch):
     monkeypatch.setattr(cockpit, "_ollama_probe", lambda: (False, []))
 
 
+@pytest.fixture(autouse=True)
+def offline_model_road(monkeypatch):
+    """Image, vision and embedding calls ask the owner's road first (crewaimeat.node_ai), and answering
+    means asking the node. Offline the answer is "not the node"; a test of the node road sets it."""
+    from crewaimeat import node_ai
+
+    monkeypatch.setattr(node_ai, "_on_node_road", lambda who: False)
+
+
 @pytest.fixture
 def no_pipeline_memory(monkeypatch):
     """Structural crew tests exercise wiring with the optional memory service unavailable."""

@@ -140,8 +140,12 @@ def _vision_meta(image: bytes, mime: str, brief: str, *, agent: str | None = Non
     relevance(0-10)}. Same OpenRouter wiring as browser_tool's screenshot describe.
     `agent` attributes the direct call to the ledger; pass it EXPLICITLY on the record/idle paths
     (on_record, postman's day-image) where no crew kickoff has set the usage_run contextvar."""
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
+    from crewaimeat import node_ai
+
+    who = agent or AGENT
+    route = node_ai.road(who)
+    if route == node_ai.NONE:
+        print(f"[{AGENT}] {node_ai.no_route('vision describe', who)}", file=sys.stderr)
         return None
     model = os.getenv("VISION_MODEL", _DEFAULT_VISION_MODEL).removeprefix("openrouter/")
     data_uri = f"data:{mime};base64," + base64.b64encode(image).decode()
@@ -152,6 +156,15 @@ def _vision_meta(image: bytes, mime: str, brief: str, *, agent: str | None = Non
         '"style": "<visual style>", "colors": ["<dominant>", "..."], '
         '"tags": ["<5-8 short tags>"], "relevance": <0-10 fit to the brief>}'
     )
+    if route == node_ai.NODE:
+        # The node picks its vision model and its key pays; nothing here names a model.
+        try:
+            text = node_ai.complete_with_images(who, prompt, [data_uri]).strip()
+        except node_ai.NodeAiError as exc:
+            print(f"[{AGENT}] vision describe on the node failed: {exc}", file=sys.stderr)
+            return None
+        return _parse_vision_meta(text)
+    api_key = os.getenv("OPENROUTER_API_KEY")
     try:
         r = requests.post(
             os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/") + "/chat/completions",
@@ -178,15 +191,23 @@ def _vision_meta(image: bytes, mime: str, brief: str, *, agent: str | None = Non
         resp_json = r.json()
         report_llm_usage(model, resp_json.get("usage"), agent=agent)
         text = (resp_json["choices"][0]["message"]["content"] or "").strip()
-        m = re.search(r"\{.*\}", text, re.DOTALL)
+        return _parse_vision_meta(text)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[{AGENT}] vision describe failed: {exc!r}", file=sys.stderr)
+        return None
+
+
+def _parse_vision_meta(text: str) -> dict | None:
+    """The vision model's JSON answer -> the meta dict, or None when it carries no subject."""
+    try:
+        m = re.search(r"\{.*\}", text or "", re.DOTALL)
         meta = json.loads(m.group(0)) if m else None
         if isinstance(meta, dict) and meta.get("subject"):
             meta["relevance"] = max(0, min(10, int(meta.get("relevance") or 0)))
             return meta
-        return None
-    except Exception as exc:  # noqa: BLE001
-        print(f"[{AGENT}] vision describe failed: {exc!r}", file=sys.stderr)
-        return None
+    except (ValueError, TypeError) as exc:
+        print(f"[{AGENT}] vision describe answered something that is not its JSON: {exc!r}", file=sys.stderr)
+    return None
 
 
 def _upload_public(key: str, image: bytes, mime: str) -> bool:

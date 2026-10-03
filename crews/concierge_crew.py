@@ -370,7 +370,10 @@ def _concierge_tools(sink: dict, *, ask_to: str | None = None, ask_conv: str | N
         `workspace`: the workspace it works on (its name, e.g. 'CADENCE'). `tools`: comma-separated, only
         from memory, workspace, workspace_write, web, article_fetch, schedule, dm. A named workspace adds
         'workspace' (read only) itself; give 'workspace_write' when the agent must ADD or CHANGE records
-        there (contacts, deals, tasks), which also asks the owner for organism:write.
+        there (contacts, deals, tasks), which also asks the owner for organism:write. Name only the tools
+        each RUN calls: every tool asks the owner for permissions. 'schedule' is for an agent that manages
+        schedules itself; a job that runs on a clock does NOT need it -- give `schedule_cron` instead, and
+        I set the clock after the approval.
         `delivers`: what each run hands back. `schedule_cron`: a 5-field cron when it should run on a clock
         ('0 7 * * *' = 07:00 daily), with `timezone`. Then relay EXACTLY what this returns -- it carries the
         address where they approve. Do not ask them yes/no as well: their press there is the approval."""

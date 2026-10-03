@@ -95,7 +95,7 @@ def build_domain(ctx: BuildContext):
             "CSS selectors, verify outcomes by reading page content (or describing a screenshot when the "
             "result is visual), and report each step's ✓/✗ honestly with the evidence you saw."
         ),
-        tools=_browser_tools(profile=AGENT_NAME),
+        tools=_browser_tools(profile=AGENT_NAME, agent_name=AGENT_NAME),
         llm=ctx.llm,
         verbose=True,
     )

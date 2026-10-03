@@ -203,6 +203,24 @@ def resolve_embedder(
         print(f"[embed] {agent_name or '?'} -> explicit memory_embedder override ({tag})", file=sys.stderr)
         return override, tag
 
+    # THE NODE ROAD comes before the cascade. When the owner routes this agent's model calls through
+    # the node, its embeddings go there too (POST /v1/ai/embed with the agent's credential): the
+    # node picks the model and its key pays. A cloud tier here would be this machine's key paying
+    # for the owner's agent, outside the node's metering. No fallback: a refusal raises with the
+    # node's own words, and a crew that asked for memory does not run without it.
+    from crewaimeat import node_ai
+
+    if agent_name and node_ai.road(agent_name) == node_ai.NODE:
+        try:
+            emb, tag = node_ai.node_embedder(agent_name)
+        except node_ai.NodeAiError as exc:
+            raise RuntimeError(
+                f"crew memory is ON and {agent_name}'s model road is the node, but the node did not embed: "
+                f"{exc}. The owner gives the agent ai:use, or sets an embedding model for it on the node."
+            ) from exc
+        print(f"[embed] {agent_name} -> the node ({tag})", file=sys.stderr)
+        return emb, tag
+
     bias = _resolve_bias(bias)
     order = _ordered_tiers(bias)
     tried: list[str] = []

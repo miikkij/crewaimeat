@@ -436,3 +436,21 @@ def test_the_prompt_tells_it_to_propose_on_an_empty_node_with_stated_assumptions
     assert "ALWAYS file the proposal in THIS run" in text
     assert "07:00 Europe/Helsinki" in text and "reads memory until one exists" in text
     assert "Never ask the workspace name, the language or the time INSTEAD of proposing" in text
+
+
+def test_a_clock_job_is_not_given_the_schedule_tool(node):
+    """A sold place's morning-brief proposal asked for workflow:read and task:write (2026-10-03). Those came
+    with the `schedule` tool; the clock is set by the concierge after the approval, so the agent's runs
+    never call a schedule route."""
+    n = node()
+    _propose(tools="workspace,schedule", schedule_cron="0 7 * * *")
+    p = n.proposal()
+    assert "schedule" not in p["crew_def"]["agents"][0]["tools"]
+    assert "workflow:read" not in p["scopes"] and "task:write" not in p["scopes"]
+    assert set(p["scopes"]) == {"memory:read", "memory:write", "organism:read"}
+
+
+def test_an_agent_that_manages_schedules_itself_keeps_the_tool(node):
+    n = node()
+    _propose(tools="schedule", schedule_cron="")
+    assert {"workflow:read", "task:write"} <= set(n.proposal()["scopes"])

@@ -84,16 +84,72 @@ def _pub_url(agent: str, gaii: str, key: str) -> str:
     return f"{base}/v1/pub/{urllib.parse.quote(gaii, safe='')}/{key}"
 
 
+def _generate_on_node(agent_name: str, prompt: str) -> dict:
+    """THE NODE ROAD: POST /v1/ai/image as the agent. The node picks the model (the owner's image
+    choice, not Seedream by name), its key pays, and the picture lands public in storage; the
+    Seedream-specific `size`/`aspect_ratio` are not sent, because they mean nothing to another model."""
+    from crewaimeat import node_ai
+
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    h = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:10]
+    try:
+        res = node_ai.generate_image(agent_name, prompt, public=True, storage_key=f"images/{stamp}-{h}")
+    except node_ai.NodeAiError as exc:
+        return {"ok": False, "error": f"the node did not generate the image ({exc})"}
+    url, key, mime = res.get("url"), res.get("storage_key"), res.get("mime_type") or "image/png"
+    if not url or not key:
+        return {"ok": False, "error": f"the node's answer carried no image address: {str(res)[:300]}"}
+    if url.startswith("/"):
+        # The node answers with a path ("/v1/pub/<owner>/<key>", measured on a local node 2026-10-03).
+        # A deliverable link and the concierge's re-fetch both need the whole address: the node this
+        # agent is registered on. Not knowing it is said, not guessed.
+        _tok, node_url = _token(agent_name, _discover_owner(agent_name))
+        if not node_url:
+            return {
+                "ok": False,
+                "error": f"the node stored the image at {url}, and this agent's node address is unknown",
+            }
+        url = node_url.rstrip("/") + url
+    print(f"[seedream] {agent_name}: image generated on the node by {res.get('model')}", file=sys.stderr)
+    _aimeat_call(
+        agent_name,
+        "aimeat_memory_write",
+        {
+            "key": f"crews.{agent_name}.images.{stamp}-{h}",
+            "value": {"prompt": prompt, "url": url, "mime": mime, "bytes": res.get("size"), "model": res.get("model")},
+            "visibility": "public",
+        },
+    )
+    _RECENT_IMAGES.append({"url": url, "prompt": prompt, "mime": mime})
+    return {
+        "ok": True,
+        "url": url,
+        "key": key,
+        "gaii": node_ai.pub_owner_of(url),
+        "mime": mime,
+        "bytes": res.get("size"),
+        "model": res.get("model"),
+    }
+
+
 def generate_image(agent_name: str, prompt: str, *, size: str = "2K", aspect_ratio: str | None = None) -> dict:
-    """Generate ONE image from `prompt` (Seedream 4.5), upload it public, and return
-    {ok, url, mime, bytes} or {ok:False, error}. Fails soft (returns the error string) — never raises,
-    so a crew tool can report it cleanly."""
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
-        return {"ok": False, "error": "OPENROUTER_API_KEY not set"}
+    """Generate ONE image from `prompt`, upload it public, and return {ok, url, mime, bytes} or
+    {ok:False, error}. Fails soft (returns the error string) — never raises, so a crew tool can report
+    it cleanly. On the node road the node generates it (crewaimeat.node_ai); otherwise Seedream 4.5
+    with this machine's OPENROUTER_API_KEY; with neither, the error says so."""
+    from crewaimeat import node_ai
+
     prompt = (prompt or "").strip()
     if not prompt:
         return {"ok": False, "error": "empty prompt"}
+    route = node_ai.road(agent_name)
+    if route == node_ai.NODE:
+        return _generate_on_node(agent_name, prompt)
+    if route == node_ai.NONE:
+        msg = node_ai.no_route("image generation", agent_name)
+        print(f"[seedream] {msg}", file=sys.stderr)
+        return {"ok": False, "error": msg}
+    api_key = os.getenv("OPENROUTER_API_KEY")
     image_config: dict = {"size": size}
     if aspect_ratio:
         image_config["aspect_ratio"] = aspect_ratio

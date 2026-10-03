@@ -78,6 +78,16 @@ def default_analysis_llm(agent_name: str, embedder_tag: str) -> Any:
     # So: name the model. Default is gpt-oss-120b (already configured in the content-free/coding
     # profiles) which honours response_format; override with AIMEAT_MEMORY_ANALYSIS_MODEL, which now
     # works on EVERY tier rather than only the ollama one.
+    # THE NODE ROAD: the agent's own get_llm already routes through the node (crewaimeat.llm), where the
+    # node picks the model and its key pays. A named OpenRouter model with this machine's key would be
+    # the place's key paying for the owner's agent, outside the node's metering.
+    from crewaimeat import node_ai
+
+    if node_ai.road(agent_name) == node_ai.NODE:
+        from crewaimeat.llm import get_llm
+
+        print(f"[pipemem] {agent_name}: encode analysis on the node road", file=sys.stderr)
+        return get_llm(agent_name=agent_name, temperature=0.1)
     key = os.getenv("OPENROUTER_API_KEY")
     if key:
         from crewai import LLM

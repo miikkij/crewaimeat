@@ -74,7 +74,9 @@ def _web_tools() -> list:
     return [DdgSearchTool()]
 
 
-def _browser_tools(profile: str | None = None, allowed_domains: list[str] | None = None) -> list:
+def _browser_tools(
+    profile: str | None = None, allowed_domains: list[str] | None = None, agent_name: str | None = None
+) -> list:
     """Return the Playwright browser tool in a list (or [] if playwright isn't installed).
 
     Pass `profile` to persist login across runs (logs/.browser/<profile>.json); pass `allowed_domains`
@@ -88,6 +90,7 @@ def _browser_tools(profile: str | None = None, allowed_domains: list[str] | None
         return []
     domains = allowed_domains or [d.strip() for d in os.getenv("BROWSER_ALLOWED_DOMAINS", "").split(",") if d.strip()]
     tool = PlaywrightBrowserTool()
+    tool.agent_name = agent_name
     if domains:
         tool.allowed_domains = tuple(domains)
     return [tool]
