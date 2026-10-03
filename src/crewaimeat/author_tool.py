@@ -41,6 +41,7 @@ from crewaimeat.generator_tool import (
     _err,
     _node_base,
     _ok,
+    app_link,
 )
 
 AUTHOR_TIMEOUT = 60
@@ -311,7 +312,7 @@ def publish_app_html(
         r = _call(agent_name, owner, "POST", "/v1/apps", meta)
         if not _ok(r):
             return False, _err(r)
-        return True, f"{base}/v1/apps/{owner}/{filename}?mode=inline"
+        return True, app_link(agent_name, owner, filename)
     except Exception as e:  # noqa: BLE001
         return False, repr(e)
 
@@ -782,7 +783,7 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
         r = _call(agent_name, owner, "POST", "/v1/apps", meta)
         if not _ok(r):
             return f"publish failed: {_err(r)}"
-        url = f"{base}/v1/apps/{owner}/{filename}?mode=inline"
+        url = app_link(agent_name, owner, filename)
         state["apps"].append(filename)
         # Record the PRE-publish version as this run's rollback baseline (the last-known-good before this
         # task touched the app) — the first time we publish a given filename this run. Lets the agent (or
@@ -878,7 +879,7 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
         _event(f"reverted app '{filename}' to v{to_version}")
         return (
             f"OK: reverted {filename} to v{to_version} (re-published as the current version; "
-            f"{len(html)} bytes). Live: {base}/v1/apps/{owner}/{filename}?mode=inline"
+            f"{len(html)} bytes). Live: {app_link(agent_name, owner, filename)}"
         )
 
     @tool("seed_memory")
@@ -899,7 +900,7 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
     @tool("app_inline_url")
     def app_inline_url(filename: str) -> str:
         """Return the live inline URL for a published app (served under the owner)."""
-        return f"{base}/v1/apps/{owner}/{filename}?mode=inline"
+        return app_link(agent_name, owner, filename)
 
     @tool("find_public_index")
     def find_public_index(index_key: str = "newspaper.frontpage") -> str:
@@ -959,8 +960,7 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
         m = _re.search(r"/v1/apps/([^/]+)/([^/?#]+)", url or "")
         if not m:
             return (
-                "BLOCKED: not an app URL. Provide the app's inline URL, e.g. "
-                f"{base}/v1/apps/{owner}/<file>.html?mode=inline"
+                f"BLOCKED: not an app URL. Provide the app's inline URL, e.g. /v1/apps/{owner}/<file>.html?mode=inline"
             )
         app_owner, filename = _up.unquote(m.group(1)), _up.unquote(m.group(2))
         try:
@@ -1043,9 +1043,7 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
 
         m = _re.search(r"/v1/apps/([^/]+)/([^/?#]+)", url or "")
         if not m:
-            return (
-                f"BLOCKED: not an app URL. Provide the inline URL, e.g. {base}/v1/apps/{owner}/<file>.html?mode=inline"
-            )
+            return f"BLOCKED: not an app URL. Provide the inline URL, e.g. /v1/apps/{owner}/<file>.html?mode=inline"
         app_owner, filename = _up.unquote(m.group(1)), _up.unquote(m.group(2))
         try:
             g = _aimeat_request(

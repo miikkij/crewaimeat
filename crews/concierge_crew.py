@@ -199,6 +199,13 @@ def _fetch_url_bytes(url: str, *, max_bytes: int = _FETCH_MAX_BYTES):
     """Download a public URL with guards (scheme, public host, size cap). Returns (data, mime, name) or None."""
     if not _is_safe_url(url):
         return None
+    return _download(url, max_bytes=max_bytes)
+
+
+def _download(url: str, *, max_bytes: int = _FETCH_MAX_BYTES):
+    """The download itself, size-capped. Called through `_fetch_url_bytes` for any address a person or a
+    model gave; called directly only for an address THIS crew built for its own node (`fetch_url` from
+    seedream_gen), which on a hosted place is loopback and would rightly fail the SSRF guard."""
     try:
         with requests.get(url, stream=True, timeout=60, headers={"User-Agent": "crewaimeat-concierge"}) as r:
             if r.status_code != 200:
@@ -310,7 +317,10 @@ def _concierge_tools(sink: dict, *, ask_to: str | None = None, ask_conv: str | N
         res = seedream_gen.generate_image(AGENT_NAME, description)
         if not res.get("ok"):
             return f"Generation failed: {res.get('error')}"
-        got = _fetch_url_bytes(res["url"])
+        # The bytes come through the crew's OWN address for its node (`fetch_url`); the person only ever
+        # sees `url`, the place's public address. On a sold place (2026-10-03) the fetch went to the
+        # loopback address, the SSRF guard refused it, and the customer got "http://127.0.0.1:40050/...".
+        got = _download(res["fetch_url"]) if res.get("fetch_url") else _fetch_url_bytes(res["url"])
         if not got:
             return f"Generated — link: {res['url']}"
         data, mime, _name = got

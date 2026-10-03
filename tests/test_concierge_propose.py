@@ -22,10 +22,10 @@ from crewaimeat import concierge_propose, workspace_tools
 from crewaimeat.agent_scopes import RUNTIME_WRITE_SCOPES
 
 NEXT_STEP = (
-    "Morning deals is waiting for your approval. Open http://node/v1/profile?tab=agents and approve it "
+    "Morning deals is waiting for your approval. Open https://place.aimeat.io/v1/profile?tab=agents and approve it "
     "there; it is created, credentialed and started only then."
 )
-APPROVAL_URL = "http://node/v1/profile?tab=agents"
+APPROVAL_URL = "https://place.aimeat.io/v1/profile?tab=agents"
 
 
 @pytest.fixture(autouse=True)

@@ -211,6 +211,26 @@ def _valid_cron(cron: str) -> bool:
     return len(parts) == 5 and all(_CRON_FIELD.match(p) for p in parts)
 
 
+def public_addresses(answer: dict, agent_name: str) -> dict:
+    """The node's answer with its approval address as a PERSON opens it.
+
+    The node builds `approval_url` (and repeats it in `next_step`) from its own configured base. On a
+    node configured with an internal base that is an address only the container can open, and the person
+    is the one who has to press there; so an internal address is replaced by the place's public one
+    (crewaimeat.public_url), and when none is known the sentence points at the Agents page instead.
+    """
+    from crewaimeat.public_url import is_internal, person_link
+
+    url = str((answer or {}).get("approval_url") or "").strip()
+    if not url or not is_internal(url):
+        return answer
+    public = person_link(url, agent_name)
+    out = dict(answer, approval_url=public)
+    if out.get("next_step"):
+        out["next_step"] = str(out["next_step"]).replace(url, public or "your Agents page")
+    return out
+
+
 def _relay(answer: dict, left_out: list[str], name: str, scheduled: str, assumption: str = "") -> str:
     """The node's own words first, then what only this side knows."""
     next_step = str(answer.get("next_step") or "").strip()
@@ -342,6 +362,7 @@ def propose(
     if isinstance(answer, dict) and answer.get("ok") is False:
         err = answer.get("error") or {}
         return f"The node did not accept the proposal ({err.get('code', 'refused')}): {err.get('message', '')}"
+    answer = public_addresses(answer, agent_name)
 
     scheduled = ""
     if schedule_cron:

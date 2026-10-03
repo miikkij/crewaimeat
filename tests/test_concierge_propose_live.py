@@ -275,6 +275,9 @@ def scene(tmp_path_factory):
         )
         s.crm = {"organism_id": org, "ws": ws}
 
+        # The address a person opens the approval at (crewaimeat.public_url): on a hosted place the fleet
+        # passes the public one; here the local node's own base is the address its owner opens.
+        os.environ["AIMEAT_BASE_URL"] = s.base
         # The brief's sentence, as the concierge's tool call.
         s.reply = concierge_propose.propose(
             CONCIERGE,
@@ -291,6 +294,7 @@ def scene(tmp_path_factory):
         if node.poll() is None:
             node.kill()
             node.wait(timeout=20)
+        os.environ.pop("AIMEAT_BASE_URL", None)
         if old_home is None:
             os.environ.pop("AIMEAT_HOME", None)
         else:

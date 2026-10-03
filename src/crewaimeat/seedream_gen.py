@@ -22,7 +22,6 @@ import urllib.parse
 import requests
 
 from crewaimeat.aimeat_crew import _aimeat_call
-from crewaimeat.generator_tool import _discover_owner, _token
 from crewaimeat.ledger_report import report_llm_usage
 
 _MODEL = os.getenv("SEEDREAM_MODEL", "bytedance-seed/seedream-4.5")
@@ -78,10 +77,16 @@ def _upload_public(agent: str, key: str, image: bytes, mime: str) -> bool:
         return False
 
 
-def _pub_url(agent: str, gaii: str, key: str) -> str:
-    _tok, url = _token(agent, _discover_owner(agent))
-    base = (url or "https://aimeat.io").rstrip("/")
-    return f"{base}/v1/pub/{urllib.parse.quote(gaii, safe='')}/{key}"
+def _pub_path(gaii: str, key: str) -> str:
+    return f"/v1/pub/{urllib.parse.quote(gaii, safe='')}/{key}"
+
+
+def _pub_url(agent: str, gaii: str, key: str) -> str | None:
+    """The link a PERSON opens: the place's public address in front (crewaimeat.public_url), never the
+    crew's own loopback connection to the node. None when no public address is known."""
+    from crewaimeat.public_url import person_link
+
+    return person_link(_pub_path(gaii, key), agent)
 
 
 def _generate_on_node(agent_name: str, prompt: str) -> dict:
@@ -96,20 +101,19 @@ def _generate_on_node(agent_name: str, prompt: str) -> dict:
         res = node_ai.generate_image(agent_name, prompt, public=True, storage_key=f"images/{stamp}-{h}")
     except node_ai.NodeAiError as exc:
         return {"ok": False, "error": f"the node did not generate the image ({exc})"}
-    url, key, mime = res.get("url"), res.get("storage_key"), res.get("mime_type") or "image/png"
-    if not url or not key:
+    from crewaimeat.public_url import NO_PUBLIC_ADDRESS, internal_url, person_link
+
+    answered, key, mime = res.get("url"), res.get("storage_key"), res.get("mime_type") or "image/png"
+    if not answered or not key:
         return {"ok": False, "error": f"the node's answer carried no image address: {str(res)[:300]}"}
-    if url.startswith("/"):
-        # The node answers with a path ("/v1/pub/<owner>/<key>", measured on a local node 2026-10-03).
-        # A deliverable link and the concierge's re-fetch both need the whole address: the node this
-        # agent is registered on. Not knowing it is said, not guessed.
-        _tok, node_url = _token(agent_name, _discover_owner(agent_name))
-        if not node_url:
-            return {
-                "ok": False,
-                "error": f"the node stored the image at {url}, and this agent's node address is unknown",
-            }
-        url = node_url.rstrip("/") + url
+    # The node answers with a path ("/v1/pub/<owner>/<key>", measured 2026-10-03). TWO addresses come of
+    # it: the link a PERSON opens, on the place's public address -- a sold place's concierge once gave a
+    # customer http://127.0.0.1:40050/... -- and the one the CREW fetches the bytes from itself (the
+    # concierge attaches the picture), on its own node address, which works from inside the container.
+    url = person_link(answered, agent_name)
+    fetch_url = internal_url(answered, agent_name)
+    if not url:
+        return {"ok": False, "error": f"the image is stored at {key}, but {NO_PUBLIC_ADDRESS}", "key": key}
     print(f"[seedream] {agent_name}: image generated on the node by {res.get('model')}", file=sys.stderr)
     _aimeat_call(
         agent_name,
@@ -124,6 +128,7 @@ def _generate_on_node(agent_name: str, prompt: str) -> dict:
     return {
         "ok": True,
         "url": url,
+        "fetch_url": fetch_url,
         "key": key,
         "gaii": node_ai.pub_owner_of(url),
         "mime": mime,
@@ -142,6 +147,12 @@ def generate_image(agent_name: str, prompt: str, *, size: str = "2K", aspect_rat
     prompt = (prompt or "").strip()
     if not prompt:
         return {"ok": False, "error": "empty prompt"}
+    # A picture nobody can open is not worth paying for: with no public address known, stop BEFORE the
+    # generation rather than after it (crewaimeat.public_url).
+    from crewaimeat.public_url import NO_PUBLIC_ADDRESS, public_base
+
+    if public_base(agent_name) is None:
+        return {"ok": False, "error": f"no image was generated: {NO_PUBLIC_ADDRESS}"}
     route = node_ai.road(agent_name)
     if route == node_ai.NODE:
         return _generate_on_node(agent_name, prompt)
@@ -201,6 +212,10 @@ def generate_image(agent_name: str, prompt: str, *, size: str = "2K", aspect_rat
     if not _upload_public(agent_name, key, data, mime):
         return {"ok": False, "error": "upload to public storage failed"}
     pub = _pub_url(agent_name, gaii, key)
+    if not pub:
+        from crewaimeat.public_url import NO_PUBLIC_ADDRESS
+
+        return {"ok": False, "error": f"the image is stored at {key}, but {NO_PUBLIC_ADDRESS}", "key": key}
     # Record the deliverable (task-runner convention) so the offer's sample + a history exist.
     _aimeat_call(
         agent_name,
@@ -216,7 +231,17 @@ def generate_image(agent_name: str, prompt: str, *, size: str = "2K", aspect_rat
     # `key` + `gaii` travel with the URL: a consumer that ATTACHES the image (the julkaisupöytä app
     # attaches by storage key, and a URL alone cannot be attached) needs the address, not just the
     # link. They were computed here and thrown away, which made every caller re-derive or give up.
-    return {"ok": True, "url": pub, "key": key, "gaii": gaii, "mime": mime, "bytes": len(data)}
+    from crewaimeat.public_url import internal_url
+
+    return {
+        "ok": True,
+        "url": pub,
+        "fetch_url": internal_url(_pub_path(gaii, key), agent_name),
+        "key": key,
+        "gaii": gaii,
+        "mime": mime,
+        "bytes": len(data),
+    }
 
 
 def make_image_tools(agent_name: str) -> list:

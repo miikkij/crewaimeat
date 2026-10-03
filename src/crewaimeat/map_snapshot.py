@@ -121,7 +121,6 @@ def upload_public(agent: str, key: str, image: bytes, mime: str = "image/png") -
     POST /v1/storage {mode:'presigned'} -> PUT the raw bytes to the returned upload_url. Returns the
     public read URL (/v1/pub/<gaii>/<key>) or None. Mirrors image_contract._upload_public, parameterized
     by agent so any appliance agent can use it."""
-    from crewaimeat.generator_tool import _discover_owner, _token
 
     presign = {"key": key, "mime_type": mime, "visibility": "public", "mode": "presigned"}
     try:
@@ -137,9 +136,14 @@ def upload_public(agent: str, key: str, image: bytes, mime: str = "image/png") -
             print(f"[map] PUT {key} failed: HTTP {put.status_code}", file=sys.stderr)
             return None
         gaii = _own_gaii(agent)
-        _tok, node = _token(agent, _discover_owner(agent))
-        if gaii and node:
-            return f"{node.rstrip('/')}/v1/pub/{gaii}/{key}"
+        # The link a PERSON opens: the place's public address, never the crew's own loopback
+        # connection to the node (crewaimeat.public_url).
+        from crewaimeat.public_url import person_link
+
+        link = person_link(f"/v1/pub/{gaii}/{key}", agent) if gaii else None
+        if link:
+            return link
+        print(f"[map] {key} uploaded, but no public link could be made for it", file=sys.stderr)
         return key  # uploaded, but the public URL couldn't be composed
     except Exception as exc:  # noqa: BLE001
         print(f"[map] upload {key} failed: {exc!r}", file=sys.stderr)

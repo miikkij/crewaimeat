@@ -170,6 +170,19 @@ def offline_model_road(monkeypatch):
     monkeypatch.setattr(node_ai, "_on_node_road", lambda who: False)
 
 
+@pytest.fixture(autouse=True)
+def offline_public_address(monkeypatch):
+    """Links for people take the place's public address (crewaimeat.public_url). Offline nothing names
+    one unless a test sets AIMEAT_BASE_URL, and the node's canonical-address read is never made."""
+    from crewaimeat import public_url
+
+    monkeypatch.delenv("AIMEAT_BASE_URL", raising=False)
+    monkeypatch.setattr(public_url, "_node_canonical", lambda agent: None)
+    public_url._CACHE.clear()
+    yield
+    public_url._CACHE.clear()
+
+
 @pytest.fixture
 def no_pipeline_memory(monkeypatch):
     """Structural crew tests exercise wiring with the optional memory service unavailable."""

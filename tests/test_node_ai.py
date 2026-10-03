@@ -34,6 +34,7 @@ def on_node(monkeypatch):
     from crewaimeat import aimeat_crew
 
     monkeypatch.setattr(node_ai, "_on_node_road", lambda who: True)
+    monkeypatch.setenv("AIMEAT_BASE_URL", "https://place.aimeat.io")
     node = Node(
         {
             "/v1/ai/image": {
@@ -192,28 +193,30 @@ def test_image_generation_is_not_retried_because_a_second_post_could_pay_twice(o
 )
 def test_with_no_road_the_failure_is_visible(monkeypatch, call):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setenv("AIMEAT_BASE_URL", "https://place.aimeat.io")
     assert "OPENROUTER_API_KEY is not set" in call()
 
 
-def test_a_relative_image_address_from_the_node_is_made_whole(on_node, monkeypatch):
-    """Measured on a local node 2026-10-03: /v1/ai/image answers with "/v1/pub/<owner>/<key>". A
-    deliverable link and the concierge's re-fetch both need the agent's node in front of it."""
-    from crewaimeat import seedream_gen
+def test_a_relative_image_address_from_the_node_is_made_whole_on_both_addresses(on_node, monkeypatch):
+    """Measured 2026-10-03: /v1/ai/image answers with "/v1/pub/<owner>/<key>". The PERSON gets the place's
+    public address in front; the crew's own re-fetch gets its node address, which works from inside."""
+    from crewaimeat import public_url, seedream_gen
 
     on_node.answers["/v1/ai/image"] = dict(on_node.answers["/v1/ai/image"], url="/v1/pub/owner%23x%40n/images/x.png")
     monkeypatch.setattr(seedream_gen, "_aimeat_call", lambda *a, **k: {"ok": True})
-    monkeypatch.setattr(seedream_gen, "_discover_owner", lambda agent: "owner")
-    monkeypatch.setattr(seedream_gen, "_token", lambda agent, owner: ("t", "http://node.example/"))
+    monkeypatch.setattr(public_url, "_node_url", lambda agent: "http://127.0.0.1:40050")
     out = seedream_gen.generate_image("painter", "a red door")
-    assert out["url"] == "http://node.example/v1/pub/owner%23x%40n/images/x.png"
-    assert seedream_gen.drain_recent_images()[-1]["url"] == out["url"]
+    assert out["url"] == "https://place.aimeat.io/v1/pub/owner%23x%40n/images/x.png"
+    assert out["fetch_url"] == "http://127.0.0.1:40050/v1/pub/owner%23x%40n/images/x.png"
+    assert seedream_gen.drain_recent_images()[-1]["url"] == out["url"], "the deliverable carries the public one"
 
 
-def test_an_unknown_node_address_is_said_not_guessed(on_node, monkeypatch):
-    from crewaimeat import seedream_gen
+def test_with_no_public_address_no_image_is_generated(on_node, monkeypatch):
+    """A picture nobody can open is not paid for: the check comes BEFORE the generation."""
+    from crewaimeat import public_url, seedream_gen
 
-    on_node.answers["/v1/ai/image"] = dict(on_node.answers["/v1/ai/image"], url="/v1/pub/o/k")
-    monkeypatch.setattr(seedream_gen, "_discover_owner", lambda agent: None)
-    monkeypatch.setattr(seedream_gen, "_token", lambda agent, owner: (None, None))
+    monkeypatch.delenv("AIMEAT_BASE_URL", raising=False)
+    monkeypatch.setattr(public_url, "_node_url", lambda agent: "http://127.0.0.1:40050")
     out = seedream_gen.generate_image("painter", "a red door")
-    assert out["ok"] is False and "node address is unknown" in out["error"]
+    assert out["ok"] is False and "public address is unknown" in out["error"]
+    assert on_node.calls == [], "the node was not asked to generate"

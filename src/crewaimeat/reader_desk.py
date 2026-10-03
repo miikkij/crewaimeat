@@ -184,7 +184,15 @@ def publish_tip_images(agent: str, attachments: list[dict], *, date: str) -> lis
         if not _upload_public(agent, pub_key, data, real_mime or mime):
             print(f"[{agent}] publish_tip_images: public upload failed for {pub_key}", file=sys.stderr)
             continue
-        urls.append(f"{node_url.rstrip('/')}/v1/pub/{gaii}/{pub_key}")
+        # The paper's readers open this link: the place's public address, never the crew's own loopback
+        # connection to the node (crewaimeat.public_url).
+        from crewaimeat.public_url import person_link
+
+        link = person_link(f"/v1/pub/{gaii}/{pub_key}", agent)
+        if not link:
+            print(f"[{agent}] publish_tip_images: no public link for {pub_key} — image skipped", file=sys.stderr)
+            continue
+        urls.append(link)
     return urls
 
 

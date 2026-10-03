@@ -106,8 +106,21 @@ def _err(env: dict) -> str:
 
 
 def _node_base(agent_name: str, owner: str | None) -> str | None:
+    """The CREW's own address for the node -- for calls and fetches it makes itself. A link for a person
+    goes through `app_link` / crewaimeat.public_url instead: on a hosted place this is loopback."""
     _tok, url = _token(agent_name, owner)
     return url.rstrip("/") if url else None
+
+
+def app_link(agent_name: str, owner: str | None, filename: str) -> str:
+    """The app's inline address as a PERSON opens it: the place's public address in front
+    (crewaimeat.public_url), never the crew's own loopback connection to the node. When no public
+    address is known, a sentence that says so in place of a link. The verify gates do not use this:
+    they load the app through the crew's own address, which is the one that works from inside."""
+    from crewaimeat.public_url import NO_PUBLIC_ADDRESS, person_link
+
+    path = f"/v1/apps/{owner or '<owner>'}/{filename}?mode=inline"
+    return person_link(path, agent_name) or f"(published at {path}; {NO_PUBLIC_ADDRESS})"
 
 
 # --------------------------------------------------------------------------- #
@@ -492,11 +505,8 @@ def make_generator_tools(agent_name: str, owner: str | None = None, task_id: str
     def gen_app_inline_url(filename: str) -> str:
         """Build the public inline URL of a published app, to hand to web-tester for the final
         browser test. `filename` = the app's published filename (e.g. 'my-app.html')."""
-        base = _node_base(agent_name, owner)
-        if not base:
-            return "No node URL available."
         own = state.get("owner") or owner or "<owner>"
-        return f"{base}/v1/apps/{own}/{filename}?mode=inline"
+        return app_link(agent_name, own, filename)
 
     tools = [
         gen_create_project,

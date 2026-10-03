@@ -36,7 +36,6 @@ import requests
 from crewai.tools import tool
 
 from crewaimeat.aimeat_crew import _aimeat_call, member_workspaces, today_local
-from crewaimeat.generator_tool import _discover_owner, _token
 from crewaimeat.ledger_report import report_llm_usage
 
 AGENT = "image-scout"
@@ -234,10 +233,12 @@ def _upload_public(key: str, image: bytes, mime: str) -> bool:
         return False
 
 
-def _pub_url(gaii: str, key: str) -> str:
-    _tok, url = _token(AGENT, _discover_owner(AGENT))
-    base = (url or "https://aimeat.io").rstrip("/")
-    return f"{base}/v1/pub/{urllib.parse.quote(gaii, safe='')}/{key}"
+def _pub_url(gaii: str, key: str) -> str | None:
+    """The link a PERSON opens in the moodboard: the place's public address in front
+    (crewaimeat.public_url), never the crew's own loopback connection. None when none is known."""
+    from crewaimeat.public_url import person_link
+
+    return person_link(f"/v1/pub/{urllib.parse.quote(gaii, safe='')}/{key}", AGENT)
 
 
 def build_moodboard(rid: str, brief: str, n_images: int = 6) -> tuple[list[dict], str | None]:
@@ -271,7 +272,12 @@ def build_moodboard(rid: str, brief: str, n_images: int = 6) -> tuple[list[dict]
         key = f"moodboards/{rid}/{i:02d}-{item['hash'][:8]}.{_IMAGE_MIMES[item['mime']]}"
         if not _upload_public(key, item["image"], item["mime"]):
             continue
-        kept.append({**{k: item[k] for k in ("url", "title", "meta")}, "pub": _pub_url(gaii, key)})
+        pub = _pub_url(gaii, key)
+        if not pub:
+            from crewaimeat.public_url import NO_PUBLIC_ADDRESS
+
+            return [], f"the images are stored under moodboards/{rid}/, but {NO_PUBLIC_ADDRESS}"
+        kept.append({**{k: item[k] for k in ("url", "title", "meta")}, "pub": pub})
     if not kept:
         return [], "no image survived download/vision/upload"
     return kept, None
