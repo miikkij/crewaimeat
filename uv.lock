@@ -16,7 +16,7 @@ resolution-markers = [
 
 [[package]]
 name = "aimeat-crewai"
-version = "0.32.0"
+version = "0.32.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "crewai" },
@@ -24,9 +24,9 @@ dependencies = [
     { name = "mcp" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0e/b1/879c9b37bdd0fc9b623ee542b8159b226db84470c3bd34156320a4a74fd0/aimeat_crewai-0.32.0.tar.gz", hash = "sha256:7be6c7614a7dbce5cf341525433214732de34f9307066e1c0911ab4a38beeecf", size = 581165, upload-time = "2026-10-02T17:13:30.999Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d8/96/60a8620854dd95985981e61c81fb4ddb7e5f1d606c1d3a8dca02ad39fab0/aimeat_crewai-0.32.1.tar.gz", hash = "sha256:aea1e986700e8324ac1f30b8b49923e4978f92d4c1ed2d0c50d7694d42f8828b", size = 588995, upload-time = "2026-10-04T02:38:59.424Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/37/90/30778d6d6eb328d6383e252ca6bbf166953388f7ab2f9a481ae2e25cec64/aimeat_crewai-0.32.0-py3-none-any.whl", hash = "sha256:d433ba7d2f0bc6c932aa5ce47f6b06974e374148dc32b6026f0a1655c3e71287", size = 161301, upload-time = "2026-10-02T17:13:29.619Z" },
+    { url = "https://files.pythonhosted.org/packages/71/1c/8a74d60a0f8bc0eda0f1079f4409d39d4cc52f33b3e488ea35a8d7c5cef3/aimeat_crewai-0.32.1-py3-none-any.whl", hash = "sha256:d51dadb06f76893413d02b382be54f4dc49159a0592564cb5bb41034ebe1b4a1", size = 165807, upload-time = "2026-10-04T02:38:57.939Z" },
 ]
 
 [package.optional-dependencies]
@@ -776,7 +776,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aimeat-crewai", extras = ["data", "parquet"], specifier = ">=0.32.0" },
+    { name = "aimeat-crewai", extras = ["data", "parquet"], specifier = ">=0.32.1" },
     { name = "crewai", extras = ["tools"], specifier = ">=1.15.22" },
     { name = "ddgs", specifier = ">=6.0" },
     { name = "fastapi", marker = "extra == 'agency'", specifier = ">=0.110" },

@@ -6,6 +6,13 @@ daemons import the modules at start. `git log` has the measurement behind each e
 
 ## [0.8.1] — 2026-10-04 — the node's own road does not override this machine's routing
 
+### Changed
+- **aimeat-crewai floor 0.32.1** (aimeat-protocol 792414179): an expired stored v1 token counts as no
+  token and is never sent; `node_llm` goes through the serve daemon first when it serves the agent, and
+  `decide()`, `capabilities()`, `effective_llm_choice()` and `publish_offers()` use the daemon or stop
+  before sending. Checked on this machine: news-writer's expired token is named and skipped, and its
+  node calls resolve to the loopback daemon.
+
 ### Fixed
 - **With nothing chosen, this machine's `llm_providers.json` runs the agent again.** Since 2026-10-02
   crewaimeat asks the node which model road applies (`GET /v1/agents/{name}/crew/llm`). With nothing
