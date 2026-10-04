@@ -88,7 +88,8 @@ def is_safe_agent_name(name: str) -> bool:
     connector's own (better) error about what a legal agent id is. Safety belongs here; identity is the
     connector's call.
     """
-    return bool(_AGENT_SAFE_RE.match(name or "")) and (name or "").strip(".") != ""
+    # fullmatch, not match: `$` also matches before a trailing newline, so "name\n" would pass.
+    return bool(_AGENT_SAFE_RE.fullmatch(name or "")) and (name or "").strip(".") != ""
 
 
 def save_brain(

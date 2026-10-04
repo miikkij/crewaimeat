@@ -217,6 +217,25 @@ def test_a_reapproval_names_no_scopes_so_the_owners_grant_stands(monkeypatch, tm
     assert "--scopes" not in captured["cmd"]
 
 
+def test_an_owner_that_could_leave_the_home_or_reach_the_shell_is_refused(monkeypatch, tmp_path):
+    forge, captured = _capture_register(monkeypatch, tmp_path)
+    for owner in ("../../etc", "a/b", "o&calc", "owner1\n"):
+        ok, msg = forge.register_agent("fresh-agent", owner, "https://aimeat.io")
+        assert not ok and "unusable owner" in msg, (owner, msg)
+    assert "cmd" not in captured, "nothing was spawned"
+
+
+def test_a_credential_path_outside_the_home_is_refused_not_probed(monkeypatch, tmp_path):
+    import pytest
+
+    import crewaimeat.forge as forge
+
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path / "home"))
+    with pytest.raises(ValueError, match="escapes the connector home"):
+        forge._has_credential("x", "o/../../../outside")
+    assert forge._has_credential("x", "owner1") is False
+
+
 def test_a_v2_key_credential_also_counts_as_existing(monkeypatch, tmp_path):
     forge, captured = _capture_register(monkeypatch, tmp_path)
     (tmp_path / "keys").mkdir()

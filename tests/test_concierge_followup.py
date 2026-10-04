@@ -220,6 +220,28 @@ def test_text_without_a_report_is_untouched():
     assert split_verify("") == ("", None)
 
 
+def test_a_trailing_rule_goes_with_the_verdict_and_a_tab_tail_cannot_stall_the_clean():
+    # CodeQL py/redos: the old trailing-rule pattern backtracked exponentially on "\n" + many "\t\n".
+    import time
+
+    from crewaimeat.verify_report import split_provenance
+
+    assert split_verify("Answer.\n\n --- \t\nVerify: pass\n") == (
+        "Answer.\n",
+        {
+            "verdict": "Verify: pass",
+            "score": None,
+            "unsupported": None,
+            "flagged": [],
+        },
+    )
+    hostile = "Answer.\n" + "\t\n" * 5000 + "x"
+    started = time.perf_counter()
+    split_verify(hostile + "\nVerify: pass")
+    split_provenance(hostile + "\nai_provenance: ai-generated")
+    assert time.perf_counter() - started < 2
+
+
 def test_the_published_deliverable_is_the_clean_one_and_the_crew_s_cleaner_still_runs():
     from crewaimeat.aimeat_crew import _for_the_reader
 

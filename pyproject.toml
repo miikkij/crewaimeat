@@ -29,7 +29,7 @@ dependencies = [
     # entirely (see llm.py, `is_litellm`). Nothing here reads a 1.9x feature, and the measured gain
     # of the jump was "general fixes". Raise the bound when a provider we ACTUALLY use needs it, and
     # then say which one -- not because the number moved.
-    "litellm>=1.87.1,<1.88",
+    "litellm>=1.88.6,<1.89",  # 1.88.6: GHSA SSRF/credential-exfiltration fix (Dependabot #54/#56); still far below the 1.102 boto3 jump
     "feedparser>=6.0.12",
     "pypdf>=5.0.0",
 ]

@@ -30,6 +30,18 @@ _VERDICT_LINE = re.compile(
 _MARK = re.compile(r"[ \t]*\[unverified(?:[ \t]*[:\-–—][^\]\n]*)?\]", re.IGNORECASE)
 _SCORE = re.compile(r"score\s*=\s*([1-5])", re.IGNORECASE)
 _UNSUPPORTED = re.compile(r"unsupported\s*=\s*(\d+)", re.IGNORECASE)
+# One line that is blank or a horizontal rule. Matched a LINE at a time by `_strip_trailing_rules`: the
+# one-regex form `(?:\n[ \t]*(?:rule)?[ \t]*)+\Z` backtracked exponentially on a tail of "\t\n" (CodeQL
+# py/redos), and even its unambiguous rewrite was quadratic -- 50 000 such lines took 165 s.
+_RULE_OR_BLANK = re.compile(r"[ \t]*(?:(?:-{3,}|\*{3,}|_{3,})[ \t]*)?")
+
+
+def _strip_trailing_rules(text: str) -> str:
+    """`text` without the blank and rule-only lines at its end; its first line always stays."""
+    lines = text.split("\n")
+    while len(lines) > 1 and _RULE_OR_BLANK.fullmatch(lines[-1]):
+        lines.pop()
+    return "\n".join(lines)
 
 
 def _clean_line(line: str) -> str:
@@ -51,9 +63,7 @@ def split_verify(text: str) -> tuple[str, dict | None]:
     body = _VERDICT_LINE.sub("", text)
     body = _MARK.sub("", body)
     # A verdict at the end often comes after a rule or a blank line; take those with it.
-    body = re.sub(r"(?:\n[ \t]*(?:-{3,}|\*{3,}|_{3,})?[ \t]*)+\Z", "", body.rstrip()) + (
-        "\n" if text.endswith("\n") else ""
-    )
+    body = _strip_trailing_rules(body.rstrip()) + ("\n" if text.endswith("\n") else "")
     verdict = " / ".join(verdicts)
     score = _SCORE.search(verdict)
     unsupported = _UNSUPPORTED.search(verdict)
@@ -99,7 +109,7 @@ def split_provenance(text: str) -> tuple[str, list[str]]:
         return text, []
     body = "".join(kept)
     # A declaration at the end usually sits under a rule or after a blank line; they go with it.
-    body = re.sub(r"(?:\n[ \t]*(?:-{3,}|\*{3,}|_{3,})?[ \t]*)+\Z", "", body.rstrip())
+    body = _strip_trailing_rules(body.rstrip())
     body += "\n" if text.endswith("\n") else ""
     return body, [t.strip() for t in taken]
 

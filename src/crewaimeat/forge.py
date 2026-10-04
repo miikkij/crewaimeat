@@ -319,10 +319,16 @@ def _has_credential(agent_name: str, owner: str) -> bool:
     """
     from crewaimeat._home import aimeat_home
 
-    home = aimeat_home()
-    return (home / "tokens" / f"{agent_name}@{owner}.token").is_file() or (
-        home / "keys" / f"{agent_name}@{owner}.key"
-    ).is_file()
+    # Both names arrive from a caller (CLI, cockpit form); a "../" in either must not turn this into a
+    # probe of an arbitrary file. Check the BUILT path stays in the home, not just the inputs.
+    home = os.path.normpath(aimeat_home())
+    for sub, ext in (("tokens", ".token"), ("keys", ".key")):
+        path = os.path.normpath(os.path.join(home, sub, f"{agent_name}@{owner}{ext}"))
+        if not path.startswith(home + os.sep):
+            raise ValueError(f"credential path for {agent_name!r}@{owner!r} escapes the connector home")
+        if os.path.isfile(path):
+            return True
+    return False
 
 
 def _crew_capability_scopes(agent_name: str) -> list[str]:
@@ -363,6 +369,9 @@ def register_agent(
 
     if not is_safe_agent_name(agent_name):
         return False, f"unusable agent name {agent_name!r} — letters, digits, dot, hyphen and underscore only"
+    # The owner rides the same argv and the same credential filename, so it gets the same floor.
+    if not is_safe_agent_name(owner):
+        return False, f"unusable owner {owner!r} — letters, digits, dot, hyphen and underscore only"
     # Device auth is `connect --url --owner --agent [--mode]`. `connect add` is gone since v1.33 (the node
     # rejected it, so NO code was ever issued and our fallback misreported it as "already registered").
     # `--mode` came back in connector 3.x: the node shows the requested mode in the consent and the owner
