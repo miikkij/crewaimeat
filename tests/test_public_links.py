@@ -205,7 +205,7 @@ def test_the_concierge_attaches_through_its_own_address_and_never_shows_loopback
     monkeypatch.setattr(concierge.dm, "dm_attach_bytes", lambda *a, **k: {"id": "att"})
     sink = {"attachments": []}
     tool = next(t for t in concierge._concierge_tools(sink) if t.name == "generate_image")
-    assert tool.run(description="kuva") == "Attached a generated image."
+    assert tool.run(description="kuva").startswith("Attached 'generated.png'")
     assert fetched == [f"{LOOPBACK}/v1/pub/o/k.png"], "the bytes come through the crew's own address"
 
 

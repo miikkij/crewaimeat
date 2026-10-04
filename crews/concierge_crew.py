@@ -242,6 +242,70 @@ def _searxng_web(query: str, n: int = 15) -> list[dict]:
         return []
 
 
+# THE TASK PATH HAS NO ATTACHMENTS. A task's deliverable is text on the person's task list; nothing a
+# tool attaches reaches it (build_domain: "no thread to reply to"). Measured 2026-10-04 on a sold place:
+# asked as a TASK for an image "and its address at the end", the concierge answered "Kuvan osoite: (the
+# generated image is attached to this message -- it is not at a public URL)" -- no link, no attachment,
+# nothing, while the picture sat in public storage and opened from outside. So on the task path every
+# file goes out as its PUBLIC link (crewaimeat.public_url for our own; the source address for one found
+# on the web), recorded per task here so the publish step can put any link the reply left out into it.
+_TASK_LINKS: dict[str, list[dict]] = {}
+
+
+def _give(sink: dict, *, name: str, mime: str = "", data: bytes | None = None, link: str | None = None) -> str:
+    """Deliver one file and say truthfully what happened.
+
+    DM path: attach it to the reply; when the attach fails, the link instead. Task path
+    (`sink["links_only"]`): never attach -- record the public link and tell the model to give it."""
+    if sink.get("links_only"):
+        if not link:
+            return f"'{name}' cannot be delivered here: this reply goes on a task list and it has no public link."
+        sink.setdefault("links", []).append({"name": name, "link": link})
+        return (
+            f"NOT attached -- this reply goes on a task list, where nothing can be attached. "
+            f"Give the person this link to '{name}': {link}"
+        )
+    att = dm.dm_attach_bytes(AGENT_NAME, data, name=name, mime=mime) if data is not None else None
+    if att:
+        sink["attachments"].append(att)
+        return f"Attached '{name}'" + (f" ({mime}, {len(data)} bytes)." if data is not None else ".")
+    if link:
+        return f"Could not attach '{name}'; give the person this link instead: {link}"
+    return f"Could not attach '{name}', and it has no public link."
+
+
+def _task_id_now() -> str | None:
+    """The AIMEAT task of the kickoff on this context (the ledger's run id, then the progress bridge's)."""
+    try:
+        from crewaimeat.ledger_report import _resolve_run_id
+
+        tid = _resolve_run_id()
+        if tid:
+            return str(tid)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from crewaimeat import progress
+
+        tid = progress._CURRENT_TASK.get()
+        if tid:
+            return str(tid)
+    except Exception:  # noqa: BLE001
+        pass
+    return next(iter(_TASK_LINKS)) if len(_TASK_LINKS) == 1 else None
+
+
+def _links_into_reply(text: str) -> str:
+    """The publish step's cleaner: every public link a tool handed out on this task is IN the reply.
+    A link the model already wrote stays where it put it; any it left out is added at the end."""
+    tid = _task_id_now()
+    links = _TASK_LINKS.pop(tid, None) if tid else None
+    missing = [x for x in (links or []) if x["link"] not in (text or "")]
+    if not missing:
+        return text
+    return (text or "").rstrip() + "\n\n" + "\n".join(f"- {x['name']}: {x['link']}" for x in missing) + "\n"
+
+
 def _concierge_tools(sink: dict, *, ask_to: str | None = None, ask_conv: str | None = None) -> list:
     """The toolset, bound to a per-message `sink` (sink["attachments"] collects files for the reply; for a
     DM, ask_to/ask_conv enable the clarify tool — it asks the user a structured question and sets
@@ -249,35 +313,34 @@ def _concierge_tools(sink: dict, *, ask_to: str | None = None, ask_conv: str | N
 
     @tool("find_images")
     def find_images(query: str, count: int = 4) -> str:
-        """Find up to `count` images on the open web for `query` and ATTACH them to the reply (moodboard)."""
+        """Find up to `count` images on the open web for `query` and deliver them (moodboard): attached
+        in a chat, as their links on a task."""
         n = 0
+        said: list[str] = []
         want = min(max(int(count or 4), 1), _MAX_IMAGES)
         for hit in image_contract._searxng_images(query, want * 3):
             if n >= want:
                 break
-            dl = image_contract._download_image(hit.get("img_src", ""))  # img_src = the image; url = source page
+            src = hit.get("img_src", "")  # img_src = the image; url = source page
+            dl = image_contract._download_image(src)
             if not dl:
                 continue
             data, mime = dl
             ext = (mime.split("/")[-1] or "jpg").split("+")[0]
-            att = dm.dm_attach_bytes(AGENT_NAME, data, name=f"img-{n + 1}.{ext}", mime=mime)
-            if att:
-                sink["attachments"].append(att)
+            out = _give(sink, name=f"img-{n + 1}.{ext}", mime=mime, data=data, link=src or None)
+            if not out.startswith(("Could not", "'")):
                 n += 1
-        return f"Attached {n} image(s) for '{query}'." if n else f"No usable images found for '{query}'."
+                said.append(out)
+        return "\n".join(said) if n else f"No usable images found for '{query}'."
 
     @tool("fetch_file")
     def fetch_file(url: str) -> str:
-        """Download a file from a public URL (guarded) and ATTACH it to the reply."""
+        """Download a file from a public URL (guarded) and deliver it: attached in a chat, as its link on a task."""
         got = _fetch_url_bytes(url)
         if not got:
             return f"Could not fetch '{url}' (blocked host, too large, or unreachable)."
         data, mime, name = got
-        att = dm.dm_attach_bytes(AGENT_NAME, data, name=name, mime=mime)
-        if not att:
-            return "Upload failed."
-        sink["attachments"].append(att)
-        return f"Attached '{name}' ({mime}, {len(data)} bytes)."
+        return _give(sink, name=name, mime=mime, data=data, link=url)
 
     @tool("find_file")
     def find_file(query: str, filetype: str = "pdf") -> str:
@@ -300,10 +363,9 @@ def _concierge_tools(sink: dict, *, ask_to: str | None = None, ask_conv: str | N
                 continue  # it's a page, not the file — keep looking
             if not name.lower().endswith(f".{ext}"):
                 name = f"{(name or 'document').rsplit('.', 1)[0]}.{ext}"
-            att = dm.dm_attach_bytes(AGENT_NAME, data, name=name, mime=mime)
-            if att:
-                sink["attachments"].append(att)
-                return f"Attached '{name}' from {url} ({mime}, {len(data)} bytes)."
+            out = _give(sink, name=name, mime=mime, data=data, link=url)
+            if not out.startswith("Could not attach") or "link instead" in out:
+                return f"{out} (found at {url})"
         pages = "; ".join(f"{r['title']} — {r['url']}" for r in results[:4])
         return (
             f"Couldn't download a .{ext} for '{query}'. Closest pages: {pages}"
@@ -313,10 +375,12 @@ def _concierge_tools(sink: dict, *, ask_to: str | None = None, ask_conv: str | N
 
     @tool("generate_image")
     def generate_image(description: str) -> str:
-        """Generate an image from `description` (Seedream) and ATTACH it to the reply."""
+        """Generate an image from `description` and deliver it: attached in a chat, as its public link on a task."""
         res = seedream_gen.generate_image(AGENT_NAME, description)
         if not res.get("ok"):
             return f"Generation failed: {res.get('error')}"
+        if sink.get("links_only"):  # nothing to attach on a task: no need to fetch the bytes either
+            return _give(sink, name="generated image", mime=res.get("mime") or "", link=res.get("url"))
         # The bytes come through the crew's OWN address for its node (`fetch_url`); the person only ever
         # sees `url`, the place's public address. On a sold place (2026-10-03) the fetch went to the
         # loopback address, the SSRF guard refused it, and the customer got "http://127.0.0.1:40050/...".
@@ -325,10 +389,7 @@ def _concierge_tools(sink: dict, *, ask_to: str | None = None, ask_conv: str | N
             return f"Generated — link: {res['url']}"
         data, mime, _name = got
         ext = (mime.split("/")[-1] or "png").split("+")[0]
-        att = dm.dm_attach_bytes(AGENT_NAME, data, name=f"generated.{ext}", mime=mime)
-        if att:
-            sink["attachments"].append(att)
-        return "Attached a generated image."
+        return _give(sink, name=f"generated.{ext}", mime=mime, data=data, link=res.get("url"))
 
     @tool("describe_capabilities")
     def describe_capabilities() -> str:
@@ -450,10 +511,7 @@ def _concierge_tools(sink: dict, *, ask_to: str | None = None, ask_conv: str | N
                 data, mime, name = got
                 if not name.lower().endswith(f".{ext}"):
                     name = f"{(name or 'document').rsplit('.', 1)[0]}.{ext}"
-                att = dm.dm_attach_bytes(AGENT_NAME, data, name=name, mime=mime)
-                if att:
-                    sink["attachments"].append(att)
-                return f"Attached '{name}' ({c['label']})."
+                return _give(sink, name=name, mime=mime, data=data, link=c["url"]) + f" ({c['label']})"
             session_store.session_set(AGENT_NAME, ask_conv, "doc_candidates", {"ext": ext, "items": cands})
             q = dm.build_question(
                 "pick_docs",
@@ -714,8 +772,16 @@ def _task(request: str, context: str, agent: Agent, today: str, directory: str =
             "match, AUTOMATICALLY lets the user tick which to download (delivering exactly those); if only "
             "one matches it just attaches it. (Use find_file only if the user clearly wants you to grab a "
             "single best one without choosing.) fetch_file is only for a URL the user already gave. If they "
-            "ask what you can do (or it's a vague greeting), call describe_capabilities. Attach images/files "
-            "with the tools and mention what you attached. If the request is genuinely ambiguous (a wrong "
+            "ask what you can do (or it's a vague greeting), call describe_capabilities. "
+            + (
+                # The task path: the reply is text on a task list and NOTHING can be attached to it.
+                "This reply goes on the person's task list, where nothing can be attached: the tools give "
+                "you each image or file as a LINK -- put every link in your reply, and never say that "
+                "something is attached. "
+                if declinable
+                else "Attach images/files with the tools and mention what you attached. "
+            )
+            + "If the request is genuinely ambiguous (a wrong "
             "guess would waste effort), call ask_user with 2-5 options to clarify FIRST, then STOP and wait. "
             "If the context contains an 'Attached file analysis' section, the user sent file(s)/image(s) and "
             "that is what I already read from them — use it to answer their question or to summarise/extract "
@@ -757,8 +823,11 @@ def _task(request: str, context: str, agent: Agent, today: str, directory: str =
 def build_domain(ctx: BuildContext):
     # Task path (an assigned task rather than a DM): same crew; attachments aren't delivered (no thread to
     # reply to), so the reply carries links/text. The DM path (run() below) collects + delivers attachments.
-    sink: dict = {"attachments": []}
-    decline = make_decline_tool(ctx.identity or AGENT_NAME, (ctx.task or {}).get("id"))
+    sink: dict = {"attachments": [], "links_only": True, "links": []}
+    tid = (ctx.task or {}).get("id")
+    if tid:
+        _TASK_LINKS[str(tid)] = sink["links"]
+    decline = make_decline_tool(ctx.identity or AGENT_NAME, tid)
     agent = _agent(ctx.llm, sink, extra_tools=[decline])
     return ([agent], [_task(ctx.prompt, "", agent, ctx.today, declinable=True)])
 
@@ -909,6 +978,7 @@ def run() -> None:
             tags=CAPABILITY_TAGS,
             capabilities=CAPABILITIES,
             chat_commands=_chat_commands,  # dynamic: base commands + one "Ask <specialist>" per live agent
+            clean_deliverable=_links_into_reply,  # a task's reply carries every link a tool handed out
         )
     )
 
