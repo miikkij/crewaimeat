@@ -32,6 +32,7 @@ def _clean(monkeypatch, tmp_path):
     llm_choice.forget()
     llm_choice._REFUSED_LOGGED.clear()
     llm_road.forget()
+    llmmod._NODE_OFFER_SAID.clear()
     monkeypatch.delenv("LLM_PROVIDERS_FILE", raising=False)
     monkeypatch.chdir(tmp_path)  # no ./llm_providers.json unless a test writes one
     # Unless a test says otherwise, an older node: no effective-choice route, the stored keys decide.
@@ -161,7 +162,9 @@ def test_the_nodes_own_answer_decides_when_it_gives_one(monkeypatch):
     calls = []
     _node_answers(monkeypatch, {"kind": "node"}, "node", rest_calls=calls)
     _owner_chose(monkeypatch, agent={"kind": "profile", "profile": "stale"})  # the keys are not read
-    assert llm_choice.node_choice("crm#owner1@n") == ({"kind": "node"}, "default")
+    # scope 'node': nothing is chosen, and the node offers its own road. Told apart from the owner's
+    # default, because only a choice somebody MADE outranks this machine's routing (section 2b).
+    assert llm_choice.node_choice("crm#owner1@n") == ({"kind": "node"}, "node")
     assert calls == [("crm#owner1@n", "GET", "/v1/agents/crm/crew/llm")], "the agent asks about itself"
 
 
@@ -256,6 +259,74 @@ def test_without_the_node_road_in_the_package_a_node_choice_fails_loudly(monkeyp
     _owner_chose(monkeypatch, agent={"kind": "node"})
     with pytest.raises(llmmod.OwnerChoiceUnavailable, match="aimeat-crewai 0.32.0"):
         llmmod._build_llm(True, 0.2, "crm")
+
+
+# ── 2b. the node's OWN default yields to this machine's routing; a choice somebody made does not ──
+#
+# Measured 2026-10-04 on aimeat.io: with nothing chosen, the node answers every agent that holds ai:use
+# with its own road ("Nothing is chosen, the agent holds ai:use and this node has a key"). The fleet's
+# agents hold `*`, so every one of them stopped using this machine's llm_providers.json profiles the
+# moment crewaimeat began asking (2026-10-02), and the Sanomat edition of 2026-10-04 failed on the node
+# road. Nobody had chosen that road. A choice the owner MADE -- for the agent, or as their default,
+# which is what a hosted place writes for every new owner -- still decides.
+
+_LOCAL = {
+    "default": "p",
+    "profiles": {"p": {"providers": [{"type": "openrouter", "api_key_env": "OPENROUTER_API_KEY", "models": ["x"]}]}},
+}
+
+
+def _local_routing(tmp_path, monkeypatch, *, key: bool) -> None:
+    (tmp_path / "llm_providers.json").write_text(json.dumps(_LOCAL), encoding="utf-8")
+    if key:
+        monkeypatch.setenv("OPENROUTER_API_KEY", "this-machines-key")
+    else:
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+
+def _no_node_road(monkeypatch) -> None:
+    def refuse(*_a, **_k):
+        raise AssertionError("the node road must not be built here")
+
+    monkeypatch.setattr(llmmod, "_node_road_llm", refuse)
+
+
+def test_with_nothing_chosen_this_machines_profile_runs_the_agent(monkeypatch, tmp_path):
+    _local_routing(tmp_path, monkeypatch, key=True)
+    _node_answers(monkeypatch, {"kind": "node"}, "node", why="Nothing is chosen")
+    _no_node_road(monkeypatch)
+    assert llmmod._node_road_choice("news-writer") is None
+    assert isinstance(llmmod._build_llm(True, 0.2, "news-writer"), llmmod.MultiProviderLLM)
+
+
+def test_with_nothing_chosen_and_no_key_here_the_node_road_stays(monkeypatch, tmp_path):
+    # A machine that cannot route the agent itself (a hosted place's worker, say) takes the node's road.
+    _local_routing(tmp_path, monkeypatch, key=False)
+    _node_answers(monkeypatch, {"kind": "node"}, "node")
+    assert llmmod._node_road_choice("news-writer") == {"kind": "node"}
+
+
+def test_with_nothing_chosen_and_no_providers_file_the_node_road_stays(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "this-machines-key")
+    _node_answers(monkeypatch, {"kind": "node"}, "node")
+    assert llmmod._node_road_choice("news-writer") == {"kind": "node"}
+
+
+@pytest.mark.parametrize("scope", ["agent", "default"])
+def test_a_node_road_somebody_chose_still_wins_over_this_machine(monkeypatch, tmp_path, scope):
+    _local_routing(tmp_path, monkeypatch, key=True)
+    _node_answers(monkeypatch, {"kind": "node"}, scope)
+    assert llmmod._node_road_choice("news-writer") == {"kind": "node"}
+
+
+def test_the_machine_road_over_the_nodes_default_is_said_once(monkeypatch, tmp_path, capsys):
+    _local_routing(tmp_path, monkeypatch, key=True)
+    _node_answers(monkeypatch, {"kind": "node"}, "node")
+    llmmod._node_road_choice("news-writer")
+    llmmod._node_road_choice("news-writer")
+    said = capsys.readouterr().err
+    assert said.count("nothing is chosen") == 1, said
+    assert "this machine" in said
 
 
 # ── 3. every model choice is checked on read ────────────────────────────────────────────────

@@ -154,9 +154,12 @@ def node_choice(agent_name: str | None) -> tuple[dict | None, str | None]:
     """`(choice, scope)` for `agent_name`: the node's effective answer when it gives one; otherwise the
     agent's own stored choice first, then the owner's default.
 
-    `scope` is 'agent' or 'default' and is only for saying WHY a model was picked in the log line —
-    "web-researcher -> node:agent coding" is a sentence somebody can act on, "coding" is not. The node's
-    own default (scope 'node': nothing chosen, the agent holds ai:use, a key pays) reads as 'default'.
+    `scope` is 'agent', 'default' or 'node'. 'agent' and 'default' are choices somebody MADE (the owner,
+    for this agent or for all of theirs; a hosted place writes the default for every new owner). 'node'
+    is the node's own offer when NOTHING is chosen ("the agent holds ai:use and this node has a key"):
+    llm._node_road_choice lets this machine's own routing run the agent over it, because a fleet whose
+    agents hold `*` would otherwise leave its llm_providers.json profiles without anyone deciding so
+    (measured 2026-10-04, the Sanomat edition that failed on the node road).
     """
     if not agent_name:
         return None, None
@@ -165,7 +168,8 @@ def node_choice(agent_name: str | None) -> tuple[dict | None, str | None]:
         choice = _valid(answer.get("value"), agent_name)
         if choice is None:
             return None, None
-        return choice, ("agent" if answer.get("scope") == "agent" else "default")
+        scope = answer.get("scope")
+        return choice, (scope if scope in ("agent", "node") else "default")
     own = _valid(_read(agent_name, key_for(agent_name)), agent_name)
     if own:
         return own, "agent"

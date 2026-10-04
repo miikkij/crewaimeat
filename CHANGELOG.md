@@ -4,6 +4,23 @@ Notable changes to crewaimeat. Format loosely follows [Keep a Changelog](https:/
 Dates are the working dates. A change reaches a running fleet only on its next restart, because the
 daemons import the modules at start. `git log` has the measurement behind each entry.
 
+## [0.8.1] — 2026-10-04 — the node's own road does not override this machine's routing
+
+### Fixed
+- **With nothing chosen, this machine's `llm_providers.json` runs the agent again.** Since 2026-10-02
+  crewaimeat asks the node which model road applies (`GET /v1/agents/{name}/crew/llm`). With nothing
+  chosen the node answers every agent holding ai:use with its own road ("Nothing is chosen, the agent
+  holds ai:use and this node has a key"), and the fleet's agents hold `*`, so the whole fleet left its
+  profiles: the crew's declared `LLM_PROFILE`, the Finnish-prose routing, all of it, without anyone
+  deciding so. On the node road every call then failed 401 (aimeat-crewai 0.32.0 sends the agent's
+  stored v1 token, and those expired in September), and the Sanomat editions of 2026-10-03 and
+  2026-10-04 did not finish. `llm_choice.node_choice` now reports that answer as scope `node`, apart
+  from the owner's default, and `llm._node_road_choice` lets this machine's own routing run the agent
+  over it when a profile with a present key exists (`_machine_routes`); the log says so once per agent.
+  A node road somebody CHOSE, for the agent or as the owner's default (what a hosted place writes for
+  every new owner), still decides and still never falls back to this machine's key. A machine with no
+  providers file or no key takes the node's road as before.
+
 ## [0.8.0] — 2026-10-02 — a basic agent's run needs no agent:write
 
 Follows aimeat-protocol bcd4027ed (an agent sets its OWN tags with no scope; another agent's still

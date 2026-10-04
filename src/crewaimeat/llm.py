@@ -668,14 +668,63 @@ class OwnerChoiceUnavailable(RuntimeError):
 
 
 def _node_road_choice(agent_name: str | None) -> dict | None:
-    """The owner's `{kind:'node'}` choice for this agent (its own, else their default), unless a person
-    at this machine pinned a model locally (llm_overrides.json), which stays above everything."""
+    """The `{kind:'node'}` road for this agent, or None for this machine's own routing.
+
+    In order: a person at this machine pinned a model (llm_overrides.json) -> this machine. The owner
+    CHOSE the node road, for this agent or as their default -> the node, and nothing here replaces it.
+    NOBODY chose, and the node offers its own road because the agent holds ai:use and a key pays ->
+    this machine, when it can route the agent itself (`_machine_routes`); else the node.
+
+    WHY THE NODE'S OFFER YIELDS. Measured 2026-10-04 on aimeat.io: with nothing chosen the node answers
+    every agent holding ai:use with its road, and the fleet's agents hold `*`. From the moment crewaimeat
+    began asking (2026-10-02) the whole fleet left its llm_providers.json profiles -- the crew's declared
+    LLM_PROFILE, the Finnish-prose routing -- and the Sanomat edition failed on the node road. Which model
+    runs is the owner's call; an offer nobody accepted is not one.
+    """
     if not agent_name or agent_override(agent_name):
         return None
     from crewaimeat.llm_choice import is_node_road, node_choice
 
-    choice, _scope = node_choice(agent_name)
-    return choice if is_node_road(choice) else None
+    choice, scope = node_choice(agent_name)
+    if not is_node_road(choice):
+        return None
+    if scope == "node" and _machine_routes(agent_name):
+        if agent_name not in _NODE_OFFER_SAID:
+            _NODE_OFFER_SAID.add(agent_name)
+            print(
+                f"[llm] {agent_name}: the node offers its own road, but nothing is chosen and this machine "
+                "routes the agent itself (llm_providers.json), so this machine's profile runs it. Choose the "
+                "node road for the agent on its page to send its calls there.",
+                file=sys.stderr,
+            )
+        return None
+    return choice
+
+
+# Agents whose "the node offers its road, this machine runs it" has been said in this process.
+_NODE_OFFER_SAID: set[str] = set()
+
+
+def _machine_routes(agent_name: str) -> bool:
+    """Can this machine route `agent_name` itself: a providers file whose chain for it holds at least one
+    enabled provider with models and its key present (or no key needed, a local Ollama). Quiet, and never
+    raises: a file that cannot be read is "no", and the node's offer stands."""
+    pf = _providers_file()
+    if not pf:
+        return False
+    try:
+        with open(pf, encoding="utf-8") as fh:
+            cfg = json.load(fh)
+        providers, _profile = _select_chain(cfg, agent_name)
+    except Exception:  # noqa: BLE001 -- unreadable routing is no routing; the build path says why
+        return False
+    for prov in providers or []:
+        if not isinstance(prov, dict) or not prov.get("enabled", True) or not prov.get("models"):
+            continue
+        keyenv = prov.get("api_key_env")
+        if not keyenv or os.getenv(keyenv):
+            return True
+    return False
 
 
 def _node_road_llm(choice: dict, agent_name: str, temperature: float) -> BaseLLM:
