@@ -20,6 +20,21 @@ VERIFIED AGAINST THE LIVE NODE (2026-08-31), not assumed:
 So `free_for_you` in the listing is computed, not guessed: the tool's owner GHII compared to this
 agent's owner. The transport is `_aimeat_rest`, which goes through the loopback tunnel in-fleet and a
 direct authed request off it — the agent reaching the node for its own call is ordinary outbound.
+
+THE OWNER'S OWN UNPRICED TOOLS (2026-10-06, wish-app-tools-an-agent-sees-and-calls-its-own-owner-s-
+unpriced-a). The commerce catalog lists PRICED tools only ("sellable through the commerce checkout"), so
+an app's free tools were invisible here and a call by sku answered "No single app-tool matches" -- even
+for the agent's own owner's tool, which the node runs for it free (an unpriced callable tool invokes
+directly for an authenticated caller). CADENCE's crm agent could not reach CADENCE's own import_records.
+So the listing adds the agent's OWN OWNER's unpriced callable tools, read from what already exists:
+  - which apps carry a tool manifest: the owner's `apps.<file>.tools` records (an owner-scoped memory
+    listing; owner-scoped, so another owner's tools are never in it);
+  - each app's tools: the node's own WebMCP listing of that manifest (GET /v1/apps/<owner>/<file>/webmcp),
+    the same PUBLIC manifest the invoke route reads, so what is listed is what can be called;
+and calls them on that listing's invoke path. Priced tools and other owners' tools are untouched: they
+come from the catalog as before, and a foreign priced tool still answers that payment is the call.
+A node-side catalog that included the caller's own unpriced callable tools would make this one read;
+that is filed for aimeat-protocol, and this reads what exists until it lands.
 """
 
 from __future__ import annotations
@@ -91,12 +106,88 @@ def _owner_of(agent_name: str) -> str:
     return ""
 
 
-def _catalog(agent_name: str) -> list[dict]:
+def _priced_catalog(agent_name: str) -> list[dict]:
     from crewaimeat.aimeat_crew import _aimeat_rest
 
     body = _aimeat_rest(agent_name, "GET", _CATALOG_PATH, raw=True)
     tools = (body or {}).get("tools") if isinstance(body, dict) else None
     return tools if isinstance(tools, list) else []
+
+
+_MANIFEST_PREFIX = "apps."
+_MANIFEST_SUFFIX = ".tools"
+
+
+def _own_manifest_files(agent_name: str, owner: str) -> list[str]:
+    """The files of the owner's apps that carry a tool manifest (`apps.<file>.tools`), from an
+    owner-scoped listing -- only this owner's records are in it. A record another owner wrote is never
+    listed by it; one whose recorded owner is someone else is skipped all the same."""
+    from crewaimeat.aimeat_crew import _aimeat_call
+    from crewaimeat.workflow import _items_of
+
+    listing = _aimeat_call(
+        agent_name,
+        "aimeat_memory_list",
+        {"owner_scope": True, "prefix": _MANIFEST_PREFIX, "limit": 500},
+        quiet=True,
+    )
+    files: list[str] = []
+    for it in _items_of(listing):
+        key = str(it.get("key") or "")
+        if not (key.startswith(_MANIFEST_PREFIX) and key.endswith(_MANIFEST_SUFFIX)):
+            continue
+        writer = str(it.get("owner_gaii") or it.get("owner") or "")
+        if writer and writer.split("#")[-1].split("@")[0] != owner:
+            continue
+        name = key[len(_MANIFEST_PREFIX) : -len(_MANIFEST_SUFFIX)]
+        if name and name not in files:
+            files.append(name)
+    return files
+
+
+def _own_unpriced(agent_name: str, owner: str) -> list[dict]:
+    """The owner's own unpriced CALLABLE app tools, shaped like catalog entries (sku, app, ownerName,
+    name, description, inputSchema, fulfillment, price, webmcp.invoke). Read from each app's WebMCP
+    listing; a priced tool there is skipped (it is in the catalog), and so is an unpriced TASK tool,
+    which has nothing to run (the node answers TOOL_NOT_INVOKABLE)."""
+    if not owner:
+        return []
+    from urllib.parse import quote
+
+    from crewaimeat.aimeat_crew import _aimeat_rest
+
+    out: list[dict] = []
+    for file in _own_manifest_files(agent_name, owner):
+        listing = _aimeat_rest(agent_name, "GET", f"/v1/apps/{quote(owner)}/{quote(file)}/webmcp", raw=True)
+        tools = listing.get("tools") if isinstance(listing, dict) else None
+        for t in tools if isinstance(tools, list) else []:
+            if not isinstance(t, dict) or not t.get("name"):
+                continue
+            if (t.get("payment") or {}).get("required") or t.get("fulfillment") != "call":
+                continue
+            out.append(
+                {
+                    "sku": f"app-tool:{owner}/{file}:{t['name']}",
+                    "app": f"{owner}/{file}",
+                    "ownerName": owner,
+                    "name": t["name"],
+                    "description": t.get("description") or "",
+                    "inputSchema": t.get("inputSchema"),
+                    "fulfillment": "call",
+                    "price": None,
+                    "webmcp": {"invoke": (t.get("invoke") or {}).get("url") or ""},
+                    "own_unpriced": True,
+                }
+            )
+    return out
+
+
+def _catalog(agent_name: str, owner: str = "") -> list[dict]:
+    """Every app tool this agent can call: the priced catalog, plus its own owner's unpriced callable
+    tools. An sku in both stays the catalog's."""
+    tools = _priced_catalog(agent_name)
+    seen = {t.get("sku") for t in tools}
+    return tools + [t for t in _own_unpriced(agent_name, owner) if t["sku"] not in seen]
 
 
 def _tool_owner(entry: dict) -> str:
@@ -136,11 +227,13 @@ def make_app_tools(agent_name: str, ctx: Any = None) -> list:
 
     @tool("list_app_tools")
     def list_app_tools(query: str = "") -> str:
-        """List the app-tools on AIMEAT you can call. Each entry shows its `sku` (pass it to
-        call_app_tool), what it does, the JSON input it expects (`input`), and whether it is free for
-        you or priced. Give `query` to filter by words in the sku or description; leave it empty for
-        all. Read the `input` schema before calling — the model has no other way to know the shape."""
-        tools = _catalog(agent_name)
+        """List the app-tools on AIMEAT you can call: the priced ones, and your own owner's apps' tools
+        that cost you nothing. Each entry shows its `sku` (pass it to call_app_tool), what it does, the
+        JSON input it expects (`input`), and whether it is free for you or priced. Give `query` to filter
+        by words in the sku or description; leave it empty for all. Read the `input` schema before
+        calling — the model has no other way to know the shape. A tool whose input takes a LIST (rows,
+        csv, items) takes the WHOLE list in ONE call: never call it once per record."""
+        tools = _catalog(agent_name, owner)
         if not tools:
             return "The app-tool catalog is empty or could not be read."
         q = query.lower().strip()
@@ -168,17 +261,23 @@ def make_app_tools(agent_name: str, ctx: Any = None) -> list:
         """Call an app-tool by its `sku` (from list_app_tools). `input_json` is a JSON object matching
         that tool's input schema. Returns the tool's result as JSON. Your own family's tools run free;
         a priced tool owned by someone else needs payment, and I report that rather than pretend it
-        ran."""
+        ran. A tool whose input takes a LIST (rows, csv, items) gets the WHOLE list in ONE call: put
+        every record in that one input, never call it once per record. A tool with a dry-run mode is
+        called with the dry run first."""
         try:
             payload = json.loads(input_json) if input_json.strip() else {}
         except ValueError as exc:
             return f"input_json is not valid JSON: {exc}"
         if not isinstance(payload, dict):
             return 'input_json must be a JSON object (e.g. {"text": "..."}).'
-        tools = _catalog(agent_name)
+        tools = _catalog(agent_name, owner)
         entry = _find(tools, sku)
         if entry is None:
             return f"No single app-tool matches {sku!r}. Call list_app_tools to see the exact sku to use."
+        return _call_webmcp(agent_name, entry, payload)
+
+    def _call_webmcp(agent_name: str, entry: dict, payload: dict) -> str:
+        """POST the tool's webmcp invoke path and say what the node said."""
         invoke = (entry.get("webmcp") or {}).get("invoke") or ""
         if "/v1/" not in invoke:
             return f"{entry.get('sku')} has no usable invoke address."
@@ -219,18 +318,23 @@ def make_app_tools(agent_name: str, ctx: Any = None) -> list:
     @tool("invoke_app_tool")
     def invoke_app_tool(sku: str, input_json: str = "{}") -> str:
         """Call an app-tool through the connector's MCP door, the platform's own route for this act.
-        Same arguments as call_app_tool — a `sku` from list_app_tools and a JSON input object. Use this
-        when call_app_tool cannot reach the tool; it returns the node's answer verbatim, including the
-        checkout terms when the tool is priced."""
+        Same arguments as call_app_tool — a `sku` from list_app_tools and a JSON input object (a LIST
+        input takes the whole list in one call). Use this when call_app_tool cannot reach the tool; it
+        returns the node's answer verbatim, including the checkout terms when the tool is priced. Your
+        own owner's free tools go to their webmcp invoke path, as call_app_tool does."""
         try:
             payload = json.loads(input_json) if input_json.strip() else {}
         except ValueError as exc:
             return f"input_json is not valid JSON: {exc}"
         if not isinstance(payload, dict):
             return 'input_json must be a JSON object (e.g. {"text": "..."}).'
-        entry = _find(_catalog(agent_name), sku)
+        entry = _find(_catalog(agent_name, owner), sku)
         if entry is None:
             return f"No single app-tool matches {sku!r}. Call list_app_tools to see the exact sku to use."
+        if entry.get("own_unpriced"):
+            # The MCP door's aimeat_app_tool_invoke needs a metered contract, which nobody holds against
+            # their own owner's free tool; the node runs it on the webmcp invoke path instead.
+            return _call_webmcp(agent_name, entry, payload)
         app_ref = str(entry.get("app") or "")  # "<owner>/<appId>"
         tool_owner, _, app_id = app_ref.partition("/")
         if not tool_owner or not app_id:

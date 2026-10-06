@@ -297,7 +297,7 @@ TOOL_PURPOSES: dict[str, str] = {
     "app_build": "author, install, publish and verify a real AIMEAT app / cortex / extension",
     "local_memory": "keep raw findings in LOCAL memory (remember/recall/search) and publish only the refined result upward (publish_memory)",
     "article_fetch": "fetch + extract the readable article text behind result URLs (read sources, not snippets)",
-    "app_tools": "find and CALL app-tools hosted on AIMEAT (list_app_tools reads how each is called; call_app_tool invokes one) — your own family's tools run free",
+    "app_tools": "find and CALL app-tools hosted on AIMEAT (list_app_tools reads how each is called; call_app_tool invokes one) — your own owner's apps' tools, priced or not, run free; a tool taking a list (rows, csv) gets the whole list in one call",
     "crew_registry": "publish a crew definition to the AIMEAT registry, and install one somebody shared by their GAII",
     "exchange": "trade on the AIMEAT EXCHANGE — browse/accept/run offerings, post needs + bid, renegotiate, run agent-work; plus deterministic band + I/O-match gates",
     "decide": "ask the owner's DECISION RULES — one tool per rule, named after the job; the rule holds the questions, thresholds and bands and you send only the state. `decide:<rule>` picks one rule instead of all of them",

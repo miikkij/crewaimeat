@@ -85,6 +85,9 @@ def node(monkeypatch):
 
     monkeypatch.setattr("crewaimeat.aimeat_crew._aimeat_rest", _rest)
     monkeypatch.setattr(at, "_owner_of", lambda a: "me")
+    # The owner's own unpriced tools come from a memory listing and per-app WebMCP listings; this
+    # catalog's tests are about the priced catalog, so the owner has none here (test_app_tools_own.py).
+    monkeypatch.setattr(at, "_own_manifest_files", lambda agent, owner: [])
     return calls
 
 
