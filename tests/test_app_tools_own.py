@@ -87,8 +87,8 @@ def node(monkeypatch):
 
     def rest(agent, method, path, body=None, *, retries=3, backoff=1.5, raw=False, return_error=False):
         calls.append((method, path, body))
-        if method == "GET" and path == "/v1/commerce/tools":
-            return PRICED_CATALOG
+        if method == "GET" and path.startswith("/v1/commerce/tools"):
+            return PRICED_CATALOG  # an OLDER node: it ignores ?include=own
         if method == "GET" and path == "/v1/apps/me/crm.html/webmcp":
             return CRM_LISTING
         if method == "POST" and path == "/v1/apps/me/crm.html/webmcp/tools/import_records":

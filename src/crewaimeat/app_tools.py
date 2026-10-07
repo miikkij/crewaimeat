@@ -33,8 +33,12 @@ So the listing adds the agent's OWN OWNER's unpriced callable tools, read from w
     the same PUBLIC manifest the invoke route reads, so what is listed is what can be called;
 and calls them on that listing's invoke path. Priced tools and other owners' tools are untouched: they
 come from the catalog as before, and a foreign priced tool still answers that payment is the call.
-A node-side catalog that included the caller's own unpriced callable tools would make this one read;
-that is filed for aimeat-protocol, and this reads what exists until it lands.
+ONE READ ON A NODE THAT CAN (aimeat-protocol 08b619ad8, 2026-10-07): GET /v1/commerce/tools?include=own
+returns, after the priced entries, the caller's own owner's unpriced callable tools with `price: null` and
+`own: true` -- the node reads only that owner's records and only public manifests with an action_id, the
+same rule as above. So the catalog is always asked with the flag. When an entry comes back marked `own`,
+that answer is the whole list. When none does, the node is older (it ignores an unknown flag) or the
+owner has no free tools, and the two reads above run as before: on a new node they find nothing more.
 """
 
 from __future__ import annotations
@@ -43,6 +47,9 @@ import json
 from typing import Any
 
 _CATALOG_PATH = "/v1/commerce/tools"
+# The node adds the caller's own owner's unpriced callable tools to the catalog with this flag (aimeat-
+# protocol 08b619ad8); an older node ignores it and answers the priced catalog.
+_CATALOG_WITH_OWN = _CATALOG_PATH + "?include=own"
 
 
 def _invoke_via_mcp(agent_name: str, owner: str, app: str, tool: str, payload: dict) -> dict:
@@ -107,9 +114,11 @@ def _owner_of(agent_name: str) -> str:
 
 
 def _priced_catalog(agent_name: str) -> list[dict]:
+    """The catalog, asked with ?include=own: priced entries, and on a node that serves the flag the
+    caller's own owner's free callable tools (`own: true`)."""
     from crewaimeat.aimeat_crew import _aimeat_rest
 
-    body = _aimeat_rest(agent_name, "GET", _CATALOG_PATH, raw=True)
+    body = _aimeat_rest(agent_name, "GET", _CATALOG_WITH_OWN, raw=True)
     tools = (body or {}).get("tools") if isinstance(body, dict) else None
     return tools if isinstance(tools, list) else []
 
@@ -184,8 +193,14 @@ def _own_unpriced(agent_name: str, owner: str) -> list[dict]:
 
 def _catalog(agent_name: str, owner: str = "") -> list[dict]:
     """Every app tool this agent can call: the priced catalog, plus its own owner's unpriced callable
-    tools. An sku in both stays the catalog's."""
+    tools -- from the catalog itself when the node marks them `own`, else from the two reads above. An
+    sku in both stays the catalog's."""
     tools = _priced_catalog(agent_name)
+    if any(t.get("own") is True for t in tools):
+        for t in tools:
+            if t.get("own") is True:
+                t["own_unpriced"] = True  # the same route as the listing's own entries: webmcp invoke
+        return tools
     seen = {t.get("sku") for t in tools}
     return tools + [t for t in _own_unpriced(agent_name, owner) if t["sku"] not in seen]
 

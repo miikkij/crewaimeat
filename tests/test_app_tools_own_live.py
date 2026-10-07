@@ -246,3 +246,28 @@ def test_another_owners_unpriced_tool_is_never_listed(sandbox, tools):
     skus = [r["sku"] for r in json.loads(tools["list_app_tools"].run(query=""))]
     assert not any(s.startswith(f"app-tool:{sandbox['stranger']}/") and "free" in s for s in skus)
     assert all(not s.startswith(f"app-tool:{sandbox['stranger']}/{APP}") for s in skus)
+
+
+def _serves_include_own() -> bool:
+    try:
+        src = (AIMEAT_DIR / "src" / "routes" / "commerce-acp.ts").read_text(encoding="utf-8")
+    except (OSError, TypeError):
+        return False
+    return "include.includes('own')" in src
+
+
+@pytest.mark.skipif(not _serves_include_own(), reason="the node checkout predates ?include=own (08b619ad8)")
+def test_on_a_node_that_serves_include_own_the_listing_is_one_read(sandbox, tools, monkeypatch):
+    from crewaimeat import aimeat_crew
+
+    real = aimeat_crew._aimeat_rest
+    asked: list[str] = []
+
+    def recording(agent, method, path, *a, **k):
+        asked.append(f"{method} {path}")
+        return real(agent, method, path, *a, **k)
+
+    monkeypatch.setattr(aimeat_crew, "_aimeat_rest", recording)
+    rows = json.loads(tools["list_app_tools"].run(query="import"))
+    assert any(r["sku"] == f"app-tool:{sandbox['owner']}/{APP}:import_records" and r["free_for_you"] for r in rows)
+    assert asked == ["GET /v1/commerce/tools?include=own"], asked
