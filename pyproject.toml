@@ -5,7 +5,7 @@ description = "AIMEAT × CrewAI integration: a validated crew template (liaison 
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
 dependencies = [
-    "crewai[tools]>=1.15.22",  # 1.15.22 (2026-09-16): CRLF accepted in inline skill definitions (our skills on Windows); SQLite connections closed in kickoff task-output storage; memory honours read_only on update()/recall(); `reasoning_effort` sent to EVERY OpenAI reasoning model and the forced final answer requested as a user turn (behaviour change for gpt-oss-120b on the coding profile: measure one run after the restart); OpenRouter as an embedding provider. 1.15.21: gateway errors inside an HTTP 200 are detected (the empty-choices case of SCAFFOLD_CANON item 6); streamed tool-call arguments preserved; JSON checkpoints UTF-8. 1.15.19: model-call hooks run on every path and propagate a deny; security floors pypdf 6.16.2 + nltk 3.10.3. 1.15.18 (2026-08-27): Anthropic default max_tokens for large tool calls + tool-result preserved when the final answer is empty + Claude Sonnet 4.6 -> 1M context mapping + crew_memory no longer recorded as a bare string + task-failure/kickoff message-role fixes. The bulk of the release (conversational flows to stable) we do not use. 1.15.6: execution_end hook fires on FAILED crews/flows + strict tool schema names. 1.15.3: fixed after_llm_call hooks breaking native tool execution + per-call usage metrics on kickoff results + token usage under both names (all directly help our hook-based ledger metering). 1.14.7: per-run state isolation (concurrent daemons), custom-BaseLLM
+    "crewai[tools]>=1.15.26",  # 1.15.26 (2026-10-08): rwlock ownership kept when an acquisition is interrupted; brings chromadb ~=1.5.9 (drops posthog telemetry) and caps instructor <1.16. 1.15.24: dependency advisories, context windows centralised, message summarisation moved into SummarizeMessages. 1.15.23: THROTTLED PROVIDER CALLS ARE RETRIED INSIDE crewai (behaviour change: a 429 now reaches MultiProviderLLM's fall-through later, after crewai's own retries; measure one run after the restart) + SQLite connections closed in flow persistence. 1.15.22 (2026-09-16): CRLF accepted in inline skill definitions (our skills on Windows); SQLite connections closed in kickoff task-output storage; memory honours read_only on update()/recall(); `reasoning_effort` sent to EVERY OpenAI reasoning model and the forced final answer requested as a user turn (behaviour change for gpt-oss-120b on the coding profile: measure one run after the restart); OpenRouter as an embedding provider. 1.15.21: gateway errors inside an HTTP 200 are detected (the empty-choices case of SCAFFOLD_CANON item 6); streamed tool-call arguments preserved; JSON checkpoints UTF-8. 1.15.19: model-call hooks run on every path and propagate a deny; security floors pypdf 6.16.2 + nltk 3.10.3. 1.15.18 (2026-08-27): Anthropic default max_tokens for large tool calls + tool-result preserved when the final answer is empty + Claude Sonnet 4.6 -> 1M context mapping + crew_memory no longer recorded as a bare string + task-failure/kickoff message-role fixes. The bulk of the release (conversational flows to stable) we do not use. 1.15.6: execution_end hook fires on FAILED crews/flows + strict tool schema names. 1.15.3: fixed after_llm_call hooks breaking native tool execution + per-call usage metrics on kickoff results + token usage under both names (all directly help our hook-based ledger metering). 1.14.7: per-run state isolation (concurrent daemons), custom-BaseLLM
     #                           restore fix, aiohttp/docling CVE fixes, faster import
     # 0.20.0: DATA PACKAGES — read_package / to_dataframe / to_parquet / publish_package /
     # package_versions + QualityGateRefused. The `data` extra brings pandas (to_dataframe), `parquet`
@@ -22,7 +22,7 @@ dependencies = [
     "python-dotenv>=1.0.1",
     "tzdata",  # zoneinfo tz database (needed on Windows for current-time injection)
     "pyfiglet>=1.0.0",  # deterministic ASCII-art for [[FIGLET]] README directives
-    "trafilatura>=2.0.0",
+    "trafilatura>=2.3.1",  # 2.3.x: download/decompression overhaul, fewer duplicated segments, better Markdown + metadata -- extraction output CHANGES, check one Sanomat edition
     # UPPER BOUND ON PURPOSE (owner, 2026-09-20). litellm 1.102 makes boto3 + botocore hard
     # dependencies -- ~27 MB of AWS SDK for Bedrock, a path none of our calls take: crewai picks its
     # NATIVE OpenAICompatibleCompletion for an `openrouter/` model, so litellm is off the hot path
@@ -31,7 +31,7 @@ dependencies = [
     # then say which one -- not because the number moved.
     "litellm>=1.88.6,<1.89",  # 1.88.6: GHSA SSRF/credential-exfiltration fix (Dependabot #54/#56); still far below the 1.102 boto3 jump
     "feedparser>=6.0.12",
-    "pypdf>=5.0.0",
+    "pypdf>=6.20.0",  # 6.20.0: SEC -- work per stream limited (filter count, decoding work): a hostile PDF fetched from the web can no longer stall a crew
 ]
 
 [project.optional-dependencies]
