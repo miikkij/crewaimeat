@@ -32,6 +32,7 @@ dependencies = [
     "litellm>=1.88.6,<1.89",  # 1.88.6: GHSA SSRF/credential-exfiltration fix (Dependabot #54/#56); still far below the 1.102 boto3 jump
     "feedparser>=6.0.12",
     "pypdf>=6.20.0",  # 6.20.0: SEC -- work per stream limited (filter count, decoding work): a hostile PDF fetched from the web can no longer stall a crew
+    "ijson>=3.5.1",  # file_fetch picks items out of a JSON document while streaming it: memory stays flat on a file no context (and no json.load) should hold
 ]
 
 [project.optional-dependencies]

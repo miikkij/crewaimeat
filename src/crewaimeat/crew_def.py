@@ -147,6 +147,14 @@ def _tools_article_fetch(agent_name: str, ctx: Any) -> list:
     return [fetch_article_text]
 
 
+def _tools_file_fetch(agent_name: str, ctx: Any) -> list:
+    # Download, unpack and pick a big file, and pipe the records to an app tool or a row space: the
+    # model says what and where, the bytes never pass through it (crewaimeat.file_fetch).
+    from crewaimeat.file_fetch import make_file_fetch_tools
+
+    return list(make_file_fetch_tools(agent_name))
+
+
 def _tools_app_tools(agent_name: str, ctx: Any) -> list:
     # C from doc-mtgwbuadi9wo: find + call app-tools hosted on the node. Same-owner tools run free;
     # a foreign priced tool is reported as needing payment rather than pretended to have run.
@@ -246,6 +254,7 @@ TOOL_REGISTRY: dict[str, Any] = {
     "local_memory": _tools_local_memory,
     "article_fetch": _tools_article_fetch,
     "app_tools": _tools_app_tools,
+    "file_fetch": _tools_file_fetch,
     "crew_registry": _tools_crew_registry,
     "exchange": _tools_exchange,
     "decide": _tools_decide,
@@ -298,6 +307,16 @@ TOOL_PURPOSES: dict[str, str] = {
     "local_memory": "keep raw findings in LOCAL memory (remember/recall/search) and publish only the refined result upward (publish_memory)",
     "article_fetch": "fetch + extract the readable article text behind result URLs (read sources, not snippets)",
     "app_tools": "find and CALL app-tools hosted on AIMEAT (list_app_tools reads how each is called; call_app_tool invokes one) — your own owner's apps' tools, priced or not, run free; a tool taking a list (rows, csv) gets the whole list in one call",
+    "file_fetch": (
+        "download a big file (https; gzip/zip unpacked by content), pick records WHILE STREAMING and hand them on "
+        "without holding them: file_fetch(url, pick_json, pipe_to_json?, max_mb=64, max_inflated_mb=1024, "
+        "timeout_s=300, member?). pick_json = {format: xml|lines|json|csv, sets: {<name>: selector}} -- xml "
+        "{tag, attr, prefix|contains|equals|regex}, lines {regex}, json {path, field, test}, csv {column, test}. "
+        "pipe_to_json = an app tool {owner, app, tool, map: {<input key>: {from: <set>, fields: {<out>: "
+        "'@attr'|'child'|'child@attr'|'a.b'}} | fixed value}} or workspace rows {workspace, space, from, fields, "
+        "row_id}; you get back counts and the tool's answer. Without pipe_to: counts, a preview and a ref: to "
+        "pass as the next call's url. A ceiling that stops it is named in the answer"
+    ),
     "crew_registry": "publish a crew definition to the AIMEAT registry, and install one somebody shared by their GAII",
     "exchange": "trade on the AIMEAT EXCHANGE — browse/accept/run offerings, post needs + bid, renegotiate, run agent-work; plus deterministic band + I/O-match gates",
     "decide": "ask the owner's DECISION RULES — one tool per rule, named after the job; the rule holds the questions, thresholds and bands and you send only the state. `decide:<rule>` picks one rule instead of all of them",

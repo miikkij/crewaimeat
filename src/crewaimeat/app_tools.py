@@ -233,6 +233,56 @@ def _find(tools: list[dict], ref: str) -> dict | None:
     return cands[0] if len(cands) == 1 else None
 
 
+def _call_webmcp(agent_name: str, entry: dict, payload: dict) -> str:
+    """POST the tool's webmcp invoke path and say what the node said."""
+    invoke = (entry.get("webmcp") or {}).get("invoke") or ""
+    if "/v1/" not in invoke:
+        return f"{entry.get('sku')} has no usable invoke address."
+    path = "/v1/" + invoke.split("/v1/", 1)[1]
+
+    from crewaimeat.aimeat_crew import _aimeat_rest
+
+    data = _aimeat_rest(agent_name, "POST", path, payload, return_error=True)
+    if data is None:
+        return (
+            f"{entry.get('sku')} could not be reached (the call never got an answer — see the "
+            f"fleet log). It did not run."
+        )
+    # SAY WHAT THE NODE SAID. This used to read a bare None, look at the price field and announce
+    # a payment wall — so on 2026-09-03 the app's OWN owner was told their tool was priced and
+    # belonged to someone else, when the node had answered TOOL_NOT_INVOKABLE: nothing is wired to
+    # it. Two consumers of one gate reporting different reasons for the same call is precisely the
+    # divergence this scenario exists to catch, and the divergence was ours.
+    if isinstance(data, dict) and data.get("ok") is False:
+        err = data.get("error") or {}
+        line = f"{entry.get('sku')} did NOT run. The node answered {err.get('code') or 'an error'}"
+        status = data.get("http_status")
+        if status:
+            line += f" (HTTP {status})"
+        msg = str(err.get("message") or "").strip()
+        if msg:
+            line += f": {msg}"
+        pay = data.get("payment") or {}
+        if pay.get("required"):
+            line += (
+                f" — the price is {json.dumps(pay.get('price'), ensure_ascii=False)} and paying IS "
+                f"the call: open and complete a checkout session. I do not do that yet."
+            )
+        return line
+    result = data.get("result", data) if isinstance(data, dict) else data
+    return json.dumps(result, ensure_ascii=False)
+
+
+def call_app_tool_ref(agent_name: str, ref: str, payload: dict) -> str:
+    """Call the app tool `ref` (sku, `owner/app:tool` or a bare name -- unambiguous only) with `payload`,
+    exactly as call_app_tool does, for code that already holds the input: file_fetch pipes records it
+    picked straight into a tool, so they never pass through the model to get there."""
+    entry = _find(_catalog(agent_name, _owner_of(agent_name)), ref)
+    if entry is None:
+        return f"No single app-tool matches {ref!r}. Call list_app_tools to see the exact sku to use."
+    return _call_webmcp(agent_name, entry, payload)
+
+
 def make_app_tools(agent_name: str, ctx: Any = None) -> list:
     """Two crewai tools: find app-tools, and call one. Bound to `agent_name`'s identity, because the
     call spends that agent's family's free access (or hits the same 402 a stranger would)."""
@@ -290,45 +340,6 @@ def make_app_tools(agent_name: str, ctx: Any = None) -> list:
         if entry is None:
             return f"No single app-tool matches {sku!r}. Call list_app_tools to see the exact sku to use."
         return _call_webmcp(agent_name, entry, payload)
-
-    def _call_webmcp(agent_name: str, entry: dict, payload: dict) -> str:
-        """POST the tool's webmcp invoke path and say what the node said."""
-        invoke = (entry.get("webmcp") or {}).get("invoke") or ""
-        if "/v1/" not in invoke:
-            return f"{entry.get('sku')} has no usable invoke address."
-        path = "/v1/" + invoke.split("/v1/", 1)[1]
-
-        from crewaimeat.aimeat_crew import _aimeat_rest
-
-        data = _aimeat_rest(agent_name, "POST", path, payload, return_error=True)
-        if data is None:
-            return (
-                f"{entry.get('sku')} could not be reached (the call never got an answer — see the "
-                f"fleet log). It did not run."
-            )
-        # SAY WHAT THE NODE SAID. This used to read a bare None, look at the price field and announce
-        # a payment wall — so on 2026-09-03 the app's OWN owner was told their tool was priced and
-        # belonged to someone else, when the node had answered TOOL_NOT_INVOKABLE: nothing is wired to
-        # it. Two consumers of one gate reporting different reasons for the same call is precisely the
-        # divergence this scenario exists to catch, and the divergence was ours.
-        if isinstance(data, dict) and data.get("ok") is False:
-            err = data.get("error") or {}
-            line = f"{entry.get('sku')} did NOT run. The node answered {err.get('code') or 'an error'}"
-            status = data.get("http_status")
-            if status:
-                line += f" (HTTP {status})"
-            msg = str(err.get("message") or "").strip()
-            if msg:
-                line += f": {msg}"
-            pay = data.get("payment") or {}
-            if pay.get("required"):
-                line += (
-                    f" — the price is {json.dumps(pay.get('price'), ensure_ascii=False)} and paying IS "
-                    f"the call: open and complete a checkout session. I do not do that yet."
-                )
-            return line
-        result = data.get("result", data) if isinstance(data, dict) else data
-        return json.dumps(result, ensure_ascii=False)
 
     @tool("invoke_app_tool")
     def invoke_app_tool(sku: str, input_json: str = "{}") -> str:
