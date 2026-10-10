@@ -243,10 +243,13 @@ edition shipped with 21 articles and no front page. `write-a`/`write-b`/`editori
   APPROVED agents come online; an unapproved one waits and joins itself once approved.
 - **One owner, several computers (2026-10-11).** The node's roster is the OWNER's list; an agent's key
   is on ONE connector, and the owner can move it (`POST /v1/agents/v2/agents/:name/move`). Both
-  runtimes cut the roster with `spawner.carried_here`: the daemon's LIVE status (`/local/status` —
-  never serve.json, which is not rewritten when a credential is refused) minus what the node places
-  on another connector (`GET /v1/agents/v2/connectors`, matched by `<home>/install-id`). The node's
-  list only ever takes agents AWAY; an agent missing from this connector's row keeps its park.
+  runtimes cut the roster with `spawner.carried_here`: the daemon's LIVE status (`/local/status`)
+  minus what the node places on another connector — each roster row's `install_id` against
+  `<home>/install-id` (aimeat-protocol 17b6e20aa; the connector list is the second read for a node
+  that does not send it). The node's word only ever takes agents AWAY; an agent it places nowhere
+  keeps its park. **Never ask the node AS an agent the daemon calls `auth_failed`**: every such call
+  is a new token request the node refuses (`_owner_callers` leaves them out), and an agent the
+  daemon no longer carries is let go even while the node cannot be asked.
 - **An always-on agent with no crew file** (ordered on aimeat.io: `crews.registry.<agent>` on the
   node, `run_mode=resident`) runs as a thread in `fleet_host` via `run_json_agent`, read from the
   node every 30 s like the spawner's half. **`AIMEAT_RUN_MODES=spawn,resident` is a PROMISE** to the

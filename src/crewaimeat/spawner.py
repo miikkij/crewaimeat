@@ -68,6 +68,9 @@ STATUS_INTERVAL_S = 2.0
 # enrols new agents into a running daemon without a restart, so a spawner that read its roster once
 # would never serve them. 30 s is well inside "press the button and it works".
 ROSTER_INTERVAL_S = 30.0
+# How long a park waits after the daemon refused it (400: an agent this daemon does not carry). The
+# same pause paces the early roster read a refusal asks for.
+REFUSED_BACKOFF_S = 10.0
 
 # HOW OFTEN THE SPAWNER LOOKS FOR WORK NOBODY TOLD IT ABOUT. A wake is a push, and a push that is
 # never sent cannot be retried: the task sits `active` on the node, the agent reads `online`, the
@@ -182,6 +185,7 @@ class Spawner:
         self._port: int | None = None
         self._threads: dict[str, list[threading.Thread]] = {}
         self._roster_note: str | None = None  # last roster complaint, printed once per change
+        self._roster_asked = threading.Event()  # a refused park: read the roster now, not in 30 s
         self._last_invoke_complaint: dict[str, float] = {}
 
     # ---------------------------------------------------------------- wake --- #
@@ -234,7 +238,12 @@ class Spawner:
         # 400 UNKNOWN_AGENT means the serve daemon does not carry this agent: loud, and back off so a
         # misconfigured roster cannot turn into a request storm.
         _say(f"[spawner] {agent}: wake refused HTTP {resp.status_code} {resp.text[:160]}")
-        time.sleep(10.0)
+        # The roster is what is out of date, so ask for it to be read now rather than at its next
+        # turn. Since a move makes the connector drop the agent at once (aimeat-protocol 17b6e20aa),
+        # this is how the spawner hears of it: measured 2026-10-11, an agent moved away was refused
+        # three times, eleven seconds apart, before the next 30-second read let go of it.
+        self._roster_asked.set()
+        time.sleep(REFUSED_BACKOFF_S)
         return False
 
     def _unwoken_work(self, agent: str) -> list[str]:
@@ -786,6 +795,23 @@ class Spawner:
             # queued behind it was lost. So an owner we could not ask keeps exactly what it had, and an
             # owner that DID answer is still followed, additions and removals both.
             kept = {a for a in current if "*" in exc.owners or _gaii_owner(a) in exc.owners or _gaii_owner(a) is None}
+            # WHAT THIS CONNECTOR NO LONGER HOLDS IS KNOWN WITHOUT THE NODE. "Keep what it had" is for
+            # what could not be asked; whether the daemon carries an agent can be, on loopback. An
+            # agent it has dropped, or whose credential the node refused, cannot run here whatever the
+            # roster says, and when it was the home's last working agent the roster cannot be read at
+            # all any more. Measured 2026-10-11: the last two agents of a home were moved away, the
+            # only one left was refused, and the park on a moved agent was refused every 11 s with
+            # nothing able to end it. A daemon that does not answer (None) changes nothing.
+            held = daemon_identities() if self.roster_fn is None else None
+            if held is not None:
+                gone = {a for a in kept if held.get(a, REFUSED) == REFUSED}
+                if gone:
+                    _note_once(
+                        f"{len(gone)} agent(s) this connector no longer carries, let go while the node "
+                        f"could not be asked: {_some(sorted(gone))}",
+                        key="roster-gone",
+                    )
+                kept -= gone
             wanted = sorted(set(exc.agents) | kept)
             unread = set(exc.owners)
             _note_once(
@@ -807,6 +833,16 @@ class Spawner:
         for agent in sorted(current - set(wanted)):
             self._retire_agent(agent)
 
+    def roster_due(self, next_roster: float, last_roster: float) -> bool:
+        """Read the roster now? At its regular turn, or sooner when a park was refused.
+
+        The early read is paced by the refusal's own back-off: a roster that keeps listing an agent
+        this daemon will not serve (a fault, not a move) costs one extra read per `REFUSED_BACKOFF_S`
+        however many agents are refused, never one per refusal.
+        """
+        now = time.monotonic()
+        return now >= next_roster or (self._roster_asked.is_set() and now - last_roster >= REFUSED_BACKOFF_S)
+
     # ----------------------------------------------------------------- run --- #
     def serve_forever(self) -> int:
         self.sweep_orphans()
@@ -822,12 +858,15 @@ class Spawner:
             f"roster re-read every {self.roster_interval_s:.0f}s)",
         )
         next_roster = time.monotonic() + self.roster_interval_s
+        last_roster = time.monotonic()
         try:
             while not self._stop.is_set():
                 self.reap()
-                if time.monotonic() >= next_roster:
+                if self.roster_due(next_roster, last_roster):
+                    self._roster_asked.clear()
                     self.refresh_roster()
-                    next_roster = time.monotonic() + self.roster_interval_s
+                    last_roster = time.monotonic()
+                    next_roster = last_roster + self.roster_interval_s
                 spawn_state.write_json(spawn_state.status_file(), self.snapshot())
                 time.sleep(STATUS_INTERVAL_S)
         except KeyboardInterrupt:
@@ -967,7 +1006,8 @@ def node_spawn_agents() -> tuple[list[str], str | None]:
 
 
 def read_node_roster(run_mode: str = agent_manifest.RUN_SPAWN) -> tuple[list[str], list[str], set[str]]:
-    """`(agents, notes, unreadable_owners)` — the roster, and WHO could not be asked.
+    """`(agents, notes, unreadable_owners)` — the roster, and WHO could not be asked. The answer of a
+    read that reached the node is a `RosterRead`, which also says where the node places each agent.
 
     `run_mode` is which half is asked for: the spawner reads `spawn`, the fleet host reads `resident`
     for the agents that have only a definition on the node. One reader, so the two runtimes cannot
@@ -998,7 +1038,12 @@ def read_node_roster(run_mode: str = agent_manifest.RUN_SPAWN) -> tuple[list[str
     out: list[str] = []
     notes: list[str] = []
     unreadable: set[str] = set()
+    placed: dict[str, str | None] = {}
     for owner, candidates in sorted(callers.items()):
+        if not candidates:
+            notes.append(f"{owner}: no agent on this connector holds a credential the node accepts")
+            unreadable.add(owner)
+            continue
         try:
             resp = _ask_node_as(doc, candidates, "/v1/agents", {"run_mode": run_mode})
         except Exception as exc:  # noqa: BLE001 — an unreachable node must not empty the roster
@@ -1010,21 +1055,45 @@ def read_node_roster(run_mode: str = agent_manifest.RUN_SPAWN) -> tuple[list[str
             notes.append(f"{owner}: unreadable ({problem})")
             unreadable.add(owner)
             continue
-        picked = [
-            str(r.get("gaii") or r.get("name"))
+        picked_rows = [
+            r
             for r in rows
             if isinstance(r, dict)
             and (r.get("gaii") or r.get("name"))
             and agent_manifest.normalise_run_mode(r.get("run_mode") or r.get("runMode")) == run_mode
         ]
-        if rows and not picked:
+        if rows and not picked_rows:
             # An unknown query parameter is IGNORED, not refused, so a node that does not know this
             # filter answers with every agent it has. Taking that on trust would put the whole fleet
             # in spawn mode, so every row is re-checked and an unhonoured filter serves nothing.
             notes.append(f"{owner}: {len(rows)} agent(s), none marked run_mode={run_mode}")
             continue
-        out.extend(picked)
-    return sorted(set(out)), notes, unreadable
+        for r in picked_rows:
+            identity = str(r.get("gaii") or r.get("name"))
+            out.append(identity)
+            if "install_id" in r:  # the key is there on every row of a node that sends it, null or not
+                placed[identity] = str(r["install_id"]) if r["install_id"] else None
+    return RosterRead(sorted(set(out)), notes, unreadable, placed or None)
+
+
+class RosterRead(tuple):
+    """`(agents, notes, unreadable_owners)` exactly as before, and beside it `.placed`.
+
+    `placed` is `{identity: install_id}` — the connector the NODE says holds each agent, or the one
+    the agent waits for, None for an agent it places nowhere. The rows carry it from aimeat-protocol
+    17b6e20aa on (`install_id` on `GET /v1/agents`). `placed` is None when no row carried the field:
+    an older node, and then `carried_here` asks the connector list instead.
+
+    A tuple of three with an attribute, not a fourth element: every caller and every test double
+    unpacks three, and a plain tuple standing in for this simply has no `placed`.
+    """
+
+    placed: dict[str, str | None] | None = None
+
+    def __new__(cls, agents: list[str], notes: list[str], unreadable: set[str], placed=None):
+        self = super().__new__(cls, (agents, notes, unreadable))
+        self.placed = placed
+        return self
 
 
 CALLER_TRIES = 3  # how many of an owner's agents are asked to carry one read before it counts as failed
@@ -1035,12 +1104,23 @@ def _owner_callers(doc: dict) -> dict[str, list[str]]:
 
     A node read is made AS one of the owner's agents (the listing is owner-scoped), and any of them
     will do — as long as its credential works.
+
+    AN AGENT THE DAEMON ALREADY CALLS REFUSED IS NEVER THE CALLER. A call made as such an agent is
+    not free and cannot succeed: the connector signs and sends a new token request for it every
+    time, and answers 502. Measured 2026-10-11 with an agent moved while its connector was down: it
+    was first in serve.json, so every roster read went out as that agent first, and the connector
+    logged a fresh refusal every 30 seconds — the repeat was ours.
+
+    An owner whose agents here are ALL refused is in the answer with an empty list: the owner is
+    known, and nobody can ask for them. The reader says so and makes no call.
     """
     callers: dict[str, list[str]] = {}
     for a in doc.get("agents") or []:
         owner, ident = a.get("owner"), (a.get("gaii") or a.get("agent"))
         if owner and ident:
-            callers.setdefault(str(owner), []).append(str(ident))
+            mine = callers.setdefault(str(owner), [])
+            if a.get("transport") != REFUSED:
+                mine.append(str(ident))
     return callers
 
 
@@ -1070,8 +1150,24 @@ def _ask_node_as(doc: dict, candidates: list[str], path: str, params: dict | Non
     return resp
 
 
+def install_id() -> str | None:
+    """The id this home's connector presents to the node (`<home>/install-id`), None when it has none.
+
+    The connector mints it on first use and sends it on every tunnel; the node's connector list and
+    the roster rows name computers by it. Read as the connector reads it: trimmed, 64 characters.
+    """
+    try:
+        return (spawn_state.aimeat_home() / "install-id").read_text(encoding="utf-8").strip()[:64] or None
+    except OSError:
+        return None
+
+
 def placed_elsewhere() -> set[tuple[str, str]]:
     """`(owner, agent name)` for every agent the NODE places on ANOTHER connector of the same owner.
+
+    THE SECOND READ, FOR A NODE WHOSE ROSTER ROWS DO NOT SAY. From aimeat-protocol 17b6e20aa the rows
+    of `GET /v1/agents` carry `install_id` and `carried_here` takes the answer from there; this is
+    what it asks when they do not.
 
     THE NODE KNOWS WHICH COMPUTER HOLDS AN AGENT (`GET /v1/agents/v2/connectors`, aimeat-protocol
     9353ccb7e), and this home knows which connector it is (`<home>/install-id`, the id the connector
@@ -1093,14 +1189,13 @@ def placed_elsewhere() -> set[tuple[str, str]]:
     doc = _serve_doc()
     if not isinstance(doc.get("port"), int):
         return set()
-    try:
-        here = (spawn_state.aimeat_home() / "install-id").read_text(encoding="utf-8").strip()[:64]
-    except OSError:
-        return set()
+    here = install_id()
     if not here:
         return set()
     out: set[tuple[str, str]] = set()
     for owner, candidates in _owner_callers(doc).items():
+        if not candidates:
+            continue
         try:
             resp = _ask_node_as(doc, candidates, "/v1/agents/v2/connectors")
             rows = ((resp.json() or {}).get("data") or {}).get("connectors") if resp.status_code == 200 else None
@@ -1157,7 +1252,7 @@ def daemon_identities() -> dict[str, str] | None:
     return out
 
 
-def carried_here(agents: list[str], *, what: str, say=None) -> list[str] | None:
+def carried_here(agents: list[str], *, what: str, say=None, placed=None) -> list[str] | None:
     """`agents` cut down to the ones THIS connector carries with a credential the node accepts.
     None when the daemon could not be asked.
 
@@ -1170,10 +1265,12 @@ def carried_here(agents: list[str], *, what: str, say=None) -> list[str] | None:
     read drops it.
 
     TWO SOURCES, ONE FOR EACH THING IT IS GOOD AT. The daemon's live status says what this home
-    holds a working credential for; the node's connector list (`placed_elsewhere`) says which of
-    those it has since given to another computer, which the status misses after a restart.
+    holds a working credential for; the node says which of those it has since given to another
+    computer, which the status misses after a restart. The node's word is `placed` — the roster
+    read's own `.placed`, each row's `install_id` — and costs no call. Without it (an older node,
+    or a caller that has no read to pass) the connector list is asked (`placed_elsewhere`).
 
-    Both kinds of absence are said once per change, because an agent that is quietly not served
+    Every kind of absence is said once per change, because an agent that is quietly not served
     looks exactly like an agent with nothing to do. `what` names the caller's half ("spawn",
     "resident") so the two runtimes' notes do not overwrite each other, and `say(note_or_None, key=)`
     is the caller's own log line (the fleet host passes its own; the default is the spawner's).
@@ -1182,18 +1279,34 @@ def carried_here(agents: list[str], *, what: str, say=None) -> list[str] | None:
     if held is None:
         return None
     say = say or _note_or_clear
+    here = install_id() if placed is not None else None
     mine = [a for a in agents if a in held and held[a] != REFUSED]
     refused = sorted(a for a in agents if held.get(a) == REFUSED)
-    elsewhere = sorted(a for a in agents if a not in held)
+    # Ordered to THIS computer and not taken by its connector yet: the enrolment is on its way, or
+    # the connector is older than the offer. Not "on another computer", and worth saying apart.
+    waiting = sorted(a for a in agents if a not in held and here and (placed or {}).get(a) == here)
+    elsewhere = sorted(a for a in agents if a not in held and a not in waiting)
     if mine:
-        gone = placed_elsewhere()
-        moved = [
-            a
-            for a in mine
-            if any(n == agent_manifest.agent_local_name(a) and _gaii_owner(a) in (o, None) for o, n in gone)
-        ]
+        if placed is not None:
+            # Only a row that names a DIFFERENT connector takes an agent away. A row that names none,
+            # an agent the read did not cover, a home with no install id: the status stands.
+            moved = [a for a in mine if here and placed.get(a) and placed[a] != here]
+        else:
+            gone = placed_elsewhere()
+            moved = [
+                a
+                for a in mine
+                if any(n == agent_manifest.agent_local_name(a) and _gaii_owner(a) in (o, None) for o, n in gone)
+            ]
         mine = [a for a in mine if a not in moved]
         elsewhere = sorted({*elsewhere, *moved})
+    say(
+        f"{len(waiting)} {what} agent(s) ordered to this computer that its connector has not taken yet: "
+        f"{_some(waiting)}"
+        if waiting
+        else None,
+        key=f"{what}-waiting",
+    )
     say(
         f"{len(elsewhere)} {what} agent(s) of the same owner are on another connector and are left to it: "
         f"{_some(elsewhere)}"
@@ -1230,7 +1343,8 @@ def discover_agents(root: Path) -> list[str]:
     cannot both claim an agent. When the node cannot be asked, this is empty and every crew stays a
     fleet thread: work still happens, in the other half, which is the safe direction to fail.
     """
-    node, notes, unreadable = read_node_roster()
+    read = read_node_roster()
+    node, notes, unreadable = read
     note = _join_notes(notes, node)
     if note:
         _note_once(note)
@@ -1247,7 +1361,7 @@ def discover_agents(root: Path) -> list[str]:
             f"crew(s) declaring RUN_MODE=spawn that the node does not list as spawn, left to the "
             f"fleet host: {', '.join(unmet)}"
         )
-    mine = carried_here(sorted(set(node)), what=agent_manifest.RUN_SPAWN)
+    mine = carried_here(sorted(set(node)), what=agent_manifest.RUN_SPAWN, placed=getattr(read, "placed", None))
     if mine is None:
         # The daemon that answered the roster a moment ago did not answer for itself. Nobody is
         # retired on that: the caller keeps every agent it has, as for an owner that could not be asked.

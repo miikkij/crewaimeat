@@ -221,7 +221,8 @@ def _node_resident_agents() -> list[str] | None:
     from crewaimeat.spawner import carried_here, read_node_roster
 
     try:
-        listed, notes, unreadable = read_node_roster(agent_manifest.RUN_RESIDENT)
+        read = read_node_roster(agent_manifest.RUN_RESIDENT)
+        listed, notes, unreadable = read
     except Exception as exc:  # noqa: BLE001 — one failed read must not stop the agents already running
         _say_once(f"resident roster read failed ({exc!r}); keeping what runs", "resident-read")
         return None
@@ -235,7 +236,9 @@ def _node_resident_agents() -> list[str] | None:
     _say_once(None, "resident-read")
     filed = {m.agent for m in agent_manifest.all_manifests(Path.cwd()) if m.agent}
     on_node_only = [a for a in listed if agent_manifest.agent_local_name(a) not in filed]
-    return carried_here(on_node_only, what=agent_manifest.RUN_RESIDENT, say=_say_once)
+    return carried_here(
+        on_node_only, what=agent_manifest.RUN_RESIDENT, say=_say_once, placed=getattr(read, "placed", None)
+    )
 
 
 def _select_crews(agents: list[str] | None) -> list[Path]:

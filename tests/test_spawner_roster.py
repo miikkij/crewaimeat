@@ -528,6 +528,92 @@ def test_a_home_without_an_install_id_asks_the_node_nothing(monkeypatch, tmp_pat
     assert spawner.placed_elsewhere() == set()
 
 
+# --------------------------------------------------------------------------- #
+# The roster rows say which connector holds each agent (aimeat-protocol 17b6e20aa)
+# --------------------------------------------------------------------------- #
+# `install_id` on `GET /v1/agents`: the connector that holds the agent, or the one it waits for. The
+# roster read already fetches those rows every 30 s, so the connector list need not be asked as well.
+def _rows_with_install(*rows):
+    return _Resp([{"name": n, "gaii": f"{n}#alice@{NODE}", "run_mode": "spawn", "install_id": i} for n, i in rows])
+
+
+def test_the_roster_read_carries_where_the_node_places_each_agent(monkeypatch, tmp_path):
+    import requests
+
+    from crewaimeat import spawner
+
+    _home_with_install_id(monkeypatch, tmp_path, [{"agent": "mine", "gaii": f"mine#alice@{NODE}", "owner": "alice"}])
+    monkeypatch.setattr(
+        requests,
+        "get",
+        lambda *a, **k: _rows_with_install(("mine", "here-id"), ("theirs", "other-id"), ("loose", None)),
+    )
+    read = spawner.read_node_roster()
+    agents, notes, unreadable = read  # still three, for every caller that unpacks it
+    assert agents == [f"loose#alice@{NODE}", f"mine#alice@{NODE}", f"theirs#alice@{NODE}"] and not unreadable
+    assert read.placed == {
+        f"mine#alice@{NODE}": "here-id",
+        f"theirs#alice@{NODE}": "other-id",
+        f"loose#alice@{NODE}": None,
+    }
+
+
+def test_a_node_that_sends_no_install_id_says_so_by_having_no_placement(monkeypatch, tmp_path):
+    """None, not an empty map: the caller has to know to ask the connector list instead."""
+    import requests
+
+    from crewaimeat import spawner
+
+    _home_with_install_id(monkeypatch, tmp_path, [{"agent": "a", "gaii": f"a#alice@{NODE}", "owner": "alice"}])
+    monkeypatch.setattr(
+        requests, "get", lambda *x, **k: _Resp([{"name": "a", "gaii": f"a#alice@{NODE}", "run_mode": "spawn"}])
+    )
+    assert spawner.read_node_roster().placed is None
+
+
+def test_with_install_id_on_the_rows_the_connector_list_is_not_asked(monkeypatch, tmp_path, capsys):
+    """One node read per owner per roster refresh, as before the cut. The restart case of 2026-10-11
+    (a moved agent the old daemon reports as `direct`) is decided from the row alone."""
+    import requests
+
+    from crewaimeat import spawner
+
+    stay, moved = f"stay#alice@{NODE}", f"moved#alice@{NODE}"
+    _home_with_install_id(monkeypatch, tmp_path, [{"agent": "stay", "gaii": stay, "owner": "alice"}])
+    monkeypatch.setattr(spawner, "daemon_identities", lambda: {stay: "tunnel", moved: "direct"})
+    monkeypatch.setattr(spawner, "_LAST_NOTE", {})
+    asked: list[str] = []
+
+    def _get(url, **kw):
+        asked.append(url.rsplit("/v1/", 1)[1])
+        return _rows_with_install(("stay", "here-id"), ("moved", "other-id"), ("due", "here-id"))
+
+    monkeypatch.setattr(requests, "get", _get)
+    assert spawner.discover_agents(tmp_path) == [stay]
+    assert asked == ["agents"], "the roster rows already said it; no second read"
+    said = capsys.readouterr().err
+    assert "another connector" in said and "moved" in said
+    assert "ordered to this computer" in said and "due" in said, "waiting for THIS connector is not 'elsewhere'"
+
+
+def test_a_row_that_names_no_connector_takes_nothing_away(monkeypatch, tmp_path):
+    """The same rule as with the connector list: the node's word only ever takes an agent away, and
+    only by naming a DIFFERENT connector. Null, a missing row, or a home with no install id leave
+    the daemon's own status standing."""
+    from crewaimeat import spawner
+
+    a, b = f"a#alice@{NODE}", f"b#alice@{NODE}"
+    _home_with_install_id(monkeypatch, tmp_path, [{"agent": "a", "gaii": a, "owner": "alice"}])
+    monkeypatch.setattr(spawner, "daemon_identities", lambda: {a: "tunnel", b: "tunnel"})
+    monkeypatch.setattr(spawner, "placed_elsewhere", lambda: pytest.fail("placement was given; nothing to ask"))
+    monkeypatch.setattr(spawner, "_LAST_NOTE", {})
+    assert spawner.carried_here([a, b], what="spawn", placed={a: None}) == [a, b]
+    assert spawner.carried_here([a, b], what="spawn", placed={a: "here-id", b: "other-id"}) == [a]
+
+    (tmp_path / "install-id").unlink()  # a connector older than the install id: nothing to compare with
+    assert spawner.carried_here([a, b], what="spawn", placed={a: "x", b: "y"}) == [a, b]
+
+
 def test_a_read_that_fails_as_one_agent_is_made_as_the_owners_next(monkeypatch, tmp_path):
     """MEASURED 2026-10-11: read as an agent that had been moved away, `GET /v1/agents` answered 502
     PROXY_ERROR at the daemon; read as its neighbour, 200. With one fixed caller per owner, a moved
@@ -558,6 +644,88 @@ def test_a_read_that_fails_as_one_agent_is_made_as_the_owners_next(monkeypatch, 
     assert unreadable == {"alice"} and len(seen) == spawner.CALLER_TRIES, (
         "a node that is down is not asked once per agent"
     )
+
+
+def test_the_node_is_not_asked_as_an_agent_the_daemon_calls_refused(monkeypatch, tmp_path):
+    """MEASURED 2026-10-11. An agent moved while its connector was down comes back `auth_failed` at the
+    next start, and it was FIRST in serve.json. Every roster read went out as that agent first, the
+    connector sent a new token request for it each time, and its log gained a refusal every 30 s."""
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path))
+    import requests
+
+    from crewaimeat import spawner
+
+    _serve(
+        tmp_path,
+        [
+            {"agent": "moved", "gaii": f"moved#alice@{NODE}", "owner": "alice", "transport": "auth_failed"},
+            {"agent": "kept", "gaii": f"kept#alice@{NODE}", "owner": "alice", "transport": "tunnel"},
+        ],
+    )
+    seen: list[str] = []
+
+    def _get(url, **kw):
+        seen.append(kw["headers"]["X-Aimeat-Agent"].split("#")[0])
+        return _Resp([{"name": "burst", "gaii": f"burst#alice@{NODE}", "run_mode": "spawn"}])
+
+    monkeypatch.setattr(requests, "get", _get)
+    agents, _notes, unreadable = spawner.read_node_roster()
+    assert agents == [f"burst#alice@{NODE}"] and not unreadable
+    assert seen == ["kept"], "one read, made as an agent whose credential works"
+
+    # A home whose ONLY agent is refused has nobody who can ask: that is said, and no call is made
+    # (each one would be another token request the node refuses).
+    _serve(tmp_path, [{"agent": "moved", "gaii": f"moved#alice@{NODE}", "owner": "alice", "transport": "auth_failed"}])
+    seen.clear()
+    agents, notes, unreadable = spawner.read_node_roster()
+    assert seen == [] and agents == [] and unreadable == {"alice"}
+    assert "no agent on this connector holds a credential" in notes[0]
+
+
+def test_an_agent_the_connector_dropped_is_let_go_even_when_the_node_cannot_be_asked(monkeypatch, tmp_path, capsys):
+    """MEASURED 2026-10-11. The last two working agents of a home were moved away; the one left was
+    refused, so the roster could not be read at all — and "keep what it had" kept the park on a
+    moved agent, refused every 11 s with nothing able to end it. Whether THIS daemon carries an
+    agent does not need the node."""
+    from crewaimeat import spawner
+
+    gone, refused, here = f"gone#alice@{NODE}", f"refused#alice@{NODE}", f"here#alice@{NODE}"
+    reads = iter(
+        [
+            ([gone, refused, here], [], set()),
+            ([], ["alice: no agent on this connector holds a credential the node accepts"], {"alice"}),
+        ]
+    )
+    monkeypatch.setattr(spawner, "read_node_roster", lambda: next(reads))
+    monkeypatch.setattr(spawner, "_LAST_NOTE", {})
+    sp = _quiet_spawner(tmp_path)
+    _daemon_holds(monkeypatch, gone, refused, here)
+    sp.refresh_roster()
+    kept_state = sp.state[here]
+    _daemon_holds(monkeypatch, here, refused=[refused])  # `gone` detached, `refused` lost its credential
+    sp.refresh_roster()
+    assert {k for k, v in sp.state.items() if not v.retired} == {here}
+    assert sp.state[here] is kept_state, "the agent the daemon still carries keeps its park and its state"
+    assert "no longer carries" in capsys.readouterr().err
+
+
+def test_a_refused_park_asks_for_the_roster_now_but_no_faster_than_its_own_back_off(tmp_path):
+    """A move makes the connector drop the agent at once, and the park on it is refused. The roster
+    is what is out of date, so it is read at the next tick instead of up to 30 s later — and a
+    roster that keeps listing an agent the daemon will not serve costs one extra read per back-off."""
+    import time
+
+    from crewaimeat import spawner
+
+    sp = _spawner(root=tmp_path)
+    now = time.monotonic()
+    assert sp.roster_due(next_roster=now + 20, last_roster=now - 15) is False, "nothing asked, not its turn"
+    sp._roster_asked.set()
+    assert sp.roster_due(next_roster=now + 20, last_roster=now - 15) is True, "a refusal brings the read forward"
+    assert sp.roster_due(next_roster=now + 20, last_roster=now - 1) is False, "but not right after the last one"
+    assert spawner.REFUSED_BACKOFF_S < spawner.ROSTER_INTERVAL_S
+    sp._roster_asked.clear()
+    assert sp.roster_due(next_roster=now - 1, last_roster=now - 31) is True, "the regular turn is unchanged"
 
 
 def test_the_resident_half_is_read_with_the_same_reader(monkeypatch, tmp_path):
