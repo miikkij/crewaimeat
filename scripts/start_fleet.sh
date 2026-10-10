@@ -30,6 +30,18 @@ cd "$root"
 : "${AIMEAT_HOME:="$root/.aimeat"}"; export AIMEAT_HOME
 echo "[start_fleet] AIMEAT_HOME = $AIMEAT_HOME"
 
+# Tell the node what this computer can RUN. The connector reads AIMEAT_RUN_MODES and sends it to the
+# node; with `resident` in it the owner's page offers "Always on" for this computer, and the node stops
+# changing an always-on agent into a spawn one for it. That is a PROMISE that something here keeps
+# such an agent running, and this script is what keeps it: it starts the fleet host below, which runs
+# an always-on agent from its definition on the node and stays up to take the next one. Exported
+# here, like AIMEAT_HOME, so the serve daemon, its supervisor and the host all inherit ONE answer. A
+# preset value wins (AIMEAT_RUN_MODES=spawn says this computer only starts a worker per job).
+# NB: a serve daemon that is ALREADY running keeps what it said when it started; the new answer
+# reaches the node after terminate_fleet + start_fleet.
+: "${AIMEAT_RUN_MODES:="spawn,resident"}"; export AIMEAT_RUN_MODES
+echo "[start_fleet] AIMEAT_RUN_MODES = $AIMEAT_RUN_MODES"
+
 # Put the venv bin first on PATH so `uv` (and the watchdog's `uv run`) resolve even if the
 # shell's PATH lacks uv.
 [ -d "$root/.venv/bin" ] && export PATH="$root/.venv/bin:$PATH"
@@ -66,17 +78,29 @@ nohup bash "$root/scripts/spawner_watchdog.sh" >"$root/logs/spawner_watchdog.log
 
 # Run the fleet HOST for every agent the node has NOT marked spawn: threads in ONE process (crewai
 # imported once). crew-forge's reconcile_fleet no-ops under AIMEAT_FLEET_HOST, so nothing spawns a
-# shadow per-process fleet. With an all-spawn roster the host has nothing to run and returns at once.
-echo "[start_fleet] starting the fleet HOST (crews the node has NOT marked run_mode=spawn) ..."
-echo "[start_fleet] with an all-spawn fleet the host has no roster and exits at once - the fleet is still up."
-echo "[start_fleet] while any agent is resident the host stays in THIS window; Ctrl+C stops resident threads only."
+# shadow per-process fleet.
+#
+# With AIMEAT_RUN_MODES naming `resident` (exported above) the host STAYS even with nothing to run:
+# the node may accept an always-on agent for this computer at any moment, and the host reads the
+# node's roster every 30 s to take it. An empty host imports no crewai. With AIMEAT_RUN_MODES=spawn
+# and an all-spawn roster it returns at once, as it always did.
+#
+# The spawner is where an all-spawn fleet's work shows, and the host now holds this window for good,
+# so the spawner's log is followed IN this window beside the host's own lines.
+echo "[start_fleet] starting the fleet HOST (resident agents: crew files the node has NOT marked spawn, and always-on agents defined on the node) ..."
+echo "[start_fleet] Ctrl+C here stops the HOST: always-on agents stop until the fleet is started again. Spawn agents keep running."
+spawner_log="$root/logs/spawner_watchdog.log"
+tail -n 20 -F "$spawner_log" 2>/dev/null &
+follow_pid=$!
+trap 'kill "$follow_pid" 2>/dev/null || true' EXIT
 rc=0; uv run python -m crewaimeat.fleet_host || rc=$?
+kill "$follow_pid" 2>/dev/null || true
+trap - EXIT
 echo "[start_fleet] host returned ($rc). Serve daemon, its supervisor and the spawner keep running (detached)."
 echo "[start_fleet] stop everything with: ./scripts/terminate_fleet.sh"
 
-# Keep watching the fleet in this window: with every agent in spawn mode the host returns in seconds,
-# and the spawner is where the work shows — what wakes, what runs, what exits.
-spawner_log="$root/logs/spawner_watchdog.log"
+# Reached when the host RETURNED by itself (AIMEAT_RUN_MODES=spawn, all-spawn roster). Keep watching
+# the fleet in this window: the spawner is where the work shows — what wakes, what runs, what exits.
 if [ -f "$spawner_log" ]; then
     echo
     echo "[start_fleet] following the spawner - what wakes, what runs, what exits."

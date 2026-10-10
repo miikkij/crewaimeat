@@ -241,6 +241,21 @@ edition shipped with 21 articles and no front page. `write-a`/`write-b`/`editori
   runs is the node's `run_mode` (the owner's setting): `spawn` → the spawner parks it and starts one
   worker process per wake (the whole fleet here is spawn); otherwise → a THREAD in `fleet_host`. Only
   APPROVED agents come online; an unapproved one waits and joins itself once approved.
+- **One owner, several computers (2026-10-11).** The node's roster is the OWNER's list; an agent's key
+  is on ONE connector, and the owner can move it (`POST /v1/agents/v2/agents/:name/move`). Both
+  runtimes cut the roster with `spawner.carried_here`: the daemon's LIVE status (`/local/status` —
+  never serve.json, which is not rewritten when a credential is refused) minus what the node places
+  on another connector (`GET /v1/agents/v2/connectors`, matched by `<home>/install-id`). The node's
+  list only ever takes agents AWAY; an agent missing from this connector's row keeps its park.
+- **An always-on agent with no crew file** (ordered on aimeat.io: `crews.registry.<agent>` on the
+  node, `run_mode=resident`) runs as a thread in `fleet_host` via `run_json_agent`, read from the
+  node every 30 s like the spawner's half. **`AIMEAT_RUN_MODES=spawn,resident` is a PROMISE** to the
+  node that a fleet host runs beside the connector — only `scripts/start_fleet.*` sets it, and with
+  it set the host stays up empty (no crewai imported) to take the next agent. Never set it where no
+  host runs (agency2, the TUI's start, a lone crew): the node then accepts an always-on agent that
+  nobody runs. The computer's NAME (`AIMEAT_INSTALL_NAME`) defaults in `serve_guard`, the one place
+  every daemon start ends. A resident thread cannot be stopped from outside: a move ends it (the
+  daemon loop exits on `auth_failed`), a changed run mode waits for the next host restart.
 - **`task-runner` mode is load-bearing, not boilerplate — and the OWNER sets it on the node.**
   The owner decides it in one of two places: at registration, where connector 3.x accepts
   `connect … --mode task-runner` again and the owner approves the mode in the same device-auth consent

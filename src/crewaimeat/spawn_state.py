@@ -13,6 +13,7 @@ time and must stay small enough that idle is genuinely free.
       .spawner.lock            OS advisory lock — one spawner per home
       .spawner_status.json     heartbeat the TUI reads (same shape idea as logs/.host_status.json)
       roster.json              the node's last roster answer; outlives the spawner (doctor reads it)
+      resident_roster.json     the same for the fleet host: node-defined agents it keeps resident here
       running/<agent>.pid      {pid, run_id, started, manager_pid} — the orphan sweep reads these
       audit/<agent>/<run>.json one record per run: who woke it, what it cost, how it ended
 """
@@ -92,6 +93,13 @@ def roster_file() -> Path:
     still the node's agents. `crewaimeat doctor` reads no node, so this is how it tells an agent
     defined on the node from a registration whose crew file vanished."""
     return spawn_dir() / "roster.json"
+
+
+def resident_roster_file() -> Path:
+    """The same for the fleet host's half: the node-defined agents it keeps resident on this
+    connector. They have no crew file either, and the spawner's roster does not hold them (they are
+    not spawn), so without this doctor would call every always-on agent a ghost."""
+    return spawn_dir() / "resident_roster.json"
 
 
 def lock_file() -> Path:

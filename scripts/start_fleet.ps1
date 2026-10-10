@@ -28,6 +28,18 @@ Set-Location $root
 if (-not $env:AIMEAT_HOME) { $env:AIMEAT_HOME = Join-Path $root '.aimeat' }
 Write-Host "[start_fleet] AIMEAT_HOME = $env:AIMEAT_HOME"
 
+# Tell the node what this computer can RUN. The connector reads AIMEAT_RUN_MODES and sends it to the
+# node; with `resident` in it the owner's page offers "Always on" for this computer, and the node stops
+# changing an always-on agent into a spawn one for it. That is a PROMISE that something here keeps
+# such an agent running, and this script is what keeps it: it starts the fleet host below, which runs
+# an always-on agent from its definition on the node and stays up to take the next one. Set here, like
+# AIMEAT_HOME, so the serve daemon, its supervisor and the host all inherit ONE answer. A preset value
+# wins (AIMEAT_RUN_MODES=spawn says this computer only starts a worker per job).
+# NB: a serve daemon that is ALREADY running keeps what it said when it started; the new answer
+# reaches the node after terminate_fleet + start_fleet.
+if (-not $env:AIMEAT_RUN_MODES) { $env:AIMEAT_RUN_MODES = 'spawn,resident' }
+Write-Host "[start_fleet] AIMEAT_RUN_MODES = $env:AIMEAT_RUN_MODES"
+
 # Put the venv's Scripts dir first on PATH so `uv` (and the watchdog's `uv run`) resolve even
 # if this shell's PATH lacks uv (uv.exe lives next to the venv python).
 $venvScripts = Join-Path $root '.venv\Scripts'
@@ -76,29 +88,43 @@ Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass',
 # and reconcile_fleet no-ops under
 # AIMEAT_FLEET_HOST, so nothing spawns a shadow per-process fleet.
 #
-# THE HOST MAY HAVE NOTHING TO DO, AND THAT IS A CORRECT OUTCOME, NOT A FAILURE. The spawner above
+# THE HOST MAY HAVE NOTHING TO RUN, AND THAT IS A CORRECT STATE, NOT A FAILURE. The spawner above
 # serves every agent the node marks `spawn`, and the host skips exactly those — so when the whole
-# fleet is spawn-mode (as it is here since 2026-09-06) the host finds an empty roster and returns
-# immediately. The window comes back to you and the fleet is up: the daemon, its supervisor and the
-# spawner are all detached and already running. Only while at least one agent is resident does the
-# host stay in this window, and only then does Ctrl+C here stop anything.
-Write-Host "[start_fleet] starting the fleet HOST (crews the node has NOT marked run_mode=spawn) ..."
-Write-Host "[start_fleet] with an all-spawn fleet the host has no roster and exits at once - the fleet is still up."
-Write-Host "[start_fleet] while any agent is resident the host stays in THIS window; Ctrl+C stops resident threads only."
-uv run python -m crewaimeat.fleet_host
+# fleet is spawn-mode (as it is here since 2026-09-06) the host has an empty roster. With
+# AIMEAT_RUN_MODES naming `resident` (set above) it STAYS anyway: the node may accept an always-on
+# agent for this computer at any moment, and the host reads the node's roster every 30 s to take it.
+# An empty host imports no crewai (29 MB resident, measured 2026-10-11). With AIMEAT_RUN_MODES=spawn
+# it returns at once, as it always did.
+#
+# THE WINDOW SHOWS BOTH RUNTIMES. The spawner is where an all-spawn fleet's work shows (what wakes,
+# what runs, what exits), and the host now holds this window for good, so the spawner's log is
+# followed IN this window beside the host's own lines. Ctrl+C stops the host and the following; the
+# serve daemon, its supervisor and the spawner are detached and keep running.
+Write-Host "[start_fleet] starting the fleet HOST (resident agents: crew files the node has NOT marked spawn, and always-on agents defined on the node) ..."
+Write-Host "[start_fleet] Ctrl+C here stops the HOST: always-on agents stop until the fleet is started again. Spawn agents keep running."
+$spawnerLog = Join-Path $root ('logs' + [IO.Path]::DirectorySeparatorChar + 'spawner_watchdog.err.log')
+$follow = $null
+if (Test-Path -LiteralPath $spawnerLog) {
+    $follow = Start-Process powershell -NoNewWindow -PassThru -ArgumentList '-NoProfile','-Command',
+        "Get-Content -LiteralPath '$($spawnerLog.Replace("'", "''"))' -Tail 20 -Wait"
+}
+try {
+    uv run python -m crewaimeat.fleet_host
+} finally {
+    if ($follow -and -not $follow.HasExited) { Stop-Process -Id $follow.Id -Force -ErrorAction SilentlyContinue }
+}
 Write-Host "[start_fleet] host returned. Serve daemon, its supervisor and the spawner keep running (detached)."
 Write-Host "[start_fleet] stop everything with: .\scripts\terminate_fleet.ps1"
 
-# THE WINDOW IS THE FLEET'S WINDOW, WHOEVER IS RUNNING IT. While any agent was resident the host
-# held this window and a person watched the fleet through it. With an all-spawn fleet the host has
-# no roster and returns in two seconds, so the window went quiet and handed the prompt back - the
-# one place anyone watched the fleet from stopped showing the fleet, while the spawner ran the
-# whole time and wrote every wake and every worker to its log with nobody looking at it.
+# THE WINDOW IS THE FLEET'S WINDOW, WHOEVER IS RUNNING IT. Reached when the host RETURNED by itself:
+# AIMEAT_RUN_MODES=spawn with an all-spawn roster, where it has nothing to run and nothing to wait
+# for. The window then went quiet and handed the prompt back - the one place anyone watched the
+# fleet from stopped showing the fleet, while the spawner ran the whole time and wrote every wake
+# and every worker to its log with nobody looking at it.
 #
 # So follow the spawner instead: same window, same purpose - what woke, what started, what exited.
 # Ctrl+C here leaves the fleet running, the opposite of what it did while the host held the window,
 # so it is said out loud rather than left to an old habit.
-$spawnerLog = Join-Path $root ('logs' + [IO.Path]::DirectorySeparatorChar + 'spawner_watchdog.err.log')
 if (Test-Path $spawnerLog) {
     Write-Host ""
     Write-Host "[start_fleet] following the spawner - what wakes, what runs, what exits."

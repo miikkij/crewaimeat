@@ -175,6 +175,13 @@ def _read_node_roster(root: Path) -> tuple[set[str], str | None, list[str]]:
         return set(), None, []
     names = {agent_local_name(str(a)) for a in (doc.get("agents") or []) if a}
     unread = [str(o) for o in (doc.get("unread_owners") or []) if o]
+    # The fleet host's half: node-defined agents it keeps resident on this connector. Not spawn, so
+    # the spawner's file does not hold them, and they have no crew file here either.
+    try:
+        resident = json.loads((serve.parent / "spawn" / "resident_roster.json").read_text(encoding="utf-8"))
+        names |= {agent_local_name(str(a)) for a in (resident.get("agents") or []) if a}
+    except (OSError, ValueError, AttributeError):
+        pass  # no host has written one: an all-spawn home, which is most of them
     return {n for n in names if n}, (str(doc["read_at"]) if doc.get("read_at") else None), unread
 
 

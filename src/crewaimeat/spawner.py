@@ -966,8 +966,12 @@ def node_spawn_agents() -> tuple[list[str], str | None]:
     return agents, _join_notes(notes, agents)
 
 
-def read_node_roster() -> tuple[list[str], list[str], set[str]]:
+def read_node_roster(run_mode: str = agent_manifest.RUN_SPAWN) -> tuple[list[str], list[str], set[str]]:
     """`(agents, notes, unreadable_owners)` — the roster, and WHO could not be asked.
+
+    `run_mode` is which half is asked for: the spawner reads `spawn`, the fleet host reads `resident`
+    for the agents that have only a definition on the node. One reader, so the two runtimes cannot
+    come to different answers about the same rows.
 
     ONE CALL PER OWNER, and the identity is the GAII, not the name. Both follow from one connector
     home now serving more than one owner:
@@ -979,32 +983,24 @@ def read_node_roster() -> tuple[list[str], list[str], set[str]]:
 
     The node filters server-side (`?run_mode=spawn`), so the 30-second refresh asks for the handful
     it wants instead of fetching everything and sorting it out here.
+
+    THE OWNER'S LIST, NOT THIS COMPUTER'S. The node answers with every agent of the owner in that run
+    mode, whichever connector holds its key. `carried_here` cuts it down to this one.
     """
     doc = _serve_doc()
     port = doc.get("port")
     if not isinstance(port, int):
         return [], ["no serve daemon in serve.json — node roster skipped"], {"*"}
-    # One caller per owner: whichever of that owner's agents the daemon carries.
-    callers: dict[str, str] = {}
-    for a in doc.get("agents") or []:
-        owner, ident = a.get("owner"), (a.get("gaii") or a.get("agent"))
-        if owner and ident and owner not in callers:
-            callers[owner] = ident
+    callers = _owner_callers(doc)
     if not callers:
         return [], ["serve.json names no agents — node roster skipped"], {"*"}
-    import requests
 
     out: list[str] = []
     notes: list[str] = []
     unreadable: set[str] = set()
-    for owner, caller in sorted(callers.items()):
+    for owner, candidates in sorted(callers.items()):
         try:
-            resp = requests.get(
-                f"http://127.0.0.1:{port}/v1/agents",
-                params={"run_mode": agent_manifest.RUN_SPAWN},
-                headers={"X-Aimeat-Agent": caller, **spawn_state.serve_auth_headers(doc)},
-                timeout=30,
-            )
+            resp = _ask_node_as(doc, candidates, "/v1/agents", {"run_mode": run_mode})
         except Exception as exc:  # noqa: BLE001 — an unreachable node must not empty the roster
             notes.append(f"{owner}: unreadable ({type(exc).__name__})")
             unreadable.add(owner)
@@ -1019,30 +1015,210 @@ def read_node_roster() -> tuple[list[str], list[str], set[str]]:
             for r in rows
             if isinstance(r, dict)
             and (r.get("gaii") or r.get("name"))
-            and agent_manifest.normalise_run_mode(r.get("run_mode") or r.get("runMode")) == agent_manifest.RUN_SPAWN
+            and agent_manifest.normalise_run_mode(r.get("run_mode") or r.get("runMode")) == run_mode
         ]
         if rows and not picked:
             # An unknown query parameter is IGNORED, not refused, so a node that does not know this
             # filter answers with every agent it has. Taking that on trust would put the whole fleet
             # in spawn mode, so every row is re-checked and an unhonoured filter serves nothing.
-            notes.append(f"{owner}: {len(rows)} agent(s), none marked run_mode=spawn")
+            notes.append(f"{owner}: {len(rows)} agent(s), none marked run_mode={run_mode}")
             continue
         out.extend(picked)
     return sorted(set(out)), notes, unreadable
 
 
-def _daemon_carries() -> set[str]:
-    """Identities the running daemon actually holds — GAIIs and their bare names."""
-    out: set[str] = set()
-    for a in _serve_doc().get("agents") or []:
-        for v in (a.get("gaii"), a.get("agent")):
-            if v:
-                out.add(str(v))
+CALLER_TRIES = 3  # how many of an owner's agents are asked to carry one read before it counts as failed
+
+
+def _owner_callers(doc: dict) -> dict[str, list[str]]:
+    """`{owner: [identity, ...]}` — every agent of each owner this daemon carries, in serve.json order.
+
+    A node read is made AS one of the owner's agents (the listing is owner-scoped), and any of them
+    will do — as long as its credential works.
+    """
+    callers: dict[str, list[str]] = {}
+    for a in doc.get("agents") or []:
+        owner, ident = a.get("owner"), (a.get("gaii") or a.get("agent"))
+        if owner and ident:
+            callers.setdefault(str(owner), []).append(str(ident))
+    return callers
+
+
+def _ask_node_as(doc: dict, candidates: list[str], path: str, params: dict | None = None):
+    """GET `path` on the node through the daemon as the first of `candidates` that gets an answer.
+
+    THE FIRST AGENT IN serve.json IS NOT ALWAYS ONE THAT CAN ASK. An agent the owner moved to
+    another computer stays in this home's files with a key the node no longer accepts, and a read
+    made as that agent fails at the daemon: measured 2026-10-11 on a local node, 502 PROXY_ERROR for
+    the moved agent and 200 for its neighbour, same route, same second. One fixed caller per owner
+    would therefore let one moved agent make the whole owner's roster unreadable for good. So a
+    failed read is retried as the next agent of the same owner, `CALLER_TRIES` in all — a node that
+    is really down costs three loopback calls, not one per agent in the home.
+    """
+    import requests
+
+    resp = None
+    for caller in candidates[:CALLER_TRIES]:
+        resp = requests.get(
+            f"http://127.0.0.1:{doc.get('port')}{path}",
+            params=params,
+            headers={"X-Aimeat-Agent": caller, **spawn_state.serve_auth_headers(doc)},
+            timeout=30,
+        )
+        if getattr(resp, "status_code", None) == 200:
+            break
+    return resp
+
+
+def placed_elsewhere() -> set[tuple[str, str]]:
+    """`(owner, agent name)` for every agent the NODE places on ANOTHER connector of the same owner.
+
+    THE NODE KNOWS WHICH COMPUTER HOLDS AN AGENT (`GET /v1/agents/v2/connectors`, aimeat-protocol
+    9353ccb7e), and this home knows which connector it is (`<home>/install-id`, the id the connector
+    presents). The daemon's own status is not enough by itself: it turns `auth_failed` when a move
+    happens under a running daemon, but a daemon STARTED after the move finds the old key file,
+    fails to mint with it and reports the agent as plain `direct` — measured 2026-10-11, where the
+    old computer's spawner took the moved agent back after a connector restart.
+
+    USED ONLY TO TAKE AGENTS AWAY, NEVER TO DECIDE WHAT IS HERE. An agent missing from this
+    connector's row is not dropped on that: the row follows sockets, and an agent whose socket
+    blinked would be retired and re-joined, which is how a running worker's ending got lost on
+    2026-09-14. An agent the node lists under a DIFFERENT connector, and not under this one, is the
+    one statement taken from it.
+
+    Empty when the node cannot say: no install id, an older node without the list (which then has
+    no move either), a connector the node does not list, or a read that failed. The status cut
+    still stands in every one of those.
+    """
+    doc = _serve_doc()
+    if not isinstance(doc.get("port"), int):
+        return set()
+    try:
+        here = (spawn_state.aimeat_home() / "install-id").read_text(encoding="utf-8").strip()[:64]
+    except OSError:
+        return set()
+    if not here:
+        return set()
+    out: set[tuple[str, str]] = set()
+    for owner, candidates in _owner_callers(doc).items():
+        try:
+            resp = _ask_node_as(doc, candidates, "/v1/agents/v2/connectors")
+            rows = ((resp.json() or {}).get("data") or {}).get("connectors") if resp.status_code == 200 else None
+        except Exception:  # noqa: BLE001 — the refinement is optional; the status cut already ran
+            continue
+        if not isinstance(rows, list) or not any(isinstance(c, dict) and c.get("id") == here for c in rows):
+            continue  # the node does not list THIS connector for this owner: it says nothing about us
+
+        def names(conns) -> set[str]:
+            return {str(n) for c in conns for n in [*(c.get("agents") or []), *(c.get("waiting") or [])] if n}
+
+        ours = names(c for c in rows if isinstance(c, dict) and c.get("id") == here)
+        theirs = names(c for c in rows if isinstance(c, dict) and c.get("id") != here)
+        out |= {(owner, n) for n in theirs - ours}
     return out
 
 
+REFUSED = "auth_failed"  # the connector's word for an identity whose credential the node refused
+
+
+def daemon_identities() -> dict[str, str] | None:
+    """What the RUNNING daemon holds, as `{identity: transport}` — GAIIs and their bare names. None
+    when the daemon could not be asked, which is not the same as holding nothing.
+
+    ASKED OF THE DAEMON (`/local/status`), NOT READ FROM serve.json. The file is written when the
+    daemon starts and when an agent attaches; it is not written when the node refuses a credential.
+    So after the owner moves an agent to another computer, the file here still names it, and only
+    the live status says `auth_failed` — the node's own verdict, arrived at through `auth_revoked`.
+    The call is loopback and reaches no node.
+    """
+    doc = _serve_doc()
+    port = doc.get("port")
+    if not isinstance(port, int):
+        return None
+    import requests
+
+    try:
+        resp = requests.get(
+            f"http://127.0.0.1:{port}/local/status", headers=spawn_state.serve_auth_headers(doc), timeout=10
+        )
+        rows = ((resp.json() or {}).get("data") or {}).get("agents") if resp.status_code == 200 else None
+    except Exception:  # noqa: BLE001 — a daemon mid-restart is weather; the caller keeps what it had
+        return None
+    if not isinstance(rows, list):
+        return None
+    out: dict[str, str] = {}
+    for a in rows:
+        if not isinstance(a, dict):
+            continue
+        transport = str(a.get("transport") or "")
+        for v in (a.get("gaii"), a.get("agent")):
+            if v:
+                out[str(v)] = transport
+    return out
+
+
+def carried_here(agents: list[str], *, what: str, say=None) -> list[str] | None:
+    """`agents` cut down to the ones THIS connector carries with a credential the node accepts.
+    None when the daemon could not be asked.
+
+    ONE OWNER, SEVERAL COMPUTERS. The node's roster is the owner's whole list, and each agent's key
+    lives on exactly one connector. Parking on an agent this daemon does not hold is refused every
+    time (400 UNKNOWN_AGENT) and never heals: read from the code 2026-10-10, a second computer
+    beside one with 50 agents makes 50 refused calls and 50 log lines every ten seconds. The same
+    cut is what makes a MOVE work without anything being told: the new computer's daemon gains the
+    agent and its next roster read serves it, the old one's status turns `auth_failed` and its next
+    read drops it.
+
+    TWO SOURCES, ONE FOR EACH THING IT IS GOOD AT. The daemon's live status says what this home
+    holds a working credential for; the node's connector list (`placed_elsewhere`) says which of
+    those it has since given to another computer, which the status misses after a restart.
+
+    Both kinds of absence are said once per change, because an agent that is quietly not served
+    looks exactly like an agent with nothing to do. `what` names the caller's half ("spawn",
+    "resident") so the two runtimes' notes do not overwrite each other, and `say(note_or_None, key=)`
+    is the caller's own log line (the fleet host passes its own; the default is the spawner's).
+    """
+    held = daemon_identities() if agents else {}  # nobody listed: nothing to ask the daemon about
+    if held is None:
+        return None
+    say = say or _note_or_clear
+    mine = [a for a in agents if a in held and held[a] != REFUSED]
+    refused = sorted(a for a in agents if held.get(a) == REFUSED)
+    elsewhere = sorted(a for a in agents if a not in held)
+    if mine:
+        gone = placed_elsewhere()
+        moved = [
+            a
+            for a in mine
+            if any(n == agent_manifest.agent_local_name(a) and _gaii_owner(a) in (o, None) for o, n in gone)
+        ]
+        mine = [a for a in mine if a not in moved]
+        elsewhere = sorted({*elsewhere, *moved})
+    say(
+        f"{len(elsewhere)} {what} agent(s) of the same owner are on another connector and are left to it: "
+        f"{_some(elsewhere)}"
+        if elsewhere
+        else None,
+        key=f"{what}-elsewhere",
+    )
+    say(
+        f"{len(refused)} {what} agent(s) whose credential on this connector the node has refused (moved to "
+        f"another computer, or waiting for a new approval), not served here: {_some(refused)}"
+        if refused
+        else None,
+        key=f"{what}-refused",
+    )
+    return mine
+
+
+def _some(identities: list[str], shown: int = 8) -> str:
+    """Names for a log line: the first few, and how many more. The whole list is on the node's page."""
+    names = [agent_manifest.agent_local_name(a) for a in identities]
+    return ", ".join(names[:shown]) + (f" (+{len(names) - shown})" if len(names) > shown else "")
+
+
 def discover_agents(root: Path) -> list[str]:
-    """The agents this spawner serves: THE NODE'S ROSTER, and nothing else.
+    """The agents this spawner serves: THE NODE'S ROSTER, cut to what this connector carries.
 
     A crew file's `RUN_MODE = "spawn"` is a REQUEST, not a fact. It used to be added to this roster
     directly, and that is the same mistake as listing `crews/*.py` as an owner's delegable peers: a
@@ -1071,7 +1247,12 @@ def discover_agents(root: Path) -> list[str]:
             f"crew(s) declaring RUN_MODE=spawn that the node does not list as spawn, left to the "
             f"fleet host: {', '.join(unmet)}"
         )
-    return sorted(set(node))
+    mine = carried_here(sorted(set(node)), what=agent_manifest.RUN_SPAWN)
+    if mine is None:
+        # The daemon that answered the roster a moment ago did not answer for itself. Nobody is
+        # retired on that: the caller keeps every agent it has, as for an owner that could not be asked.
+        raise RosterUnreadable("the serve daemon did not say which agents it carries", [], {"*"})
+    return mine
 
 
 _LAST_NOTE: dict[str, str] = {}
@@ -1082,6 +1263,14 @@ def _note_once(note: str, key: str = "roster") -> None:
     if _LAST_NOTE.get(key) != note:
         _LAST_NOTE[key] = note
         _say(f"[spawner] roster: {note}")
+
+
+def _note_or_clear(note: str | None, key: str) -> None:
+    """Say `note` once per change, and forget it when the condition ends so its return is said again."""
+    if note:
+        _note_once(note, key=key)
+    else:
+        _LAST_NOTE.pop(key, None)
 
 
 def select_agents(root: Path, wanted: list[str] | None = None) -> list[str]:
@@ -1157,13 +1346,19 @@ def main(argv: list[str] | None = None) -> int:
     if a.list:
         print("\n".join(agents) if agents else '(no crew declares RUN_MODE = "spawn")')
         return 0
+    if not agents and a.agents:
+        return 1  # the named agents are not this connector's spawn agents; select_agents said which
     if not agents:
-        print(
-            '[spawner] no spawn-mode agents. Add RUN_MODE = "spawn" to a crew file '
-            "(undeclared means continuous, so nothing changes for the existing fleet).",
-            file=sys.stderr,
+        # AN EMPTY ROSTER IS A STATE, NOT AN ERROR. This used to exit 1 with "add RUN_MODE to a crew
+        # file", from the days the roster came from crew files; the watchdog then restarted it every
+        # 20 s for as long as the roster stayed empty. Since an owner chooses the computer an agent
+        # runs on, a connector with no spawn agent yet is what every newly added computer looks like,
+        # and the roster re-read is what brings its first agent in. Measured 2026-10-11: a second
+        # computer whose only spawn agent had been moved away exited here.
+        _say(
+            f"[spawner] the node lists no spawn agent on this connector yet — waiting "
+            f"(the roster is re-read every {ROSTER_INTERVAL_S:.0f}s)."
         )
-        return 1
 
     lock = _acquire_singleton()
     if lock is None:

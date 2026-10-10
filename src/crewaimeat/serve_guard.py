@@ -329,6 +329,37 @@ def _assert_serve_json_owner(doc: dict) -> bool:
         return False
 
 
+def default_install_name() -> str:
+    """`<computer> (<folder>)` — the name this home's connector reports when nobody chose one.
+
+    The node lists an owner's connectors as named computers (`GET /v1/agents/v2/connectors`) and the
+    owner picks one when ordering an agent. Left alone the connector reports the host name, and that
+    is ONE name for every home on the machine: this checkout's fleet, a dev clone beside it and a
+    desktop appliance would be three rows called the same. The folder the home sits in is what tells
+    them apart, and it is the name the person gave that folder.
+    """
+    import socket
+
+    host = socket.gethostname() or "computer"
+    place = _aimeat_home().resolve().parent.name
+    return f"{host} ({place})" if place else host
+
+
+def _name_this_install() -> None:
+    """Give the daemon about to be started its name, unless the environment already carries one.
+
+    HERE, AND NOT IN A START SCRIPT, because every path that can start the daemon ends in this
+    module: the fleet's start, the serve watchdog on its timer, the appliance, and a crew that has to
+    reload the daemon to attach itself. A name set in one of them would change with whichever
+    happened to restart the daemon last. `AIMEAT_INSTALL_NAME` in the environment wins (a hosted
+    place sets the customer's own name), and the owner can rename the computer on the node anyway.
+
+    The RUN MODES are deliberately not decided here: `resident` is a promise that a fleet host runs
+    beside this daemon, and only the entrypoint that starts one can make it (scripts/start_fleet.*).
+    """
+    os.environ.setdefault("AIMEAT_INSTALL_NAME", default_install_name())
+
+
 def _guard_pytest() -> None:
     """A test must NEVER spawn or kill a real serve daemon. Every existing test mocks these functions;
     this backstop makes a forgotten mock fail LOUD instead of silently mutating the live machine."""
@@ -347,6 +378,7 @@ def ensure_single_serve(timeout: float = 60.0) -> dict:
 
     from crewaimeat.node_engine import serve_command
 
+    _name_this_install()
     with _CrossProcessLock(_LOCK, timeout):
         # serve_command() resolves the connector CLI even when a JUST-installed one isn't on this
         # process's PATH yet (the appliance's engine step installs it mid-session).
@@ -374,6 +406,7 @@ def restart_serve(timeout: float = 60.0) -> dict:
 
     from crewaimeat.node_engine import serve_command
 
+    _name_this_install()
     with _CrossProcessLock(_LOCK, timeout):
         for pid in this_home_serve_pids():
             _kill(pid)

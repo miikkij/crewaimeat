@@ -150,6 +150,7 @@ def test_select_agents_only_picks_spawn_mode(tmp_path, monkeypatch):
     assert select_agents(root) == []
 
     monkeypatch.setattr("crewaimeat.spawner.read_node_roster", lambda: (["spawny"], [], set()))
+    monkeypatch.setattr("crewaimeat.spawner.daemon_identities", lambda: {"spawny": "tunnel"})
     assert select_agents(root) == ["spawny"]
     # asking for a continuous agent is refused, not silently served
     assert select_agents(root, ["cont"]) == []
