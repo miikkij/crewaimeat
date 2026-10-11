@@ -171,13 +171,79 @@ def test_the_llm_choice_key_is_by_name():
     assert llm_choice.key_for(GAII) == "crews.llm.tarjoama-testi"
 
 
+# --- the node's refusal of a misaddressed key: said once, never retried -------------------------- #
+
+# The key holds "503" on purpose: a refusal quotes the key back, and a task id is hex.
+_BAD_KEY = f"agents.{GAII}.tasks.0b503c1e-4616-4ae3-8d00-3d439f1e66a0.live"
+_REFUSAL = {
+    "ok": False,
+    "error": {
+        "code": "AGENT_KEY_NOT_A_NAME",
+        "message": f"'{_BAD_KEY}' names an identity; write agents.tarjoama-testi.tasks.0b503c1e-….live",
+    },
+}
+
+
+class _Refusing:
+    """A serve daemon that hands back the node's 400, and counts how often it is asked."""
+
+    def __init__(self):
+        self.asked = 0
+
+    def _answer(self):
+        self.asked += 1
+
+        class R:
+            status_code = 400
+            text = ""
+
+            @staticmethod
+            def json():
+                return dict(_REFUSAL)
+
+        return R()
+
+    def post(self, url, **kw):
+        return self._answer()
+
+    def request(self, method, url, **kw):
+        return self._answer()
+
+
+@pytest.fixture
+def refusing_daemon(monkeypatch):
+    daemon = _Refusing()
+    monkeypatch.setattr(ac, "_serve_api", lambda: ("http://127.0.0.1:1", daemon))
+    monkeypatch.setattr(ac, "_identity_guard", lambda *a, **k: True)
+    monkeypatch.setattr(ac.time, "sleep", lambda s: pytest.fail(f"backed off {s}s: the refusal was retried"))
+    return daemon
+
+
+def test_a_refused_memory_write_is_said_once_with_the_nodes_words_and_not_retried(refusing_daemon, capsys):
+    res = ac._aimeat_call(GAII, "aimeat_memory_write", {"key": _BAD_KEY, "value": {}, "visibility": "owner"})
+    assert res is None
+    assert refusing_daemon.asked == 1
+    err = capsys.readouterr().err
+    assert err.count("AGENT_KEY_NOT_A_NAME") == 1 and "write agents.tarjoama-testi.tasks" in err
+
+
+def test_a_refused_memory_patch_is_said_once_with_the_nodes_words_and_not_retried(refusing_daemon, capsys):
+    res = ac._aimeat_rest(GAII, "PATCH", f"/v1/memory/{_BAD_KEY}", {"status": "working"})
+    assert res is None
+    assert refusing_daemon.asked == 1
+    err = capsys.readouterr().err
+    assert err.count("AGENT_KEY_NOT_A_NAME") == 1 and "write agents.tarjoama-testi.tasks" in err
+
+
 # --- shape: nobody spells an agent's key or route by hand -------------------------------------- #
 
 # What may be interpolated straight after one of these: only `agent_local_name(...)`.
 _PREFIXES = ("agents.", "/v1/agents/", "crews.", "crews.llm.", "crews.runtime.", "crews.registry.")
 # A template filled LATER (`KEY = "agents.{agent}.x"` ... `KEY.format(agent=...)`) is the same site.
 _TEMPLATE = re.compile(r"(?:\bagents\.|\bcrews\.(?:llm\.|runtime\.|registry\.)?|/v1/agents/)(?:\{\w*\}|%s)")
-_SCANNED = ("src/crewaimeat", "crews", "scripts")
+# Every tracked directory that holds Python run against the node, plus the scripts at the root.
+# tests/ is left out on purpose: a test may spell a wrong key to prove it is refused.
+_SCANNED = ("src/crewaimeat", "crews", "scripts", "benchmarks")
 _FIX = (
     "build it with crewaimeat.agent_manifest.agent_key / crew_key / agent_route (or registry_key / "
     "runtime_key / llm_choice.key_for): they strip a full identity to the name. The identity goes in "
@@ -234,11 +300,13 @@ def _hand_spelled(tree: ast.AST):
 
 def _offenders() -> list[str]:
     found = []
+    files = sorted(ROOT.glob("*.py"))
     for rel in _SCANNED:
-        for path in sorted((ROOT / rel).rglob("*.py")):
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-            for line, what in _hand_spelled(tree):
-                found.append(f"{path.relative_to(ROOT).as_posix()}:{line}  {what}")
+        files += sorted((ROOT / rel).rglob("*.py"))
+    for path in files:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for line, what in _hand_spelled(tree):
+            found.append(f"{path.relative_to(ROOT).as_posix()}:{line}  {what}")
     return found
 
 

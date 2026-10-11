@@ -4,7 +4,7 @@ The node hosts a dedicated skills registry (spec doc-sdie0se): node scope (syste
 + user scope (owner GHII). The owner links skills to an agent (profile UI or
 ``aimeat_skill_link``); the agent's refs live at memory key ``agents.{name}.skills``. This
 module is the consumer side: at each crew build, fetch the agent's resolved skills
-(``GET /v1/agents/{name}/skills`` — a DIRECT authed node call, the storage.py pattern),
+(``GET /v1/agents/{name}/skills``, through the serve daemon like every other node call),
 materialize each as ``<tmpdir>/<name>/<files>``, validate through the same fail-loud
 ``load_skills`` path as repo-local skills, and merge with the crew's local skills.
 
@@ -15,7 +15,7 @@ API, refuses to download when non-interactive (our daemons always are), keeps a 
 back silently between tiers (violates fail-loud).
 
 Failure semantics (the boundary between "environment" and "configuration"):
-- Registry unreachable / endpoint missing (404) / no token → LOUD stderr error, return []
+- Registry unreachable / endpoint missing (404) / no answer → LOUD stderr error, return []
   — the crew still runs with its repo-local skills (an owner's node hiccup must not kill
   every task), but the gap is visible in the log, never silent.
 - ``unresolved`` refs reported by the node → LOUD stderr error per ref, continue (contract).
@@ -86,17 +86,16 @@ def materialize_skill(entry: dict, base_dir: Path) -> Path:
 def fetch_agent_skills(agent_name: str, owner: str | None = None) -> list:
     """Fetch + materialize + validate the agent's registry-linked skills. Returns a list of
     activated crewai ``Skill`` objects ([] when none / registry unavailable — see the module
-    docstring for the loud-vs-raise boundary)."""
-    from crewaimeat.generator_tool import _discover_owner, _token
+    docstring for the loud-vs-raise boundary).
 
-    owner = owner or _discover_owner(agent_name)
-    tok, url = _token(agent_name, owner)
-    if not tok or not url:
-        _log(agent_name, "no token/url — registry skills skipped (is the agent registered + approved?)")
-        return []
-    # THROUGH THE DAEMON, not a direct Bearer. `_token` returns the STORED credential, which for a
-    # migrated agent is the v1 token the enrolment replaced and did not delete — and those expire one
-    # by one. The daemon holds the key and signs per call.
+    NO STORED-TOKEN CHECK STANDS IN FRONT OF THE REQUEST. One did, left from the time this was a
+    direct Bearer call: it looked the agent's token file up by the name it was handed and returned []
+    when it found none. An agent whose crew is defined on the node runs under its full identity
+    (`name#owner@node`), no file is named that, and so every such agent ran without the skills its
+    owner had linked — one stderr line per task, "no token/url — registry skills skipped", measured
+    on production 2026-10-11 (tarjoama-testi, spawn-demo). The request never used that token: it goes
+    through the daemon, which holds the key and signs per call, and which says so itself when it
+    cannot. `owner` stays in the signature for the callers that pass it."""
     from crewaimeat.aimeat_crew import _aimeat_rest
 
     try:
@@ -180,17 +179,8 @@ def fetch_workspace_skills(agent_name: str, owner: str | None, organism_id: str,
     (``GET /v1/skills/{name}?scope=workspace&…``) for its ``fileContents``. Same failure
     boundary as :func:`fetch_agent_skills`: environment failures (node without 2c → 400,
     unreachable, non-200 on a single resolve) are LOUD-and-skip; a skill that RESOLVES but
-    fails validation raises ``SkillLoadError``."""
-    from crewaimeat.generator_tool import _discover_owner, _token
-
-    owner = owner or _discover_owner(agent_name)
-    tok, url = _token(agent_name, owner)
-    if not tok or not url:
-        _log(agent_name, "no token/url — workspace skills skipped")
-        return []
+    fails validation raises ``SkillLoadError``. No stored-token check, for the reason there."""
     where = f"workspace {organism_id}/{ws}"
-    # Through the daemon, for the reason at the other fetch above: the stored bearer is the one the
-    # enrolment replaced, and it expires.
     from crewaimeat.aimeat_crew import _aimeat_rest
 
     qs = f"scope=workspace&organism={organism_id}&ws={ws}"

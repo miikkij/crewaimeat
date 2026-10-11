@@ -121,3 +121,136 @@ def test_apply_is_idempotent(tmp_path, monkeypatch):
     retire.apply(root, "a", purge_node=False)
     steps = retire.apply(root, "a", purge_node=False)
     assert all(s.done for s in steps), [s for s in steps if not s.done]
+
+
+# --- --forget: an agent the NODE deleted --------------------------------------------------------- #
+
+NODE = "o@a-node"
+
+
+def _deleted_agent(
+    tmp_path: Path, monkeypatch, agent: str = "gone", neighbour: str = "gone-too"
+) -> tuple[Path, list[Path]]:
+    """A home that still holds everything a node-defined agent leaves behind, beside a neighbour whose
+    name STARTS with the same letters. Returns (root, the deleted agent's own paths)."""
+    root = _repo(tmp_path, monkeypatch, {}, served=[agent, neighbour])
+    home = root / ".aimeat"
+    doc = json.loads((home / "serve.json").read_text(encoding="utf-8"))
+    for a in doc["agents"]:
+        a["gaii"] = f"{a['agent']}#{NODE}"
+    doc["port"] = 1
+    (home / "serve.json").write_text(json.dumps(doc), encoding="utf-8")
+
+    mine: list[Path] = []
+    for name in (agent, neighbour):
+        gaii, safe = f"{name}#{NODE}", f"{name}_o_a-node"
+        paths = [
+            home / "tokens" / f"{name}@o.token",
+            home / "keys" / f"{name}@o.key",
+            home / "agents" / "o" / name / "config.yaml",
+            home / "logs" / ".locks" / f"onboarding_{gaii}.attempt",
+            home / "spawn" / "audit" / safe / f"{safe}-1a12.json",
+            home / "spawn" / "logs" / f"{safe}-{safe}-1a12.log",
+            root / "logs" / ".readme_cache" / f"{gaii}.md",
+            root / "logs" / ".readme_cache" / f"{gaii}.hash",
+            root / "logs" / ".locks" / f"{safe}.lock",
+        ]
+        for p in paths:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("x", encoding="utf-8")
+        if name == agent:
+            mine = paths
+    return root, mine
+
+
+def _node_says(monkeypatch, listed, why="the node was asked"):
+    monkeypatch.setattr(retire, "_node_still_lists", lambda agent: (listed, why))
+
+
+def test_forget_deletes_what_the_machine_keeps_and_nothing_of_a_neighbour(tmp_path, monkeypatch):
+    root, mine = _deleted_agent(tmp_path, monkeypatch)
+    theirs = [p for p in root.rglob("*") if p.is_file() and "gone-too" in p.as_posix()]
+    assert len(theirs) == len(mine) == 9
+    _node_says(monkeypatch, False)
+    steps = retire.apply(root, "gone", purge_node=False, forget=True)
+    assert all(s.done for s in steps), [s for s in steps if not s.done]
+    assert [p for p in mine if p.exists()] == [], "everything the deleted agent left is gone"
+    assert not (root / ".aimeat" / "agents" / "o" / "gone").exists()
+    assert not (root / ".aimeat" / "spawn" / "audit" / "gone_o_a-node").exists()
+    assert not (root / ".aimeat" / "keys" / "retired").exists(), "a dead key is deleted, not kept for later"
+    assert all(p.exists() for p in theirs), "the neighbour whose name starts the same keeps every file"
+    agents = json.loads((root / ".aimeat" / "serve.json").read_text(encoding="utf-8"))["agents"]
+    assert [a["agent"] for a in agents] == ["gone-too"]
+    deleted = next(s for s in steps if s.what == "local files")
+    assert "deleted 9" in deleted.detail and "keys/gone@o.key" in deleted.detail, "it says what it removed"
+
+
+def test_forget_touches_nothing_while_the_node_still_lists_the_agent(tmp_path, monkeypatch):
+    root, _mine = _deleted_agent(tmp_path, monkeypatch)
+    before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    _node_says(monkeypatch, True, "the node still lists 'gone' for o")
+    steps = retire.apply(root, "gone", purge_node=False, forget=True)
+    assert [s.done for s in steps] == [False] and "still lists" in steps[0].detail
+    assert {p: p.read_bytes() for p in root.rglob("*") if p.is_file()} == before
+
+
+def test_forget_touches_nothing_when_the_node_cannot_be_asked(tmp_path, monkeypatch):
+    """Not knowing is not permission: a key deleted on a guess costs a new approval by the owner."""
+    root, _mine = _deleted_agent(tmp_path, monkeypatch)
+    before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    _node_says(monkeypatch, None, "the node could not be asked")
+    steps = retire.apply(root, "gone", purge_node=False, forget=True)
+    assert [s.done for s in steps] == [False]
+    assert {p: p.read_bytes() for p in root.rglob("*") if p.is_file()} == before
+
+
+def test_the_forget_plan_changes_nothing_and_asks_nobody(tmp_path, monkeypatch):
+    root, mine = _deleted_agent(tmp_path, monkeypatch)
+    monkeypatch.setattr(retire, "_node_still_lists", lambda agent: (_ for _ in ()).throw(AssertionError("asked")))
+    before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    text = " ".join(s.what for s in retire.plan(root, "gone", purge_node=False, forget=True))
+    assert {p: p.read_bytes() for p in root.rglob("*") if p.is_file()} == before
+    assert "ONLY IF the node no longer lists" in text and "gone@o.key" in text
+
+
+class _Listing:
+    status_code = 200
+
+    def __init__(self, names):
+        self._names = names
+
+    def json(self):
+        return {"data": {"agents": [{"name": n} for n in self._names]}}
+
+
+def test_the_node_is_asked_as_a_neighbour_never_as_the_agent_in_doubt(tmp_path, monkeypatch):
+    from crewaimeat import spawner
+
+    _deleted_agent(tmp_path, monkeypatch)
+    asked: list = []
+
+    def ask(doc, candidates, path, params=None):
+        asked.append((list(candidates), path))
+        return _Listing(["gone-too"])
+
+    monkeypatch.setattr(spawner, "_ask_node_as", ask)
+    assert retire._node_still_lists("gone")[0] is False
+    assert asked == [([f"gone-too#{NODE}"], "/v1/agents")]
+
+    monkeypatch.setattr(spawner, "_ask_node_as", lambda *a, **k: _Listing(["gone", "gone-too"]))
+    assert retire._node_still_lists("gone")[0] is True
+
+
+def test_an_owner_with_no_neighbour_to_ask_is_not_an_answer(tmp_path, monkeypatch):
+    """The only other agent of the owner is one the daemon calls refused: nobody can ask, so nobody
+    knows, and `--forget` must not read that as "the node deleted it"."""
+    from crewaimeat import spawner
+
+    root, _mine = _deleted_agent(tmp_path, monkeypatch)
+    serve = root / ".aimeat" / "serve.json"
+    doc = json.loads(serve.read_text(encoding="utf-8"))
+    doc["agents"][1]["transport"] = "auth_failed"
+    serve.write_text(json.dumps(doc), encoding="utf-8")
+    monkeypatch.setattr(spawner, "_ask_node_as", lambda *a, **k: (_ for _ in ()).throw(AssertionError("asked")))
+    listed, why = retire._node_still_lists("gone")
+    assert listed is None and "can ask" in why

@@ -14,9 +14,9 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 import time
 
+from crewaimeat.agent_manifest import crew_key
 from crewaimeat.aimeat_crew import _aimeat_call
 
 COORDINATOR = "crew-forge"  # whose token we use to create tasks + publish
@@ -85,7 +85,7 @@ def read_deliverable(agent: str, short: str):
     """Find this agent's deliverable for the subtask (key contains the task short id)."""
     keys = _keys_of(_aimeat_call(agent, "aimeat_memory_list", {}))
     for k in keys:
-        if k.startswith(f"crews.{agent}.") and short in k and k.endswith("latest_output"):
+        if k.startswith(f"{crew_key(agent)}.") and short in k and k.endswith("latest_output"):
             r = _aimeat_call(agent, "aimeat_memory_read", {"key": k})
             val = r.get("value") if isinstance(r, dict) else r
             return k, val

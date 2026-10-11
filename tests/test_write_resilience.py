@@ -23,6 +23,20 @@ def test_transient_classification():
     assert not _is_transient_error(None)
 
 
+def test_a_status_number_inside_a_quoted_key_is_not_a_gateway_status():
+    """The node's refusal of a misaddressed key QUOTES the key, and a task id is hex: "503" inside it
+    is not a 503. A status that stands alone still is."""
+    for tid in ("0b503c1e-4616-4ae3-8d00-3d439f1e66a0", "044b7ea6-5024-4ae3-8d00-3d439f1e66a0", "a504"):
+        refusal = {
+            "code": "AGENT_KEY_NOT_A_NAME",
+            "message": f"Write agents.spawn-demo.tasks.{tid}.live: the segment after agents. is the agent's name",
+        }
+        assert not _is_transient_error(refusal), tid
+    assert _is_transient_error("HTTP 503")
+    assert _is_transient_error({"code": "UPSTREAM", "message": "node answered 502"})
+    assert _is_transient_error({"code": "TOOL_CALL_ERROR", "message": "status=504, retry later"})
+
+
 # ── _read_raw: failed read ≠ empty raw ────────────────────────────────────────
 def _fake_call(read_ret, list_ret):
     def _call(agent, tool, payload, **_kw):

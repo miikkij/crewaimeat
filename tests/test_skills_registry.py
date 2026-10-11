@@ -121,13 +121,61 @@ def test_fetch_transport_failure_is_loud_empty(monkeypatch, capsys):
     assert "WITHOUT registry skills" in capsys.readouterr().err
 
 
-def test_fetch_no_token_is_loud_empty(monkeypatch, capsys):
+GAII = "spawn-demo#happydude500001@aimeat-finland-001-genesis"
+
+
+def _recording_rest(payload, seen):
+    def fake(agent, method, path, body=None, **kw):
+        seen.append((agent, method, path))
+        return payload
+
+    return fake
+
+
+def test_fetch_for_a_node_defined_agent_needs_no_token_file(monkeypatch, capsys):
+    """An agent whose crew is defined on the node runs under its full identity, and no token file is
+    named that. The lookups are the REAL ones here (no `_patch_auth`): this machine holds nothing for
+    the identity, and the linked skill is fetched all the same, because the request goes through the
+    daemon. Before 2026-10-11 this returned [] with "no token/url — registry skills skipped"."""
+    seen: list = []
+    _patch_rest(monkeypatch, _recording_rest({"skills": [_entry()], "unresolved": []}, seen))
+    (skill,) = reg.fetch_agent_skills(GAII)
+    assert skill.name == "reg-skill" and skill.instructions
+    assert seen == [(GAII, "GET", "/v1/agents/spawn-demo/skills")], "identity in the transport, name in the path"
+    err = capsys.readouterr().err
+    assert "skipped" not in err and "no token" not in err
+    assert "loaded 1 registry skill(s): reg-skill" in err
+
+
+def test_fetch_for_a_node_defined_agent_with_nothing_linked_is_silent(monkeypatch, capsys):
+    seen: list = []
+    _patch_rest(monkeypatch, _recording_rest({"skills": [], "unresolved": []}, seen))
+    assert reg.fetch_agent_skills(GAII) == []
+    assert len(seen) == 1, "the node is asked; an empty answer is the answer"
+    assert capsys.readouterr().err == ""
+
+
+def test_fetch_does_not_read_a_stored_token(monkeypatch):
+    """The request never used it, so nothing may stand in front of the request waiting for one."""
     from crewaimeat import generator_tool
 
-    monkeypatch.setattr(generator_tool, "_token", lambda a, o: (None, None))
-    monkeypatch.setattr(generator_tool, "_discover_owner", lambda a: None)
-    assert reg.fetch_agent_skills("joker") == []
-    assert "no token" in capsys.readouterr().err
+    def refuse(*a, **k):
+        raise AssertionError("fetch_agent_skills looked for a stored token")
+
+    monkeypatch.setattr(generator_tool, "_token", refuse)
+    monkeypatch.setattr(generator_tool, "_discover_owner", refuse)
+    _patch_rest(monkeypatch, _fake_rest({"skills": [_entry()], "unresolved": []}))
+    assert [s.name for s in reg.fetch_agent_skills("joker")] == ["reg-skill"]
+    entry = _entry("ws-skill", ref="ws:org-1/ws-a/ws-skill")
+    _patch_rest(monkeypatch, _ws_router(listing=[{"name": "ws-skill"}], resolves={"ws-skill": entry}))
+    assert [s.name for s in reg.fetch_workspace_skills(GAII, None, "org-1", "ws-a")] == ["ws-skill"]
+
+
+def test_fetch_no_answer_is_loud_empty(monkeypatch, capsys):
+    """No daemon and no credential is the transport's fault to name; here it is one loud line."""
+    _patch_rest(monkeypatch, lambda *a, **k: None)
+    assert reg.fetch_agent_skills(GAII) == []
+    assert "fetch got no answer" in capsys.readouterr().err
 
 
 def test_fetch_malformed_content_raises(monkeypatch):

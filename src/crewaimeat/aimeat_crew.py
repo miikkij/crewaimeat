@@ -779,9 +779,6 @@ _TRANSIENT_ERR_MARKERS = (
     "timeout",
     "timed out",
     "temporarily unavailable",
-    "502",
-    "503",
-    "504",
     "bad gateway",
     "service unavailable",
     # The daemon refused the secret this process cached: it restarted and made a new one. Re-discovering
@@ -789,6 +786,12 @@ _TRANSIENT_ERR_MARKERS = (
     # write cannot apply it twice.
     "loopback_secret_required",
 )
+# A gateway STATUS, standing alone ("HTTP 503", "status=502"). As bare substrings these three also
+# matched inside whatever a refusal quotes back: the node's 400 for a misaddressed key names the key,
+# a live-record key carries a task id, and one task id in sixty holds "502", "503" or "504" among its
+# hex digits. That verdict was then retried twice (4.5 s, two more refused writes) before it was
+# reported — the opposite of what a verdict is owed.
+_TRANSIENT_STATUS = re.compile(r"(?<![0-9a-z])50[234](?![0-9a-z])")
 
 
 def _is_transient_error(err) -> bool:
@@ -797,7 +800,7 @@ def _is_transient_error(err) -> bool:
     if not err:
         return False
     s = (err if isinstance(err, str) else json.dumps(err, default=str)).lower()
-    return any(m in s for m in _TRANSIENT_ERR_MARKERS)
+    return any(m in s for m in _TRANSIENT_ERR_MARKERS) or bool(_TRANSIENT_STATUS.search(s))
 
 
 def _warn_if_provenance_dropped(agent_name: str, tool: str, data: object) -> None:

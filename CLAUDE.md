@@ -175,7 +175,11 @@ status cells, append decisions), so the two sides stay synced without drifting p
   deliverable path is visible, the connector version exists in one place), liveness (`--live`, what the
   node believes). Runs in pre-commit + CI; `doctor-baseline.json` only ever shrinks.
   `crewaimeat retire <agent>` is the opposite of forging one; `crewaimeat costs` shows who spends
-  without producing.
+  without producing. **An agent DELETED on the node leaves files here that nothing removes**: its key,
+  its line in serve.json (the daemon carries it as `auth_failed`), its README cache, locks and run
+  records. `crewaimeat retire <agent> --apply --forget` deletes them, after asking the node (as a
+  neighbour of the same owner) that the agent is really gone; while the node still lists it, or
+  cannot be asked, it changes nothing.
 - **Two messaging channels — keep them distinct.** (1) dashboard/owner chat (`aimeat_message_*`): the
   agent ↔ its OWN owner, private, NOT federated — the daemon already triggers crews from it. (2) the
   **federated inbox** (`aimeat_dm_*`, AIMEAT "Postilaatikko", v1.30.1+): the agent → ANYONE on the
