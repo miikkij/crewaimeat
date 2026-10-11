@@ -74,6 +74,34 @@ def agent_local_name(identity: str) -> str:
     return str(identity or "").split("#", 1)[0].strip()
 
 
+def identity_owner(identity: str) -> str | None:
+    """The OWNER out of a full identity (`name#owner@node`); None for a bare name, which names none."""
+    return str(identity or "").partition("#")[2].partition("@")[0].strip() or None
+
+
+def agent_file_stem(identity: str) -> str:
+    """The file name for what the runtime KEEPS PER AGENT on this machine: a lock, a cache, a counter,
+    a log.
+
+    TWO KINDS OF FILE CARRY AN AGENT'S NAME, AND THEY ARE SPELLED DIFFERENTLY.
+
+      * A file the connector or the repository already filed under the NAME — a credential
+        (`<name>@<owner>`), a per-agent config, a crew file — is found with `agent_local_name`
+        (credentials go through `crewaimeat.credentials`). Handing it an identity finds nothing.
+      * A file this runtime creates for a running agent is named by THIS function, from the
+        identity as handed. It keeps the owner and the node on purpose: one connector home serves
+        several owners, two of them may have an agent of the same name, and their locks and caches
+        must not be one file. It only makes the string a legal file name on every system: `#` and
+        `@` become `_`, so `name#owner@node` is `name_owner_node` and a bare name is itself.
+
+    Before this, each site chose for itself: the daemon lock substituted, the README cache and the
+    onboarding marker wrote `#` and `@` into the name raw, and the spawner had its own copy
+    (`spawn_state._safe`, which answers the same and is pinned to this by a test). Whoever cleans up
+    after an agent (`crewaimeat retire --forget`) had to know all three spellings.
+    """
+    return "".join(c if (c.isalnum() or c in "._-") else "_" for c in str(identity or ""))[:120] or "unnamed"
+
+
 def agent_key(identity: str, *parts: str) -> str:
     """`agents.<name>[.<part>...]` — a memory key in an agent's namespace, built from its NAME.
 

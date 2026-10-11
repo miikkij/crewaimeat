@@ -34,7 +34,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from crewaimeat.agent_manifest import agent_route
+from crewaimeat.agent_manifest import agent_file_stem, agent_route
 from crewaimeat.skills import SkillLoadError, load_skills
 
 _TIMEOUT = 30
@@ -125,7 +125,7 @@ def fetch_agent_skills(agent_name: str, owner: str | None = None) -> list:
     entries = data.get("skills") or []
     if not entries:
         return []
-    base = Path(tempfile.mkdtemp(prefix=f"aimeat-skills-{agent_name}-"))
+    base = Path(tempfile.mkdtemp(prefix=f"aimeat-skills-{agent_file_stem(agent_name)}-"))
     dirs = [materialize_skill(e, base) for e in entries]
     skills = load_skills(dirs)  # the SAME fail-loud validation path as repo-local skills
     _log(agent_name, f"loaded {len(skills)} registry skill(s): " + ", ".join(s.name for s in skills))
@@ -203,7 +203,7 @@ def fetch_workspace_skills(agent_name: str, owner: str | None, organism_id: str,
     if not manifests:
         return []
 
-    base = Path(tempfile.mkdtemp(prefix=f"aimeat-skills-ws-{agent_name}-"))
+    base = Path(tempfile.mkdtemp(prefix=f"aimeat-skills-ws-{agent_file_stem(agent_name)}-"))
     dirs: list[Path] = []
     for m in manifests:
         name = str(m.get("name") or "")

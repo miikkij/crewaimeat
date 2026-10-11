@@ -37,10 +37,11 @@ from __future__ import annotations
 import argparse
 import glob
 import json
-import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+
+from crewaimeat.agent_manifest import agent_local_name
 
 
 @dataclass
@@ -94,7 +95,6 @@ def _node_still_lists(agent: str) -> tuple[bool | None, str]:
     calls refused is not the caller either. The listing is owner-scoped: the agent's owner comes
     from its registration, and when that is already gone every owner this home serves is asked."""
     from crewaimeat import spawner
-    from crewaimeat.agent_manifest import agent_local_name
 
     doc = spawner._serve_doc()
     if not doc.get("port"):
@@ -126,6 +126,7 @@ def _forget_targets(root: Path, agent: str, idents: list[str]) -> list[Path]:
     EXACT NAMES, NO PREFIX MATCHES: `news` must never take `news-fetcher` with it. Every path below
     is built the way the code that writes it builds it, for the name and for each full identity."""
     from crewaimeat import spawn_state
+    from crewaimeat.agent_manifest import agent_file_stem
 
     home = _home()
     name = glob.escape(agent)
@@ -135,9 +136,13 @@ def _forget_targets(root: Path, agent: str, idents: list[str]) -> list[Path]:
     found += sorted(p for p in (home / "agents").glob(f"*/{name}") if p.is_dir())
     for ident in idents:
         cache = root / "logs" / ".readme_cache"
-        found += [cache / f"{ident}.hash", cache / f"{ident}.md"]
-        found.append(root / "logs" / ".locks" / (re.sub(r"[^A-Za-z0-9_.-]+", "_", ident) + ".lock"))
-        found.append(home / "logs" / ".locks" / f"onboarding_{ident}.attempt")
+        # by `agent_file_stem`, and by the raw identity too: until 2026-10-11 the README cache and
+        # the onboarding marker wrote `#` and `@` into the name, and such files are still on disks
+        for stem in dict.fromkeys((agent_file_stem(ident), ident)):
+            found += [cache / f"{stem}.hash", cache / f"{stem}.md"]
+            found.append(home / "logs" / ".locks" / f"onboarding_{stem}.attempt")
+        found.append(root / "logs" / ".locks" / f"{agent_file_stem(ident)}.lock")
+        found.append(root / "logs" / ".explore" / f"{agent_file_stem(ident)}.seq")
         audit = spawn_state.audit_dir(ident)
         if audit.is_dir():  # one audit file per run, and each run has one log named after it
             found += [spawn_state.log_file(ident, run.stem) for run in sorted(audit.glob("*.json"))]
@@ -265,7 +270,7 @@ def _stash_token(agent: str) -> Step:
         if not d.is_dir():
             continue
         looked.append(folder)
-        hits = list(d.glob(f"{agent}@*{suffix}"))
+        hits = list(d.glob(f"{glob.escape(agent_local_name(agent))}@*{suffix}"))
         if not hits:
             continue
         retired = d / "retired"
@@ -367,6 +372,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--root", default=".", help="repo root (default: cwd)")
     args = ap.parse_args(argv)
     root = Path(args.root).resolve()
+    args.agent = agent_local_name(args.agent)  # everything below is filed under the NAME
 
     if not args.apply:
         print(f"retire '{args.agent}' would do:\n")

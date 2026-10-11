@@ -11,6 +11,11 @@ Two lenses, because either alone lets the defect back in:
   * BEHAVIOUR — the publishers that failed, run with a full identity.
   * SHAPE — no source file may spell `agents.<expr>`, `crews.<expr>` or `/v1/agents/<expr>` itself.
     The spelling lives in `agent_manifest.agent_key` / `crew_key` / `agent_route`.
+
+The same two lenses for what an agent has ON THIS MACHINE (second half of the file): a stored
+credential is found by the agent's name (`crewaimeat.credentials`), a node call is signed by the
+daemon and never by a bearer read off the disk, and a file name is built with `agent_local_name`
+(a file filed under the name) or `agent_file_stem` (a file the runtime creates per identity).
 """
 
 import ast
@@ -343,3 +348,311 @@ def test_the_rule_sees_each_shape_the_defect_took(source):
 )
 def test_the_rule_leaves_the_right_spellings_alone(source):
     assert not list(_hand_spelled(ast.parse(source))), f"the rule refused: {source}"
+
+
+# =============================================================================================== #
+# On this machine: the stored credential, the bearer nobody may send, and the file names
+# =============================================================================================== #
+
+OWNER = "happydude500001"
+KEYED = f"keyed-agent#{OWNER}@aimeat-finland-001-genesis"  # enrolled with a key: no bearer on disk
+OLD = f"old-agent#{OWNER}@aimeat-finland-001-genesis"  # still holds a v1 bearer
+
+
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    """A connector home holding one agent of each credential family, filed as the connector files them."""
+    h = tmp_path / "aimeat"
+    for rel, text in {
+        f"keys/keyed-agent@{OWNER}.key": "KEY-MATERIAL",
+        f"tokens/old-agent@{OWNER}.token": "BEARER",
+        f"agents/{OWNER}/keyed-agent/config.yaml": "node_url: https://node.example\n",
+        f"agents/{OWNER}/old-agent/config.yaml": "node_url: https://node.example\n",
+    }.items():
+        f = h / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(text, encoding="utf-8")
+    monkeypatch.setenv("AIMEAT_HOME", str(h))
+    monkeypatch.delenv("AIMEAT_OWNER", raising=False)
+    monkeypatch.chdir(tmp_path)
+    return h
+
+
+class _Response:
+    def __init__(self, payload, status=200):
+        self._payload, self.status_code, self.text, self.headers = payload, status, "", {}
+
+    def json(self):
+        return self._payload
+
+
+@pytest.fixture
+def daemon(monkeypatch):
+    """The shared transport, recording. No test below patches a token lookup: this machine holds a KEY
+    for the agent, and every call is expected to reach the transport anyway."""
+    seen: list[tuple] = []
+    answer = {"payload": {"ok": True, "data": {}}}
+
+    def request(agent, method, path, **kw):
+        seen.append((agent, method, path))
+        return _Response(answer["payload"])
+
+    monkeypatch.setattr(ac, "_aimeat_request", request)
+    seen_answer = type("D", (), {"seen": seen, "answer": answer})
+    return seen_answer
+
+
+# --- the stored credential -------------------------------------------------------------------- #
+
+
+def test_a_stored_credential_is_found_by_name_whatever_is_handed(home):
+    from crewaimeat import credentials, generator_tool, public_url
+
+    for handed in (OLD, "old-agent"):
+        assert credentials.read_token(handed) == ("BEARER", "https://node.example")
+        assert generator_tool._token(handed, None) == ("BEARER", "https://node.example")
+        assert ac._aimeat_read_token(handed) == ("BEARER", "https://node.example")
+    for handed in (KEYED, "keyed-agent"):
+        assert credentials.read_token(handed) == ("", "https://node.example"), "a key is not a bearer"
+        assert public_url._node_url(handed) == "https://node.example"
+
+
+def test_the_owner_comes_from_the_identity_or_from_either_credential_family(home):
+    from crewaimeat import generator_tool
+
+    assert generator_tool._discover_owner("anything#someone@a-node") == "someone", "the identity says it"
+    assert generator_tool._discover_owner("old-agent") == OWNER
+    assert generator_tool._discover_owner("keyed-agent") == OWNER, "an agent with a key has an owner too"
+    assert generator_tool._discover_owner("nobody-here") is None
+
+
+def test_only_one_module_reads_the_packages_credential_reader():
+    """A second import of it is a second place to forget the name."""
+    readers = [
+        path.relative_to(ROOT).as_posix()
+        for rel in _SCANNED
+        for path in sorted((ROOT / rel).rglob("*.py"))
+        if re.search(r"import\s+_read_token\b", path.read_text(encoding="utf-8"))
+    ]
+    assert readers == ["src/crewaimeat/credentials.py"], readers
+
+
+# --- the five modules, and the two that send a bearer the same way --------------------------------- #
+
+
+def test_exchange_tools_reach_the_node_for_an_agent_with_no_bearer(home, daemon):
+    from crewaimeat import exchange_tools
+
+    tools = {t.name: t for t in exchange_tools.make_exchange_tools(KEYED)}
+    out = tools["exchange_browse"].run(q="weather")
+    assert "no token" not in out and not out.startswith("ERROR"), out
+    [(agent, method, path)] = daemon.seen
+    assert agent == KEYED and method == "GET" and path.startswith("/v1/exchange/offerings")
+
+
+def test_schedule_tools_reach_the_node_for_an_agent_with_no_bearer(home, daemon):
+    from crewaimeat import scheduler
+
+    daemon.answer["payload"] = {
+        "ok": True,
+        "data": {"managed": [{"id": "s1", "kind": "agent_task", "cron": "0 6 * * *"}]},
+    }
+    tools = {t.name: t for t in scheduler.make_schedule_tools(KEYED)}
+    out = tools["schedule_list"].run()
+    assert "id=s1" in out, out
+    assert daemon.seen == [(KEYED, "GET", "/v1/agents/keyed-agent/schedules")]
+
+
+def test_a_refused_schedule_read_is_said_not_shown_as_no_schedules(home, monkeypatch):
+    from crewaimeat import scheduler
+
+    refusal = {"ok": False, "error": {"code": "SCOPE_DENIED", "message": 'Scope "schedule:read" required.'}}
+    monkeypatch.setattr(ac, "_aimeat_request", lambda *a, **k: _Response(refusal, status=403))
+    tools = {t.name: t for t in scheduler.make_schedule_tools(KEYED)}
+    out = tools["schedule_list"].run()
+    assert out.startswith("ERROR") and "SCOPE_DENIED" in out, out
+
+
+def test_engagements_are_read_and_matched_by_name_for_an_agent_handed_in_by_identity(home, daemon):
+    from crewaimeat import engagements
+
+    daemon.answer["payload"] = {
+        "ok": True,
+        "data": {
+            "engagements": [{"agentName": "keyed-agent", "contract": "c@1"}, {"agentName": "other", "contract": "x"}]
+        },
+    }
+    got = engagements._agent_engagements(KEYED, "org-1", "ws-a")
+    assert got == [{"agentName": "keyed-agent", "contract": "c@1"}], "None here means the gate fails open for good"
+    assert daemon.seen == [(KEYED, "GET", "/v1/organisms/org-1/workspace/engagements")]
+
+
+def test_reader_desk_publishes_a_readers_picture_without_a_stored_token(home, monkeypatch):
+    from crewaimeat import public_url, reader_desk, seedream_gen, storage
+
+    monkeypatch.setattr(storage, "fetch_bytes", lambda agent, key: (b"jpg", "image/jpeg"))
+    monkeypatch.setattr(seedream_gen, "_upload_public", lambda *a, **k: True)
+    monkeypatch.setattr(public_url, "person_link", lambda path, agent=None: "https://place.example" + path)
+    monkeypatch.setattr(ac, "_aimeat_call", lambda *a, **k: pytest.fail("the identity was handed in; no roster read"))
+    assert reader_desk.own_gaii(KEYED) == KEYED
+    [link] = reader_desk.publish_tip_images(
+        KEYED, [{"mime": "image/jpeg", "storage_key": "k", "name": "a.jpg"}], date="2026-10-11"
+    )
+    assert link == f"https://place.example/v1/pub/{KEYED}/sanomat/lukijoilta/2026-10-11/a.jpg"
+    assert reader_desk.is_owner_human(KEYED, f"{OWNER}@aimeat-finland-001-genesis") is True
+
+
+def test_a_rating_is_signed_by_the_daemon_not_sent_with_a_bearer_read_off_the_disk(home, daemon, monkeypatch):
+    monkeypatch.setattr(ac.requests, "post", lambda *a, **k: pytest.fail("a bearer was sent by hand"))
+    ok, status, detail = ac._rate_task(KEYED, GAII, "t-1", {"stars": 4})
+    assert (ok, status, detail) == (True, 200, "")
+    assert daemon.seen == [(KEYED, "POST", "/v1/agents/tarjoama-testi/tasks/t-1/rate")]
+
+
+def test_with_no_daemon_an_agent_with_a_key_is_told_so_and_no_empty_bearer_goes_out(home, monkeypatch, capsys):
+    monkeypatch.setattr(ac, "_serve_api", lambda: None)
+    monkeypatch.setattr(ac, "_identity_guard", lambda *a, **k: True)
+    monkeypatch.setattr(
+        ac.requests, "request", lambda *a, **k: pytest.fail("sent `Authorization: Bearer ` with nothing in it")
+    )
+    assert ac._aimeat_rest(KEYED, "GET", "/v1/agents/keyed-agent/skills", retries=1) is None
+    assert "requires its serve daemon" in capsys.readouterr().err
+
+
+# --- file names --------------------------------------------------------------------------------- #
+
+STEM = "tarjoama-testi_happydude500001_aimeat-finland-001-genesis"
+
+
+def test_file_stem_keeps_the_identity_and_is_a_legal_file_name():
+    from crewaimeat import spawn_state
+    from crewaimeat.agent_manifest import agent_file_stem, identity_owner
+
+    assert agent_file_stem(GAII) == STEM
+    assert agent_file_stem(NAME) == NAME, "a bare name is its own file name: nothing existing is renamed"
+    assert identity_owner(GAII) == "happydude500001" and identity_owner(NAME) is None
+    for handed in (GAII, NAME, "a/b\\c:d", ""):
+        assert agent_file_stem(handed) == spawn_state._safe(handed), "the spawner's copy answers the same"
+
+
+def test_what_the_runtime_keeps_per_agent_is_named_by_the_stem(home, monkeypatch, tmp_path):
+    from crewaimeat import workflow
+
+    assert ac._onboarding_marker(GAII).name == f"onboarding_{STEM}.attempt"
+    assert workflow._explore_seq_path(GAII).name == f"{STEM}.seq"
+    monkeypatch.setattr(ac, "_expand_readme", lambda readme, llm, commands: readme)
+    monkeypatch.setattr(ac, "get_llm", lambda **kw: None)
+    monkeypatch.setattr(ac, "_aimeat_call", lambda *a, **k: {"ok": True})
+    ac._publish_readme(GAII, "# x\n", None)
+    assert sorted(f.name for f in (tmp_path / "logs" / ".readme_cache").iterdir()) == [f"{STEM}.hash", f"{STEM}.md"]
+
+
+def test_a_file_filed_under_the_name_is_found_when_handed_an_identity(home, tmp_path, monkeypatch):
+    from crewaimeat import app_tools, brains, forge, forge_json, json_agent
+
+    assert forge._fname(GAII) == forge._fname(NAME) == "tarjoama_testi_crew.py"
+    assert forge_json._doc_base(GAII) == "tarjoama_testi"
+    assert brains._stub_stem(GAII) == "tarjoama_testi_crew"
+    monkeypatch.setattr(forge, "_project_root", lambda: tmp_path)
+    assert json_agent.staged_path(GAII) == tmp_path / "crew_defs" / "tarjoama_testi.json"
+    assert forge._has_credential(KEYED, OWNER) is True
+    assert app_tools._owner_of("keyed-agent") == OWNER
+
+
+# --- shape: no file name is built from an agent's name as handed -------------------------------- #
+
+_AGENTISH = {
+    "agent",
+    "agent_name",
+    "ident",
+    "identity",
+    "who",
+    "coordinator_name",
+    "target_agent",
+    "rater_agent",
+    "ratee_agent",
+}
+# The spellings: by NAME (a file filed under it), by STEM (a file the runtime creates), and the older
+# sanitisers that now strip to the name themselves (`_fname`, `_doc_base`, `_stub_stem`) or keep their
+# own scheme on purpose (`_seg`: the memory store; `_known`: the appliance's own table).
+_SPELLED = {"agent_local_name", "agent_file_stem", "_safe", "_fname", "_doc_base", "_stub_stem", "_seg", "_known"}
+_PATH_CALLS = {"glob", "rglob", "join", "open", "Path", "mkdtemp", "with_name", "joinpath"}
+_FILE_FIX = (
+    "a file name is built from an agent's name as handed. Use agent_manifest.agent_local_name for a "
+    "file filed under the NAME (a credential goes through crewaimeat.credentials), or "
+    "agent_manifest.agent_file_stem for a file the runtime creates per agent (lock, cache, counter, log)."
+)
+
+
+def _is_agentish(expr: ast.AST) -> bool:
+    return (isinstance(expr, ast.Name) and expr.id in _AGENTISH) or (
+        isinstance(expr, ast.Attribute) and expr.attr in _AGENTISH
+    )
+
+
+def _raw_agent_names(operand: ast.AST):
+    if isinstance(operand, ast.JoinedStr):
+        for v in operand.values:
+            if isinstance(v, ast.FormattedValue) and _is_agentish(v.value):
+                yield ast.unparse(v.value)
+    elif _is_agentish(operand):
+        yield ast.unparse(operand)
+
+
+def _raw_file_names(tree: ast.AST):
+    """(line, what) for each path operand that carries an agent's name with no spelling around it."""
+    for node in ast.walk(tree):
+        operands: list[ast.AST] = []
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+            operands = [node.left, node.right]
+        elif isinstance(node, ast.Call):
+            fn = node.func
+            if (fn.id if isinstance(fn, ast.Name) else getattr(fn, "attr", "")) in _PATH_CALLS:
+                operands = [*node.args, *(k.value for k in node.keywords if k.arg in ("prefix", "suffix"))]
+        for operand in operands:
+            for raw in _raw_agent_names(operand):
+                yield node.lineno, f"{{{raw}}} in {ast.unparse(operand)[:60]}"
+
+
+def test_no_file_name_is_built_from_an_agents_name_as_handed():
+    files = sorted(ROOT.glob("*.py"))
+    for rel in _SCANNED:
+        files += sorted((ROOT / rel).rglob("*.py"))
+    found = [
+        f"{path.relative_to(ROOT).as_posix()}:{line}  {what}"
+        for path in files
+        for line, what in _raw_file_names(ast.parse(path.read_text(encoding="utf-8")))
+    ]
+    assert not found, "\n  ".join(["raw agent name in a file name:", *found]) + "\n" + _FILE_FIX
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        'p = home / "tokens" / f"{agent_name}@{owner}.token"',
+        'hits = tokens.glob(f"{agent}@*.token")',
+        'lock = lock_dir / f"{spec.agent_name}.lock"',
+        'p = cache_dir / f"{agent_name}.hash"',
+        'cfg = agents_dir / owner / agent_name / "config.yaml"',
+        'path = os.path.join(home, "keys", f"{agent}@{owner}.key")',
+        'fh = open(f"logs/{agent}.log", "a")',
+        'base = tempfile.mkdtemp(prefix=f"skills-{agent_name}-")',
+    ],
+)
+def test_the_file_rule_sees_each_shape_the_defect_took(source):
+    assert list(_raw_file_names(ast.parse(source))), f"the rule missed: {source}"
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        'p = home / "tokens" / f"{agent_local_name(agent_name)}@{owner}.token"',
+        'hits = tokens.glob(f"{glob.escape(agent_local_name(agent))}@*.token")',
+        'lock = lock_dir / f"{agent_file_stem(spec.agent_name)}.lock"',
+        "p = crews / _fname(agent_name)",
+        "rate = done / total_agent_runs",
+        'print(f"[{agent_name}] started")',
+    ],
+)
+def test_the_file_rule_leaves_the_right_spellings_alone(source):
+    assert not list(_raw_file_names(ast.parse(source))), f"the rule refused: {source}"

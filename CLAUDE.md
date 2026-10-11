@@ -197,6 +197,13 @@ status cells, append decisions), so the two sides stay synced without drifting p
   `agents.tarjoama-testi#…` while its offer route answered 404 (the `#` starts a URL fragment).
   `tests/test_agent_addressing.py` refuses a new one. And a 404 from a route is a FAILURE to
   report, never a cue to write the same thing somewhere else and call it published.
+  **The same holds on this machine.** A stored credential is found through `crewaimeat.credentials`
+  (by name; the identity already says the owner), and it is NOT a bearer to send: an agent enrolled
+  with a key has none (`read_token` answers `""`), so a node call goes through the daemon
+  (`_aimeat_call` / `_aimeat_rest` / `_aimeat_request`) and `if not tok` is never a test for
+  "registered". A file name takes `agent_local_name` when the file is filed under the name (a crew
+  file, a credential) and `agent_file_stem` when the runtime creates it per agent (lock, cache,
+  counter, log: `name_owner_node`, so two owners' agents of one name stay apart).
 - **Fail loud** — surface the real cause: reject at the boundary, or raise from one shared dispatcher.
 
 ---

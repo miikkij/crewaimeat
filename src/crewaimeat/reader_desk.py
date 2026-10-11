@@ -27,7 +27,7 @@ from aimeat_crewai.provenance import HumanInvolvement, Level, declare
 
 from crewaimeat import dm, orchestrator, session_store, storage
 from crewaimeat.aimeat_crew import _aimeat_call
-from crewaimeat.generator_tool import _discover_owner, _token
+from crewaimeat.generator_tool import _discover_owner
 
 AGENT_NAME = "sanomat-desk"
 _CONFIG_CONV = "_sanomat_desk"  # fixed session_store pseudo-conversation for this agent's own config
@@ -54,7 +54,10 @@ def set_config(agent: str, **changes) -> dict:
 
 # ── owner addressing (same shape as social_briefing — same-owner DM is ungated) ──
 def own_gaii(agent: str = AGENT_NAME) -> str | None:
-    """This agent's full GAII (name#owner@node) from the live roster."""
+    """This agent's full GAII (name#owner@node): what it was handed when that is already one, else
+    its row on the live roster (the rows carry the NAME)."""
+    if "#" in str(agent) and "@" in str(agent):
+        return str(agent)
     for a in orchestrator.list_node_agents(agent):
         if a.get("name") == agent and a.get("gaii"):
             return a["gaii"]
@@ -164,10 +167,13 @@ def publish_tip_images(agent: str, attachments: list[dict], *, date: str) -> lis
     from crewaimeat.seedream_gen import _upload_public
 
     urls: list[str] = []
+    # The identity is all this needs. A stored-token lookup stood beside it as a second condition
+    # ("no gaii/node url"), although nothing below used the URL it returned: the upload and the fetch
+    # go through the daemon and the link comes from `person_link`. For an agent handed in by its
+    # full identity that lookup found no file, and every reader's picture was skipped.
     gaii = own_gaii(agent)
-    _tok, node_url = _token(agent, _discover_owner(agent))
-    if not gaii or not node_url:
-        print(f"[{agent}] publish_tip_images: no gaii/node url — images skipped", file=sys.stderr)
+    if not gaii:
+        print(f"[{agent}] publish_tip_images: this agent's identity is unknown — images skipped", file=sys.stderr)
         return urls
     for i, att in enumerate(attachments):
         mime = str(att.get("mime") or att.get("mime_type") or "").lower()

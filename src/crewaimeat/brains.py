@@ -308,8 +308,10 @@ def run_brain(agent_name: str) -> None:
 
 
 def _stub_stem(agent_name: str) -> str:
-    """Filesystem-safe `crews/<stem>_crew.py` stem for an agent name."""
-    return re.sub(r"[^a-z0-9]+", "_", agent_name.lower()).strip("_") + "_crew"
+    """Filesystem-safe `crews/<stem>_crew.py` stem for an agent name (the NAME of a full identity)."""
+    from crewaimeat.agent_manifest import agent_local_name
+
+    return re.sub(r"[^a-z0-9]+", "_", agent_local_name(agent_name).lower()).strip("_") + "_crew"
 
 
 def write_crew_stub(agent_name: str, crews_dir: str | os.PathLike | None = None) -> str:

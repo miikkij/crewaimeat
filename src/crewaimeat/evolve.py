@@ -29,7 +29,7 @@ from types import SimpleNamespace
 
 from crewai import Crew, Process
 
-from crewaimeat.agent_manifest import agent_key, agent_route
+from crewaimeat.agent_manifest import agent_file_stem, agent_key, agent_route
 from crewaimeat.aimeat_crew import _aimeat_call
 from crewaimeat.llm import get_llm
 
@@ -671,7 +671,7 @@ def _launch_evolve_run(agent: str, ctx: str) -> bool:
     root = Path.cwd()
     (root / "logs").mkdir(exist_ok=True)
     try:
-        logf = open(root / "logs" / f".evolve-{agent}.log", "ab")
+        logf = open(root / "logs" / f".evolve-{agent_file_stem(agent)}.log", "ab")
         env = os.environ.copy()
         env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
         cmd = [sys.executable, "-m", "crewaimeat.evolve_run", agent, ctx]

@@ -25,11 +25,10 @@ from __future__ import annotations
 
 import json
 
-import requests
 from crewai.tools import tool
 
 from crewaimeat.agent_manifest import agent_route
-from crewaimeat.generator_tool import _discover_owner, _token
+from crewaimeat.generator_tool import _discover_owner
 
 SCHED_TIMEOUT = 30
 
@@ -40,18 +39,13 @@ def make_schedule_tools(agent_name: str, owner: str | None = None) -> list:
 
     def _req(method: str, path: str, body: dict | None = None, as_agent: str | None = None):
         who = as_agent or agent_name
-        tok, url = _token(who, owner)
-        if not tok or not url:
-            return None, f"no token/url for '{who}' (is it registered + approved? same owner?)"
-        base = url.rstrip("/")
+        # Through the shared transport (the serve daemon signs), not a bearer of our own: see the
+        # same change in exchange_tools. The stored-token check that stood here turned away every
+        # agent enrolled with a key and every agent handed in by its full identity.
+        from crewaimeat.aimeat_crew import _aimeat_request
+
         try:
-            r = requests.request(
-                method,
-                f"{base}{path}",
-                headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
-                json=body,
-                timeout=SCHED_TIMEOUT,
-            )
+            r = _aimeat_request(who, method, path, owner=owner, json=body, timeout=SCHED_TIMEOUT)
         except Exception as e:  # noqa: BLE001
             return None, f"request failed: {e!r}"
         try:
@@ -153,7 +147,12 @@ def make_schedule_tools(agent_name: str, owner: str | None = None) -> list:
     def schedule_list() -> str:
         """List the schedules YOU created (id, kind, cron, enabled, last/next run). Call before updating
         or deleting one. Does not show extension-internal or other agents' schedules."""
-        items = _managed()
+        # A refusal is said, not shown as an empty list: an agent without the permission was told
+        # "No schedules created by this agent yet", which is an answer about its schedules.
+        data, err = _req("GET", f"{agent_route(agent_name)}/schedules")
+        if err:
+            return f"ERROR: the schedules could not be read: {err}"
+        items = ((data or {}).get("data") or {}).get("managed") or []
         if not items:
             return "No schedules created by this agent yet."
         out = []

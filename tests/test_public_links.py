@@ -130,8 +130,6 @@ def test_the_reader_desk_image_link(place, monkeypatch):
     from crewaimeat import reader_desk, seedream_gen, storage
 
     monkeypatch.setattr(reader_desk, "own_gaii", lambda agent: "desk#x@n")
-    monkeypatch.setattr(reader_desk, "_token", lambda agent, owner: ("t", LOOPBACK))
-    monkeypatch.setattr(reader_desk, "_discover_owner", lambda agent: "o")
     monkeypatch.setattr(storage, "fetch_bytes", lambda agent, key: (b"jpg", "image/jpeg"))
     monkeypatch.setattr(seedream_gen, "_upload_public", lambda *a, **k: True)
     [link] = reader_desk.publish_tip_images(

@@ -239,6 +239,14 @@ class NodeTransport:
                         print(f"[{agent_name}] {method} {path}: no daemon and no token reader", file=sys.stderr)
                         return None
                     token, node_url = self.read_token(agent_name)
+                    if not token:
+                        # A key is not a bearer: without the daemon nobody here can sign for this agent.
+                        print(
+                            f"[{agent_name}] {method} {path}: this agent requires its serve daemon; "
+                            "no bearer token is stored for it",
+                            file=sys.stderr,
+                        )
+                        return None
                     r = requests.request(
                         method,
                         f"{node_url.rstrip('/')}{path}",

@@ -20,7 +20,10 @@ the fleet is FOUND or understood (a missing offer, a missing identity).
 from __future__ import annotations
 
 import ast
+import glob
 import re
+
+from crewaimeat.agent_manifest import agent_local_name
 
 from .inventory import Inventory
 from .model import ERROR, WARN, Finding, Report
@@ -433,7 +436,8 @@ def _run_mode(inv: Inventory, report: Report) -> None:
         # checked, because a rule that looks only where the file NO LONGER IS reports "clean" forever —
         # a false green is worse than the error it was written to catch.
         agents_dir = inv.root / ".aimeat" / "agents"
-        candidates = [agents_dir / crew.agent / "config.yaml", *agents_dir.glob(f"*/{crew.agent}/config.yaml")]
+        name = glob.escape(agent_local_name(crew.agent))
+        candidates = [agents_dir / name / "config.yaml", *agents_dir.glob(f"*/{name}/config.yaml")]
         cfg = next((c for c in candidates if c.is_file()), candidates[0])
         try:
             cfg_text = cfg.read_text(encoding="utf-8", errors="replace") if cfg.is_file() else ""

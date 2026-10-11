@@ -24,15 +24,11 @@ reads it automatically, so the agent never has to thread the id through tool cal
 from __future__ import annotations
 
 import json
-import os
 from typing import Any
 
 from crewai.tools import tool
 
-try:  # private helper; degrade gracefully if a future version moves it
-    from aimeat_crewai.daemon import _read_token as _aimeat_read_token
-except Exception:  # pragma: no cover
-    _aimeat_read_token = None
+from crewaimeat import credentials
 
 GEN_TIMEOUT = 90  # generator prompts/artifacts can be large; give the node room
 
@@ -46,27 +42,20 @@ from crewaimeat.app_verify import cortex_syntax_ok, cortex_uses_slug  # noqa: E4
 # Auth + owner discovery
 # --------------------------------------------------------------------------- #
 def _discover_owner(agent_name: str) -> str | None:
-    """Find the owner from the token filename (~/.aimeat/tokens/<agent>@<owner>.token).
-
-    Deterministic and env-free: there is exactly one token file per (agent, owner)."""
-    from crewaimeat._home import aimeat_home
-
-    tokens = aimeat_home() / "tokens"
-    try:
-        for p in tokens.glob(f"{agent_name}@*.token"):
-            stem = p.name[: -len(".token")]
-            if "@" in stem:
-                return stem.split("@", 1)[1]
-    except OSError:
-        pass
-    return os.environ.get("AIMEAT_OWNER")
+    """The agent's owner: from its identity, else its credential file, else AIMEAT_OWNER. A bare name
+    or a full identity — see `crewaimeat.credentials`, which is where the lookup lives."""
+    return credentials.discover_owner(agent_name)
 
 
 def _token(agent_name: str, owner: str | None):
-    if _aimeat_read_token is None:
-        return None, None
+    """`(token, node_url)` of the stored credential, `(None, None)` when this machine holds none.
+
+    THE TOKEN IS "" FOR AN AGENT ENROLLED WITH A KEY, so `if not tok` is not a test for "registered":
+    it turns every agent made since 2026-09 away. A node call goes through the daemon
+    (`_aimeat_request` / `_aimeat_rest` / `_aimeat_call`); this is for the node URL and for knowing
+    the agent is connected here at all."""
     try:
-        return _aimeat_read_token(agent_name, owner=owner)
+        return credentials.read_token(agent_name, owner=owner)
     except Exception:  # noqa: BLE001 — never crash the agent on auth read
         return None, None
 

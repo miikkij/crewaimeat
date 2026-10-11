@@ -23,7 +23,7 @@ from typing import Any
 
 from crewai.tools import tool
 
-from crewaimeat.agent_manifest import agent_key, agent_local_name, agent_route, crew_key
+from crewaimeat.agent_manifest import agent_file_stem, agent_key, agent_local_name, agent_route, crew_key
 from crewaimeat.aimeat_crew import _GROUNDING_RULE, _aimeat_call, _aimeat_rest, _rate_task
 
 POLL_SECONDS = 15
@@ -302,7 +302,7 @@ EXPLORE_EVERY = 4
 def _explore_seq_path(coordinator_name: str) -> Path:
     """File holding the coordinator's explore counter, so the 1-in-N cadence survives daemon restarts
     (in-memory state would reset to 0 every restart and re-bunch exploration). Under logs/ → gitignored."""
-    return Path.cwd() / "logs" / ".explore" / f"{coordinator_name}.seq"
+    return Path.cwd() / "logs" / ".explore" / f"{agent_file_stem(coordinator_name)}.seq"
 
 
 def _read_explore_seq(coordinator_name: str) -> int:

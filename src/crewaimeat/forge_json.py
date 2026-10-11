@@ -80,8 +80,11 @@ def coerce_doc(crew_json: Any) -> dict | None:
 
 
 def _doc_base(agent_name: str) -> str:
-    """Filesystem base for an agent name — matches the crews/<base>_crew.py convention (forge._fname)."""
-    return re.sub(r"[^a-z0-9]+", "_", agent_name.lower()).strip("_")
+    """Filesystem base for an agent name — matches the crews/<base>_crew.py convention (forge._fname).
+    By the agent's NAME: handed a full identity, it answers for the name in it."""
+    from crewaimeat.agent_manifest import agent_local_name
+
+    return re.sub(r"[^a-z0-9]+", "_", agent_local_name(agent_name).lower()).strip("_")
 
 
 def render_loader(agent_name: str) -> str:

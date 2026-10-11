@@ -87,8 +87,11 @@ def _project_root() -> Path:
 
 
 def _fname(agent_name: str) -> str:
-    """crews filename for an agent name, matching the new-crew CLI convention."""
-    return re.sub(r"[^a-z0-9]+", "_", agent_name.lower()).strip("_") + "_crew.py"
+    """crews filename for an agent name, matching the new-crew CLI convention. A crew file is filed
+    under the agent's NAME, so a full identity (`name#owner@node`) is stripped to it first."""
+    from crewaimeat.agent_manifest import agent_local_name
+
+    return re.sub(r"[^a-z0-9]+", "_", agent_local_name(agent_name).lower()).strip("_") + "_crew.py"
 
 
 def _rel(path: Path) -> str:
@@ -321,9 +324,11 @@ def _has_credential(agent_name: str, owner: str) -> bool:
 
     # Both names arrive from a caller (CLI, cockpit form); a "../" in either must not turn this into a
     # probe of an arbitrary file. Check the BUILT path stays in the home, not just the inputs.
+    from crewaimeat.agent_manifest import agent_local_name
+
     home = os.path.normpath(aimeat_home())
     for sub, ext in (("tokens", ".token"), ("keys", ".key")):
-        path = os.path.normpath(os.path.join(home, sub, f"{agent_name}@{owner}{ext}"))
+        path = os.path.normpath(os.path.join(home, sub, f"{agent_local_name(agent_name)}@{owner}{ext}"))
         if not path.startswith(home + os.sep):
             raise ValueError(f"credential path for {agent_name!r}@{owner!r} escapes the connector home")
         if os.path.isfile(path):

@@ -51,7 +51,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from crewaimeat.agent_manifest import agent_key, agent_route, crew_key
+from crewaimeat.agent_manifest import agent_file_stem, agent_key, agent_route, crew_key
 
 for _s in (sys.stdout, sys.stderr):
     _r = getattr(_s, "reconfigure", None)
@@ -73,10 +73,11 @@ from aimeat_crewai.daemon import DAEMON_DEFAULT_TOOL_FILTER, _default_propose_cr
 from aimeat_crewai.mcp_client import AimeatServeError  # noqa: E402 — raised when no live serve daemon
 from crewai import Agent, Crew, Process, Task  # noqa: E402
 
-try:  # private helper; degrade gracefully if a future version moves it
-    from aimeat_crewai.daemon import _read_token as _aimeat_read_token  # noqa: E402
-except Exception:  # pragma: no cover
-    _aimeat_read_token = None
+from crewaimeat import credentials as _credentials  # noqa: E402
+
+# The stored credential, found by the agent's NAME whatever this is handed (crewaimeat.credentials).
+# None when the package has no reader, which every caller below already allows for.
+_aimeat_read_token = _credentials.read_token if _credentials.HAS_READER else None
 
 from crewaimeat.directives import fetch_directives, format_directives  # noqa: E402
 from crewaimeat.llm import get_llm  # noqa: E402
@@ -104,11 +105,10 @@ def _acquire_single_instance(agent_name: str) -> bool:
     watchdog, an orphaned daemon) — unlike a command-line scan, which a differing path string
     defeats.
     """
-    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", agent_name)
     lock_dir = Path.cwd() / "logs" / ".locks"
     try:
         lock_dir.mkdir(parents=True, exist_ok=True)
-        fh = open(lock_dir / f"{safe}.lock", "a+")
+        fh = open(lock_dir / f"{agent_file_stem(agent_name)}.lock", "a+")
     except OSError:
         return True  # cannot create the lock file -> do not block startup
     try:
@@ -523,21 +523,19 @@ _format_directives = format_directives
 def _rate_task(
     rater_agent: str, ratee_agent: str, task_id: str, body: dict, owner: str | None = None
 ) -> tuple[bool, int | None, str]:
-    """POST a reputation rating for ratee_agent's task using rater_agent's token (REST).
+    """POST a reputation rating for ratee_agent's task, as rater_agent (REST).
 
     The AIMEAT Quality-tab rate endpoint: a coordinator rates a worker it consumed
     (POST /v1/agents/:ratee/tasks/:id/rate). Source-grounded + inter-agent — self-rating is
     rejected 403, missing grounding 422 GROUNDING_REQUIRED (distinct, the caller separates them).
-    Returns (ok, status_code, detail). Best-effort: any transport failure returns (False, None, msg)."""
-    if _aimeat_read_token is None:
-        return False, None, "no token reader available"
+    Returns (ok, status_code, detail). Best-effort: any transport failure returns (False, None, msg).
+
+    THROUGH THE SHARED TRANSPORT, where the serve daemon signs. It sent the rater's stored bearer
+    itself; a coordinator enrolled with a key has none (the reader answers ""), so its ratings went
+    out as `Authorization: Bearer ` and came back 401, one line in a log nobody reads."""
     try:
-        token, node_url = _aimeat_read_token(rater_agent, owner=owner)
-        r = requests.post(
-            f"{node_url.rstrip('/')}{agent_route(ratee_agent)}/tasks/{task_id}/rate",
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            json=body,
-            timeout=30,
+        r = _aimeat_request(
+            rater_agent, "POST", f"{agent_route(ratee_agent)}/tasks/{task_id}/rate", owner=owner, json=body, timeout=30
         )
         ok = r.status_code in (200, 201)
         return ok, r.status_code, ("" if ok else f"{r.status_code} {r.text[:200]}")
@@ -1136,7 +1134,7 @@ def _onboarding_state(agent_name: str) -> tuple[bool, int]:
 def _onboarding_marker(agent_name: str) -> Path:
     from crewaimeat._home import aimeat_home
 
-    return aimeat_home() / "logs" / ".locks" / f"onboarding_{agent_name}.attempt"
+    return aimeat_home() / "logs" / ".locks" / f"onboarding_{agent_file_stem(agent_name)}.attempt"
 
 
 def _onboarding_attempted_recently(agent_name: str, within_seconds: int = 3600) -> bool:
@@ -2417,8 +2415,8 @@ def _publish_readme(agent_name: str, readme_md: str, commands: list[dict] | None
     cache_seed = readme_md + "\n\x00" + json.dumps(commands or [], sort_keys=True)
     src_hash = hashlib.sha256(cache_seed.encode("utf-8")).hexdigest()
     cache_dir = Path.cwd() / "logs" / ".readme_cache"
-    body_file = cache_dir / f"{agent_name}.md"
-    hash_file = cache_dir / f"{agent_name}.hash"
+    body_file = cache_dir / f"{agent_file_stem(agent_name)}.md"
+    hash_file = cache_dir / f"{agent_file_stem(agent_name)}.hash"
 
     expanded: str | None = None
     if hash_file.is_file() and body_file.is_file() and hash_file.read_text(encoding="utf-8").strip() == src_hash:

@@ -102,11 +102,14 @@ def _owner_of(agent_name: str) -> str:
     if "#" in ident:
         return ident.split("#", 1)[1].split("@", 1)[0]
     try:
+        import glob
+
         from crewaimeat._home import aimeat_home
+        from crewaimeat.agent_manifest import agent_local_name
 
         home = aimeat_home()
         for sub, ext in (("keys", ".key"), ("tokens", ".token")):
-            for f in (home / sub).glob(f"{ident}@*{ext}"):
+            for f in (home / sub).glob(f"{glob.escape(agent_local_name(ident))}@*{ext}"):
                 return f.stem.split("@", 1)[1]
     except Exception:  # noqa: BLE001 — the hint is a convenience, never a hard dependency
         pass

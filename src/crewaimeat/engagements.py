@@ -19,22 +19,25 @@ from __future__ import annotations
 
 import sys
 
+from crewaimeat.agent_manifest import agent_local_name
+
 # The stable workspace manifest (space->contract map) is cached per process; a failed read is NOT cached
 # (so the next pass retries). Engagements are deliberately NOT cached — see the module docstring.
 _SPACE_CONTRACT_CACHE: dict[tuple[str, str], dict[str, str]] = {}
 
 
 def _api_get(agent: str, path: str, params: dict) -> dict | None:
-    """Authed GET as `agent` (its own token) against the node. Parsed JSON on 200, else None (fail open)."""
-    import requests
+    """GET as `agent` against the node, through the shared transport (the serve daemon signs).
+    Parsed JSON on 200, else None (fail open).
 
-    from crewaimeat.generator_tool import _discover_owner, _token
+    It used to send the stored bearer itself. For an agent enrolled with a key that bearer is empty,
+    and for an agent handed in by its full identity no token file is found at all; both failed
+    inside the `except` below, the caller read None as "could not read, fail open", and the gate
+    never held anything back for them."""
+    from crewaimeat.aimeat_crew import _aimeat_request
 
     try:
-        tok, url = _token(agent, _discover_owner(agent))
-        r = requests.get(
-            f"{url.rstrip('/')}{path}", params=params, headers={"Authorization": f"Bearer {tok}"}, timeout=10
-        )
+        r = _aimeat_request(agent, "GET", path, params=params, timeout=10)
         return r.json() if r.status_code == 200 else None
     except Exception:  # noqa: BLE001 — fail open
         return None
@@ -48,7 +51,8 @@ def _agent_engagements(agent: str, org: str, ws: str) -> list[dict] | None:
     if data is None:
         return None  # read failed -> fail open
     engs = (data.get("data") or {}).get("engagements") or []
-    return [e for e in engs if isinstance(e, dict) and e.get("agentName") == agent]
+    name = agent_local_name(agent)  # the node's rows carry the NAME; `agent` may be a full identity
+    return [e for e in engs if isinstance(e, dict) and e.get("agentName") == name]
 
 
 def _space_contract(agent: str, org: str, ws: str, space: str) -> str | None:

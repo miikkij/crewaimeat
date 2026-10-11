@@ -6,7 +6,8 @@ or START agent WORK; demand is posted as NEEDS that providers BID on; live contr
 PROPOSALS. The node stays thin — it only mints entitlements, meters usage, enforces budget and routes the
 rake. ALL matching + negotiation is the AGENT's (this file), private + fleet-side. That is the moat.
 
-Auth model: every call uses the AGENT'S OWN owner-scoped AIMEAT token (``_token``). The accepted contract
+Auth model: every call is made AS THE AGENT, through the shared transport (the serve daemon signs it;
+see ``_req``). The accepted contract
 (the metered entitlement) authorises the metered call — there is NO separate API key, and the provider's
 upstream keys stay server-side. These tools are thin wrappers over EXISTING node REST endpoints
 (``exchange.ts`` = entitlements/proposals/work, ``exchange-market.ts`` = offerings/needs/bids). Zero node
@@ -40,7 +41,7 @@ import json
 import requests
 from crewai.tools import tool
 
-from crewaimeat.generator_tool import _discover_owner, _token
+from crewaimeat.generator_tool import _discover_owner
 
 EXCHANGE_TIMEOUT = 45  # node round-trip; a metered run may touch a provider's upstream, so generous
 
@@ -118,22 +119,21 @@ def band_decision(price: float, provider_owner: str, band: dict) -> dict:
 
 # ── the tools ────────────────────────────────────────────────────────────────
 def make_exchange_tools(agent_name: str, owner: str | None = None) -> list:
-    """Return the EXCHANGE crewai tools for ``agent_name`` (called with its own owner-scoped token)."""
+    """Return the EXCHANGE crewai tools for ``agent_name`` (each call is made as that agent)."""
     owner = owner or _discover_owner(agent_name)
 
     def _req(method: str, path: str, body: dict | None = None):
-        tok, url = _token(agent_name, owner)
-        if not tok or not url:
-            return None, f"no token/url for '{agent_name}' (is it registered + approved?)"
-        base = url.rstrip("/")
+        # THROUGH THE SHARED TRANSPORT, which reaches the node by the serve daemon. This built its own
+        # request from the stored token and first refused when there was none: "no token/url (is it
+        # registered + approved?)". An agent enrolled with a key HAS no bearer on disk, and an agent
+        # defined on the node is handed here by its full identity, which no token file is named —
+        # so both were told they were unregistered and neither could trade (2026-10-11). The daemon
+        # holds the key and signs; with no daemon the transport falls back to the stored bearer and
+        # says so itself when there is none.
+        from crewaimeat.aimeat_crew import _aimeat_request
+
         try:
-            r = requests.request(
-                method,
-                f"{base}{path}",
-                headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
-                json=body,
-                timeout=EXCHANGE_TIMEOUT,
-            )
+            r = _aimeat_request(agent_name, method, path, owner=owner, json=body, timeout=EXCHANGE_TIMEOUT)
         except Exception as e:  # noqa: BLE001
             return None, f"request failed: {e!r}"
         try:

@@ -20,9 +20,7 @@ import datetime
 import json
 import sys
 
-import requests
-
-from crewaimeat.generator_tool import _discover_owner, _token
+from crewaimeat.aimeat_crew import _aimeat_request
 
 AGENT = "news-fetcher"
 WARN_BYTES = 800 * 1024
@@ -42,14 +40,9 @@ def check(name: str, ok: bool, detail: str) -> bool:
 def main() -> int:
     date = sys.argv[1] if len(sys.argv) > 1 else datetime.date.today().isoformat()
     edition = sys.argv[2] if len(sys.argv) > 2 else "evening"
-    tok, url = _token(AGENT, _discover_owner(AGENT))
-    if not tok:
-        print(f"no token for {AGENT} — is it registered and approved?", file=sys.stderr)
-        return 2
-    base, headers = url.rstrip("/"), {"Authorization": f"Bearer {tok}"}
 
     def get(path: str) -> dict:
-        r = requests.get(f"{base}{path}", headers=headers, timeout=60)
+        r = _aimeat_request(AGENT, "GET", path, timeout=60)  # through the daemon, which signs
         try:
             return r.json().get("data") or {}
         except ValueError:

@@ -254,3 +254,25 @@ def test_an_owner_with_no_neighbour_to_ask_is_not_an_answer(tmp_path, monkeypatc
     monkeypatch.setattr(spawner, "_ask_node_as", lambda *a, **k: (_ for _ in ()).throw(AssertionError("asked")))
     listed, why = retire._node_still_lists("gone")
     assert listed is None and "can ask" in why
+
+
+def test_forget_finds_the_files_under_the_stem_the_runtime_now_writes(tmp_path, monkeypatch):
+    """Since 2026-10-11 the README cache, the onboarding marker and the explore counter are named by
+    `agent_file_stem` (`name_owner_node`), no longer with `#` and `@` in the name. Both spellings are
+    on disks, and forgetting an agent takes both."""
+    root, _mine = _deleted_agent(tmp_path, monkeypatch)
+    stem = "gone_o_a-node"
+    new = [
+        root / "logs" / ".readme_cache" / f"{stem}.md",
+        root / "logs" / ".readme_cache" / f"{stem}.hash",
+        root / "logs" / ".explore" / f"{stem}.seq",
+        root / ".aimeat" / "logs" / ".locks" / f"onboarding_{stem}.attempt",
+    ]
+    for p in new:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("x", encoding="utf-8")
+    _node_says(monkeypatch, False)
+    steps = retire.apply(root, "gone", purge_node=False, forget=True)
+    assert all(s.done for s in steps), [s for s in steps if not s.done]
+    assert [p for p in new if p.exists()] == []
+    assert "deleted 13" in next(s for s in steps if s.what == "local files").detail
