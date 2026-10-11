@@ -174,6 +174,7 @@ def test_the_rendition_taken_is_the_smallest_that_covers_the_quality():
 
 def test_lengths_read_the_way_a_person_says_them():
     assert sr.span(45) == "45 s" and sr.span(5700) == "95 min" and sr.span(9600) == "2 h 40 min"
+    assert sr.span(7200) == "2 h"
 
 
 def test_an_address_inside_the_machine_is_refused_unless_the_owner_allows_it(monkeypatch):

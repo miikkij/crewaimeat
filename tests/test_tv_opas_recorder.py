@@ -99,6 +99,7 @@ def node(monkeypatch, tmp_path):
     n = Node()
     # run_once marks its process as a spawn worker in os.environ, and its tests run in this process too.
     monkeypatch.delenv("AIMEAT_SPAWN_WORKER", raising=False)
+    monkeypatch.delenv("AIMEAT_SPAWN_RUN_TIMEOUT_S", raising=False)
     monkeypatch.setattr("crewaimeat.aimeat_crew._aimeat_call", n.call)
     monkeypatch.setattr(sr, "find_ffmpeg", lambda: ("ffmpeg", "ffprobe"))
     monkeypatch.setattr(
@@ -626,10 +627,27 @@ def _crew():
     return mod
 
 
+def test_a_worker_told_it_has_no_limit_records_a_film(node, recorded, monkeypatch):
+    """This crew declares RUN_TIMEOUT_S = 0, and the spawner tells its worker so."""
+    monkeypatch.setenv("AIMEAT_SPAWN_WORKER", "1")
+    monkeypatch.setenv("AIMEAT_SPAWN_RUN_TIMEOUT_S", "0")
+    assert tv.handle_task(AGENT, _task()) == "Petolliset, Nelonen, 95 min, 248 MB"
+
+
+def test_a_worker_told_a_limit_shorter_than_the_film_refuses_it(node, recorded, monkeypatch):
+    monkeypatch.setenv("AIMEAT_SPAWN_WORKER", "1")
+    monkeypatch.setenv("AIMEAT_SPAWN_RUN_TIMEOUT_S", "10800")
+    assert tv.handle_task(AGENT, _task(stop=_z(NOW + timedelta(hours=3)))).startswith("RUN_LIMIT: ")
+    assert tv.handle_task(AGENT, _task(tid="t-2")) == "Petolliset, Nelonen, 95 min, 248 MB", (
+        "95 min, with its compression, fits three hours"
+    )
+
+
 def test_the_agent_is_what_the_app_looks_for(monkeypatch):
     mod = _crew()
     assert mod.AGENT_NAME == "tv-opas-recorder" and "role:tvopas-recorder" in mod.TAGS
-    assert mod.RUN_MODE == "resident", "a per-wake worker is stopped after an hour; a film is longer"
+    assert mod.RUN_MODE == "resident", "a per-wake worker cannot take a second recording during a film"
+    assert mod.RUN_TIMEOUT_S == 0, "a recording is as long as the programme; an hour's limit cuts a film"
     assert all(len(o["ask"]) <= 500 for o in mod.OFFERS), "the node refuses the whole offers document over 500"
     captured = {}
     monkeypatch.setattr(mod, "run_crew", lambda spec: captured.update(spec=spec))

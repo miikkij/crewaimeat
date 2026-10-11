@@ -37,10 +37,17 @@ AGENT_NAME = "tv-opas-recorder"
 # ever made on it (see handle_task).
 LLM_PROFILE = "content-free"
 
-# ALWAYS ON, and the reason is a number: the spawner stops a per-wake worker after 60 minutes
-# (SPAWN_RUN_TIMEOUT_S), and a recording is as long as the programme plus the time to compress it. The
-# node's run mode for the agent is the owner's setting; this is what the crew asks for. A recording
-# given to a per-wake worker that cannot finish it is refused up front (RUN_LIMIT), never cut off.
+# NO RUN LIMIT. The spawner ends a per-wake worker after an hour by default, which is the guard against
+# a model stuck in a loop. Nothing here is a model, and the length of a run is the length of the
+# programme plus the time to compress it: an hour's limit cuts a film at minute 60. Every step is
+# bounded by the task's own `stop` instead.
+RUN_TIMEOUT_S = 0
+
+# ALWAYS ON, and the reason is two programmes at once. A per-wake worker takes the tasks that are there
+# when it starts and exits when they are done; a recording asked for while a film is being recorded
+# would wait for the film to end, and miss its own start. A resident agent takes it at once, up to
+# MAX_CONCURRENT. The node's run mode for the agent is the owner's setting; this is what the crew asks
+# for. Run per wake anyway, it still records, one batch of tasks at a time.
 RUN_MODE = "resident"
 
 # How many recordings may be in hand at once: two programmes that overlap, one waiting for its start,

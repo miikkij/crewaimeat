@@ -242,6 +242,12 @@ edition shipped with 21 articles and no front page. `write-a`/`write-b`/`editori
   runs is the node's `run_mode` (the owner's setting): `spawn` → the spawner parks it and starts one
   worker process per wake (the whole fleet here is spawn); otherwise → a THREAD in `fleet_host`. Only
   APPROVED agents come online; an unapproved one waits and joins itself once approved.
+- **A spawned run has a time limit, and a crew may state its own.** The spawner ends a worker after
+  `SPAWN_RUN_TIMEOUT_S` (an hour), re-runs it ONCE, then leaves the task for a person: that is the guard
+  against a model stuck in a loop. An agent whose honest work is longer declares `RUN_TIMEOUT_S` in its
+  crew file (whole seconds, `0` = no limit; owner's ruling 2026-10-11, the recorder's run is as long as
+  the programme). `Spawner.run_timeout_for` decides it, and the worker is told its real limit in
+  `AIMEAT_SPAWN_RUN_TIMEOUT_S`. An agent defined on the node (no crew file here) has the default.
 - **One owner, several computers (2026-10-11).** The node's roster is the OWNER's list; an agent's key
   is on ONE connector, and the owner can move it (`POST /v1/agents/v2/agents/:name/move`). Both
   runtimes cut the roster with `spawner.carried_here`: the daemon's LIVE status (`/local/status`)

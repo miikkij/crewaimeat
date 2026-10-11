@@ -126,7 +126,9 @@ def span(seconds: float) -> str:
     if s < 90:
         return f"{s} s"
     m = int(round(s / 60))
-    return f"{m} min" if m < 120 else f"{m // 60} h {m % 60} min"
+    if m < 120:
+        return f"{m} min"
+    return f"{m // 60} h {m % 60} min" if m % 60 else f"{m // 60} h"
 
 
 def megabytes(n: float) -> str:

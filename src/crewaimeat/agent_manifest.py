@@ -111,6 +111,14 @@ def normalise_run_mode(value: object) -> str | None:
     return v if v in RUN_MODES else None
 
 
+def normalise_run_timeout(value: object) -> int | None:
+    """A declared run limit: whole seconds, 0 for no limit. None when the value is not a limit at all
+    (a negative number, a string, True), so the caller decides what an unreadable declaration means."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
 # Module-level constants a Python crew may declare, and the Manifest field each becomes.
 _CONSTANTS = {
     "LLM_PROFILE": "llm_profile",
@@ -122,6 +130,7 @@ _CONSTANTS = {
     "SCHEDULE": "schedule",
     "RUN_MODE": "run_mode",
     "MAX_CONCURRENT": "max_concurrent",
+    "RUN_TIMEOUT_S": "run_timeout_s",
     "MODE": "mode",
 }
 # The same fields as a JSON crew doc names them.
@@ -157,6 +166,10 @@ class Manifest:
     #   None = undeclared -> `effective_run_mode` reads CONTINUOUS, today's behaviour for all 49 crews.
     max_concurrent: int | None = None  # static value for CrewSpec.max_concurrent_tasks. 1 = single-flight;
     #   >1 = a bounded pool INSIDE one worker. None = ask the node at daemon start (today's behaviour).
+    run_timeout_s: int | None = None  # how long ONE spawned run of this agent may take before the spawner
+    #   ends it, in seconds; 0 = no limit. None = undeclared -> the spawner's own (SPAWN_RUN_TIMEOUT_S, an
+    #   hour). The hour is the guard against a model stuck in a loop; an agent whose honest work is longer
+    #   than that (a recording is as long as the programme) says so here instead of being cut off.
     mode: str | None = None  # the AIMEAT agent MODE this crew expects (MODE / "mode"); None = task-runner.
     has_build_domain: bool = False
     has_run: bool = False
@@ -184,6 +197,17 @@ class Manifest:
         register an agent in a mode nobody chose. `normalise_agent_mode` is what makes it loud.
         """
         return normalise_agent_mode(self.mode) or DEFAULT_AGENT_MODE
+
+    def run_timeout(self, default: float) -> float | None:
+        """Seconds one spawned run of this agent may take; None when it declares no limit.
+
+        Undeclared, or declared as something that is not a limit, reads `default`: a typo must not
+        take the guard off an agent. The doctor rule `runtimeout.invalid` is what makes the typo loud.
+        """
+        declared = normalise_run_timeout(self.run_timeout_s)
+        if declared is None:
+            return float(default)
+        return None if declared == 0 else float(declared)
 
     @property
     def single_flight(self) -> bool:

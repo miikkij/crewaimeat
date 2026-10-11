@@ -230,6 +230,76 @@ def test_overdue_worker_is_terminated():
     assert len(spawned) == 2  # ...and handed straight to the one retry a reaped run gets
 
 
+# --------------------------------------------------------------------------- #
+# A crew's own run limit (RUN_TIMEOUT_S)
+# --------------------------------------------------------------------------- #
+_LONG = """AGENT_NAME = "long"
+RUN_MODE = "spawn"
+RUN_TIMEOUT_S = {limit}
+
+def build_domain(ctx):
+    ...
+
+def run():
+    ...
+"""
+
+
+def _aged(tmp_path, limit, age, agent="long"):
+    """A spawner whose default is 30 s, serving a crew that declares `limit`, with one run `age` s old."""
+    sp, spawned = make_spawner([agent], run_timeout_s=30)
+    sp.root = _repo(tmp_path, _LONG.format(limit=limit), "long_crew.py")
+    sp.on_wake(agent)
+    sp.state[agent].started_at -= age
+    sp.reap()
+    return sp, spawned
+
+
+def test_a_crew_states_its_own_run_limit(tmp_path):
+    """One number for every agent was wrong: the hour is for a model stuck in a loop, and a recorder's
+    run is as long as the programme. The default stays; a crew that needs longer says so."""
+    sp, spawned = _aged(tmp_path, 7200, age=3601)
+    assert spawned[0][2].terminated is False, "past the spawner's default, inside the crew's own limit"
+    assert sp.run_timeout_for("long") == 7200.0 and sp.run_timeout_for("someone-else") == 30.0
+    sp.state["long"].started_at -= 3600
+    sp.reap()
+    assert spawned[0][2].terminated is True, "its own limit is still a limit"
+
+
+def test_a_crew_may_declare_no_limit_at_all(tmp_path):
+    sp, spawned = _aged(tmp_path, 0, age=10**7)
+    assert sp.run_timeout_for("long") is None
+    assert spawned[0][2].terminated is False and len(spawned) == 1
+
+
+def test_the_limit_is_found_when_the_spawner_holds_the_agent_as_a_gaii(tmp_path):
+    sp, spawned = _aged(tmp_path, 0, age=10**7, agent="long#happydude500001@a-node")
+    assert spawned[0][2].terminated is False
+
+
+@pytest.mark.parametrize("bad", ["-5", '"two hours"', "True", "1.5"])
+def test_a_limit_that_is_not_one_keeps_the_default_and_the_doctor_says_so(tmp_path, bad):
+    """A typo must not take the guard off an agent."""
+    sp, spawned = _aged(tmp_path, bad, age=31)
+    assert sp.run_timeout_for("long") == 30.0 and spawned[0][2].terminated is True
+    assert "runtimeout.invalid" in _doctor_rules(tmp_path)
+
+
+def test_a_valid_limit_is_not_a_doctor_finding(tmp_path):
+    _repo(tmp_path, _LONG.format(limit=0), "long_crew.py")
+    assert "runtimeout.invalid" not in _doctor_rules(tmp_path)
+
+
+def test_the_worker_is_told_the_limit_it_runs_under(tmp_path):
+    """Work that knows its own length can then refuse a job it would be ended in the middle of. The
+    spawner's default may come from --run-timeout, which no environment variable of its own shows."""
+    sp, _ = make_spawner(["long", "plain"], run_timeout_s=900)
+    sp.root = _repo(tmp_path, _LONG.format(limit=0), "long_crew.py")
+    assert sp._worker_env("long", "r1")["AIMEAT_SPAWN_RUN_TIMEOUT_S"] == "0"
+    assert sp._worker_env("plain", "r2")["AIMEAT_SPAWN_RUN_TIMEOUT_S"] == "900"
+    assert sp._worker_env("plain", "r2")["AIMEAT_SPAWN_RUN_ID"] == "r2"
+
+
 def test_a_worker_finds_the_crew_file_when_handed_a_gaii(tmp_path, monkeypatch):
     """The spawner hands GAIIs; a crew file declares a bare name. They must still meet.
 

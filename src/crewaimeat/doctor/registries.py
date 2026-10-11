@@ -368,7 +368,7 @@ def _run_mode(inv: Inventory, report: Report) -> None:
         worker for the same task alongside ours. The agent lock then kills one of the two with a clean
         exit 0, and the only symptom is "the task did nothing".
     """
-    from crewaimeat.agent_manifest import RUN_MODES, RUN_SPAWN, normalise_run_mode
+    from crewaimeat.agent_manifest import RUN_MODES, RUN_SPAWN, normalise_run_mode, normalise_run_timeout
 
     for crew in inv.live:
         if crew.agent is None:
@@ -383,6 +383,17 @@ def _run_mode(inv: Inventory, report: Report) -> None:
                     f"RUN_MODE = {crew.run_mode!r} is not a run mode, so it reads as "
                     f"{RUN_MODES[0]!r} and the declaration does nothing",
                     f"use one of {RUN_MODES}, or drop the constant to stay {RUN_MODES[0]}",
+                )
+            )
+        if crew.run_timeout_s is not None and normalise_run_timeout(crew.run_timeout_s) is None:
+            report.add(
+                Finding(
+                    "runtimeout.invalid",
+                    ERROR,
+                    where,
+                    f"RUN_TIMEOUT_S = {crew.run_timeout_s!r} is not a run limit, so the spawner's own "
+                    "applies and the declaration does nothing",
+                    "use whole seconds (0 = no limit), or drop the constant to keep the spawner's default",
                 )
             )
         if crew.effective_run_mode != RUN_SPAWN:

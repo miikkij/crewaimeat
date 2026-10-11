@@ -281,20 +281,27 @@ class _Stages:
 
 
 def _run_limit(seconds_from_now: float) -> None:
-    """Refuse a recording a per-wake worker cannot finish. The spawner stops a worker after an hour
-    (SPAWN_RUN_TIMEOUT_S), and a recording stopped there is lost with nothing saying why; an agent that
-    runs always on has no such limit."""
+    """Refuse a recording a per-wake worker would be ended in the middle of, since a recording stopped
+    there is lost with nothing saying why.
+
+    The spawner tells its worker the limit it runs under (AIMEAT_SPAWN_RUN_TIMEOUT_S, 0 = none). This
+    crew declares none (RUN_TIMEOUT_S = 0), so under this repo's spawner nothing is refused here. What
+    is left is a worker somebody else started with a limit: a spawner older than the per-agent limit
+    says nothing, and then its hour (SPAWN_RUN_TIMEOUT_S) is what applies."""
     if os.environ.get("AIMEAT_SPAWN_WORKER") != "1":
         return
-    limit = float(os.environ.get("SPAWN_RUN_TIMEOUT_S") or 3600)
+    told = os.environ.get("AIMEAT_SPAWN_RUN_TIMEOUT_S")
+    limit = float(told) if told is not None else float(os.environ.get("SPAWN_RUN_TIMEOUT_S") or 3600)
+    if limit <= 0:
+        return
     left = limit - (time.monotonic() - _STARTED)
     need = seconds_from_now * 1.25 + 120  # the wait and the recording, then compressing and uploading it
     if need > left:
         raise RecordError(
             "RUN_LIMIT",
             f"this recorder is started once per job and stopped after {sr.span(limit)}, and this recording "
-            f"ends in {sr.span(seconds_from_now)}. Its owner sets the agent to run always on; then a recording "
-            f"may be as long as the programme.",
+            f"ends in {sr.span(seconds_from_now)}. Whoever runs it gives the agent a longer limit, or none, "
+            f"or sets it to run always on; then a recording may be as long as the programme.",
         )
 
 

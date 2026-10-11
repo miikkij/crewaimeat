@@ -61,6 +61,8 @@ DEBOUNCE_S = 2.0
 # The ceiling on CONCURRENT worker processes. Measured: a real run peaks at ~225 MB, so 8 is ~1.8 GB.
 MAX_WORKERS = int(os.environ.get("SPAWN_MAX_WORKERS", "8"))
 # Wall-clock per run. Mirrors the connector's own runner default rather than inventing a second number.
+# This is the DEFAULT: a crew whose honest work is longer declares its own with RUN_TIMEOUT_S (seconds,
+# 0 = none), and `Spawner.run_timeout_for` is the one place the limit of a run is decided.
 RUN_TIMEOUT_S = int(os.environ.get("SPAWN_RUN_TIMEOUT_S", "3600"))
 KILL_GRACE_S = 10.0
 STATUS_INTERVAL_S = 2.0
@@ -538,14 +540,40 @@ class Spawner:
         )
         _say(f"[spawner] {st.agent}: run {run_id} started (pid {proc.pid}, trigger={trigger})")
 
+    def run_timeout_for(self, agent: str) -> float | None:
+        """How long ONE run of `agent` may take, in seconds; None when its crew declares no limit.
+
+        ONE NUMBER FOR EVERY AGENT WAS WRONG (owner, 2026-10-11). The hour exists for a model stuck in
+        a loop, where every further minute is paid for and nothing comes of it. It was also applied to
+        an agent whose honest work is longer: a recorder's run is as long as the programme, and a film
+        cut at the hour mark is the failure, not the guard. So the hour is the default, and a crew
+        states its own with `RUN_TIMEOUT_S` (seconds, 0 for none). Read from the crew file through
+        `agent_manifest`, never by importing it. An agent with no crew file here (its definition is on
+        the node) has the default: the spawner cannot read a definition, and the node's roster row
+        carries no such field yet.
+        """
+        m = agent_manifest.manifest_for(agent_manifest.agent_local_name(agent), self.root)
+        return m.run_timeout(self.run_timeout_s) if m is not None else float(self.run_timeout_s)
+
+    def _worker_env(self, agent: str, run_id: str) -> dict[str, str]:
+        """The environment one worker starts in."""
+        env = dict(os.environ)
+        env["AIMEAT_SPAWN_RUN_ID"] = run_id
+        env["AIMEAT_HOME"] = str(spawn_state.aimeat_home())
+        # The worker is told the limit it actually runs under (0 = none), so work that knows its own
+        # length can refuse a job it would be ended in the middle of. Reading SPAWN_RUN_TIMEOUT_S in
+        # the worker would not do: this spawner may have been started with --run-timeout instead, and
+        # the agent may have a limit of its own.
+        limit = self.run_timeout_for(agent)
+        env["AIMEAT_SPAWN_RUN_TIMEOUT_S"] = "0" if limit is None else str(int(limit))
+        return env
+
     def _spawn(self, agent: str, run_id: str):
         if self.spawn_fn is not None:
             return self.spawn_fn(agent, run_id)
         if "pytest" in sys.modules:  # the same refusal forge.launch_crew and tui.actions make
             raise RuntimeError("refusing to spawn a real process under pytest — inject spawn_fn instead")
-        env = dict(os.environ)
-        env["AIMEAT_SPAWN_RUN_ID"] = run_id
-        env["AIMEAT_HOME"] = str(spawn_state.aimeat_home())
+        env = self._worker_env(agent, run_id)
         # Keep the worker's console. A spawned run is over in seconds and its process is gone; if its
         # output went to DEVNULL the only record of WHAT HAPPENED would be an exit code, and "the task
         # did nothing" would be unanswerable after the fact.
@@ -584,7 +612,8 @@ class Spawner:
                     continue
                 code = st.proc.poll()
                 if code is None:
-                    if time.monotonic() - st.started_at > self.run_timeout_s:
+                    limit = self.run_timeout_for(st.agent)
+                    if limit is not None and time.monotonic() - st.started_at > limit:
                         overdue.append(st)
                     continue
                 finished.append((st, int(code)))
@@ -604,7 +633,7 @@ class Spawner:
     def _kill(self, st: AgentState) -> None:
         """Terminate an overdue worker. Runs OUTSIDE the lock — it blocks for up to 20 s."""
         _say(
-            f"[spawner] {st.agent}: run {st.run_id} exceeded {self.run_timeout_s}s — terminating",
+            f"[spawner] {st.agent}: run {st.run_id} exceeded {self.run_timeout_for(st.agent) or 0:.0f}s — terminating",
         )
         try:
             st.proc.terminate()
@@ -852,9 +881,16 @@ class Spawner:
         for agent in self.agents:  # an explicit --agents list is served even if discovery missed it
             self._ensure_agent(agent)
         live = sorted(a for a, st in self.state.items() if not st.retired)
+        own = {a: self.run_timeout_for(a) for a in live}
+        own_limits = ", ".join(
+            f"{agent_manifest.agent_local_name(a)} {'none' if v is None else f'{v:.0f}s'}"
+            for a, v in own.items()
+            if v != float(self.run_timeout_s)
+        )
         _say(
             f"[spawner] parked on {len(live)} agent(s): {', '.join(live) or '(none yet)'} "
-            f"(max {self.max_workers} concurrent workers, run timeout {self.run_timeout_s}s, "
+            f"(max {self.max_workers} concurrent workers, run timeout {self.run_timeout_s}s"
+            f"{f' except {own_limits}' if own_limits else ''}, "
             f"roster re-read every {self.roster_interval_s:.0f}s)",
         )
         next_roster = time.monotonic() + self.roster_interval_s
