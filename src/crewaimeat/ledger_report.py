@@ -17,6 +17,8 @@ from __future__ import annotations
 import sys
 from typing import Any
 
+from crewaimeat.agent_manifest import agent_route
+
 
 def _resolve_agent(agent: str | None) -> str | None:
     """The explicit agent, else the AIMEAT agent whose crew kickoff is running on this context —
@@ -117,6 +119,8 @@ def report_llm_usage(
 
         from crewaimeat.aimeat_crew import _aimeat_request
 
-        _log(_aimeat_request(who, "POST", f"/v1/agents/{who}/telemetry", json=payload, timeout=15), "shared transport")
+        _log(
+            _aimeat_request(who, "POST", f"{agent_route(who)}/telemetry", json=payload, timeout=15), "shared transport"
+        )
     except Exception as exc:  # noqa: BLE001 — metering must never break the calling tool
         print(f"[ledger] usage report failed ({model}): {exc!r}", file=sys.stderr)

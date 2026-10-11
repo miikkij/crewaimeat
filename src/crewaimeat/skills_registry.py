@@ -34,6 +34,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from crewaimeat.agent_manifest import agent_route
 from crewaimeat.skills import SkillLoadError, load_skills
 
 _TIMEOUT = 30
@@ -99,7 +100,7 @@ def fetch_agent_skills(agent_name: str, owner: str | None = None) -> list:
     from crewaimeat.aimeat_crew import _aimeat_rest
 
     try:
-        env = _aimeat_rest(agent_name, "GET", f"/v1/agents/{agent_name}/skills", retries=1, return_error=True)
+        env = _aimeat_rest(agent_name, "GET", f"{agent_route(agent_name)}/skills", retries=1, return_error=True)
     except Exception as exc:  # noqa: BLE001 — environment failure: loud, crew keeps local skills
         _log(agent_name, f"fetch FAILED ({exc!r}) — running WITHOUT registry skills this task")
         return []

@@ -38,6 +38,7 @@ import re
 import sys
 import time
 
+from crewaimeat.agent_manifest import agent_route
 from crewaimeat.agent_scopes import runtime_scopes
 from crewaimeat.aimeat_crew import _aimeat_call, _aimeat_rest
 from crewaimeat.workspace_tools import READ_SCOPES, WRITE_SCOPES
@@ -102,11 +103,8 @@ def own_scopes(agent_name: str) -> list[str] | None:
     """What the concierge itself holds, read from the node (GET /v1/agents/{name}/refusals answers the
     agent itself with `granted_scopes`). None when the node could not say -- an older node without the
     route, or no answer -- and then nothing is capped here and the node's own ceiling decides."""
-    from crewaimeat.agent_manifest import agent_local_name
 
-    res = _aimeat_rest(
-        agent_name, "GET", f"/v1/agents/{agent_local_name(agent_name)}/refusals", retries=2, return_error=True
-    )
+    res = _aimeat_rest(agent_name, "GET", f"{agent_route(agent_name)}/refusals", retries=2, return_error=True)
     if not isinstance(res, dict) or res.get("ok") is False:
         return None
     held = res.get("granted_scopes")
@@ -425,7 +423,7 @@ def start_proposed(agent_name: str, name: str) -> str:
     }
     # The concierge's OWN token, the new agent's path: the node resolves the target under the caller's
     # owner, so a same-owner sibling can be scheduled without borrowing its credential (scheduler.py).
-    res = _aimeat_rest(agent_name, "POST", f"/v1/agents/{name}/schedules", body, retries=2, return_error=True)
+    res = _aimeat_rest(agent_name, "POST", f"{agent_route(name)}/schedules", body, retries=2, return_error=True)
     if res is None:
         return "The node did not answer, so the schedule was not set. Try again in a moment."
     if isinstance(res, dict) and res.get("ok") is False:

@@ -51,6 +51,8 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from crewaimeat.agent_manifest import agent_key, agent_route, crew_key
+
 for _s in (sys.stdout, sys.stderr):
     _r = getattr(_s, "reconfigure", None)
     if _r:
@@ -497,7 +499,7 @@ def _auth_alive(agent_name: str, owner: str | None) -> bool | None:
     try:
         token, node_url = _aimeat_read_token(agent_name, owner=owner)
         r = requests.get(
-            f"{node_url.rstrip('/')}/v1/agents/{agent_name}/tasks",
+            f"{node_url.rstrip('/')}{agent_route(agent_name)}/tasks",
             headers={"Authorization": f"Bearer {token}"},
             params={"status": "active"},
             timeout=15,
@@ -532,7 +534,7 @@ def _rate_task(
     try:
         token, node_url = _aimeat_read_token(rater_agent, owner=owner)
         r = requests.post(
-            f"{node_url.rstrip('/')}/v1/agents/{ratee_agent}/tasks/{task_id}/rate",
+            f"{node_url.rstrip('/')}{agent_route(ratee_agent)}/tasks/{task_id}/rate",
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
             json=body,
             timeout=30,
@@ -1177,9 +1179,8 @@ def _memory_key(agent_name: str, prefix: str | None, task: dict) -> str:
     text = task.get("description") or task.get("title") or ""
     slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:32].strip("-")
     token = f"{slug}-{short}" if slug else short
-    from crewaimeat.agent_manifest import agent_local_name
 
-    base = prefix or f"crews.{agent_local_name(agent_name)}"
+    base = prefix or f"{crew_key(agent_name)}"
     return f"{base}.{token}.latest_output"
 
 
@@ -1522,7 +1523,7 @@ def _run_onboarding_only(
     step_args: dict[str, dict] = {}
     if commands:
         step_args["publish_commands"] = {
-            "key": f"agents.{agent_name}.commands",
+            "key": f"{agent_key(agent_name)}.commands",
             "value": commands,
             "visibility": "owner",
         }
@@ -1852,7 +1853,7 @@ def _write_verify_stat(agent_name: str, tid: str | None, output_text: str, dimen
         agent_name,
         "aimeat_memory_write",
         {
-            "key": f"agents.{agent_name}.statistics.custom.self_verify",
+            "key": f"{agent_key(agent_name)}.statistics.custom.self_verify",
             "value": {
                 "score": score,
                 "by": agent_name,
@@ -1916,7 +1917,7 @@ def _publish_selection_rollup(agent_name: str, owner: str | None = None, _state:
         _aimeat_call(
             agent_name,
             "aimeat_memory_write",
-            {"key": f"agents.{agent_name}.statistics.custom.selection", "value": value, "visibility": "public"},
+            {"key": f"{agent_key(agent_name)}.statistics.custom.selection", "value": value, "visibility": "public"},
         )
         print(f"[{agent_name}] published field-reputation rollup -> selection {value}", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001 — reputation publish is best-effort; never break the daemon
@@ -1991,9 +1992,7 @@ def _run_refusals(agent_name: str, since: str) -> list[dict] | None:
     """
     from urllib.parse import quote
 
-    from crewaimeat.agent_manifest import agent_local_name
-
-    path = f"/v1/agents/{agent_local_name(agent_name)}/refusals?since={quote(since, safe='')}"
+    path = f"{agent_route(agent_name)}/refusals?since={quote(since, safe='')}"
     res = _aimeat_rest(agent_name, "GET", path, retries=2, return_error=True)
     if res is None:
         return None
@@ -2062,7 +2061,7 @@ def _resolve_offer(agent_name: str, task: dict) -> dict | None:
     if scope.get("kind") != "offer":
         return None
     oid = str(scope.get("offer_id") or "")
-    doc = _aimeat_call(agent_name, "aimeat_memory_read", {"key": f"agents.{agent_name}.offers"}) or {}
+    doc = _aimeat_call(agent_name, "aimeat_memory_read", {"key": f"{agent_key(agent_name)}.offers"}) or {}
     val = doc.get("value") if isinstance(doc, dict) else None
     for o in (val or {}).get("offers") or []:
         if o.get("id") == oid:
@@ -2433,9 +2432,9 @@ def _publish_readme(agent_name: str, readme_md: str, commands: list[dict] | None
     res = _aimeat_call(
         agent_name,
         "aimeat_memory_write",
-        {"key": f"agents.{agent_name}.readme", "value": expanded, "visibility": "owner"},
+        {"key": f"{agent_key(agent_name)}.readme", "value": expanded, "visibility": "owner"},
     )
-    print(f"[{agent_name}] published README to agents.{agent_name}.readme: {bool(res)}", file=sys.stderr)
+    print(f"[{agent_name}] published README to {agent_key(agent_name)}.readme: {bool(res)}", file=sys.stderr)
 
 
 _CAPABILITY_TYPES = {"mcp", "skill", "tool"}
@@ -2661,11 +2660,11 @@ def run_crew(spec: CrewSpec) -> None:
         res = _aimeat_call(
             spec.agent_name,
             "aimeat_memory_write",
-            {"key": f"agents.{spec.agent_name}.commands", "value": spec.commands, "visibility": "owner"},
+            {"key": f"{agent_key(spec.agent_name)}.commands", "value": spec.commands, "visibility": "owner"},
         )
         print(
             f"[{spec.agent_name}] published {len(spec.commands)} commands to "
-            f"agents.{spec.agent_name}.commands: {bool(res)}",
+            f"{agent_key(spec.agent_name)}.commands: {bool(res)}",
             file=sys.stderr,
         )
 
@@ -2969,7 +2968,7 @@ def run_crew(spec: CrewSpec) -> None:
             "nature": gate["nature"] if gate else None,
             "task": _short,
             "crew_holder": _crew_holder,
-            "custom_key": f"agents.{spec.agent_name}.statistics.custom.eval_context",
+            "custom_key": f"{agent_key(spec.agent_name)}.statistics.custom.eval_context",
         }
 
         # Guarantee the deliverable lands even if the liaison's LLM memory_write loops/errors:

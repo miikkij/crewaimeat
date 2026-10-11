@@ -30,6 +30,7 @@ from aimeat_crewai.workflow_spec import (  # published grammar + compat check
     validate_signal,
 )
 
+from crewaimeat.agent_manifest import agent_key, agent_route, crew_key
 from crewaimeat.aimeat_crew import _aimeat_call
 
 # Where these contracts are adopted today — used only to fetch a REAL deliverable sample.
@@ -406,7 +407,7 @@ def publish_offers(agent: str, with_samples: bool = True) -> bool:
         return False
     ok = bool(
         _aimeat_call(
-            agent, "aimeat_memory_write", {"key": f"agents.{agent}.offers", "visibility": "owner", "value": doc}
+            agent, "aimeat_memory_write", {"key": f"{agent_key(agent)}.offers", "visibility": "owner", "value": doc}
         )
     )
     print(f"[offers] {agent}: {len(doc['offers'])} offer(s) {'published' if ok else 'PUBLISH FAILED'}")
@@ -467,7 +468,9 @@ def fetch_crew_sample(agent: str) -> str:
     or 'untested'. Same hard rule as contracts: never invented."""
     try:
         r = (
-            _aimeat_call(agent, "aimeat_memory_list", {"owner_scope": True, "prefix": f"crews.{agent}.", "limit": 50})
+            _aimeat_call(
+                agent, "aimeat_memory_list", {"owner_scope": True, "prefix": f"{crew_key(agent)}.", "limit": 50}
+            )
             or {}
         )
         items = r.get("items") or []
@@ -601,7 +604,7 @@ def crew_offer(agent: str, meta: dict, with_sample: bool = False) -> dict:
         "consequences": list(meta["consequences"]),
         "deliverable": {
             "format": fmt,
-            "location": {"space": f"crews.{agent}.", "visibility": "owner"},
+            "location": {"space": f"{crew_key(agent)}.", "visibility": "owner"},
             # Golden sample: live last-run excerpt → authored representative example → "untested".
             "sample": _resolve_sample(fetch_crew_sample(agent), meta.get("sample")) if with_sample else "untested",
         },
@@ -636,8 +639,8 @@ def crew_offer(agent: str, meta: dict, with_sample: bool = False) -> dict:
         # crews.<agent>. — no run-keyed output, so the signal is a weak "produces output here" — enough
         # to make the agent SELECTABLE as a workflow step; a real workflow overrides per step.
         offer["required_to_function"] = NONE
-        offer["success_signal"] = Sig.count_nonempty(key_glob=f"crews.{agent}.*", min=1)
-        offer["deliverable"]["location"]["key"] = f"crews.{agent}."
+        offer["success_signal"] = Sig.count_nonempty(key_glob=f"{crew_key(agent)}.*", min=1)
+        offer["deliverable"]["location"]["key"] = f"{crew_key(agent)}."
     return offer
 
 
@@ -668,8 +671,16 @@ def offers_doc_any(agent: str, with_samples: bool = False) -> dict:
 
 def publish_offers_any(agent: str, with_samples: bool = True) -> bool:
     """Publish through PUT /v1/agents/:name/offers — the node-validated route (live on
-    aimeat.io since 2026-06-12). Falls back LOUDLY to the direct memory write only when
-    the route is absent (older/self-hosted node)."""
+    aimeat.io since 2026-06-12).
+
+    A 404 IS A FAILURE, NOT A NODE WITHOUT THE ROUTE. The 404 branch used to write the document
+    straight into memory and report success, on the theory that only an older node answers 404.
+    Measured on production 2026-10-11: the path carried a full identity, whose `#` cut the URL
+    short, the node answered 404 for a route it has had for four months, and the "fallback" filed
+    the offer under a key nothing reads and printed "published". A fallback that turns the one
+    error that says "you asked for the wrong thing" into a success is how the offer stayed off the
+    owner's page with no line anywhere saying so. The direct write remains only for a route that
+    could not be REACHED, which is a different fault and writes the key the node itself reads."""
     doc = offers_doc_any(agent, with_samples=with_samples)
     if not doc["offers"]:
         print(f"[offers] {agent}: nothing to publish", file=sys.stderr)
@@ -688,15 +699,15 @@ def publish_offers_any(agent: str, with_samples: bool = True) -> bool:
         from crewaimeat.aimeat_crew import _aimeat_rest
 
         res = _aimeat_rest(
-            agent, "PUT", f"/v1/agents/{agent}/offers", {"offers": doc["offers"]}, retries=1, return_error=True
+            agent, "PUT", f"{agent_route(agent)}/offers", {"offers": doc["offers"]}, retries=1, return_error=True
         )
         if isinstance(res, dict) and res.get("ok") is False:
+            # Every refusal is REAL, 404 included: surface it with the node's own words, write nothing.
             status = res.get("http_status")
-            if status != 404:  # validation/auth errors are REAL failures — surface, don't mask
-                err = (res.get("error") or {}).get("code") or f"HTTP {status}"
-                print(f"[offers] {agent}: route FAILED {err}", file=sys.stderr)
-                return False
-            print(f"[offers] {agent}: route 404 (node without offers) -> direct memory write", file=sys.stderr)
+            err = res.get("error") or {}
+            said = " ".join(str(x) for x in (err.get("code") or f"HTTP {status}", err.get("message") or "") if x)
+            print(f"[offers] {agent}: route FAILED {said[:300]}", file=sys.stderr)
+            return False
         elif res is not None:
             print(f"[offers] {agent}: {len(doc['offers'])} offer(s) published via route")
             return True
@@ -706,7 +717,7 @@ def publish_offers_any(agent: str, with_samples: bool = True) -> bool:
         print(f"[offers] {agent}: route unreachable ({exc!r}) -> direct memory write", file=sys.stderr)
     ok = bool(
         _aimeat_call(
-            agent, "aimeat_memory_write", {"key": f"agents.{agent}.offers", "visibility": "owner", "value": doc}
+            agent, "aimeat_memory_write", {"key": f"{agent_key(agent)}.offers", "visibility": "owner", "value": doc}
         )
     )
     print(f"[offers] {agent}: {len(doc['offers'])} offer(s) {'published (direct)' if ok else 'PUBLISH FAILED'}")
@@ -715,7 +726,8 @@ def publish_offers_any(agent: str, with_samples: bool = True) -> bool:
 
 def publish_meta_offer(agent: str, meta: dict, with_sample: bool = False) -> tuple[bool, str]:
     """Publish ONE offer built from a `meta` dict (a brain template's `offer`) to agents.<agent>.offers
-    via the node-validated PUT route, falling back to a direct memory write on a 404. Used by the
+    via the node-validated PUT route (a refusal, 404 included, is returned as the failure it is —
+    see `publish_offers_any`). Used by the
     aimeat-agency cockpit when an operator OPTS IN to advertise a brain's capability. Needs the agent's
     token (registered + approved). Returns (ok, detail) so the caller can show the REAL reason on failure
     (e.g. the node's validation message) rather than guessing."""
@@ -726,15 +738,13 @@ def publish_meta_offer(agent: str, meta: dict, with_sample: bool = False) -> tup
         from crewaimeat.aimeat_crew import _aimeat_rest
 
         res = _aimeat_rest(
-            agent, "PUT", f"/v1/agents/{agent}/offers", {"offers": [offer]}, retries=1, return_error=True
+            agent, "PUT", f"{agent_route(agent)}/offers", {"offers": [offer]}, retries=1, return_error=True
         )
         if isinstance(res, dict) and res.get("ok") is False:
             status = res.get("http_status")
             detail = str((res.get("error") or {}).get("message") or "")[:300]
-            if status != 404:  # validation/auth errors are REAL — surface, don't mask
-                print(f"[offers] {agent}: offer route FAILED HTTP {status}: {detail}", file=sys.stderr)
-                return False, f"node rejected the offer (HTTP {status}): {detail}"
-            print(f"[offers] {agent}: offer route 404 -> direct memory write", file=sys.stderr)
+            print(f"[offers] {agent}: offer route FAILED HTTP {status}: {detail}", file=sys.stderr)
+            return False, f"node rejected the offer (HTTP {status}): {detail}"
         elif res is not None:
             print(f"[offers] {agent}: advertised offer '{offer['id']}' via route")
             return True, f"advertised '{offer['id']}'"
@@ -742,14 +752,6 @@ def publish_meta_offer(agent: str, meta: dict, with_sample: bool = False) -> tup
             return False, "could not reach the node — is the agent approved + the fleet up?"
     except Exception as exc:  # noqa: BLE001
         return False, f"could not reach the node ({exc!r}) — is the agent approved + the fleet up?"
-    ok = bool(
-        _aimeat_call(
-            agent,
-            "aimeat_memory_write",
-            {"key": f"agents.{agent}.offers", "visibility": "owner", "value": {"offers": [offer]}},
-        )
-    )
-    return (ok, "advertised (direct write)" if ok else "direct memory write failed")
 
 
 def publish_all(with_samples: bool = True) -> dict:

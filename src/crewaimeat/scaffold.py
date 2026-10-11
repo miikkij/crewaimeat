@@ -15,6 +15,8 @@ import sys
 from importlib import resources
 from pathlib import Path
 
+from crewaimeat.agent_manifest import agent_key
+
 _TEMPLATE_PKG = "crewaimeat.templates"
 _TEMPLATE_FILE = "example_crew.py"
 
@@ -96,7 +98,7 @@ Next steps
 
 5. Queue a task for '{name}' from the AIMEAT dashboard (its Tasks tab → + New Task)
    and watch it run: live status appears under the memory key
-   agents.{name}.tasks.<id>.live, and the deliverable lands in memory when done.
+   {agent_key(name)}.tasks.<id>.live, and the deliverable lands in memory when done.
 """
 
 

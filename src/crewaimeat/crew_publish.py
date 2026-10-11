@@ -106,8 +106,10 @@ def cmd_install(name: str, as_agent: str | None, gaii: str | None, node_backed: 
             print(f"FAILED: {exc}", file=sys.stderr)
             return 1
         print(f"wrote {path}")
+        from crewaimeat.crew_registry import registry_key
+
         print(
-            f"\n{doc['agent_name']} is node-backed: its crew stays at crews.registry.{doc['agent_name']}\n"
+            f"\n{doc['agent_name']} is node-backed: its crew stays at {registry_key(doc['agent_name'])}\n"
             "and is edited in AIMEAT. Nothing about it lives in this repo but the name."
         )
         return 0

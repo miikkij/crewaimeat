@@ -15,6 +15,8 @@ import re
 import time
 from collections.abc import Callable
 
+from crewaimeat.agent_manifest import crew_key
+
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
 
 
@@ -59,7 +61,7 @@ def _keys_of(mem_list_resp) -> list[str]:
 def _read_deliverable(call, agent: str, short: str):
     """The agent's deliverable for this subtask (memory key carries the task short id), or None."""
     for k in _keys_of(call(agent, "aimeat_memory_list", {})):
-        if k.startswith(f"crews.{agent}.") and short in k and k.endswith("latest_output"):
+        if k.startswith(f"{crew_key(agent)}.") and short in k and k.endswith("latest_output"):
             r = call(agent, "aimeat_memory_read", {"key": k})
             val = r.get("value") if isinstance(r, dict) else r
             if val:

@@ -37,6 +37,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from crewaimeat.agent_manifest import agent_route
+
 # Interactive tool identities (a Claude Desktop / goose / VS Code session) are the OWNER at a
 # keyboard, not fleet leftovers. They are never offered for deletion.
 TOOL_SESSION = re.compile(r"claude|goose|openhands|cursor|vscode|desktop|^chat$|^analyst$|hermes|dify|secretary|probe")
@@ -111,7 +113,7 @@ def delete(name: str, node_url: str, token: str) -> tuple[bool, str]:
 
     try:
         r = requests.delete(
-            f"{node_url.rstrip('/')}/v1/agents/{name}",
+            f"{node_url.rstrip('/')}{agent_route(name)}",
             headers={"Authorization": f"Bearer {token}"},
             timeout=30,
         )

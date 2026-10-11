@@ -35,6 +35,7 @@ import sys
 from zoneinfo import ZoneInfo
 
 from crewaimeat import forge_catalog
+from crewaimeat.agent_manifest import agent_key
 from crewaimeat.aimeat_crew import BuildContext, _aimeat_call
 from crewaimeat.contract_adopt import task_scope
 from crewaimeat.crew_def import validate_crew_doc
@@ -80,7 +81,7 @@ def deployed_agent_name(app_id: str, agent_name: str) -> str:
 
 def deploy_key(deployed: str) -> str:
     """The memory key the app observes for liveness: ``agents.<deployed>.deploy``."""
-    return f"agents.{deployed}.deploy"
+    return f"{agent_key(deployed)}.deploy"
 
 
 def _now_iso() -> str:

@@ -184,6 +184,15 @@ status cells, append decisions), so the two sides stay synced without drifting p
   `make_dm_tools` (LLM-crew tools: reply + read only). Inbound (a DM → a crew) is the daemon's `dm.inbound`
   tunnel-push drain (Phase 2, aimeat-crewai). **Scopes:** agents need `messages:send` + `messages:read`
   (both in the `coordinator` profile; grant explicitly for task-runner agents at device-auth).
+- **An agent's IDENTITY travels in the transport; its NAME spells its keys and routes.** A crew
+  defined on the node runs with `spec.agent_name` = `name#owner@node`. That form is the first
+  argument of `_aimeat_call` / `_aimeat_rest` and nothing else. A memory key or a `/v1/agents/…`
+  path is built with `agent_manifest.agent_key` / `crew_key` / `agent_route` (or `registry_key`,
+  `runtime_key`, `llm_choice.key_for`), never with an f-string of your own: 47 sites did that, and
+  on 2026-10-11 `tarjoama-testi` filed its offer, README and task record under
+  `agents.tarjoama-testi#…` while its offer route answered 404 (the `#` starts a URL fragment).
+  `tests/test_agent_addressing.py` refuses a new one. And a 404 from a route is a FAILURE to
+  report, never a cue to write the same thing somewhere else and call it published.
 - **Fail loud** — surface the real cause: reject at the boundary, or raise from one shared dispatcher.
 
 ---

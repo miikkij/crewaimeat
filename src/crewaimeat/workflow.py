@@ -23,7 +23,7 @@ from typing import Any
 
 from crewai.tools import tool
 
-from crewaimeat.agent_manifest import agent_local_name
+from crewaimeat.agent_manifest import agent_key, agent_local_name, agent_route, crew_key
 from crewaimeat.aimeat_crew import _GROUNDING_RULE, _aimeat_call, _aimeat_rest, _rate_task
 
 POLL_SECONDS = 15
@@ -190,7 +190,7 @@ def _read_agent_messages(agent_name: str) -> dict | None:
 
     A None here means the answer never arrived, so a workflow prompt stays unanswered rather than
     being read as a refusal — `_aimeat_rest` has already said WHY on stderr."""
-    return _aimeat_rest(agent_name, "GET", f"/v1/agents/{agent_name}/messages?per_page=50", retries=2)
+    return _aimeat_rest(agent_name, "GET", f"{agent_route(agent_name)}/messages?per_page=50", retries=2)
 
 
 def _find_prompt_answer(resp, prompt_id: str):
@@ -210,7 +210,7 @@ def _find_prompt_answer(resp, prompt_id: str):
 def _read_deliverable(agent: str, short: str):
     """Fallback: scan this agent's memory list for a deliverable key containing the task short id."""
     for k in _keys_of(_aimeat_call(agent, "aimeat_memory_list", {})):
-        if k.startswith(f"crews.{agent}.") and short in k and k.endswith("latest_output"):
+        if k.startswith(f"{crew_key(agent)}.") and short in k and k.endswith("latest_output"):
             r = _aimeat_call(agent, "aimeat_memory_read", {"key": k})
             return r.get("value") if isinstance(r, dict) else r
     return None
@@ -218,7 +218,7 @@ def _read_deliverable(agent: str, short: str):
 
 def _live_done(agent: str, tid: str) -> bool:
     """True when the worker's live-status memory says the run finished (state == 'done')."""
-    r = _aimeat_call(agent, "aimeat_memory_read", {"key": f"agents.{agent}.tasks.{tid}.live"})
+    r = _aimeat_call(agent, "aimeat_memory_read", {"key": f"{agent_key(agent)}.tasks.{tid}.live"})
     v = r.get("value") if isinstance(r, dict) else None
     return isinstance(v, dict) and v.get("state") == "done"
 
@@ -229,7 +229,7 @@ def _deliverable_by_key(agent: str, instruction: str, short: str):
     the `instruction` we sent, so we can reproduce it."""
     slug = re.sub(r"[^a-z0-9]+", "-", (instruction or "").lower()).strip("-")[:32].strip("-")
     token = f"{slug}-{short}" if slug else short
-    r = _aimeat_call(agent, "aimeat_memory_read", {"key": f"crews.{agent}.{token}.latest_output"})
+    r = _aimeat_call(agent, "aimeat_memory_read", {"key": f"{crew_key(agent)}.{token}.latest_output"})
     return r.get("value") if isinstance(r, dict) else None
 
 
@@ -335,14 +335,14 @@ def _reputation(coordinator_name: str, agent: str, gaii: str | None) -> tuple[st
             _aimeat_call(
                 coordinator_name,
                 "aimeat_memory_read_public",
-                {"gaii": gaii, "key": f"agents.{agent}.statistics.custom.selection"},
+                {"gaii": gaii, "key": f"{agent_key(agent)}.statistics.custom.selection"},
             )
         )
         bench = _mem_value(
             _aimeat_call(
                 coordinator_name,
                 "aimeat_memory_read_public",
-                {"gaii": gaii, "key": f"agents.{agent}.statistics.custom.benchmark"},
+                {"gaii": gaii, "key": f"{agent_key(agent)}.statistics.custom.benchmark"},
             )
         )
     except Exception:  # noqa: BLE001 — reputation is advisory; never break discovery

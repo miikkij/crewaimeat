@@ -21,6 +21,7 @@ import urllib.parse
 
 import requests
 
+from crewaimeat.agent_manifest import crew_key
 from crewaimeat.aimeat_crew import _aimeat_call
 from crewaimeat.ledger_report import report_llm_usage
 
@@ -119,7 +120,7 @@ def _generate_on_node(agent_name: str, prompt: str) -> dict:
         agent_name,
         "aimeat_memory_write",
         {
-            "key": f"crews.{agent_name}.images.{stamp}-{h}",
+            "key": f"{crew_key(agent_name)}.images.{stamp}-{h}",
             "value": {"prompt": prompt, "url": url, "mime": mime, "bytes": res.get("size"), "model": res.get("model")},
             "visibility": "public",
         },
@@ -221,7 +222,7 @@ def generate_image(agent_name: str, prompt: str, *, size: str = "2K", aspect_rat
         agent_name,
         "aimeat_memory_write",
         {
-            "key": f"crews.{agent_name}.images.{stamp}-{h}",
+            "key": f"{crew_key(agent_name)}.images.{stamp}-{h}",
             "value": {"prompt": prompt, "url": pub, "mime": mime, "bytes": len(data)},
             "visibility": "public",
         },

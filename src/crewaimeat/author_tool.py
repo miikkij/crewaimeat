@@ -32,6 +32,7 @@ from typing import Any
 import requests
 from crewai.tools import tool
 
+from crewaimeat.agent_manifest import agent_route
 from crewaimeat.app_verify import cortex_syntax_ok
 
 # Reuse the shared auth + REST helpers (stable, not generator-specific).
@@ -332,7 +333,7 @@ def make_author_tools(agent_name: str, owner: str | None = None, task_id: str | 
                 agent_name,
                 owner,
                 "POST",
-                f"/v1/agents/{agent_name}/tasks/{task_id}/event",
+                f"{agent_route(agent_name)}/tasks/{task_id}/event",
                 {"type": "progress", "message": msg[:300]},
             )
 

@@ -74,6 +74,45 @@ def agent_local_name(identity: str) -> str:
     return str(identity or "").split("#", 1)[0].strip()
 
 
+def agent_key(identity: str, *parts: str) -> str:
+    """`agents.<name>[.<part>...]` — a memory key in an agent's namespace, built from its NAME.
+
+    THE ONE PLACE AN AGENT KEY IS SPELLED. An agent whose crew is defined on the node runs with its
+    full identity as `spec.agent_name` (`name#owner@node`: the daemon needs it to pick the right
+    agent when one home serves two owners). Every call site that wrote `f"agents.{agent_name}..."`
+    then filed its record under a key nothing reads. Measured on production 2026-10-11 with the
+    agent `tarjoama-testi`: its offer, its README, its evaluation context and its task's live
+    record all landed under `agents.tarjoama-testi#happydude500001@aimeat-finland-001-genesis.*`,
+    and `GET /v1/agents/tarjoama-testi/offers` answered an empty list. Forty-seven sites had the
+    same shape and three had been fixed one at a time; tests/test_agent_addressing.py now refuses a
+    new one.
+    """
+    return ".".join(["agents", agent_local_name(identity), *[str(p) for p in parts if p]])
+
+
+def crew_key(identity: str, *parts: str) -> str:
+    """`crews.<name>[.<part>...]` — where an agent's deliverables live, built from its NAME.
+
+    The same rule as `agent_key`, for the other namespace an agent writes under. The key a run files
+    its result at was already stripped (`_deliverable_key`); the places that READ or ADVERTISE that
+    location were not — an offer told its buyers the deliverable was under `crews.name#owner@node.`.
+    `crews.registry.<name>`, `crews.runtime.<name>` and `crews.llm.<name>` have their own one-line
+    builders (`registry_key`, `runtime_key`, `llm_choice.key_for`), which strip the same way.
+    """
+    return ".".join(["crews", agent_local_name(identity), *[str(p) for p in parts if p]])
+
+
+def agent_route(identity: str, suffix: str = "") -> str:
+    """`/v1/agents/<name><suffix>` — a node route addressed by agent NAME.
+
+    The same defect as `agent_key`, with a worse symptom: in a URL the `#` of an identity starts a
+    FRAGMENT, so `PUT /v1/agents/name#owner@node/offers` leaves this machine as
+    `PUT /v1/agents/name` and the node answers 404 for a route that exists. The identity belongs in
+    the TRANSPORT argument (the first argument of `_aimeat_rest` / `_aimeat_call`), never in the path.
+    """
+    return f"/v1/agents/{agent_local_name(identity)}{suffix}"
+
+
 # --- Agent mode ------------------------------------------------------------------------------ #
 # The node's five agent modes. Which one an agent HAS is the owner's standing instruction on the node;
 # the crew only states which one it EXPECTS, and registration asks for exactly that

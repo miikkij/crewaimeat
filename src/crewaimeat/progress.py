@@ -58,6 +58,8 @@ from crewai.events import (  # noqa: E402
     ToolUsageStartedEvent,
 )
 
+from crewaimeat.agent_manifest import agent_key
+
 # NB: per-LLM-call usage metering (AIMEAT LEDGER / TARGET-016) is NOT here anymore — it moved into
 # the aimeat-crewai package (>=0.16.0): run_crew_daemon auto-subscribes to LLMCallCompletedEvent and
 # POSTs the `llm_call` telemetry itself (run_id = the AIMEAT task id via a ContextVar). Keeping a copy
@@ -199,7 +201,7 @@ class ProgressReporter:
 
     # --- small internal helpers ----------------------------------------- #
     def _live_key(self, task_id: str) -> str:
-        return f"agents.{self.agent_name}.tasks.{task_id}.live"
+        return f"{agent_key(self.agent_name)}.tasks.{task_id}.live"
 
     def _tid(self) -> str | None:
         """Resolve the AIMEAT task this event belongs to, most-reliable first:

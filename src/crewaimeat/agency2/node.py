@@ -17,6 +17,7 @@ from typing import Any
 import requests
 
 from crewaimeat.agency2 import paths
+from crewaimeat.agent_manifest import agent_local_name
 from crewaimeat.spawn_state import serve_auth_headers
 
 
@@ -116,7 +117,7 @@ def tasks(agent: str, *, per_page: int = 20) -> list[dict]:
 def runtime_report(agent: str) -> dict | None:
     """`crews.runtime.<agent>` — what the runtime last loaded and whether it was valid (json_agent)."""
     try:
-        data = call(agent, "aimeat_memory_read", {"key": f"crews.runtime.{agent}"})
+        data = call(agent, "aimeat_memory_read", {"key": f"crews.runtime.{agent_local_name(agent)}"})
     except Refused as exc:
         if exc.code in ("NOT_FOUND", "MEMORY_NOT_FOUND"):
             return None

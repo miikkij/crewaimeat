@@ -342,7 +342,7 @@ def _supervise_resident(res: _Resident, stop: threading.Event) -> None:
         and in `crews.runtime.<agent>`, where the owner's Crew tab shows it.
     """
     from crewaimeat.crew_def import CrewDocError
-    from crewaimeat.json_agent import run_json_agent
+    from crewaimeat.json_agent import run_json_agent, runtime_key
     from crewaimeat.memory_tools import MemoryReadRefused
 
     label, restarts = res.agent, 0
@@ -373,7 +373,7 @@ def _supervise_resident(res: _Resident, stop: threading.Event) -> None:
                 return
             except (CrewDocError, MemoryReadRefused):
                 print(
-                    f"[host] {label}: CANNOT START (the reason is above and in crews.runtime.{label}); "
+                    f"[host] {label}: CANNOT START (the reason is above and in {runtime_key(label)}); "
                     f"asking again in {_READMIT_S / 60:.0f} min",
                     file=sys.stderr,
                 )

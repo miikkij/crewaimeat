@@ -28,6 +28,7 @@ import json
 import requests
 from crewai.tools import tool
 
+from crewaimeat.agent_manifest import agent_route
 from crewaimeat.generator_tool import _discover_owner, _token
 
 SCHED_TIMEOUT = 30
@@ -63,7 +64,7 @@ def make_schedule_tools(agent_name: str, owner: str | None = None) -> list:
         return data, None
 
     def _managed() -> list:
-        data, err = _req("GET", f"/v1/agents/{agent_name}/schedules")
+        data, err = _req("GET", f"{agent_route(agent_name)}/schedules")
         if err:
             return []
         return ((data or {}).get("data") or {}).get("managed") or []
@@ -137,7 +138,7 @@ def make_schedule_tools(agent_name: str, owner: str | None = None) -> list:
             body["action_id"] = action_id
         else:
             return f"FAILED: unknown kind '{kind}'. Use 'extension', 'ai', or 'agent_task'."
-        data, err = _req("POST", f"/v1/agents/{post_as}/schedules", body)  # caller's OWN token; path = target
+        data, err = _req("POST", f"{agent_route(post_as)}/schedules", body)  # caller's OWN token; path = target
         if err:
             return f"FAILED to create schedule (target '{post_as}'): {err}"
         sched = (data or {}).get("data") or {}

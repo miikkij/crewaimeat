@@ -29,14 +29,15 @@ from types import SimpleNamespace
 
 from crewai import Crew, Process
 
+from crewaimeat.agent_manifest import agent_key, agent_route
 from crewaimeat.aimeat_crew import _aimeat_call
 from crewaimeat.llm import get_llm
 
 MIN_N = 10  # never propose on thin data (the n=3 lesson — see doc 20)
 WEAK_FLOOR = 2.5  # avgStars below this (with enough n) = consistently weak
 COOLDOWN_DAYS = 3  # don't re-propose the same (context, signal) within this window
-_PROPOSED_KEY = "agents.{agent}.statistics.custom.evolve_proposed"  # time-based dedup (anti-spam)
-_LINEAGE_KEY = "agents.{agent}.statistics.custom.evolve_lineage"  # PERMANENT: a variant was built
+_PROPOSED_KEY = "statistics.custom.evolve_proposed"  # time-based dedup (anti-spam)
+_LINEAGE_KEY = "statistics.custom.evolve_lineage"  # PERMANENT: a variant was built
 
 
 def _has_variant(agent: str, ctx: str, signal: str) -> bool:
@@ -46,7 +47,7 @@ def _has_variant(agent: str, ctx: str, signal: str) -> bool:
     selection), the monitor must stop re-proposing the SAME evolution — even after the cooldown, and
     even if the parent still shows the signal (e.g. a specialist took some traffic but the parent's
     own dist is unchanged). A genuinely DIFFERENT signal for the same context is still allowed."""
-    rec = (_aimeat_call(agent, "aimeat_memory_read", {"key": _LINEAGE_KEY.format(agent=agent)}) or {}).get("value")
+    rec = (_aimeat_call(agent, "aimeat_memory_read", {"key": agent_key(agent, _LINEAGE_KEY)}) or {}).get("value")
     return bool(isinstance(rec, dict) and (rec.get(ctx) or {}).get(signal))
 
 
@@ -55,7 +56,7 @@ def record_evolution(parent: str, ctx: str, signal: str, variant: str, mode: str
 
     Called by the selection step (P4) when the owner picks a variant. mode = 'replace' | 'specialist'.
     Idempotent; stores the latest variant per (ctx, signal)."""
-    key = _LINEAGE_KEY.format(agent=parent)
+    key = agent_key(parent, _LINEAGE_KEY)
     rec = (_aimeat_call(parent, "aimeat_memory_read", {"key": key}) or {}).get("value")
     rec = rec if isinstance(rec, dict) else {}
     rec.setdefault(ctx, {})[signal] = {
@@ -77,7 +78,7 @@ def _read_reviews(agent: str, owner: str | None) -> dict:
     from crewaimeat.aimeat_crew import _aimeat_rest
 
     try:
-        data = _aimeat_rest(agent, "GET", f"/v1/agents/{agent}/statistics", retries=1)
+        data = _aimeat_rest(agent, "GET", f"{agent_route(agent)}/statistics", retries=1)
         return (data or {}).get("reviews", {}) if isinstance(data, dict) else {}
     except Exception:  # noqa: BLE001 — monitoring is best-effort, never break the task
         return {}
@@ -98,7 +99,7 @@ def _signal(stats: dict) -> tuple[str | None, str]:
 
 
 def _recently_proposed(agent: str, ctx: str) -> bool:
-    rec = (_aimeat_call(agent, "aimeat_memory_read", {"key": _PROPOSED_KEY.format(agent=agent)}) or {}).get("value")
+    rec = (_aimeat_call(agent, "aimeat_memory_read", {"key": agent_key(agent, _PROPOSED_KEY)}) or {}).get("value")
     entry = (rec or {}).get(ctx) if isinstance(rec, dict) else None
     ts = (entry or {}).get("ts")
     if not ts:
@@ -110,7 +111,7 @@ def _recently_proposed(agent: str, ctx: str) -> bool:
 
 
 def _mark_proposed(agent: str, ctx: str, signal: str) -> None:
-    key = _PROPOSED_KEY.format(agent=agent)
+    key = agent_key(agent, _PROPOSED_KEY)
     rec = (_aimeat_call(agent, "aimeat_memory_read", {"key": key}) or {}).get("value")
     rec = rec if isinstance(rec, dict) else {}
     rec[ctx] = {"signal": signal, "ts": datetime.now(timezone.utc).isoformat()}

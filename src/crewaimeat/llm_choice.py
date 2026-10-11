@@ -45,6 +45,8 @@ import sys
 import time
 from typing import Any
 
+from crewaimeat.agent_manifest import agent_route
+
 DEFAULT_KEY = "crews.llm.default"
 CATALOG_KEY = "crews.llm.catalog"
 
@@ -55,8 +57,10 @@ _CACHE: dict[str, tuple[float, Any]] = {}
 
 
 def key_for(agent_name: str) -> str:
-    """`crews.llm.<agent>` — one agent's own choice."""
-    return f"crews.llm.{agent_name}"
+    """`crews.llm.<agent>` — one agent's own choice. By NAME: see agent_manifest.agent_key."""
+    from crewaimeat.agent_manifest import agent_local_name
+
+    return f"crews.llm.{agent_local_name(agent_name)}"
 
 
 def _read(agent_name: str, key: str) -> Any:
@@ -137,12 +141,9 @@ def _effective(agent_name: str) -> Any:
     if hit and now - hit[0] < CACHE_TTL_S:
         return hit[1]
     try:
-        from crewaimeat.agent_manifest import agent_local_name
         from crewaimeat.aimeat_crew import _aimeat_rest
 
-        res = _aimeat_rest(
-            agent_name, "GET", f"/v1/agents/{agent_local_name(agent_name)}/crew/llm", retries=1, return_error=True
-        )
+        res = _aimeat_rest(agent_name, "GET", f"{agent_route(agent_name)}/crew/llm", retries=1, return_error=True)
     except Exception:  # noqa: BLE001 — a routing lookup must never take the fleet down
         res = None
     answer = res if isinstance(res, dict) and res.get("ok") is not False and "value" in res else _NO_ANSWER

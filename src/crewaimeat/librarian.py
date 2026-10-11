@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 
 from crewai.tools import tool
 
+from crewaimeat.agent_manifest import agent_key
 from crewaimeat.aimeat_crew import _aimeat_call
 from crewaimeat.llm import get_llm
 from crewaimeat.workflow import _items_of  # owner_scope list -> [{key, value}, ...]
@@ -214,7 +215,7 @@ def search_index(agent_name: str, need: str, top_k: int = 5, prefix: str | None 
     return results
 
 
-LIBRARY_KEY = "agents.{agent}.library"
+LIBRARY_KEY = "library"  # under agent_key(<agent>)
 LIBRARY_CAP = 200  # keep the per-agent library compact (pointers, not payloads): newest N entries
 
 
@@ -235,7 +236,7 @@ def contribute_deliverable(agent_name: str, deliverable_key: str, content: str, 
         "confidence": meta["confidence"],
         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
     }
-    lib_key = LIBRARY_KEY.format(agent=agent_name)
+    lib_key = agent_key(agent_name, LIBRARY_KEY)
     r = _aimeat_call(agent_name, "aimeat_memory_read", {"key": lib_key})
     cur = r.get("value") if isinstance(r, dict) else None
     arr = [e for e in cur if isinstance(e, dict) and e.get("key") != deliverable_key] if isinstance(cur, list) else []
