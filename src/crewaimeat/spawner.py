@@ -487,6 +487,18 @@ class Spawner:
             now = time.monotonic()
             st.wakes += 1
             if st.busy:
+                if (now - st.started_at) < self.debounce_s:
+                    # THE SAME BURST THAT STARTED THIS WORKER. The debounce below only ever saw wakes
+                    # for an agent with NO worker, and the first wake of a burst starts one at once —
+                    # so the second wake of every burst landed here and bought a second process.
+                    # Measured on the live fleet 2026-10-11, twice: one agent start gave two wake
+                    # signals in the same second, the task was done in 13 s, and a second worker
+                    # then started, found nothing and exited after 8 s. Coalescing is safe inside
+                    # this window because the worker has not read anything yet: it lists its work
+                    # only after its imports, which take longer than the window.
+                    st.last_wake_at = now
+                    _say(f"[spawner] {agent}: wake coalesced (within {self.debounce_s}s of the start)")
+                    return
                 # Single-flight: never a second process for the same agent. Not dropped — re-run on exit.
                 st.dirty = True
                 st.last_wake_at = now

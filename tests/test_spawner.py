@@ -188,6 +188,34 @@ def test_debounce_coalesces_a_burst_into_one_run():
     assert len(spawned) == 1
 
 
+def test_the_second_wake_of_the_burst_that_started_a_worker_buys_no_second_process():
+    """MEASURED on the live fleet 2026-10-11, twice. Starting a stopped agent that had one task gave
+    two wake signals in the same second. The first started the worker; the second found it busy,
+    was queued as a re-run, and a second worker started when the task was already done, found
+    nothing and exited after 8 s. The debounce existed for exactly this and never applied: it only
+    looked at wakes for an agent with no worker."""
+    sp, spawned = make_spawner(["a"], debounce_s=60.0)
+    sp.on_wake("a")
+    sp.on_wake("a")  # the same burst: the worker has not read anything yet
+    assert len(spawned) == 1 and sp.state["a"].dirty is False
+    spawned[0][2].finish(0)
+    sp.reap()
+    assert len(spawned) == 1, "one start, one worker"
+
+
+def test_a_wake_that_arrives_later_in_a_run_is_still_re_run_and_never_dropped(monkeypatch):
+    """Past the window the worker may already have listed its work, so what arrives now may be work
+    it has not seen. That wake keeps its re-run: the invariant is that nothing is dropped."""
+    sp, spawned = make_spawner(["a"], debounce_s=2.0)
+    sp.on_wake("a")
+    sp.state["a"].started_at -= 5.0  # the worker has been running for five seconds
+    sp.on_wake("a")
+    assert sp.state["a"].dirty is True
+    spawned[0][2].finish(0)
+    sp.reap()
+    assert len(spawned) == 2
+
+
 # --------------------------------------------------------------------------- #
 # The worker cap and the queue: nothing is silently dropped
 # --------------------------------------------------------------------------- #
