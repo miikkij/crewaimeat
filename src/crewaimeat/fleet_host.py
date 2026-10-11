@@ -320,7 +320,9 @@ class _Resident:
         self.identity, self.agent = identity, agent
         self.thread: threading.Thread | None = None
         self.ended_at = 0.0  # monotonic; 0 while it has never ended
-        self.busy = False  # it ended because another runtime held the agent's lock
+        self.busy = False  # it ended for a reason that clears by itself: another runtime held the
+        #   agent's lock, or this host asked the loop to end. Either way it may be started again at once.
+        self.stop = threading.Event()  # set by the host to end THIS agent's daemon loop, and no other
 
 
 def _supervise_resident(res: _Resident, stop: threading.Event) -> None:
@@ -345,11 +347,18 @@ def _supervise_resident(res: _Resident, stop: threading.Event) -> None:
 
     label, restarts = res.agent, 0
     try:
-        while not stop.is_set():
+        while not stop.is_set() and not res.stop.is_set():
             try:
                 _set_state(res.agent, "running")
-                run_json_agent(res.identity)  # blocks in run_crew's daemon loop while the agent lives
-                print(f"[host] {label}: its loop returned", file=sys.stderr)
+                # Blocks in run_crew's daemon loop while the agent lives. `stop_event` is this host's
+                # handle on that one loop (aimeat-crewai 0.33.0): set, it returns within 5 seconds,
+                # after a running kickoff has finished.
+                run_json_agent(res.identity, stop_event=res.stop)
+                res.busy = res.stop.is_set()
+                print(
+                    f"[host] {label}: " + ("its loop ended, as asked" if res.busy else "its loop returned"),
+                    file=sys.stderr,
+                )
                 _set_state(res.agent, "stopped")
                 return
             except SystemExit as exc:
@@ -392,12 +401,19 @@ def _follow_residents(residents: dict[str, _Resident], wanted: list[str] | None,
     """Make the running node-defined agents match `wanted` (None = the roster could not be read:
     nobody is started and nobody is given up).
 
-    A THREAD CANNOT BE STOPPED FROM OUTSIDE, and this does not pretend otherwise. An agent that
-    leaves the roster because it MOVED ends by itself: the node refuses its credential here, the
-    connector reports `auth_failed`, and the daemon loop exits on that within one cycle. An agent
-    that leaves because the owner changed its run mode keeps its thread until this host restarts —
-    it still holds the agent's lock, so the spawner's workers stand down and the work is done once,
-    here. That is said once, when it happens, so nobody reads a quiet log as a change taken.
+    AN AGENT THAT LEAVES THE ROSTER HAS ITS LOOP ENDED, AND ONLY ITS OWN. Each agent's daemon is
+    started with a `stop_event` of its own; setting it ends that one loop within 5 seconds, after a
+    kickoff in flight has finished, and every other thread is untouched. Leaving means the owner
+    moved the agent to another computer or changed its run mode to spawn — in the second case the
+    thread used to live until the host restarted, holding the agent's lock so that the spawner's
+    workers stood down. Until 0.33.0 a thread could not be ended from outside at all.
+
+    A STOPPED AGENT DOES NOT LEAVE. The node's `stopped` (POST /v1/agents/{name}/stop) keeps the
+    agent on this roster, and its thread stays up on purpose: the node gives a stopped agent no new
+    work and does not wake it, so the daemon sits idle, and a start takes effect the moment the node
+    pushes the waiting work — no half-minute roster read in between, which is the whole point of an
+    agent that is always on. Ending the thread would free nothing either: it is one thread in a
+    process that keeps crewai loaded for as long as it runs anything.
     """
     from crewaimeat import agent_manifest, spawn_state
 
@@ -423,6 +439,7 @@ def _follow_residents(residents: dict[str, _Resident], wanted: list[str] | None,
         _prepare_runtime()
         res = residents.setdefault(identity, _Resident(identity, agent_manifest.agent_local_name(identity)))
         res.busy = False
+        res.stop = threading.Event()  # a new handle for a new loop: the last one may have been set
         _set_state(res.agent, "starting")
         res.thread = threading.Thread(target=_supervise_resident, args=(res, stop), name=res.agent, daemon=True)
         res.thread.start()
@@ -432,10 +449,10 @@ def _follow_residents(residents: dict[str, _Resident], wanted: list[str] | None,
     for identity in sorted(set(residents) - set(wanted)):
         res = residents[identity]
         if res.thread is not None and res.thread.is_alive():
+            res.stop.set()
             _say_once(
-                f"{res.agent}: no longer a resident agent of this connector on the node. Its loop ends by "
-                "itself when the node refuses its credential here (a move); a changed run mode takes hold "
-                "when this host restarts.",
+                f"{res.agent}: no longer a resident agent of this connector on the node (moved to another "
+                "computer, or changed to spawn) — ending its loop; work it is doing finishes first.",
                 f"left:{identity}",
             )
             continue

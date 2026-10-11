@@ -314,6 +314,8 @@ class Spawner:
                 return  # this generation is over; a re-join started its own poll
             if st.busy:
                 continue
+            if agent in STOPPED_ON_NODE:
+                continue  # the node holds its work and its own task list would answer agent_stopped
             fresh = self._unwoken_work(agent)
             if fresh:
                 self._woken_tasks.setdefault(agent, set()).update(fresh)
@@ -1075,6 +1077,7 @@ def read_node_roster(run_mode: str = agent_manifest.RUN_SPAWN) -> tuple[list[str
     notes: list[str] = []
     unreadable: set[str] = set()
     placed: dict[str, str | None] = {}
+    stopped: set[str] = set()
     for owner, candidates in sorted(callers.items()):
         if not candidates:
             notes.append(f"{owner}: no agent on this connector holds a credential the node accepts")
@@ -1109,7 +1112,9 @@ def read_node_roster(run_mode: str = agent_manifest.RUN_SPAWN) -> tuple[list[str
             out.append(identity)
             if "install_id" in r:  # the key is there on every row of a node that sends it, null or not
                 placed[identity] = str(r["install_id"]) if r["install_id"] else None
-    return RosterRead(sorted(set(out)), notes, unreadable, placed or None)
+            if r.get("stopped") is True:
+                stopped.add(identity)
+    return RosterRead(sorted(set(out)), notes, unreadable, placed or None, stopped)
 
 
 class RosterRead(tuple):
@@ -1120,15 +1125,21 @@ class RosterRead(tuple):
     17b6e20aa on (`install_id` on `GET /v1/agents`). `placed` is None when no row carried the field:
     an older node, and then `carried_here` asks the connector list instead.
 
-    A tuple of three with an attribute, not a fourth element: every caller and every test double
-    unpacks three, and a plain tuple standing in for this simply has no `placed`.
+    `stopped` is the identities whose row says `stopped: true`: the owner stopped the agent on the
+    node (POST /v1/agents/{name}/stop). They stay in `agents` — a stopped agent is still this
+    connector's agent — and the node itself gives them no new work and does not wake them.
+
+    A tuple of three with attributes, not more elements: every caller and every test double
+    unpacks three, and a plain tuple standing in for this simply has no `placed` or `stopped`.
     """
 
     placed: dict[str, str | None] | None = None
+    stopped: frozenset[str] = frozenset()
 
-    def __new__(cls, agents: list[str], notes: list[str], unreadable: set[str], placed=None):
+    def __new__(cls, agents: list[str], notes: list[str], unreadable: set[str], placed=None, stopped=()):
         self = super().__new__(cls, (agents, notes, unreadable))
         self.placed = placed
+        self.stopped = frozenset(stopped)
         return self
 
 
@@ -1402,10 +1413,26 @@ def discover_agents(root: Path) -> list[str]:
         # The daemon that answered the roster a moment ago did not answer for itself. Nobody is
         # retired on that: the caller keeps every agent it has, as for an owner that could not be asked.
         raise RosterUnreadable("the serve daemon did not say which agents it carries", [], {"*"})
+    # STOPPED ON THE NODE IS NOT GONE FROM HERE. The agent keeps its parks: the node sends a stopped
+    # agent no wake, so nothing starts, and when the owner starts it again the node's push finds the
+    # park already there — no roster read in between. Said once per change, because an agent that
+    # does nothing on purpose looks exactly like one that is broken.
+    held_back = sorted(set(mine) & set(getattr(read, "stopped", ())))
+    STOPPED_ON_NODE.clear()
+    STOPPED_ON_NODE.update(held_back)
+    _note_or_clear(
+        f"{len(held_back)} spawn agent(s) the owner has stopped on the node; they stay parked and start no "
+        f"work until started again: {_some(held_back)}"
+        if held_back
+        else None,
+        key="spawn-stopped",
+    )
     return mine
 
 
 _LAST_NOTE: dict[str, str] = {}
+# The agents of the last roster read that the node marks stopped. One spawner per process reads it.
+STOPPED_ON_NODE: set[str] = set()
 
 
 def _note_once(note: str, key: str = "roster") -> None:

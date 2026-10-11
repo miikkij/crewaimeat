@@ -264,8 +264,15 @@ edition shipped with 21 articles and no front page. `write-a`/`write-b`/`editori
   it set the host stays up empty (no crewai imported) to take the next agent. Never set it where no
   host runs (agency2, the TUI's start, a lone crew): the node then accepts an always-on agent that
   nobody runs. The computer's NAME (`AIMEAT_INSTALL_NAME`) defaults in `serve_guard`, the one place
-  every daemon start ends. A resident thread cannot be stopped from outside: a move ends it (the
-  daemon loop exits on `auth_failed`), a changed run mode waits for the next host restart.
+  every daemon start ends. Each resident thread has its own `CrewSpec.stop_event` (`aimeat-crewai>=0.33.0`):
+  the host sets it when the agent leaves this connector's resident roster (moved, or changed to
+  spawn), and that one loop ends within 5 s, after a kickoff in flight finishes.
+- **A STOPPED agent stays where it is (2026-10-11).** The owner stops and starts an agent on the node
+  (`POST /v1/agents/{name}/stop|start`); the roster rows carry `stopped`. The node gives a stopped
+  agent no new work and no wake, so the runtimes hold nothing back themselves: the spawner keeps its
+  parks, the fleet host keeps the thread, and a start is taken by the node's own push with no roster
+  read in between. `stopped` is only READ here — to say it once in the log and to skip the spawner's
+  backlog poll. Do not end a daemon because its agent is stopped; `stop_event` is for LEAVING.
 - **`task-runner` mode is load-bearing, not boilerplate — and the OWNER sets it on the node.**
   The owner decides it in one of two places: at registration, where connector 3.x accepts
   `connect … --mode task-runner` again and the owner approves the mode in the same device-auth consent

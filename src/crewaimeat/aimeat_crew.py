@@ -176,6 +176,11 @@ class CrewSpec:
     #   AIMEAT >= 1.16.2 + aimeat-crewai >= 0.3.8); 1 = serial (unchanged); >1 = a bounded thread pool
     #   with a SEPARATE liaison+MCP per task (a shared stdio MCP can't run parallel kickoffs). Best for
     #   I/O-bound crews (mostly waiting on the LLM). PROPOSE + inbox stay serial on the shared liaison.
+    stop_event: Any = None  # a `threading.Event` the HOST of this daemon sets to end it (aimeat-crewai
+    #   >= 0.33.0): the loop returns within 5 seconds, after a running kickoff finishes. None = it runs
+    #   until the process ends, as before. This is how fleet_host lets go of ONE agent thread without
+    #   stopping the others — an always-on agent the owner moved to another computer or switched to
+    #   spawn. It is not how an agent is STOPPED: the node holds a stopped agent by itself.
     one_shot: bool = False  # SPAWNED mode: run ONE daemon cycle (PROPOSE -> EXECUTE -> messages ->
     #   records -> dms) and return, instead of looping forever. The spawner starts this process on a
     #   tunnel wake and the process exits when the cycle is done, so an idle agent costs nothing at all
@@ -3270,6 +3275,12 @@ def run_crew(spec: CrewSpec) -> None:
                 one_shot=spec.one_shot,  # spawned mode: one cycle, then exit and give the memory back
                 serve_options={"auto_start": False},  # crews never spawn the daemon — only start_fleet does
                 on_error=_on_daemon_error,  # the package's own post-kickoff refusal check reports here
+                # The host's handle to end this one daemon — PASSED ONLY WHEN A HOST GAVE ONE. The kwarg
+                # exists from aimeat-crewai 0.33.0, and a spawn worker starts from whatever the venv
+                # holds at that moment: between a merge of this file into a live checkout and the next
+                # `uv sync`, that is still the older package, where an unknown kwarg would fail EVERY
+                # worker at daemon start. A worker never has a handle, so it never sends one.
+                **({"stop_event": spec.stop_event} if spec.stop_event is not None else {}),
             )
             return
         except AimeatServeError as exc:

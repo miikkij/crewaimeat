@@ -50,12 +50,21 @@ class _Runs:
         self.started: list[str] = []
         self.release = threading.Event()
         self.ending: dict[str, BaseException] = {}
+        self.handles: dict[str, list[threading.Event]] = {}
+        self.threads: list[threading.Thread] = []
 
-    def __call__(self, identity: str, **_kw) -> None:
+    def __call__(self, identity: str, **kw) -> None:
+        self.threads.append(threading.current_thread())
         self.started.append(identity)
+        handle = kw.get("stop_event")
+        self.handles.setdefault(identity, []).append(handle)
         if identity in self.ending:
             raise self.ending[identity]
-        self.release.wait(5)
+        # Like the real daemon loop: until the process is done with it, or its own handle is set.
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not self.release.wait(0.01):
+            if handle is not None and handle.is_set():
+                return
 
 
 @pytest.fixture
@@ -66,6 +75,11 @@ def runs(monkeypatch):
     monkeypatch.setattr(json_agent, "run_json_agent", r)
     yield r
     r.release.set()
+    # Joined before the next test: the host's status is one module-level dict, and a thread still
+    # ending would write its last state into whichever test came next.
+    for t in r.threads:
+        if t is not threading.current_thread():
+            t.join(timeout=3)
 
 
 def _settle(residents) -> None:
@@ -246,17 +260,63 @@ def test_a_refused_credential_ends_the_thread_and_the_agent_leaves_with_the_rost
     assert "left the resident roster" in capsys.readouterr().err
 
 
-def test_a_running_agent_that_leaves_the_roster_is_named_not_silently_kept(host, runs, capsys):
-    """A thread cannot be stopped from outside. When the owner changes the run mode the loop keeps
-    running until the host restarts, and the log says so once instead of looking as if it obeyed."""
-    stop, residents, a = threading.Event(), {}, _gaii("switched")
+def test_an_agent_that_leaves_the_roster_has_its_own_loop_ended_and_no_other(host, runs, capsys):
+    """The owner changes an always-on agent to spawn, or moves it. Until aimeat-crewai 0.33.0 its
+    thread could not be ended from outside and lived until the host restarted; each daemon now gets
+    a `stop_event` of its own, and setting it ends that one loop."""
+    stop, residents = threading.Event(), {}
+    stays, leaves = _gaii("stays"), _gaii("leaves")
+    host._follow_residents(residents, [stays, leaves], stop)
+    _wait_started(runs, 2)
+    assert all(isinstance(h[0], threading.Event) for h in runs.handles.values()), "every loop gets a handle"
+    assert runs.handles[stays][0] is not runs.handles[leaves][0], "and each its own"
+
+    host._follow_residents(residents, [stays], stop)
+    residents[leaves].thread.join(timeout=2)
+    assert not residents[leaves].thread.is_alive(), "its loop ended"
+    assert residents[stays].thread.is_alive() and not runs.handles[stays][0].is_set(), "nobody else's did"
+    assert not stop.is_set(), "and the host itself was not stopped to do it"
+    said = capsys.readouterr().err
+    assert said.count("no longer a resident agent") == 1 and "its loop ended, as asked" in said
+
+    host._follow_residents(residents, [stays], stop)
+    assert set(residents) == {stays}
+    assert host._status.get("stays") == "running" and "leaves" not in host._status
+    assert "left the resident roster" in capsys.readouterr().err
+
+
+def test_an_agent_let_go_and_wanted_again_is_started_at_once_with_a_new_handle(host, runs):
+    """Changed to spawn and back within a minute. The first loop was ended on request, which is not a
+    failure to wait ten minutes over; and the handle that ended it must not end the next loop."""
+    stop, residents, a = threading.Event(), {}, _gaii("back")
     host._follow_residents(residents, [a], stop)
     _wait_started(runs, 1)
     host._follow_residents(residents, [], stop)
-    host._follow_residents(residents, [], stop)
-    said = capsys.readouterr().err
-    assert said.count("no longer a resident agent") == 1
-    assert a in residents and residents[a].thread.is_alive()
+    residents[a].thread.join(timeout=2)
+    host._follow_residents(residents, [a], stop)
+    _wait_started(runs, 2)
+    assert residents[a].thread.is_alive()
+    first, second = runs.handles[a]
+    assert first.is_set() and not second.is_set() and first is not second
+
+
+def test_the_daemon_is_handed_the_stop_handle_the_crew_spec_carries():
+    """`CrewSpec.stop_event` reaches `run_crew_daemon(stop_event=...)`, which exists from
+    aimeat-crewai 0.33.0. Pinned against the real signature and the real call site: below the floor
+    the kwarg is unknown and every crew fails at daemon start."""
+    import dataclasses
+    import inspect
+
+    from aimeat_crewai.daemon import run_crew_daemon
+
+    from crewaimeat import aimeat_crew
+
+    assert "stop_event" in inspect.signature(run_crew_daemon).parameters
+    assert "stop_event" in {f.name for f in dataclasses.fields(aimeat_crew.CrewSpec)}
+    src = inspect.getsource(aimeat_crew.run_crew)
+    # Sent only when a host gave one: a spawn worker started from a venv that still holds the older
+    # package (the minutes between a merge and the next `uv sync`) must not be handed an unknown kwarg.
+    assert '**({"stop_event": spec.stop_event} if spec.stop_event is not None else {})' in src
 
 
 def test_a_crashing_agent_is_restarted_a_bounded_number_of_times(host, runs, monkeypatch, capsys):
@@ -266,7 +326,7 @@ def test_a_crashing_agent_is_restarted_a_bounded_number_of_times(host, runs, mon
     host._follow_residents(residents, [a], stop)
     _settle(residents)
     assert len(runs.started) == host._MAX_RESTARTS + 1
-    assert host._status == {"crashy": "crashed"} and "leaving it for" in capsys.readouterr().err
+    assert host._status.get("crashy") == "crashed" and "leaving it for" in capsys.readouterr().err
 
 
 # --------------------------------------------------------------------------- #

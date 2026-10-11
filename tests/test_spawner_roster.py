@@ -728,6 +728,72 @@ def test_a_refused_park_asks_for_the_roster_now_but_no_faster_than_its_own_back_
     assert sp.roster_due(next_roster=now - 1, last_roster=now - 31) is True, "the regular turn is unchanged"
 
 
+# --------------------------------------------------------------------------- #
+# An agent the owner STOPPED on the node (POST /v1/agents/{name}/stop)
+# --------------------------------------------------------------------------- #
+# The roster rows carry `stopped`. The node gives a stopped agent no new work and does not wake it,
+# so nothing here has to hold it back. What the spawner owes is not to LOSE it: the agent keeps its
+# parks, so a start is taken by the node's own push with no roster read in between.
+def test_a_stopped_agent_keeps_its_park_and_is_named_once(monkeypatch, tmp_path, capsys):
+    import requests
+
+    from crewaimeat import spawner
+
+    runs, held = f"runs#alice@{NODE}", f"held#alice@{NODE}"
+    _home_with_install_id(monkeypatch, tmp_path, [{"agent": "runs", "gaii": runs, "owner": "alice"}])
+    rows = [
+        {"name": "runs", "gaii": runs, "run_mode": "spawn", "install_id": "here-id", "stopped": False},
+        {"name": "held", "gaii": held, "run_mode": "spawn", "install_id": "here-id", "stopped": True},
+    ]
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _Resp(rows))
+    monkeypatch.setattr(spawner, "daemon_identities", lambda: {runs: "tunnel", held: "tunnel"})
+    monkeypatch.setattr(spawner, "_LAST_NOTE", {})
+    monkeypatch.setattr(spawner, "STOPPED_ON_NODE", set())
+
+    assert spawner.read_node_roster().stopped == {held}
+    assert spawner.discover_agents(tmp_path) == [held, runs], "stopped is not gone: it stays on the roster"
+    assert {held} == spawner.STOPPED_ON_NODE
+    said = capsys.readouterr().err
+    assert "stopped on the node" in said and "held" in said
+    spawner.discover_agents(tmp_path)
+    assert "stopped on the node" not in capsys.readouterr().err, "once per change"
+
+    rows[1]["stopped"] = False  # the owner starts it again
+    spawner.discover_agents(tmp_path)
+    assert set() == spawner.STOPPED_ON_NODE
+
+
+def test_the_backlog_poll_does_not_ask_for_a_stopped_agent(monkeypatch):
+    """The poll looks for work nobody announced. A stopped agent's work is held by the node, and its
+    own task list would answer agent_stopped: one call every two minutes for nothing."""
+    from crewaimeat import spawner as sp_mod
+    from crewaimeat.spawner import AgentState
+
+    monkeypatch.setattr(sp_mod, "WORK_POLL_S", 0.0)
+    monkeypatch.setattr(sp_mod, "STOPPED_ON_NODE", {"a"})
+    sp, rounds, asked = _spawner(), [], []
+    sp.state["a"] = AgentState("a")
+
+    def has_work(agent):
+        asked.append(len(rounds))  # which round it was asked in
+        sp.state["a"].retired = True  # ends the loop after the round that does ask
+        return []
+
+    monkeypatch.setattr(sp, "_unwoken_work", has_work)
+    real_wait = sp._stop.wait
+
+    def wait(_s):
+        rounds.append(1)
+        if len(rounds) == 3:
+            sp_mod.STOPPED_ON_NODE.clear()  # started again on the node
+        _bounded(rounds, "the work poll")
+        return real_wait(0)
+
+    monkeypatch.setattr(sp._stop, "wait", wait)
+    sp._work_poll_loop("a")
+    assert asked == [3], "skipped in rounds 1 and 2 while stopped, asked in the first round after the start"
+
+
 def test_the_resident_half_is_read_with_the_same_reader(monkeypatch, tmp_path):
     """The fleet host asks for `resident` rows; a node that ignored the filter must serve nothing
     there either, or every agent of the owner would be started as always-on."""
