@@ -27,6 +27,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from crewaimeat.crew_def import CrewDocError, build_domain_from_json, render_tool_catalog, validate_crew_doc
+from crewaimeat.forge_catalog import OFFER_EXAMPLE_RULE
 
 # Brain-var placeholders a TEMPLATE may use (substituted from the live brain before interpretation). The
 # per-run {{ctx.prompt}} / {{ctx.today}} are left for crew_def to inject at build time.
@@ -248,7 +249,9 @@ def render_template_schema_brief() -> str:
         '    "default_policy": {"autonomy": "draft", "schedule": {"cron": "<5-field cron>", "timezone":'
         ' "Europe/Helsinki"}, "visibility": "owner", "key_mode": "date"},\n'
         '    "offer": {"id":"<kebab>","title":"...","ask":"what to send + what it returns + what it does NOT do",'
-        ' "example":"...","cost":"cheap","latency":"minutes","repeatability":"idempotent","verification":"ungated","consequences":[]}\n'
+        ' "example":"<'
+        f"{OFFER_EXAMPLE_RULE}"
+        '>","cost":"cheap","latency":"minutes","repeatability":"idempotent","verification":"ungated","consequences":[]}\n'
         "  },\n"
         '  "crew": {\n'
         '    "temperature": <0.25 factual | 0.5 mixed | 0.7 creative>,\n'

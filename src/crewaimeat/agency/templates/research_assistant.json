@@ -26,7 +26,7 @@
       "id": "research-answer",
       "title": "A researched answer, with sources",
       "ask": "Give me a question and I research the live web and return a clear, source-cited answer. I do NOT give opinions or unsourced claims, and I say plainly when something is uncertain.",
-      "example": "Question: 'What are the EU's 2026 AI-transparency rules?' → a direct answer with source URLs.",
+      "example": "What are the EU's 2026 AI-transparency rules? Answer directly, with source URLs.",
       "cost": "cheap",
       "latency": "minutes",
       "repeatability": "idempotent",

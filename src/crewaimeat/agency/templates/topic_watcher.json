@@ -26,7 +26,7 @@
       "id": "topic-summary",
       "title": "Latest on a topic, summarized",
       "ask": "Give me a topic and I return a concise, source-cited summary of what's genuinely new. I do NOT give opinions, predictions, or unsourced claims.",
-      "example": "Topic: 'Finnish AI-startup funding' → a short digest of recent rounds, each with its source URL.",
+      "example": "Give me a short digest of what is new in Finnish AI-startup funding, each item with its source URL.",
       "cost": "cheap",
       "latency": "minutes",
       "repeatability": "idempotent",

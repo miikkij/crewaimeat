@@ -847,7 +847,9 @@ def write_and_validate_crew(
     fails loud at run time.
 
     OFFER — pass `offer_ask` (what to send the agent + what it returns + what it does NOT do — state the
-    negative scope) and `offer_example` (one concrete example request) so the new agent ADVERTISES its
+    negative scope) and `offer_example` (one real request, written as a person would send it to the
+    agent, with a sample of what they would give it; the request only, never the result — the node hands
+    it to the new agent as its first task) so the new agent ADVERTISES its
     value on the node and others can discover + order it. Leave offer_ask empty to advertise nothing.
     crew-forge fills the strict enums and derives a title from the agent name.
 

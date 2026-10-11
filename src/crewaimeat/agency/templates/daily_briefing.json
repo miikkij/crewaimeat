@@ -26,7 +26,7 @@
       "id": "daily-briefing",
       "title": "A short daily briefing across your topics",
       "ask": "Give me a few topics and I post a short morning digest of what's genuinely new on each, with sources. I do NOT give opinions or unsourced claims.",
-      "example": "Topics: 'EU AI regulation', 'Finnish startup funding', 'agent frameworks' → a short digest per topic each morning.",
+      "example": "Brief me each morning on EU AI regulation, Finnish startup funding and agent frameworks: what is new on each, with sources.",
       "cost": "cheap",
       "latency": "minutes",
       "repeatability": "idempotent",

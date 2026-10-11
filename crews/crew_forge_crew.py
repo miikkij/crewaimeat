@@ -413,7 +413,7 @@ def _build_domain(ctx: BuildContext, request: str | None = None) -> tuple[list[A
             "(local ollama, free, or a cloud key), so answer no unless remembering is core to the job>\n"
             "OFFER_ASK: <one sentence: what to send this agent + what it returns + what it does NOT do "
             "(state the negative scope), so others can discover and order it; leave empty to advertise nothing>\n"
-            "OFFER_EXAMPLE: <one concrete example request, or leave empty>\n"
+            f"OFFER_EXAMPLE: <{forge_catalog.OFFER_EXAMPLE_RULE} Or leave empty>\n"
             "EXTRA_IMPORTS:\n"
             "<extra NON-tool import lines, or leave this empty>\n"
             "README:\n"

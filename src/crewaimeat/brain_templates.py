@@ -122,7 +122,7 @@ _TOPIC_WATCHER_OFFER = {
     "title": "Latest on a topic, summarized",
     "ask": "Give me a topic and I return a concise, source-cited summary of what's genuinely new. "
     "I do NOT give opinions, predictions, or unsourced claims.",
-    "example": "Topic: 'Finnish AI-startup funding' → a short digest of recent rounds, each with its source URL.",
+    "example": "Give me a short digest of what is new in Finnish AI-startup funding, each item with its source URL.",
     "cost": "cheap",
     "latency": "minutes",
     "repeatability": "idempotent",  # node enum: idempotent | accumulative | destructive
@@ -349,7 +349,7 @@ _RESEARCH_OFFER = {
     "title": "A researched answer, with sources",
     "ask": "Give me a question and I research the live web and return a clear, source-cited answer. I do "
     "NOT give opinions or unsourced claims, and I say plainly when something is uncertain.",
-    "example": "Question: 'What are the EU's 2026 AI-transparency rules?' → a direct answer with source URLs.",
+    "example": "What are the EU's 2026 AI-transparency rules? Answer directly, with source URLs.",
     "cost": "cheap",
     "latency": "minutes",
     "repeatability": "idempotent",
@@ -362,7 +362,7 @@ _BRIEFING_OFFER = {
     "title": "A short briefing across your topics",
     "ask": "Give me a few topics and I return a short, scannable digest of what's genuinely new on each, "
     "with sources. No opinions, no filler.",
-    "example": "Topics: 'Finnish startups, EU AI act, Nordic energy' → a 3-section digest, each item sourced.",
+    "example": "Brief me on Finnish startups, the EU AI Act and Nordic energy: what is new on each, with sources.",
     "cost": "cheap",
     "latency": "minutes",
     "repeatability": "idempotent",
@@ -375,7 +375,7 @@ _PAGE_WATCHER_OFFER = {
     "title": "What changed on a web page",
     "ask": "Give me a page URL and I fetch it, compare it to the last time I checked, and report what is "
     "meaningfully new or changed — ignoring cosmetic noise.",
-    "example": "URL: a competitor's pricing page → 'the Pro tier rose 19€→24€; a new Team tier was added.'",
+    "example": "Watch https://example.com/pricing and tell me what has changed since your last look.",
     "cost": "cheap",
     "latency": "minutes",
     "repeatability": "accumulative",  # it builds a history of snapshots over time
@@ -388,7 +388,7 @@ _COMPANY_WATCHER_OFFER = {
     "title": "Notable news about a company",
     "ask": "Give me a company name and I return the genuinely notable recent news — funding, launches, "
     "leadership, partnerships, incidents — each with its source. I skip routine noise.",
-    "example": "Company: 'Wolt' → a short list of notable recent items, each with a source URL.",
+    "example": "What is new at Wolt? Give me the notable recent items, each with its source URL.",
     "cost": "cheap",
     "latency": "minutes",
     "repeatability": "idempotent",
@@ -402,7 +402,7 @@ _MAP_SNAPSHOT_OFFER = {
     "ask": "Give me an address (or 'lat,lon') and a precision (20km / 5km / 500m) and I return a static "
     "OpenStreetMap image of that spot, stored with a memory entry linking it (address, coordinates, "
     "precision, timestamp).",
-    "example": "Location: 'Helsinki Central Station', precision '500m' → a map image + a linked memory entry.",
+    "example": "Make a map snapshot of Helsinki Central Station at 500 m precision and save it to memory.",
     "cost": "cheap",
     "latency": "seconds",
     "repeatability": "idempotent",

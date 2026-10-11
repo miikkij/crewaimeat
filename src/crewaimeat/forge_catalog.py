@@ -408,6 +408,21 @@ def _has_negative_scope(ask: str) -> bool:
     return bool(words & _NEG_SCOPE_WORDS)
 
 
+# WHAT AN OFFER'S `example` IS, in the words every prompt that asks a model for one uses.
+#
+# It is the first request the new agent RUNS, not only a line on the offers page: when an agent
+# proposal is approved the node gives the agent one task at once, and that task's text is the
+# `example` of the definition's first offer (aimeat-protocol 3f644989c; the agent's purpose is used
+# only when there is no example). A model told nothing but `"example": "..."` wrote what reads well
+# in a catalogue — "Topic: 'X' -> a short digest, each with its source" — and that sentence, handed
+# to the agent as its first task, is a request with its own answer attached.
+OFFER_EXAMPLE_RULE = (
+    "one real request, written as a person would send it to the agent, with a sample of what they "
+    "would give it; the request only, never the result, e.g. Make one short slogan for the product "
+    "Morning Coffee."
+)
+
+
 def build_offer_meta(
     agent_name: str,
     ask: str,
@@ -420,7 +435,8 @@ def build_offer_meta(
     """Assemble a valid crew_offer-shape offer META from the human parts the Architect provides.
 
     The Architect writes only the ask (what to send + what it returns + what it does NOT do) and an
-    example; crew-forge fills the strict node enums with safe defaults so the LLM never has to get them
+    example (one real request as a person would send it, the request only, never the result — see
+    OFFER_EXAMPLE_RULE); crew-forge fills the strict node enums with safe defaults so the LLM never has to get them
     right, guarantees the ask states negative scope (a hard offer rule — a soft clause is appended if
     the author omitted it), and derives a human title from the agent name. Returns None when there's no
     ask, so a crew simply advertises nothing. `sample` stays None ('untested') — never an invented sample.

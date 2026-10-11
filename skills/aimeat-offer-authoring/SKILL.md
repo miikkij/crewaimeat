@@ -40,7 +40,7 @@ Required — an offer without these is not orderable:
 | `id` | — | stable slug, never renamed; it is what an order references |
 | `title` | what is this | a noun phrase, the thing delivered, not the activity |
 | `ask` | what exactly will you do, and what will you NOT do | 2–5 sentences, first person, **state the refusals** |
-| `example` | what do I type | one real request, copy-pasteable |
+| `example` | what do I type | one real request, copy-pasteable, as a person would send it with a sample of what they give; the request only, never the result (the node runs it as a new agent's first task) |
 | `cost` | what does it cost me | `free` · `cheap` · `moderate` · `expensive` |
 | `latency` | when do I get it | `seconds` · `minutes` · `hours` · `days` |
 | `verification` | can I check the result | `deterministic` · `reviewable` · `unverifiable` |

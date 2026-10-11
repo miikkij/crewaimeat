@@ -17,6 +17,7 @@ import re
 from typing import Any
 
 from crewaimeat.crew_def import build_domain_from_json, validate_crew_doc
+from crewaimeat.forge_catalog import OFFER_EXAMPLE_RULE
 
 # The thin loader written to crews/<base>_crew.py. It carries AGENT_NAME + build_domain + run() so it is
 # indistinguishable from a hand-written crew to fleet discovery and the subprocess validator, yet all the
@@ -178,7 +179,9 @@ def render_schema_brief() -> str:
         '  "capabilities": {"technical": [{"name": "<skill>", "type": "skill"}],'
         ' "domain": ["<subject words>"], "languages": ["en"]},\n'
         '  "offers": [{"id": "<kebab>", "title": "...", "ask": "what to send + what it returns + what it'
-        ' does NOT do (state the negative scope)", "example": "...", "cost": "cheap", "latency": "minutes",'
+        ' does NOT do (state the negative scope)", "example": "<'
+        f"{OFFER_EXAMPLE_RULE}"
+        '>", "cost": "cheap", "latency": "minutes",'
         ' "repeatability": "accumulative", "verification": "ungated", "consequences": []}],\n'
         '  "agents": [\n'
         '    {"name": "<local-id>", "role": "...", "goal": "...", "backstory": "...",'
