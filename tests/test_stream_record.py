@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import functools
 import http.server
+import re
 import shutil
 import subprocess
 import threading
@@ -100,9 +101,26 @@ def stream(tmp_path_factory):
     """The base URL of a loopback server serving the ladder, plus /gone (404) and /abroad (403)."""
     root = tmp_path_factory.mktemp("hls")
     _ladder(root)
+    hits: dict[str, int] = {}
 
     class H(http.server.SimpleHTTPRequestHandler):
         def do_GET(self):  # noqa: N802
+            flaky = re.fullmatch(r"/flaky-(\w+)(/.*)", self.path)
+            if flaky:
+                # A host that cuts its first connections, as live-fi.tvkaista.net did on 2026-10-11: the
+                # first request for the playlist is answered with nothing in it, the second is dropped
+                # without an answer, and from the third on the stream is there.
+                self.path = flaky.group(2)
+                if self.path.endswith(".m3u8"):
+                    hits[flaky.group(1)] = hits.get(flaky.group(1), 0) + 1
+                    if hits[flaky.group(1)] == 1:
+                        self.send_response(200)
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
+                    if hits[flaky.group(1)] == 2:
+                        self.close_connection = True
+                        return
             if self.path.startswith("/gone"):
                 self.send_error(404)
             elif self.path.startswith("/abroad"):
@@ -203,17 +221,27 @@ def test_a_length_that_cannot_fit_is_refused_before_a_minute_is_recorded(monkeyp
     assert e.value.code == "TOO_LONG"
 
 
-# ── a live stream that drops is attached again; one that never worked is failed at once ─────────
+# ── trying again: a stream that does not open, and a live one that drops ────────────────────────
+
+LIVE = {"program": None, "live": True, "picked": None}
 
 
-def _scripted(monkeypatch, tmp_path, lengths: list[float], said: str = "Connection reset by peer"):
-    """Stand in for ffmpeg: each attachment 'catches' the next length in `lengths`."""
-    asked: list[float] = []
-    clock = {"t": 0.0}
+def _scripted(monkeypatch, tmp_path, lengths: list[float], said: str = "Connection reset by peer", looks=None):
+    """Stand in for ffmpeg and for the look at the playlist, on a clock the test owns. Each attachment
+    'catches' the next length in `lengths`; each look answers the next of `looks` (a dict, or a
+    RecordError to raise; the last one repeats; none given, the stream is live and there)."""
+    asked = _Asked()
+    clock = asked.clock = {"t": 0.0, "looks": 0}
     monkeypatch.setattr(sr, "find_ffmpeg", lambda: ("ffmpeg", "ffprobe"))
-    monkeypatch.setattr(sr, "look_at_stream", lambda *a, **k: {"program": None, "live": True, "picked": None})
     monkeypatch.setattr(sr.time, "monotonic", lambda: clock["t"])
     monkeypatch.setattr(sr.time, "sleep", lambda s: clock.__setitem__("t", clock["t"] + s))
+
+    def look(*a, **k):
+        clock["looks"] += 1
+        answer = (looks or [LIVE])[min(clock["looks"], len(looks or [LIVE])) - 1]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
 
     def once(cmd, log, seconds, should_stop):
         asked.append(seconds)
@@ -222,41 +250,128 @@ def _scripted(monkeypatch, tmp_path, lengths: list[float], said: str = "Connecti
         Path(cmd[-1]).write_bytes(b"x" * int(got))
         Path(log).write_text(said, "utf-8")
 
+    monkeypatch.setattr(sr, "look_at_stream", look)
     monkeypatch.setattr(sr, "_capture_once", once)
     monkeypatch.setattr(sr, "media_info", lambda ffprobe, path: {"seconds": float(path.stat().st_size)})
     return asked
 
 
+class _Asked(list):
+    """What each attachment was asked for, with the test's clock: `t` seconds gone, `looks` made."""
+
+    clock: dict
+
+
+def _clock(asked) -> dict:
+    return asked.clock
+
+
 def test_a_live_stream_that_drops_is_attached_again_until_the_clock_runs_out(monkeypatch, tmp_path):
+    notes: list[tuple[str, bool]] = []
     asked = _scripted(monkeypatch, tmp_path, [200.0, 0.0, 380.0])
-    parts, caught = sr.capture("http://x/live.m3u8", 600, tmp_path, want_height=360)
+    parts, caught = sr.capture(
+        "http://x/live.m3u8", 600, tmp_path, want_height=360, on_note=lambda t, e: notes.append((t, e))
+    )
     assert [p.name for p in parts] == ["part-001.ts", "part-003.ts"] and caught == 580.0
     assert asked[0] == 600 and asked[1] < 400, "after a drop it asks for what the clock has left, not the whole length"
     assert asked[2] < asked[1], "the gap is not recorded past the end the person set"
+    assert notes[0] == ("the stream dropped after 3 min; trying again with 7 min left", False)
+    assert _clock(asked)["looks"] == 1, "a stream that has recorded is not looked at again"
 
 
-def test_a_live_stream_that_gives_nothing_at_first_is_tried_again(monkeypatch, tmp_path):
-    """Measured on a real channel: one attachment in twenty-one gave nothing for a moment."""
-    notes: list[str] = []
-    asked = _scripted(monkeypatch, tmp_path, [0.0, 597.0])
-    parts, caught = sr.capture("http://x/live.m3u8", 600, tmp_path, want_height=360, on_note=notes.append)
+def test_a_stream_that_does_not_open_at_first_is_opened_again_and_recorded(monkeypatch, tmp_path):
+    """aimeat.io 2026-10-11, task 576d0225: the host cut one connection, the recorder had allowed itself
+    one attempt, and a 25-minute programme failed in two seconds. The same address worked afterwards."""
+    notes: list[tuple[str, bool]] = []
+    asked = _scripted(monkeypatch, tmp_path, [0.0, 597.0], said="[tls @ 0x1] IO error: End of file")
+    parts, caught = sr.capture(
+        "http://x/live.m3u8", 600, tmp_path, want_height=360, on_note=lambda t, e: notes.append((t, e))
+    )
     assert [p.name for p in parts] == ["part-002.ts"] and caught == 597.0 and len(asked) == 2
-    assert notes == ["the stream gives no picture yet; trying again with 10 min left"]
+    assert notes == [("the stream did not open (attempt 1 of 10); trying again in 3 s", True)]
+    assert _clock(asked)["looks"] == 2, "each attempt looks at the stream afresh"
 
 
-def test_a_host_that_refuses_the_picture_is_failed_at_once_with_its_status(monkeypatch, tmp_path):
-    asked = _scripted(monkeypatch, tmp_path, [0.0, 600.0], said="[https @ 0x1] HTTP error 404 Not Found")
+def test_a_look_that_got_no_playlist_does_not_decide_the_stream_is_not_live(monkeypatch, tmp_path):
+    """What made the failure final in two seconds: the cut connection's answer was no playlist, a
+    stream that is not a playlist counted as not live, and one that is not live got one attempt."""
+    not_a_playlist = {"program": None, "live": False, "picked": None}
+    asked = _scripted(monkeypatch, tmp_path, [0.0, 600.0], looks=[not_a_playlist, LIVE])
+    parts, caught = sr.capture("http://x/live.m3u8", 600, tmp_path, want_height=360)
+    assert caught == 600.0 and len(asked) == 2
+
+
+def test_a_stream_that_never_opens_fails_after_ten_attempts_and_not_before(monkeypatch, tmp_path):
+    notes: list[str] = []
+    asked = _scripted(monkeypatch, tmp_path, [0.0] * 50, said="[tls @ 0x1] IO error: End of file")
     with pytest.raises(sr.RecordError) as e:
-        sr.capture("http://x/live.m3u8", 600, tmp_path, want_height=360)
-    assert e.value.code == "STREAM_UNREACHABLE" and "HTTP 404" in e.value.message and len(asked) == 1
+        sr.capture("http://x/live.m3u8", 3600, tmp_path, want_height=360, on_note=lambda t, e: notes.append(t))
+    assert e.value.code == "STREAM_ENDED_EARLY"
+    assert e.value.message.startswith("after 10 attempts the stream gave nothing to record. ffmpeg said: ")
+    assert len(asked) == sr.OPEN_ATTEMPTS == 10 and len(notes) == 9, "one note per wait, none after the last"
+    assert [n.split("trying again in ")[1] for n in notes] == ["3 s", "6 s", "12 s", "24 s"] + ["30 s"] * 5
+    assert _clock(asked)["t"] == 3 + 6 + 12 + 24 + 30 * 5 == 195, "the waits, on a clock where an attempt takes no time"
 
 
-def test_a_live_stream_that_never_gives_anything_fails_when_the_clock_runs_out(monkeypatch, tmp_path):
-    asked = _scripted(monkeypatch, tmp_path, [0.0] * 200)
+def test_a_host_that_answers_with_a_status_keeps_its_code_and_says_how_often_it_was_asked(monkeypatch, tmp_path):
+    gone = sr.RecordError("STREAM_UNREACHABLE", "the stream's address answered HTTP 404: http://x/live.m3u8")
+    asked = _scripted(monkeypatch, tmp_path, [600.0], looks=[gone])
     with pytest.raises(sr.RecordError) as e:
-        sr.capture("http://x/live.m3u8", 120, tmp_path, want_height=360)
-    assert e.value.code == "STREAM_ENDED_EARLY" and "Connection reset by peer" in e.value.message
-    assert 3 < len(asked) < 12, "tried again with a growing pause, and only until the end the person set"
+        sr.capture("http://x/live.m3u8", 3600, tmp_path, want_height=360)
+    assert str(e.value) == (
+        "STREAM_UNREACHABLE: after 10 attempts the stream's address answered HTTP 404: http://x/live.m3u8"
+    )
+    assert asked == [] and _clock(asked)["looks"] == 10, "ffmpeg is not started on an address that answered 404"
+
+    abroad = sr.RecordError("GEO_BLOCKED", "the stream's host refused this computer (HTTP 403).")
+    _scripted(monkeypatch, tmp_path, [600.0], looks=[abroad])
+    with pytest.raises(sr.RecordError) as e:
+        sr.capture("http://x/live.m3u8", 3600, tmp_path, want_height=360)
+    assert e.value.code == "GEO_BLOCKED" and e.value.message.startswith("after 10 attempts the stream's host refused")
+
+
+def test_a_status_that_goes_away_is_recorded_after_it(monkeypatch, tmp_path):
+    gone = sr.RecordError("STREAM_UNREACHABLE", "the stream's address answered HTTP 404: http://x/live.m3u8")
+    asked = _scripted(monkeypatch, tmp_path, [591.0], looks=[gone, gone, LIVE])
+    parts, caught = sr.capture("http://x/live.m3u8", 600, tmp_path, want_height=360)
+    assert caught == 591.0 and len(asked) == 1 and asked[0] == 600 - 3 - 6
+
+
+def test_a_window_that_closes_first_ends_the_attempts_and_says_so(monkeypatch, tmp_path):
+    asked = _scripted(monkeypatch, tmp_path, [0.0] * 50)
+    with pytest.raises(sr.RecordError) as e:
+        sr.capture("http://x/live.m3u8", 40, tmp_path, want_height=360)
+    assert e.value.code == "STREAM_ENDED_EARLY" and len(asked) == 4
+    assert e.value.message.startswith("after 4 attempts, when the recording's time ran out, the stream gave nothing")
+
+
+def test_an_address_that_is_wrong_in_itself_is_not_asked_again(monkeypatch, tmp_path):
+    asked = _scripted(monkeypatch, tmp_path, [600.0], looks=[sr.RecordError("STREAM_UNREACHABLE", "x", retry=False)])
+    with pytest.raises(sr.RecordError):
+        sr.capture("ftp://x/live.m3u8", 600, tmp_path, want_height=360)
+    assert _clock(asked)["looks"] == 1 and _clock(asked)["t"] == 0
+    monkeypatch.delenv("STREAM_RECORD_ALLOW_HOSTS", raising=False)
+    for bad in ("ftp://example.org/a.m3u8", "http://127.0.0.1:9/a.m3u8"):
+        with pytest.raises(sr.RecordError) as e:
+            sr.check_stream_url(bad)
+        assert e.value.retry is False
+
+
+def test_a_stop_during_the_wait_between_two_attempts_is_obeyed_within_a_second(monkeypatch, tmp_path):
+    """The waits grow to half a minute; a Stop is not made to sit one out."""
+    asked = _scripted(monkeypatch, tmp_path, [0.0] * 50)
+    clock = _clock(asked)
+    stop_at = 3 + 6 + 12 + 24 + 7.5  # in the middle of the fifth wait, which is 30 s long
+    parts, caught = sr.capture(
+        "http://x/live.m3u8", 3600, tmp_path, want_height=360, should_stop=lambda: clock["t"] >= stop_at
+    )
+    assert (parts, caught) == ([], 0.0) and len(asked) == 5
+    assert stop_at <= clock["t"] <= stop_at + 1.0, "looked for once a second, in the wait as well"
+
+    _scripted(monkeypatch, tmp_path, [0.0] * 50)
+    with pytest.raises(sr.RecordError) as e:
+        sr.record("http://x/live.m3u8", 3600, tmp_path / "w", should_stop=lambda: sr.time.monotonic() >= 20)
+    assert e.value.code == "CANCELLED", "a stop is CANCELLED, never the failure of the attempt before it"
 
 
 def test_what_ffmpeg_was_refused_names_the_failure():
@@ -361,8 +476,12 @@ def test_a_live_stream_that_stalls_is_ended_by_the_wall_clock(stream, allowed, t
 @pytest.mark.parametrize(
     "path,code,status", [("/gone/a.m3u8", "STREAM_UNREACHABLE", "404"), ("/abroad/a.m3u8", "GEO_BLOCKED", "403")]
 )
-def test_a_stream_that_does_not_answer_fails_with_its_http_status(stream, allowed, tmp_path, path, code, status):
+def test_a_stream_that_does_not_answer_fails_with_its_http_status(
+    stream, allowed, tmp_path, path, code, status, monkeypatch
+):
+    monkeypatch.setattr(sr, "OPEN_WAITS", (0.0,))  # the waits are held by their own tests, on a clock
     with pytest.raises(sr.RecordError) as e:
         sr.record(f"{stream}{path}", 30, tmp_path)
     assert e.value.code == code and f"HTTP {status}" in e.value.message
+    assert e.value.message.startswith("after 10 attempts the stream's ")
     assert not list(tmp_path.glob("*.mp4")) and not list(tmp_path.glob("*.ts"))

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -395,6 +396,69 @@ def test_a_stream_attached_again_is_said_on_the_task_but_not_every_time(node, mo
         "recording Petolliset, Nelonen until 19:35 UTC: the stream dropped after 12 min; trying again with 83 min left",
         "recording Petolliset, Nelonen until 19:35 UTC: the stream dropped after 20 min; trying again with 70 min left",
     ]
+
+
+# ── a stream that does not open at first ────────────────────────────────────────────────────────
+
+
+def test_every_attempt_to_open_a_stream_is_said_on_the_task(node, monkeypatch):
+    """The app shows the first word of the last progress event as the stage, and the whole line in the
+    booking's dialog; an opening attempt is never held back by the five-minute rule for drops."""
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(tv.time, "monotonic", lambda: clock["t"])
+    stages = tv._Stages(AGENT, "t-1")
+    stages.say("recording", "Simpsonit, Nelonen until 09:32 UTC")
+    for n, wait in ((1, 3), (2, 6), (3, 12)):
+        clock["t"] += wait
+        stages.note(f"the stream did not open (attempt {n} of 10); trying again in {wait} s", True)
+    assert node.events[1:] == [
+        f"recording Simpsonit, Nelonen until 09:32 UTC: the stream did not open (attempt {n} of 10); trying again in {w} s"
+        for n, w in ((1, 3), (2, 6), (3, 12))
+    ]
+    assert node.stages() == ["recording"] * 4
+
+
+def _never_opens(monkeypatch, node, cancel_at: float, *, push: bool):
+    """A stream that answers 404 for ever, on a clock the test owns; the app's Stop arrives at `cancel_at`."""
+    clock = {"t": 0.0, "looks": 0}
+
+    def sleep(s):
+        clock["t"] += s
+        if clock["t"] >= cancel_at and "agents.cancel.task.t-1" not in node.memory:
+            node.app_cancels("t-1", push=push)
+
+    def look(*a, **k):
+        clock["looks"] += 1
+        raise sr.RecordError("STREAM_UNREACHABLE", "the stream's address answered HTTP 404: https://x/live.m3u8")
+
+    monkeypatch.setattr(sr.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(sr.time, "sleep", sleep)
+    monkeypatch.setattr(sr, "look_at_stream", look)
+    return clock
+
+
+def test_a_stream_that_never_opens_fails_the_task_after_ten_attempts_with_its_code(node, monkeypatch):
+    clock = _never_opens(monkeypatch, node, cancel_at=10**9, push=True)
+    out = tv.handle_task(AGENT, _task())
+    assert out == "STREAM_UNREACHABLE: after 10 attempts the stream's address answered HTTP 404: https://x/live.m3u8"
+    assert lifecycle.take_outcome("t-1") == (True, out) and clock["looks"] == 10
+    assert node.stages() == ["recording"] * 10, "the stage, then one line for each of the nine waits"
+    assert node.events[1].endswith(": the stream did not open (attempt 1 of 10); trying again in 3 s")
+    assert node.events[9].endswith(": the stream did not open (attempt 9 of 10); trying again in 30 s")
+    assert not node.files and "tvopas.recordings" not in node.memory
+
+
+@pytest.mark.parametrize("push,within", [(True, "PEEK_S"), (False, "LOOK_S")])
+def test_a_stop_during_a_wait_between_attempts_ends_the_task_as_cancelled(node, monkeypatch, push, within):
+    """Update 3's times hold in the waits too: seconds when the node's push arrived, inside half a
+    minute plus a look when only the marker is there."""
+    cancel_at = 3 + 6 + 12 + 24 + 4.0  # four seconds into the fifth wait, which is 30 s long
+    clock = _never_opens(monkeypatch, node, cancel_at, push=push)
+    out = tv.handle_task(AGENT, _task())
+    assert out == "CANCELLED: the recording was stopped after 0 s of 95 min."
+    assert lifecycle.take_outcome("t-1") == (True, out)
+    assert clock["t"] - cancel_at <= getattr(tv, within) + 1.0, "obeyed in the wait, not after it"
+    assert clock["looks"] <= 6, "and no further attempt is made after the stop"
 
 
 def test_a_per_wake_worker_refuses_a_recording_it_would_be_stopped_in(node, recorded, monkeypatch):
@@ -793,3 +857,38 @@ def test_the_tool_answers_a_failure_with_its_code_first(monkeypatch, tmp_path):
     assert tool.run(url="https://x/y.m3u8", seconds=60, storage_key="../up.mp4").startswith(
         "stream_record stopped: BAD_REQUEST: "
     )
+
+
+# ── the whole road, with the real ffmpeg: a first open that is refused, a second that records ───
+
+from test_stream_record import (  # noqa: E402, F401 -- the loopback HLS stream and its marks
+    allowed,
+    needs_ffmpeg,
+    stream,
+)
+
+_REAL_FIND_FFMPEG = sr.find_ffmpeg
+
+
+@needs_ffmpeg
+def test_a_stream_whose_first_open_is_refused_ends_as_a_stored_recording(node, stream, allowed, monkeypatch):  # noqa: F811
+    """aimeat.io 2026-10-11, task 576d0225: the host cut one connection and the task failed two seconds
+    after it began; the same address recorded 804 seconds twelve minutes later. Here the stream's host
+    answers its first request with nothing and drops its second, as that one did."""
+    monkeypatch.setattr(sr, "find_ffmpeg", _REAL_FIND_FFMPEG)
+    monkeypatch.setattr(sr, "OPEN_WAITS", (1.0,))  # the real waits are held by tests on a clock
+    line = tv.handle_task(
+        AGENT, _task(stream_url=f"{stream}/flaky-first/v360/index.m3u8", stop=_z(NOW + timedelta(seconds=8)))
+    )
+    # The first attempt and the wait used up part of the eight seconds, and the recording still ends
+    # when the task said: what is left is recorded, not eight seconds from the second attempt on.
+    assert re.fullmatch(r"Petolliset, Nelonen, [5-8] s, \d+\.\d MB", line), line
+    assert lifecycle.take_outcome("t-1") == (False, line), "done, not failed"
+    assert list(node.files) == ["tvopas/rec/FI-Nelonen.fi-29861820.mp4"] and node.files[_FILE] > 10_000
+    item = node.memory["tvopas.recordings"]["items"][0]
+    assert (item["width"], item["height"], item["bytes"]) == (640, 360, node.files[_FILE])
+    assert node.stages() == ["recording", "recording", "packing", "uploading"]
+    assert node.events[1].endswith(": the stream did not open (attempt 1 of 10); trying again in 1 s")
+
+
+_FILE = "tvopas/rec/FI-Nelonen.fi-29861820.mp4"

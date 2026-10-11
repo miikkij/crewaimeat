@@ -84,6 +84,17 @@ _PLAYLIST_BYTES = 1 << 20
 #: How long past its asked length a capture may run before it is ended: a stream that stalls delivers
 #: no time for ffmpeg to count, so the wall clock is what ends it.
 _STALL_GRACE_S = 60.0
+#: How many times a stream that has given NOTHING yet is opened before the recording is given up, and
+#: the waits between those attempts in seconds (the last one repeats): 3, 6, 12, 24, then 30 five
+#: times, 195 s of waiting in all, a little over three minutes plus the attempts' own time.
+#: WHY A COUNT HERE AND NONE AFTER THE FIRST PICTURE. A stream that has recorded something is alive, and
+#: a drop is attached again until the programme's end. One that has never given a frame may be an
+#: address that is simply dead, and the person is better told so in minutes than at the programme's
+#: end, while they can still book it from another source. The number is a judgement, not a
+#: measurement: the two first-open failures seen on real channels (2026-10-11) were gone at the next
+#: attempt and twelve minutes later.
+OPEN_ATTEMPTS = 10
+OPEN_WAITS = (3.0, 6.0, 12.0, 24.0, 30.0)
 #: The brief's part size for the node's chunked upload route.
 _CHUNK_BYTES = 8 * _MIB
 #: A name this tool will use for a file or a folder: letters, digits, dot, dash and underscore, and
@@ -96,9 +107,10 @@ _KEY = re.compile(rf"{_NAME}(/{_NAME})*")
 class RecordError(Exception):
     """A recording that could not be made. `code` is for the program, the message for the person."""
 
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, *, retry: bool = True):
         super().__init__(f"{code}: {message}")
         self.code, self.message = code, message
+        self.retry = retry  # False: asking again cannot change the answer (the address itself is wrong)
 
 
 @dataclass
@@ -335,7 +347,7 @@ def check_stream_url(url: str) -> None:
     p = urlparse(url or "")
     host = (p.hostname or "").lower()
     if p.scheme not in ("http", "https") or not host:
-        raise RecordError("STREAM_UNREACHABLE", f"{url!r} is not an http(s) address.")
+        raise RecordError("STREAM_UNREACHABLE", f"{url!r} is not an http(s) address.", retry=False)
     if host in _allowed_hosts():
         return
     try:
@@ -349,18 +361,22 @@ def check_stream_url(url: str) -> None:
                 "STREAM_UNREACHABLE",
                 f"{host} is an address inside this computer or its network ({ip}); only its owner can "
                 f"allow such a host ({_ALLOW_ENV}).",
+                retry=False,
             )
 
 
 def _get_playlist(url: str, headers: dict) -> str:
     """The text at `url`, or the failure that names the HTTP status."""
     import requests
+    import urllib3
 
     try:
         with requests.get(url, headers=headers, timeout=(15, 30), stream=True) as r:
             status = r.status_code
             body = r.raw.read(_PLAYLIST_BYTES, decode_content=True) if status == 200 else b""
-    except requests.RequestException as exc:
+    except (requests.RequestException, urllib3.exceptions.HTTPError, OSError) as exc:
+        # The body is read from the raw response, so a connection cut in the middle of it arrives as
+        # urllib3's error or the socket's own, not as one of requests'.
         raise RecordError(
             "STREAM_UNREACHABLE", f"the stream's address did not answer ({type(exc).__name__}): {url}"
         ) from exc
@@ -488,6 +504,27 @@ def _why_nothing(log_tail: str) -> RecordError:
     return RecordError("STREAM_ENDED_EARLY", f"the stream gave nothing to record. ffmpeg said: {log_tail or 'nothing'}")
 
 
+def _wait(seconds: float, should_stop: Callable[[], bool] | None) -> bool:
+    """Wait `seconds`, looking once a second whether somebody stopped the recording. True when they
+    did: a Stop pressed between two attempts is not made to sit out the wait."""
+    until = time.monotonic() + seconds
+    while True:
+        if should_stop is not None and should_stop():
+            return True
+        left = until - time.monotonic()
+        if left <= 0:
+            return False
+        time.sleep(min(1.0, left))
+
+
+def _gave_up(failure: RecordError, attempts: int, *, window_closed: bool) -> RecordError:
+    """The failure of a stream that never opened, with how often it was tried in the sentence."""
+    tried = f"after {attempts} attempt{'' if attempts == 1 else 's'}"
+    if window_closed:
+        tried += ", when the recording's time ran out,"
+    return RecordError(failure.code, f"{tried} {failure.message}")
+
+
 def capture(
     url: str,
     seconds: float,
@@ -497,53 +534,78 @@ def capture(
     user_agent: str = "",
     referrer: str = "",
     should_stop: Callable[[], bool] | None = None,
-    on_note: Callable[[str], None] | None = None,
+    on_note: Callable[[str, bool], None] | None = None,
 ) -> tuple[list[Path], float]:
     """Record `url` from now for `seconds`, stream copy. Returns (the parts in order, seconds caught).
 
-    A live stream that drops, or gives nothing yet, is attached again for as long as the clock has
-    time left: the clock is the only limit, because it is the one the person set, and `on_note` hears
-    each time it happens. Measured 2026-10-11 on a real channel: one attachment in twenty-one gave
-    nothing for a moment, and failing there would have cost the whole programme. Two things are not
-    tried again. A host that REFUSES the picture (an HTTP status in what ffmpeg said) answers the same
-    way a second time, so that fails at once with its status. And a stream that is not live (its
-    playlist ends) is read once; attaching again would record the same minutes twice."""
+    TWO KINDS OF TRYING AGAIN, and `on_note(text, every)` hears each one.
+
+    Before the first picture: the stream is looked at and opened up to OPEN_ATTEMPTS times, with
+    OPEN_WAITS between, whatever the failure was (no answer, an HTTP status, an answer that is not a
+    playlist, an open that gave no data). Measured on aimeat.io 2026-10-11: a host cut ONE connection,
+    the look got an answer that was no playlist, the stream was therefore taken for one that is not
+    live and given a single attempt, and a 25-minute programme failed in two seconds; twelve minutes
+    later the same address opened three times out of three. The failure the task ends with is the
+    last attempt's, with the number of attempts in its sentence. `every` is True for these notes.
+
+    After the first picture: a live stream that drops is attached again until the clock runs out,
+    with no count, and what was caught is kept. `every` is False: a stream that flaps would otherwise
+    fill the task's timeline.
+
+    Not tried again: an address that is wrong in itself (`RecordError.retry` False), and a stream that
+    is not live once it HAS given its picture, since attaching again would record the same minutes
+    twice. A Stop (`should_stop`) is looked for once a second, in the waits as well; stopped, this
+    returns what it has and `record` gives the recording up as CANCELLED."""
     ffmpeg, ffprobe = find_ffmpeg()
-    seen = look_at_stream(url, want_height, user_agent=user_agent, referrer=referrer)
     end = time.monotonic() + seconds
     parts: list[Path] = []
-    nothing: RecordError | None = None
+    seen: dict | None = None
     caught, pause, ask, attempt = 0.0, 3.0, float(seconds), 0
     while True:
         attempt += 1
-        part, log = workdir / f"part-{attempt:03d}.ts", workdir / f"part-{attempt:03d}.log"
-        _capture_once(_capture_cmd(ffmpeg, url, ask, part, seen, user_agent, referrer), log, ask, should_stop)
-        got = media_info(ffprobe, part)["seconds"] if part.exists() and part.stat().st_size > 0 else 0.0
-        if got > 0:
-            parts.append(part)
-            caught += got
-            pause = 3.0
+        got, said = 0.0, ""
+        failure: RecordError | None = None
+        try:
+            if not parts:  # until something is caught, every attempt looks afresh: the last look may be the cut one
+                seen = look_at_stream(url, want_height, user_agent=user_agent, referrer=referrer)
+        except RecordError as exc:
+            if not exc.retry:
+                raise
+            failure, said = exc, exc.message
         else:
-            nothing = _why_nothing(_tail(log))
-            if not parts and nothing.code != "STREAM_ENDED_EARLY":
-                raise nothing
-        if (should_stop is not None and should_stop()) or not seen["live"] or got >= ask - _slack(ask):
+            part, log = workdir / f"part-{attempt:03d}.ts", workdir / f"part-{attempt:03d}.log"
+            _capture_once(_capture_cmd(ffmpeg, url, ask, part, seen, user_agent, referrer), log, ask, should_stop)
+            got = media_info(ffprobe, part)["seconds"] if part.exists() and part.stat().st_size > 0 else 0.0
+            said = _tail(log, 1)
+            if got > 0:
+                parts.append(part)
+                caught += got
+                pause = 3.0
+            else:
+                failure = _why_nothing(_tail(log))
+        if should_stop is not None and should_stop():
+            return parts, caught
+        if got > 0 and (not seen["live"] or got >= ask - _slack(ask)):
             break
         left = end - time.monotonic()
-        if left < 5:
-            break
-        note = f"the stream dropped after {span(caught)}" if parts else "the stream gives no picture yet"
-        note += f"; trying again with {span(left)} left"
-        print(f"[stream_record] {note} ({_tail(log, 1) or 'no message'})", file=sys.stderr)
+        if not parts:
+            wait = OPEN_WAITS[min(attempt, len(OPEN_WAITS)) - 1]
+            if attempt >= OPEN_ATTEMPTS or left - wait < 5:
+                raise _gave_up(failure, attempt, window_closed=attempt < OPEN_ATTEMPTS)
+            note = f"the stream did not open (attempt {attempt} of {OPEN_ATTEMPTS}); trying again in {wait:.0f} s"
+        else:
+            if left < 5:
+                break
+            wait, pause = min(pause, left), min(pause * 2, 30.0)
+            note = f"the stream dropped after {span(caught)}; trying again with {span(left)} left"
+        print(f"[stream_record] {note} ({said or 'no message'})", file=sys.stderr)
         if on_note:
-            on_note(note)
-        time.sleep(min(pause, left))
-        pause = min(pause * 2, 30.0)
+            on_note(note, not parts)
+        if _wait(wait, should_stop):
+            return parts, caught
         ask = end - time.monotonic()  # the recording still ends when the person said, however long the gap was
         if ask < 5:
             break
-    if not parts:
-        raise nothing or RecordError("STREAM_ENDED_EARLY", "the stream gave nothing to record.")
     return parts, caught
 
 
@@ -651,13 +713,13 @@ def record(
     min_keep_s: float = MIN_KEEP_S,
     should_stop: Callable[[], bool] | None = None,
     on_stage: Callable[[str], None] | None = None,
-    on_note: Callable[[str], None] | None = None,
+    on_note: Callable[[str, bool], None] | None = None,
 ) -> Recording:
     """Record `url` from now for `seconds` and leave ONE MP4 in `workdir`. Raises RecordError.
 
     `max_bytes` is the node's limit for one file; with it the recording is fitted (see the module
-    text). `on_stage` hears "recording" and "packing" as each begins, and `on_note` hears each time
-    the stream had to be attached again. `should_stop` is asked about once a second during the capture; when it says yes the capture ends and the recording is given up
+    text). `on_stage` hears "recording" and "packing" as each begins, and `on_note(text, every)` hears
+    each time the stream had to be opened or attached again (see `capture`). `should_stop` is asked about once a second during the capture; when it says yes the capture ends and the recording is given up
     (CANCELLED), because a recording somebody stopped is not one they want half of.
     """
     q = QUALITIES.get(str(quality or DEFAULT_QUALITY).lower())

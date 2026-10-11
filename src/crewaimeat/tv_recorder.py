@@ -291,14 +291,20 @@ class _Stages:
         self._since = self._said = time.monotonic()
         self._event(f"{stage} {detail}".strip())
 
-    def note(self, text: str) -> None:
-        """Something the person should see inside the current stage (the stream dropped and is being
-        attached again). The first is said at once; after that at most one in five minutes, because a
-        stream that flaps would otherwise fill the task's timeline."""
+    def note(self, text: str, every: bool = False) -> None:
+        """Something the person should see inside the current stage. The event begins with the stage's
+        word, because the app shows the first word of the last progress event as the stage.
+
+        `every` is for the attempts to OPEN a stream: each one is said, and there are at most
+        stream_record.OPEN_ATTEMPTS of them. A stream that drops after it has recorded is said at
+        once the first time and after that at most once in five minutes, because one that flaps
+        would otherwise fill the task's timeline."""
         now = time.monotonic()
-        if self._noted and now - self._noted < NOTE_S:
-            return
-        self._noted = self._said = now
+        if not every:
+            if self._noted and now - self._noted < NOTE_S:
+                return
+            self._noted = now
+        self._said = now
         self._event(f"{self._stage} {self._detail}: {text}")
 
     def _event(self, message: str) -> None:
