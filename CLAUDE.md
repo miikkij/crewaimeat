@@ -77,8 +77,8 @@ status cells, append decisions), so the two sides stay synced without drifting p
   explicit `[{"organism_id","ws"}]`); precedence local > linked > workspace-auto. Default OFF — a
   workspace is a shared surface; any member's skill would ride into the crew's prompts.
 - **The crew file is the ONE source for what an agent is.** Beside `build_domain`, a crew declares at
-  module level: `LLM_PROFILE` (which `llm_providers.json` profile routes it), `TAGS` (charset-safe
-  `[a-z0-9._-]`), `CAPABILITIES` ({technical: [{name,type}] OBJECTS, domain: [str], languages: [str]}),
+  module level: `LLM_PROFILE` (which `llm_providers.json` profile routes it), `TAGS` (the node's charset,
+  `[a-z0-9._:-]`), `CAPABILITIES` ({technical: [{name,type}] OBJECTS, domain: [str], languages: [str]}),
   `OFFERS` (a list), `SKILLS`, and optionally `MODE` (the agent mode registration asks for; default
   `task-runner`, which every crew here is). A JSON crew states the same keys in its `crew_defs/*.json` doc.
   `crewaimeat.agent_manifest` reads them STATICALLY (ast, never by importing); `fleet_identity`,
@@ -108,7 +108,8 @@ status cells, append decisions), so the two sides stay synced without drifting p
   on every start, and `run_crew` REJECTS a malformed capabilities payload at the boundary (a bare string
   in `technical` is accepted by the node and silently makes the agent unmatchable). Discovery reads tags
   + capabilities + README + offers, so keep the crew's `README` constant accurate too. Versioned ids
-  (`consumes:x@1`) go in `capabilities`/`offers`, never tags (tags reject `:`/`@`).
+  (`consumes:x@1`) go in `capabilities`/`offers`, never tags (tags reject `@`; the node takes `:`, which
+  is how an app finds its agent by role, e.g. `role:tvopas-recorder`).
 - LLM routing: the crew's own `LLM_PROFILE` is the default; `llm_providers.json` → `crews` is a
   per-machine OVERRIDE list (empty by default). Content crews → grok is for PROSE only (strong at
   prose, weak at code and weak in Finnish); Finnish prose → the `news` profile (DeepSeek V4 Pro);

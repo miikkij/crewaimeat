@@ -12,7 +12,9 @@ import re
 from crewaimeat.agent_manifest import all_manifests
 from crewaimeat.fleet_identity import FLEET_IDENTITY, identity_for
 
-_TAG_RE = re.compile(r"[a-z0-9._-]+")
+# The node's own rule (aimeat-protocol services/agent-profile-write.ts, TAG_PATTERN). It takes ':' since
+# the role tags an app finds its agent by (`role:tvopas-recorder`); measured on a local node 2026-10-11.
+_TAG_RE = re.compile(r"[a-z0-9][a-z0-9._:-]{0,63}")
 
 
 def _declared():
@@ -31,11 +33,11 @@ def _declared():
 
 
 def test_all_tags_charset_safe():
-    """AIMEAT rejects ':' and '@' in a tag. A rejected tag is not an error the crew ever sees — the
-    agent simply stops being findable by it."""
+    """AIMEAT rejects '@' (and anything else outside its pattern) in a tag, and refuses the whole call
+    over one bad tag — so the agent keeps the tags it had and stops being findable by the new ones."""
     for agent, ident in _declared():
         for t in ident.get("tags", []):
-            assert _TAG_RE.fullmatch(t), f"{agent}: tag {t!r} carries chars AIMEAT rejects (only [a-z0-9._-])"
+            assert _TAG_RE.fullmatch(t), f"{agent}: tag {t!r} carries chars AIMEAT rejects (only [a-z0-9._:-])"
 
 
 def test_capabilities_wellformed():

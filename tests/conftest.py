@@ -47,6 +47,7 @@ os.environ.pop("USE_XAI", None)
 _PROCESS_TEST_ACTIVE = False
 _PROCESS_ALLOWED = False
 _NODE_SYNTAX_ALLOWED = False
+_FFMPEG_ALLOWED = False
 
 
 def _audit_subprocess(event, args):
@@ -61,6 +62,13 @@ def _audit_subprocess(event, args):
             node = shutil.which("node")
             if resolved and node and Path(resolved).resolve() == Path(node).resolve():
                 return  # Node parses this file without executing its code.
+        if _FFMPEG_ALLOWED:
+            resolved = shutil.which(executable or argv[0])
+            tools = [shutil.which(name) for name in ("ffmpeg", "ffprobe")]
+            if resolved and any(t and Path(resolved).resolve() == Path(t).resolve() for t in tools):
+                return  # A media tool reading the test's own loopback stream and writing under tmp_path.
+            if Path(argv[0]).stem.lower() == "taskkill" and "/PID" in argv:
+                return  # Windows: ending that tool by its process id, with the real one under its shim.
         if not _PROCESS_ALLOWED:
             pytest.fail("Offline test attempted a subprocess; mock it or declare @pytest.mark.local_process")
         if Path(executable or argv[0]).resolve() != Path(sys.executable).resolve():
@@ -79,7 +87,7 @@ sys.addaudithook(_audit_subprocess)
 
 @pytest.fixture(autouse=True)
 def offline_processes(monkeypatch, request):
-    global _PROCESS_TEST_ACTIVE, _PROCESS_ALLOWED, _NODE_SYNTAX_ALLOWED
+    global _PROCESS_TEST_ACTIVE, _PROCESS_ALLOWED, _NODE_SYNTAX_ALLOWED, _FFMPEG_ALLOWED
     monkeypatch.setenv("CREWAIMEAT_OFFLINE_TEST", "1")
     monkeypatch.setenv("WEB_SEARCH", "ddg")
     monkeypatch.setenv(
@@ -87,6 +95,7 @@ def offline_processes(monkeypatch, request):
     )
     _PROCESS_ALLOWED = request.node.get_closest_marker("local_process") is not None
     _NODE_SYNTAX_ALLOWED = request.node.get_closest_marker("node_syntax") is not None
+    _FFMPEG_ALLOWED = request.node.get_closest_marker("ffmpeg") is not None
     _PROCESS_TEST_ACTIVE = True
     try:
         yield
@@ -94,6 +103,7 @@ def offline_processes(monkeypatch, request):
         _PROCESS_TEST_ACTIVE = False
         _PROCESS_ALLOWED = False
         _NODE_SYNTAX_ALLOWED = False
+        _FFMPEG_ALLOWED = False
 
 
 @pytest.fixture(autouse=True)

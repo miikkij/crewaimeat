@@ -155,6 +155,14 @@ def _tools_file_fetch(agent_name: str, ctx: Any) -> list:
     return list(make_file_fetch_tools(agent_name))
 
 
+def _tools_stream_record(agent_name: str, ctx: Any) -> list:
+    # Record a live HLS stream for a given time, compress it into ONE MP4 and store it in the agent's
+    # own node storage (crewaimeat.stream_record). Needs ffmpeg on the computer that runs the agent.
+    from crewaimeat.stream_record import make_stream_record_tools
+
+    return list(make_stream_record_tools(agent_name))
+
+
 def _tools_app_tools(agent_name: str, ctx: Any) -> list:
     # C from doc-mtgwbuadi9wo: find + call app-tools hosted on the node. Same-owner tools run free;
     # a foreign priced tool is reported as needing payment rather than pretended to have run.
@@ -255,6 +263,7 @@ TOOL_REGISTRY: dict[str, Any] = {
     "article_fetch": _tools_article_fetch,
     "app_tools": _tools_app_tools,
     "file_fetch": _tools_file_fetch,
+    "stream_record": _tools_stream_record,
     "crew_registry": _tools_crew_registry,
     "exchange": _tools_exchange,
     "decide": _tools_decide,
@@ -316,6 +325,16 @@ TOOL_PURPOSES: dict[str, str] = {
         "'@attr'|'child'|'child@attr'|'a.b'}} | fixed value}} or workspace rows {workspace, space, from, fields, "
         "row_id}; you get back counts and the tool's answer. Without pipe_to: counts, a preview and a ref: to "
         "pass as the next call's url. A ceiling that stops it is named in the answer"
+    ),
+    "stream_record": (
+        "record a live video stream (an HLS .m3u8 address) from now for a given time, compress it into ONE "
+        "MP4 a browser plays (H.264 + AAC) and store it in your own node storage, readable by your owner only: "
+        "stream_record(url, seconds, quality='low'|'medium'|'high', storage_key?, user_agent?, referrer?). low "
+        "is 360p and about 160 MB an hour, medium 480p and 320 MB, high 720p and 680 MB; the picture is never "
+        "upscaled. A recording too long for the node's file limit is recorded at a lower bitrate and the answer "
+        "says so. The call returns when the recording is stored, so it lasts `seconds` plus the compression. "
+        "Needs ffmpeg on the computer that runs the agent; a failure starts with its code (STREAM_UNREACHABLE, "
+        "GEO_BLOCKED, STREAM_ENDED_EARLY, NO_FFMPEG, TOO_LONG, QUOTA, UPLOAD_FAILED)"
     ),
     "crew_registry": "publish a crew definition to the AIMEAT registry, and install one somebody shared by their GAII",
     "exchange": "trade on the AIMEAT EXCHANGE — browse/accept/run offerings, post needs + bid, renegotiate, run agent-work; plus deterministic band + I/O-match gates",

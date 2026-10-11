@@ -102,6 +102,7 @@ markers = [
     "loopback: integration test using only a local loopback server (external network remains blocked)",
     "local_process: explicit Python subprocess test inheriting the offline network guard",
     "node_syntax: permit node --check only, parsing JavaScript without executing it",
+    "ffmpeg: permit ffmpeg and ffprobe subprocesses (and the taskkill that ends one), for media tests against a loopback stream",
 ]
 addopts = "-q"
 pythonpath = [".", "tests"]

@@ -87,6 +87,30 @@ def refused_runs() -> dict[str, str]:
         return dict(_REFUSED)
 
 
+# A RUN THAT KNOWS HOW IT ENDED SAYS SO ITSELF. A deterministic handler (CrewSpec.on_task) does its
+# whole job in code, so it knows two things no callback can work out afterwards: the one line a person
+# should read on the finished task ("Petolliset, Nelonen, 95 min, 248 MB"), and whether the work failed
+# and why ("STREAM_UNREACHABLE: the stream's address answered HTTP 404"). Without this the first is
+# replaced by "Crew finished; deliverable published to memory" and the second is completed as done.
+# task id -> (failed, message). Taken (and so cleared) by the completion of that task.
+_OUTCOMES: dict[str, tuple[bool, str]] = {}
+
+
+def note_outcome(task_id: str | None, message: str, *, failed: bool = False) -> None:
+    """Record how this task's run ended, in the words the task is to carry. The last word stands."""
+    message = str(message or "").strip()
+    if not task_id or not message:
+        return
+    with _LOCK:
+        _OUTCOMES[task_id] = (bool(failed), message)
+
+
+def take_outcome(task_id: str | None) -> tuple[bool, str] | None:
+    """(failed, message) the run recorded for this task, or None; clears it."""
+    with _LOCK:
+        return _OUTCOMES.pop(task_id or "", None)
+
+
 def cannot_start_message(reason: str) -> str:
     """The sentence a task carries when the runtime that was to run it never got going."""
     reason = reason.strip().rstrip(".")
@@ -304,6 +328,7 @@ class LifecycleCallbacks:
         def _cb(_task_output) -> None:
             # Taken first, whichever way this run ends, so a long-lived daemon never carries it over.
             declined = take_declined(tid) if tid else None
+            outcome = take_outcome(tid)
             unchecked = ""
             if since and self.refusals is not None:
                 try:
@@ -335,6 +360,20 @@ class LifecycleCallbacks:
                     # Left active it would be run again, and turned down again, for nothing.
                     raise RuntimeError(f"Declining task {tid} failed")
                 print(f"[{agent_name}] task DECLINED -> task_fail {tid}: {message}", file=sys.stderr)
+                return
+            if outcome and outcome[0]:
+                # The run said it failed, in its own words; those words are the task's, unchanged.
+                message = outcome[1] + unchecked
+                fr = self.call(agent_name, "aimeat_task_fail", {"task_id": tid, "message": message})
+                # Not raised when the /fail is not accepted: the caller would fail it a second way and
+                # then run the whole task again on the next cycle, and the usual reason is that the
+                # owner already ended the task, which is the state it was after.
+                print(
+                    f"[{agent_name}] run FAILED by its own account -> task_fail {tid} "
+                    f"({'failed' if fr is not None else 'the /fail was NOT accepted; the task stays as it is'}): "
+                    f"{message}",
+                    file=sys.stderr,
+                )
                 return
             if require_verify:
                 try:
@@ -399,6 +438,8 @@ class LifecycleCallbacks:
                 # deliverable in memory and its outcome carried state/message/at but no deliverable_key.
                 payload["deliverable_key"] = key
                 payload["message"] = f"Crew finished; deliverable published to memory at {key}."
+            if outcome:
+                payload["message"] = outcome[1]  # the run's own closing line, for the person
             payload["message"] += unchecked
             res = self.call(agent_name, "aimeat_task_complete", payload)
             if res is None:
