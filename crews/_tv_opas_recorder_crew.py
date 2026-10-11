@@ -16,9 +16,11 @@ It needs ffmpeg on the computer that runs it; without it every recording fails w
 PARKED (the leading underscore) UNTIL ITS OWNER REGISTERS IT. A live crew file with no registered agent
 is a doctor ERROR on the fleet host (`registry.serve.unregistered`), which stops every commit made there.
 To bring it online, in this order:
-  1. register + approve, asking for the scopes the work needs (proven sufficient on a local node):
+  1. register + approve, asking for the scopes the work needs (proven sufficient on a local node).
+     provenance:write is what lets a recording be declared as a recording; without it the node stamps
+     the file as model-written, and with the declaration sent and the scope missing it refuses the upload:
        npx aimeat@latest connect --url https://aimeat.io --owner <you> --agent tv-opas-recorder \
-         --mode task-runner --scopes storage:read,storage:write,memory:read,memory:write
+         --mode task-runner --scopes storage:read,storage:write,memory:read,memory:write,provenance:write
   2. set the agent to run always on (resident) on its page;
   3. git mv crews/_tv_opas_recorder_crew.py crews/tv_opas_recorder_crew.py, commit, restart the fleet.
 """

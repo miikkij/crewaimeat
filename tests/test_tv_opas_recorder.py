@@ -558,8 +558,29 @@ def test_one_presigned_put_stores_the_one_file_for_its_owner_only(upload, monkey
     )
     out = sr.store_file(AGENT, f, "tvopas/rec/a.mp4")
     assert (out["bytes"], out["route"]) == (30, "put")
+    declared = asked.pop("ai_provenance")
     assert asked == {"key": "tvopas/rec/a.mp4", "mime_type": "video/mp4", "visibility": "owner", "mode": "presigned"}
     assert seen == [("POST", "/v1/storage"), ("PUT", "http://node/v1/upload/u_1")]
+    # A recording is declared as one. Undeclared, the node stamps an agent's upload as model-written
+    # and serves a television programme with `AI-Disclosure: machine-generated`.
+    assert (declared["level"], declared["media_kind"], declared["media_type"]) == ("original", "video", "video/mp4")
+    assert "No model produced or changed it" in declared["notes"] and "model" not in declared
+
+
+def test_the_chunked_route_declares_the_recording_too(upload, monkeypatch):
+    f, seen, answers = upload
+    answers["POST /v1/storage/upload/init"] = _Resp(201, {"ok": True, "data": {"upload_id": "upload-abc"}})
+    answers["POST /complete"] = _Resp(201, {"ok": True, "data": {"key": "k.mp4", "size": 30}})
+    bodies = {}
+    real = sr._request
+    monkeypatch.setattr(
+        sr,
+        "_request",
+        lambda agent, method, path, **kw: bodies.__setitem__(path, kw.get("json")) or real(agent, method, path, **kw),
+    )
+    sr._store_chunked(AGENT, f, "k.mp4", "video/mp4", "owner")
+    done = bodies["/v1/storage/upload/upload-abc/complete"]
+    assert done["ai_provenance"]["level"] == "original" and len(done["checksum_sha256"]) == 64
 
 
 def test_the_nodes_quota_refusal_says_how_much_is_stored(upload):

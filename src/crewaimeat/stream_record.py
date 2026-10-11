@@ -690,17 +690,33 @@ def _answer(r) -> tuple[dict, str, str]:
     return (body.get("data") if isinstance(body.get("data"), dict) else body), "", ""
 
 
+def recording_provenance(mime: str = "video/mp4") -> dict:
+    """What a recording is, for the node's provenance record: `original`, no model involved.
+
+    WHY IT IS SAID. An agent's write with no declaration is stamped as model-written, and the file is
+    then served with `AI-Disclosure: mode=machine-generated`: a television programme labelled as
+    generated (measured 2026-10-11 on the first recordings). No model produced or changed any of it,
+    so the upload says so (owner's ruling, same day). The declaration needs the scope
+    `provenance:write`; without it the node refuses the whole upload with SCOPE_DENIED and names the
+    scope, which is the failure the task then carries."""
+    from aimeat_crewai.provenance import Level, declare
+
+    return {
+        **declare(
+            Level.ORIGINAL,
+            notes="A recording of a broadcast stream, compressed by ffmpeg. No model produced or changed it.",
+        ),
+        "media_kind": mime.split("/", 1)[0] if mime.split("/", 1)[0] in ("video", "audio") else "data",
+        "media_type": mime,
+    }
+
+
 def open_upload(agent: str, key: str, *, mime: str = "video/mp4", visibility: str = "owner") -> dict:
     """Ask the node for an address to upload `key` to. The answer also says how large one file may be
     (`max_size_bytes`), which is how a caller asks the node for its limit instead of assuming one.
-
-    NO PROVENANCE IS DECLARED, and the node therefore stamps the file the way it stamps any agent's
-    write: `AI-Disclosure: machine-generated`, on a television programme no model touched. Declaring
-    `level: original` puts that right and was tried (2026-10-11, local node): the node refuses the
-    whole upload with SCOPE_DENIED unless the agent holds `provenance:write`, which is not among the
-    scopes the brief gives this work. Whether a recorder gets that scope is its owner's decision; with
-    it, the declaration is one `ai_provenance` field here and one on the chunked route's `complete`."""
+    The upload is declared as a recording (`recording_provenance`)."""
     body = {"key": key, "mime_type": mime, "visibility": visibility, "mode": "presigned"}
+    body["ai_provenance"] = recording_provenance(mime)
     try:
         r = _request(agent, "POST", "/v1/storage", json=body, timeout=60)
     except Exception as exc:  # noqa: BLE001 -- whatever stopped the question is the reason the person reads
@@ -772,7 +788,7 @@ def _store_chunked(agent: str, path: Path, key: str, mime: str, visibility: str)
             agent,
             "POST",
             f"/v1/storage/upload/{upload_id}/complete",
-            json={"checksum_sha256": digest.hexdigest()},
+            json={"checksum_sha256": digest.hexdigest(), "ai_provenance": recording_provenance(mime)},
             timeout=900,
         )
         data, code, message = _answer(r)
