@@ -321,6 +321,21 @@ def test_a_stream_that_ends_too_early_to_keep_is_failed(stream, allowed, tmp_pat
 
 
 @needs_ffmpeg
+def test_a_stop_during_the_compression_ends_it_there(stream, allowed, tmp_path):
+    """A film takes a minute or more to compress; Stop is not made to wait for that."""
+    work = tmp_path / "w"
+    work.mkdir()
+    parts, caught = sr.capture(f"{stream}/v720/index.m3u8", 10, work, want_height=720)
+    src = sr.media_info(shutil.which("ffprobe"), parts[0])
+    began = time.monotonic()
+    with pytest.raises(sr.RecordError) as e:
+        sr.pack(parts, work / "recording.mp4", sr.QUALITIES["high"], 1400, src, should_stop=lambda: True)
+    assert e.value.code == "CANCELLED" and "compressed" in e.value.message and time.monotonic() - began < 30
+    shutil.rmtree(work)  # nothing of ffmpeg still holds a file in it
+    assert not work.exists()
+
+
+@needs_ffmpeg
 def test_a_recording_somebody_stopped_ends_ffmpeg_and_keeps_nothing(stream, allowed, tmp_path):
     """The capture is a process of its own, and on Windows often a shim with the real ffmpeg under it.
     Stopped, nothing of it may be left running: a folder whose file a process still holds cannot be deleted."""

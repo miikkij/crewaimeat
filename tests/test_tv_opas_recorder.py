@@ -64,6 +64,14 @@ class Node:
         self.status = "active"
         self.answers: dict[str, object] = {}  # tool -> a fixed answer that overrides the behaviour below
         self.limit = 1024 * 2**20
+        self.pushed: set[str] = set()  # task ids the node pushed as cancelled (the connector daemon's list)
+        self.on_store = None  # called while the file is "on its way", for a cancel that arrives then
+
+    def app_cancels(self, task_id: str, *, push: bool = True) -> None:
+        """What AIMEAT.agents.cancelTask does: the marker in the owner's memory, and the node's push."""
+        self.memory[f"agents.cancel.task.{task_id}"] = [task_id]
+        if push:
+            self.pushed.add(task_id)
 
     def call(self, agent, tool, payload, **kw):
         if tool in self.answers:
@@ -109,9 +117,12 @@ def node(monkeypatch, tmp_path):
 
     def store(agent, path, key, **k):
         n.files[key] = path.stat().st_size
+        if n.on_store:
+            n.on_store()
         return {"bytes": path.stat().st_size, "seconds": 3.1, "route": "put"}
 
     monkeypatch.setattr(sr, "store_file", store)
+    monkeypatch.setattr(tv, "_pushed_cancels", lambda agent: set(n.pushed))
     monkeypatch.setattr(tv, "_now", lambda: NOW)
     lifecycle._OUTCOMES.clear()
     yield n
@@ -278,6 +289,78 @@ def test_a_task_ended_by_its_owner_while_waiting_records_nothing(node, recorded,
     node.status = "failed"
     out = tv.handle_task(AGENT, _task(start=_z(NOW + timedelta(hours=2)), stop=_z(NOW + timedelta(hours=3))))
     assert out.startswith("CANCELLED: ") and not recorded and node.stages() == ["waiting"]
+
+
+# ── the app's Stop: a marker in the owner's memory and a push, while the task stays `active` ─────
+
+
+def test_the_apps_cancel_stops_a_task_that_is_still_active_on_the_node(node, monkeypatch):
+    """An app cannot pause a task (owner only). AIMEAT.agents.cancelTask writes a marker and the node
+    pushes `task.cancelled`; the task's status does not change, so the status alone stopped nothing."""
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(tv.time, "monotonic", lambda: clock["t"])
+    stages = tv._Stages(AGENT, "t-1")
+    clock["t"] += tv.LOOK_S + 1
+    assert stages.ended() is False and node.status == "active"
+    node.app_cancels("t-1")
+    clock["t"] += tv.PEEK_S + 0.1
+    assert stages.ended() is True, "the push is read from the connector daemon within seconds"
+    assert stages.ended() is True, "and once stopped it stays stopped"
+
+
+def test_a_cancel_whose_push_never_arrived_is_still_obeyed_inside_a_minute(node, monkeypatch):
+    """The push is sent once, to an agent online at that moment; the marker is what is still there."""
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(tv.time, "monotonic", lambda: clock["t"])
+    stages = tv._Stages(AGENT, "t-1")
+    node.app_cancels("t-1", push=False)
+    clock["t"] += tv.PEEK_S + 0.1
+    assert stages.ended() is False, "nothing was pushed, and the node is not asked this often"
+    clock["t"] += tv.LOOK_S
+    assert stages.ended() is True and tv.LOOK_S + tv.PEEK_S < 60
+
+
+def test_another_tasks_cancel_stops_nothing_here(node, monkeypatch):
+    monkeypatch.setattr(tv, "LOOK_S", 0.0)
+    monkeypatch.setattr(tv, "PEEK_S", 0.0)
+    node.app_cancels("t-other")
+    assert tv._Stages(AGENT, "t-1").ended() is False
+    node.answers["aimeat_memory_read"] = None  # the node did not answer: not knowing is not cancelled
+    assert tv._Stages(AGENT, "t-1").ended() is False
+
+
+def test_a_recording_cancelled_by_the_app_fails_as_cancelled_and_keeps_nothing(node, monkeypatch, tmp_path):
+    def stopped(url, seconds, workdir, **kw):
+        kw["on_stage"]("recording")
+        workdir.mkdir(parents=True, exist_ok=True)
+        (workdir / "part-001.ts").write_bytes(b"x" * 100)
+        node.app_cancels("t-1")
+        assert kw["should_stop"]() is False, "looked at a moment ago"
+        monkeypatch.setattr(tv, "PEEK_S", 0.0)
+        assert kw["should_stop"]() is True
+        raise sr.RecordError("CANCELLED", "the recording was stopped after 12 min of 95 min.")
+
+    monkeypatch.setattr(sr, "record", stopped)
+    out = tv.handle_task(AGENT, _task())
+    assert out == "CANCELLED: the recording was stopped after 12 min of 95 min."
+    assert lifecycle.take_outcome("t-1") == (True, out), "the task is active, so this /fail is what ends it"
+    assert not node.files and "tvopas.recordings" not in node.memory
+    assert not (tmp_path / "work" / "FI-Nelonen.fi-29861820").exists()
+
+
+def test_a_stop_that_arrives_after_the_recording_is_made_still_keeps_nothing(node, recorded, monkeypatch):
+    """Stop pressed while the film is compressed or on its way to the node is still a Stop."""
+    node.app_cancels("t-1")  # arrived during the compression: the forced look before the upload sees it
+    out = tv.handle_task(AGENT, _task())
+    assert out.startswith("CANCELLED: the recording was stopped before it was stored") and not node.files
+
+    node.pushed.clear()
+    node.memory.clear()
+    node.on_store = lambda: node.app_cancels("t-2")  # arrives while the file is being uploaded
+    out = tv.handle_task(AGENT, _task(tid="t-2"))
+    assert out.startswith("CANCELLED: the recording was stopped while it was being stored")
+    assert not node.files, "the stored file is removed again"
+    assert "tvopas.recordings" not in node.memory
 
 
 def test_a_long_stage_says_where_it_is_before_the_node_calls_it_stalled(node, monkeypatch):

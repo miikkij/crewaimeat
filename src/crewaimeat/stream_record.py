@@ -164,25 +164,95 @@ def _run_quiet(cmd: list[str], *, low_priority: bool = False, **kw) -> subproces
         kw["preexec_fn"] = lambda: os.nice(10)  # noqa: PLW1509 -- one call before exec, nothing shared
     if os.name != "nt":
         kw["start_new_session"] = True  # its own process group, so `_end` reaches whatever it starts
-    return subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, **kw)  # noqa: S603
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, **kw)  # noqa: S603
+    proc._crewaimeat_job = _job_of_its_own(proc) if os.name == "nt" else None
+    return proc
+
+
+def _job_of_its_own(proc: subprocess.Popen) -> int | None:
+    """Windows: put ffmpeg in a job object, so that ending the job ends everything it started.
+
+    WHY NOT `taskkill /T`. The `ffmpeg.exe` a package manager puts on the path is often a shim that
+    starts the real one as its child (Chocolatey's is; measured on the fleet host). `taskkill /T` ends
+    the children it can see at that instant, and a shim ended in its first milliseconds starts its
+    child a moment AFTER the look: the real ffmpeg then runs on alone and holds the recording's file
+    open (caught by a test that stops the compression at once). A process started by a member of a
+    job is born in the job, so nothing gets out, and the job is set to end its members when its last
+    handle closes: if this process dies, ffmpeg does not go on recording for nobody.
+    None when the job could not be made; `_end` then falls back to `taskkill /T`."""
+    import ctypes
+    from ctypes import wintypes
+
+    class _Basic(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_longlong),
+            ("PerJobUserTimeLimit", ctypes.c_longlong),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class _Extended(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", _Basic),
+            ("IoInfo", ctypes.c_ulonglong * 6),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    k32 = _kernel32()
+    job = k32.CreateJobObjectW(None, None)
+    if not job:
+        return None
+    info = _Extended()
+    info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    ok = k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info))  # 9 = extended limits
+    if not ok or not k32.AssignProcessToJobObject(job, wintypes.HANDLE(int(proc._handle))):
+        k32.CloseHandle(job)
+        return None
+    return job
+
+
+def _kernel32():
+    import ctypes
+    from ctypes import wintypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateJobObjectW.restype = wintypes.HANDLE
+    k32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+    k32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    k32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    return k32
 
 
 def _end(proc: subprocess.Popen) -> None:
-    """End ffmpeg AND whatever it started. On Windows the `ffmpeg.exe` a package manager puts on the
-    path is often a shim that starts the real one as its child (Chocolatey's is; measured on the fleet
-    host), and ending the shim alone leaves the real ffmpeg recording with nobody waiting for it."""
-    if proc.poll() is not None:
-        return
-    if os.name == "nt":
-        subprocess.run(  # noqa: S603
-            ["taskkill", "/PID", str(proc.pid), "/T", "/F"],  # noqa: S607 -- the same call spawner._terminate_pid makes
-            capture_output=True,
-            timeout=30,
-            check=False,
-        )
-    else:
-        with contextlib.suppress(ProcessLookupError, PermissionError):
-            os.killpg(proc.pid, signal.SIGKILL)
+    """End ffmpeg AND whatever it started, and give its job back. Safe to call on one that has already
+    finished: a job with no members left has nothing to end."""
+    job = getattr(proc, "_crewaimeat_job", None)
+    if job:
+        proc._crewaimeat_job = None
+        k32 = _kernel32()
+        k32.TerminateJobObject(job, 1)
+        k32.CloseHandle(job)
+    elif proc.poll() is None:
+        if os.name == "nt":
+            subprocess.run(  # noqa: S603
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],  # noqa: S607 -- what spawner._terminate_pid does
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+        else:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(proc.pid, signal.SIGKILL)
     with contextlib.suppress(subprocess.TimeoutExpired):
         proc.wait(timeout=15)
 
@@ -541,13 +611,30 @@ def _pack_cmd(ffmpeg: str, parts: list[Path], out: Path, q: Quality, video_kbps:
     return [*cmd, "-movflags", "+faststart", "-f", "mp4", str(out)]
 
 
-def pack(parts: list[Path], out: Path, q: Quality, video_kbps: int, src: dict) -> None:
-    """Compress the captured parts into ONE MP4 at `out`."""
+def pack(
+    parts: list[Path],
+    out: Path,
+    q: Quality,
+    video_kbps: int,
+    src: dict,
+    should_stop: Callable[[], bool] | None = None,
+) -> None:
+    """Compress the captured parts into ONE MP4 at `out`. A film takes a minute or more of every
+    core, so `should_stop` is asked about once a second here too: a recording somebody stopped is
+    given up (CANCELLED) and not compressed to the end first."""
     ffmpeg, _ = find_ffmpeg()
     log = out.with_suffix(".pack.log")
     with open(log, "wb") as err:
         proc = _run_quiet(_pack_cmd(ffmpeg, parts, out, q, video_kbps, src), low_priority=True, stderr=err)
-        code = proc.wait()
+        try:
+            while proc.poll() is None:
+                if should_stop is not None and should_stop():
+                    _end(proc)
+                    raise RecordError("CANCELLED", "the recording was stopped while it was being compressed.")
+                time.sleep(1.0)
+        finally:
+            _end(proc)
+        code = proc.returncode
     if code != 0 or not out.exists() or out.stat().st_size == 0:
         raise RecordError("PACK_FAILED", f"the recording could not be compressed. ffmpeg said: {_tail(log) or code}")
 
@@ -617,7 +704,7 @@ def record(
     if on_stage:
         on_stage("packing")
     out = workdir / "recording.mp4"
-    pack(parts, out, tier, video_kbps, src)
+    pack(parts, out, tier, video_kbps, src, should_stop)
     if max_bytes and out.stat().st_size > max_bytes:
         # The encoder overshot its average. One more pass, lowered by exactly what it overshot.
         again = int(video_kbps * max_bytes * FIT_FRACTION / out.stat().st_size)
@@ -630,7 +717,7 @@ def record(
         video_kbps, lowered = again, True
         notes[:] = [n for n in notes if not n.startswith("quality lowered")]
         notes.append(f"quality lowered to fit: {span(caught)} at {video_kbps} kbit/s")
-        pack(parts, out, tier, video_kbps, src)
+        pack(parts, out, tier, video_kbps, src, should_stop)
         if out.stat().st_size > max_bytes:
             raise RecordError(
                 "TOO_LONG",

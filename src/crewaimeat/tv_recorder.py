@@ -45,8 +45,15 @@ START_NOW_S = 60.0
 #: The node marks an active task stalled after 120 minutes without an event (its
 #: AIMEAT_TASK_STALL_THRESHOLD_MINUTES default). A long wait or a long film says where it is well inside that.
 STILL_HERE_S = 30 * 60.0
-#: How often a waiting or recording task looks whether its owner has ended it.
-LOOK_S = 60.0
+#: How often a waiting or working task asks the NODE whether it has been ended: the task's status and
+#: the app's cancel marker. Half a minute, so a Stop is obeyed within a minute even when the push for
+#: it never arrived.
+LOOK_S = 30.0
+#: How often it reads the connector daemon's own list of cancelled tasks, which the node's push fills.
+#: A loopback call that reaches no node, so it is asked often and a Stop is usually obeyed in seconds.
+PEEK_S = 5.0
+#: The record AIMEAT.agents.cancelTask writes in the owner's memory; its value is the list of task ids.
+CANCEL_MARKER = "agents.cancel.task."
 #: The least time between two notes about a stream that had to be attached again.
 NOTE_S = 5 * 60.0
 #: The brief: the recording id is the file's name; letters, digits, dot, dash and underscore only. It
@@ -231,14 +238,51 @@ def delete_recording(agent: str, rid: str) -> str:
 # --------------------------------------------------------------------------- one recording
 
 
+def _pushed_cancels(agent: str) -> set[str]:
+    """The task ids the node has pushed to this agent as cancelled, as the connector daemon holds them
+    (GET /local/cancelled). Empty when there is no daemon or it will not say: this is the fast road,
+    and the marker on the node is the one that is relied on."""
+    from crewaimeat.aimeat_crew import _serve_api
+
+    api = _serve_api()  # discovery only; the session carries the daemon's secret
+    if api is None:
+        return set()
+    base, session = api
+    try:
+        r = session.get(
+            f"{base}/local/cancelled", params={"agent": agent}, headers={"X-Aimeat-Agent": agent}, timeout=10
+        )
+        if r.status_code != 200:
+            return set()
+        return {str(i) for i in ((r.json() or {}).get("data") or {}).get("cancelled") or []}
+    except Exception:  # noqa: BLE001 -- no list is not a cancellation; the marker read still decides
+        return set()
+
+
+def _marked_cancelled(agent: str, task_id: str) -> bool:
+    """Whether the owner's memory holds the cancel marker for this task: the record
+    `agents.cancel.task.<taskId>` that AIMEAT.agents.cancelTask writes, its value the list of ids."""
+    r = _call(
+        agent,
+        "aimeat_memory_read",
+        {"key": f"{CANCEL_MARKER}{task_id}", "owner_scope": True},
+        return_error=True,
+        quiet=True,
+    )
+    if not isinstance(r, dict) or r.get("ok") is False:
+        return False
+    value = r.get("value")
+    return isinstance(value, (list, dict)) and task_id in {str(i) for i in value}
+
+
 class _Stages:
     """Says each stage on the task as it begins, repeats where it is every half hour so the node does
-    not call a long film stalled, and notices when the owner has ended the task."""
+    not call a long film stalled, and notices when the task has been ended or cancelled."""
 
     def __init__(self, agent: str, task_id: str):
         self.agent, self.task_id = agent, task_id
         self._stage, self._detail, self._since = "", "", 0.0
-        self._said = self._looked = time.monotonic()
+        self._said = self._looked = self._peeked = time.monotonic()
         self._noted = 0.0
         self._ended = False
 
@@ -264,20 +308,45 @@ class _Stages:
             file=sys.stderr,
         )
 
-    def ended(self) -> bool:
-        """True once the task is no longer open on the node. Looks once a minute; not knowing is not ended."""
+    def _stopped(self, why: str) -> bool:
+        self._ended = True
+        print(f"[{self.agent}] task {self.task_id}: stopping, {why}", file=sys.stderr)
+        return True
+
+    def ended(self, *, force: bool = False) -> bool:
+        """True once somebody has ended this task. Not knowing is not ended.
+
+        THREE WAYS A RECORDING IS STOPPED, because the app and the owner do it differently:
+          the push    the app calls AIMEAT.agents.cancelTask, which writes a marker in the owner's
+                      memory; the node pushes `task.cancelled` down the tunnel and the connector
+                      daemon keeps the id. Read here every PEEK_S: a loopback call, no node traffic.
+          the marker  the same cancel, read from the node every LOOK_S. The push is sent once, to an
+                      agent that is online at that moment, and a daemon that restarts forgets its
+                      list; the marker is what is still there afterwards.
+          the status  the owner in person pauses, fails or deletes the task. An app cannot do that
+                      (owner only), which is why the status alone did not let the app stop anything.
+        `force` looks now, whatever was looked at a moment ago: before the upload and after it."""
+        if self._ended:
+            return True
         now = time.monotonic()
-        if self._ended or now - self._looked < LOOK_S:
-            return self._ended
+        if force or now - self._peeked >= PEEK_S:
+            self._peeked = now
+            if self.task_id in _pushed_cancels(self.agent):
+                return self._stopped("the app cancelled it (pushed by the node)")
+        if not force and now - self._looked < LOOK_S:
+            return False
         self._looked = now
         got = _call(self.agent, "aimeat_task_get", {"task_id": self.task_id}, quiet=True)
         task = (got.get("task") if isinstance(got, dict) and isinstance(got.get("task"), dict) else got) or {}
         status = str(task.get("status") or "") if isinstance(task, dict) else ""
-        self._ended = bool(status) and status not in ("active", "stalled")
-        if not self._ended and now - self._said >= STILL_HERE_S:
+        if status and status not in ("active", "stalled"):
+            return self._stopped(f"the task is {status} on the node")
+        if _marked_cancelled(self.agent, self.task_id):
+            return self._stopped(f"the app cancelled it (marker {CANCEL_MARKER}{self.task_id})")
+        if now - self._said >= STILL_HERE_S:
             self._said = now
             self._event(f"{self._stage} {self._detail} ({sr.span(now - self._since)} so far)".replace("  ", " "))
-        return self._ended
+        return False
 
 
 def _run_limit(seconds_from_now: float) -> None:
@@ -350,9 +419,14 @@ def record_task(agent: str, task_id: str, req: Request) -> str:
             on_stage=on_stage,
             on_note=stages.note,
         )
+        if stages.ended(force=True):
+            raise RecordError("CANCELLED", "the recording was stopped before it was stored; nothing was kept.")
         stages.say("uploading", f"{what}, {sr.megabytes(rec.bytes)}")
         sent = sr.store_file(agent, rec.path, req.file)
         stored = True
+        if stages.ended(force=True):
+            # Stopped while the file was on its way. It is stored now, and the handler below removes it.
+            raise RecordError("CANCELLED", "the recording was stopped while it was being stored; it was removed again.")
         done = _now()
         item: dict[str, Any] = {
             "id": req.recording_id,
