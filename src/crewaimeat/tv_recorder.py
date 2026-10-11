@@ -378,8 +378,15 @@ def record_task(agent: str, task_id: str, req: Request) -> str:
         f"[{agent}] {req.recording_id}: {sr.megabytes(rec.bytes)} uploaded in {sent['seconds']} s by {sent['route']}",
         file=sys.stderr,
     )
+    notes = list(rec.notes)
+    late = (now - req.start).total_seconds()
+    if late > START_NOW_S:
+        # The task was reached after the programme began (the app made it late, or the fleet was
+        # restarted in the middle of the recording and this is the second go). A length alone does
+        # not say that the beginning is not there.
+        notes.insert(0, f"the first {sr.span(late)} are missing: the recorder got to it after the start")
     line = f"{what}, {sr.span(rec.seconds)}, {sr.megabytes(rec.bytes)}"
-    return line + "".join(f"; {n}" for n in rec.notes)
+    return line + "".join(f"; {n}" for n in notes)
 
 
 def handle_task(agent: str, task: dict) -> str:

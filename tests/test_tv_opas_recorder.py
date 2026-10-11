@@ -249,6 +249,14 @@ def test_a_start_within_a_minute_means_now(node, recorded):
     assert recorded[0]["seconds"] == 95 * 60, "it records to `stop` from now"
 
 
+def test_a_task_reached_after_the_start_says_the_beginning_is_missing(node, recorded):
+    """The app made it late, or the fleet restarted mid-recording and this is the second go."""
+    line = tv.handle_task(AGENT, _task(start=_z(NOW - timedelta(minutes=40)), stop=_z(NOW + timedelta(minutes=55))))
+    assert recorded[0]["seconds"] == 55 * 60, "it records what is left, to `stop`"
+    assert line.endswith("; the first 40 min are missing: the recorder got to it after the start")
+    assert lifecycle.take_outcome("t-1") == (False, line), "what is there is kept, and the task says what is not"
+
+
 def test_a_task_reached_after_the_programme_ended_is_too_late(node, recorded):
     out = tv.handle_task(AGENT, _task(start=_z(NOW - timedelta(hours=3)), stop=_z(NOW - timedelta(hours=1))))
     assert out.startswith("TOO_LATE: ") and not recorded and not node.files
