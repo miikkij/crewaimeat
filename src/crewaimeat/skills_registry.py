@@ -93,7 +93,7 @@ def fetch_agent_skills(agent_name: str, owner: str | None = None) -> list:
     when it found none. An agent whose crew is defined on the node runs under its full identity
     (`name#owner@node`), no file is named that, and so every such agent ran without the skills its
     owner had linked — one stderr line per task, "no token/url — registry skills skipped", measured
-    on production 2026-10-11 (tarjoama-testi, spawn-demo). The request never used that token: it goes
+    on production 2026-10-11 (tarjoama-testi, always-on-check). The request never used that token: it goes
     through the daemon, which holds the key and signs per call, and which says so itself when it
     cannot. `owner` stays in the signature for the callers that pass it."""
     from crewaimeat.aimeat_crew import _aimeat_rest
