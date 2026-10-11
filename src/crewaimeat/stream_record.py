@@ -472,20 +472,45 @@ def _capture_cmd(ffmpeg: str, url: str, seconds: float, out: Path, seen: dict, u
     return [*cmd, "-t", f"{seconds:.1f}", "-c", "copy", "-f", "mpegts", str(out)]
 
 
-def _capture_once(cmd: list, log: Path, seconds: float, should_stop: Callable[[], bool] | None) -> None:
+def _has_data(path: Path) -> bool:
+    """Whether ffmpeg has written anything to `path` yet. The size is read through an open handle: a
+    directory's own record of a file that is being written stays at 0 on Windows (seen: a listing
+    said 0 bytes of a capture that held 12 MB)."""
+    try:
+        with open(path, "rb") as fh:
+            return fh.seek(0, os.SEEK_END) > 0
+    except OSError:
+        return False
+
+
+def _capture_once(
+    cmd: list,
+    log: Path,
+    seconds: float,
+    should_stop: Callable[[], bool] | None,
+    on_data: Callable[[], None] | None = None,
+) -> None:
     """Run one attachment. Ends when ffmpeg has its `seconds`, when the wall clock is a minute past
-    them (a stream that stalls delivers no time to count), or when the caller says stop."""
+    them (a stream that stalls delivers no time to count), or when the caller says stop.
+    `on_data` is called once, when the first of the stream has been written: that is the moment the
+    stream is open and the recording has begun, which no earlier event can honestly say."""
     give_up = time.monotonic() + seconds + _STALL_GRACE_S
+    out, told = Path(cmd[-1]), on_data is None
     with open(log, "wb") as err:
         proc = _run_quiet(cmd, stderr=err)
         try:
             while proc.poll() is None:
+                if not told and _has_data(out):
+                    told = True
+                    on_data()
                 if time.monotonic() > give_up or (should_stop is not None and should_stop()):
                     _stop(proc)
                     break
                 time.sleep(1.0)
         finally:
             _end(proc)
+    if not told and _has_data(out):  # a stream read to its end inside the first second
+        on_data()
 
 
 def _why_nothing(log_tail: str) -> RecordError:
@@ -535,8 +560,11 @@ def capture(
     referrer: str = "",
     should_stop: Callable[[], bool] | None = None,
     on_note: Callable[[str, bool], None] | None = None,
+    on_data: Callable[[], None] | None = None,
 ) -> tuple[list[Path], float]:
     """Record `url` from now for `seconds`, stream copy. Returns (the parts in order, seconds caught).
+    `on_data` is called each time an attachment begins to deliver: at the first picture, and again
+    when a stream that dropped has been attached and is delivering again.
 
     TWO KINDS OF TRYING AGAIN, and `on_note(text, every)` hears each one.
 
@@ -574,7 +602,8 @@ def capture(
             failure, said = exc, exc.message
         else:
             part, log = workdir / f"part-{attempt:03d}.ts", workdir / f"part-{attempt:03d}.log"
-            _capture_once(_capture_cmd(ffmpeg, url, ask, part, seen, user_agent, referrer), log, ask, should_stop)
+            cmd = _capture_cmd(ffmpeg, url, ask, part, seen, user_agent, referrer)
+            _capture_once(cmd, log, ask, should_stop, on_data)
             got = media_info(ffprobe, part)["seconds"] if part.exists() and part.stat().st_size > 0 else 0.0
             said = _tail(log, 1)
             if got > 0:
@@ -718,7 +747,8 @@ def record(
     """Record `url` from now for `seconds` and leave ONE MP4 in `workdir`. Raises RecordError.
 
     `max_bytes` is the node's limit for one file; with it the recording is fitted (see the module
-    text). `on_stage` hears "recording" and "packing" as each begins, and `on_note(text, every)` hears
+    text). `on_stage` hears "opening" before the stream is asked for, "recording" each time it begins
+    to deliver (the first picture, and again after a drop is attached), and "packing"; `on_note(text, every)` hears
     each time the stream had to be opened or attached again (see `capture`). `should_stop` is asked about once a second during the capture; when it says yes the capture ends and the recording is given up
     (CANCELLED), because a recording somebody stopped is not one they want half of.
     """
@@ -732,7 +762,10 @@ def record(
     workdir.mkdir(parents=True, exist_ok=True)
 
     if on_stage:
-        on_stage("recording")
+        # Not "recording": nothing is recorded until the stream has opened, and a stream may take ten
+        # attempts and three minutes to open, or never open. Seen on aimeat.io 2026-10-11 (task
+        # 17111ae3): a booking on an address that answered 404 read "recording now" until it failed.
+        on_stage("opening")
     parts, caught = capture(
         url,
         seconds,
@@ -742,6 +775,7 @@ def record(
         referrer=referrer,
         should_stop=should_stop,
         on_note=on_note,
+        on_data=(lambda: on_stage("recording")) if on_stage else None,
     )
     if should_stop is not None and should_stop():
         raise RecordError("CANCELLED", f"the recording was stopped after {span(caught)} of {span(seconds)}.")

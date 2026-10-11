@@ -243,9 +243,11 @@ def _scripted(monkeypatch, tmp_path, lengths: list[float], said: str = "Connecti
             raise answer
         return answer
 
-    def once(cmd, log, seconds, should_stop):
+    def once(cmd, log, seconds, should_stop, on_data=None):
         asked.append(seconds)
         got = lengths[len(asked) - 1]
+        if got and on_data:
+            on_data()
         clock["t"] += got
         Path(cmd[-1]).write_bytes(b"x" * int(got))
         Path(log).write_text(said, "utf-8")
@@ -337,6 +339,29 @@ def test_a_status_that_goes_away_is_recorded_after_it(monkeypatch, tmp_path):
     assert caught == 591.0 and len(asked) == 1 and asked[0] == 600 - 3 - 6
 
 
+def test_the_stages_run_opening_until_the_first_picture_and_recording_after_each_attachment(monkeypatch, tmp_path):
+    """Two opens refused, then a stream that records, drops and is attached again."""
+    stages: list[str] = []
+    asked = _scripted(monkeypatch, tmp_path, [0.0, 0.0, 200.0, 380.0])
+    notes: list[tuple[str, bool]] = []
+    parts, caught = sr.capture(
+        "http://x/live.m3u8",
+        600,
+        tmp_path,
+        want_height=360,
+        on_note=lambda t, every: (notes.append((t, every)), stages.append("note"))[0],
+        on_data=lambda: stages.append("data"),
+    )
+    assert stages == ["note", "note", "data", "note", "data"] and len(asked) == 4 and caught == 580.0
+    assert [every for _, every in notes] == [True, True, False], "two attempts to open, then one drop"
+
+    never: list[str] = []
+    _scripted(monkeypatch, tmp_path, [0.0] * 50)
+    with pytest.raises(sr.RecordError):
+        sr.record("http://x/live.m3u8", 3600, tmp_path / "w", on_stage=never.append)
+    assert never == ["opening"], "a stream that never opens is never said to be recording"
+
+
 def test_a_window_that_closes_first_ends_the_attempts_and_says_so(monkeypatch, tmp_path):
     asked = _scripted(monkeypatch, tmp_path, [0.0] * 50)
     with pytest.raises(sr.RecordError) as e:
@@ -387,7 +412,7 @@ def test_what_ffmpeg_was_refused_names_the_failure():
 def test_six_seconds_at_low_is_one_mp4_a_browser_plays_from_its_first_bytes(stream, allowed, tmp_path):
     stages: list[str] = []
     rec = sr.record(f"{stream}/master.m3u8", 6, tmp_path, quality="low", on_stage=stages.append)
-    assert stages == ["recording", "packing"]
+    assert stages == ["opening", "recording", "packing"], "`recording` is said when the stream delivers, not before"
     assert rec.path.name == "recording.mp4" and rec.bytes == rec.path.stat().st_size > 0
     info = _probe(rec.path)
     assert (info["video"], info["audio"]) == ("h264", "aac")

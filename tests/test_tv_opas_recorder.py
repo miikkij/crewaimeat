@@ -137,6 +137,7 @@ def recorded(monkeypatch):
 
     def fake(url, seconds, workdir, **kw):
         asked.append({"url": url, "seconds": seconds, **kw})
+        kw["on_stage"]("opening")
         kw["on_stage"]("recording")
         kw["on_stage"]("packing")
         workdir.mkdir(parents=True, exist_ok=True)
@@ -205,7 +206,7 @@ def test_a_recording_is_stored_catalogued_and_closed_with_one_readable_line(node
     line = tv.handle_task(AGENT, _task())
     assert line == "Petolliset, Nelonen, 95 min, 248 MB"
     assert lifecycle.take_outcome("t-1") == (False, line)
-    assert node.stages() == ["recording", "packing", "uploading"]
+    assert node.stages() == ["opening", "recording", "packing", "uploading"]
     assert node.files == {"tvopas/rec/FI-Nelonen.fi-29861820.mp4": 248_000_000}
     doc = node.memory["tvopas.recordings"]
     assert node.visibility["tvopas.recordings"] == "private"
@@ -251,14 +252,14 @@ def test_a_start_ahead_is_waited_for_and_said(node, recorded, monkeypatch):
     monkeypatch.setattr(tv.time, "sleep", lambda s: clock.__setitem__("t", clock["t"] + timedelta(seconds=max(s, 1))))
     start = NOW + timedelta(minutes=3)
     tv.handle_task(AGENT, _task(start=_z(start), stop=_z(start + timedelta(minutes=30))))
-    assert node.stages() == ["waiting", "recording", "packing", "uploading"]
+    assert node.stages() == ["waiting", "opening", "recording", "packing", "uploading"]
     assert node.events[0] == "waiting until 18:03 UTC to record Petolliset, Nelonen"
     assert recorded[0]["seconds"] == pytest.approx(30 * 60, abs=6)
 
 
 def test_a_start_within_a_minute_means_now(node, recorded):
     tv.handle_task(AGENT, _task(start=_z(NOW + timedelta(seconds=40))))
-    assert node.stages()[0] == "recording"
+    assert node.stages()[0] == "opening"
     assert recorded[0]["seconds"] == 95 * 60, "it records to `stop` from now"
 
 
@@ -332,6 +333,7 @@ def test_another_tasks_cancel_stops_nothing_here(node, monkeypatch):
 
 def test_a_recording_cancelled_by_the_app_fails_as_cancelled_and_keeps_nothing(node, monkeypatch, tmp_path):
     def stopped(url, seconds, workdir, **kw):
+        kw["on_stage"]("opening")
         kw["on_stage"]("recording")
         workdir.mkdir(parents=True, exist_ok=True)
         (workdir / "part-001.ts").write_bytes(b"x" * 100)
@@ -407,15 +409,43 @@ def test_every_attempt_to_open_a_stream_is_said_on_the_task(node, monkeypatch):
     clock = {"t": 1000.0}
     monkeypatch.setattr(tv.time, "monotonic", lambda: clock["t"])
     stages = tv._Stages(AGENT, "t-1")
-    stages.say("recording", "Simpsonit, Nelonen until 09:32 UTC")
+    stages.say("opening", "Simpsonit, Nelonen until 09:32 UTC")
     for n, wait in ((1, 3), (2, 6), (3, 12)):
         clock["t"] += wait
         stages.note(f"the stream did not open (attempt {n} of 10); trying again in {wait} s", True)
     assert node.events[1:] == [
-        f"recording Simpsonit, Nelonen until 09:32 UTC: the stream did not open (attempt {n} of 10); trying again in {w} s"
+        f"opening Simpsonit, Nelonen until 09:32 UTC: the stream did not open (attempt {n} of 10); trying again in {w} s"
         for n, w in ((1, 3), (2, 6), (3, 12))
     ]
-    assert node.stages() == ["recording"] * 4
+    assert node.stages() == ["opening"] * 4, "never `recording` while nothing is being recorded"
+
+
+def test_recording_is_said_when_the_stream_delivers_and_again_only_after_something_else(node, monkeypatch):
+    """`recording` comes with the first picture. A stream that drops and is attached again says it
+    once more, so the last line on the task is not "trying again" for the rest of the programme;
+    said twice in a row it is one event, and the stage's own clock keeps running."""
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(tv.time, "monotonic", lambda: clock["t"])
+    stages = tv._Stages(AGENT, "t-1")
+    what = "Suomen Tulli, Jim until 10:02 UTC"
+    stages.say("opening", what)
+    clock["t"] += 2
+    stages.say("recording", what)  # the first picture
+    clock["t"] += 60
+    stages.say("recording", what)  # a second attachment whose drop was not said: nothing new to say
+    stages.note("the stream dropped after 60 s; trying again with 53 min left")
+    clock["t"] += 4
+    stages.say("recording", what)  # delivering again
+    assert node.events == [
+        f"opening {what}",
+        f"recording {what}",
+        f"recording {what}: the stream dropped after 60 s; trying again with 53 min left",
+        f"recording {what}",
+    ]
+    clock["t"] += tv.STILL_HERE_S
+    monkeypatch.setattr(tv, "LOOK_S", 0.0)
+    assert stages.ended() is False
+    assert node.events[-1] == f"recording {what} (31 min so far)", "counted from the first picture, not the last drop"
 
 
 def _never_opens(monkeypatch, node, cancel_at: float, *, push: bool):
@@ -442,7 +472,8 @@ def test_a_stream_that_never_opens_fails_the_task_after_ten_attempts_with_its_co
     out = tv.handle_task(AGENT, _task())
     assert out == "STREAM_UNREACHABLE: after 10 attempts the stream's address answered HTTP 404: https://x/live.m3u8"
     assert lifecycle.take_outcome("t-1") == (True, out) and clock["looks"] == 10
-    assert node.stages() == ["recording"] * 10, "the stage, then one line for each of the nine waits"
+    assert node.stages() == ["opening"] * 10, "the stage, then one line for each of the nine waits; never `recording`"
+    assert node.events[0] == "opening Petolliset, Nelonen until 19:35 UTC"
     assert node.events[1].endswith(": the stream did not open (attempt 1 of 10); trying again in 3 s")
     assert node.events[9].endswith(": the stream did not open (attempt 9 of 10); trying again in 30 s")
     assert not node.files and "tvopas.recordings" not in node.memory
@@ -476,7 +507,7 @@ def test_a_per_wake_worker_refuses_a_recording_it_would_be_stopped_in(node, reco
 
 def test_a_stream_that_answers_404_fails_the_task_and_leaves_no_file(node, monkeypatch, tmp_path):
     def unreachable(url, seconds, workdir, **kw):
-        kw["on_stage"]("recording")
+        kw["on_stage"]("opening")
         workdir.mkdir(parents=True, exist_ok=True)
         (workdir / "part-001.log").write_text("x", "utf-8")
         raise sr.RecordError("STREAM_UNREACHABLE", f"the stream's address answered HTTP 404: {url}")
@@ -887,8 +918,24 @@ def test_a_stream_whose_first_open_is_refused_ends_as_a_stored_recording(node, s
     assert list(node.files) == ["tvopas/rec/FI-Nelonen.fi-29861820.mp4"] and node.files[_FILE] > 10_000
     item = node.memory["tvopas.recordings"]["items"][0]
     assert (item["width"], item["height"], item["bytes"]) == (640, 360, node.files[_FILE])
-    assert node.stages() == ["recording", "recording", "packing", "uploading"]
-    assert node.events[1].endswith(": the stream did not open (attempt 1 of 10); trying again in 1 s")
+    assert node.stages() == ["opening", "opening", "recording", "packing", "uploading"]
+    assert node.events[0] == "opening Petolliset, Nelonen until 18:00 UTC"
+    assert node.events[1] == (
+        "opening Petolliset, Nelonen until 18:00 UTC: the stream did not open (attempt 1 of 10); trying again in 1 s"
+    )
+    assert node.events[2] == "recording Petolliset, Nelonen until 18:00 UTC", "said when the first picture arrives"
+
+
+@needs_ffmpeg
+def test_a_stream_that_opens_at_once_says_opening_once_and_then_recording(node, stream, allowed, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(sr, "find_ffmpeg", _REAL_FIND_FFMPEG)
+    line = tv.handle_task(AGENT, _task(stream_url=f"{stream}/master.m3u8", stop=_z(NOW + timedelta(seconds=6))))
+    assert lifecycle.take_outcome("t-1") == (False, line) and list(node.files) == [_FILE]
+    assert node.events[:2] == [
+        "opening Petolliset, Nelonen until 18:00 UTC",
+        "recording Petolliset, Nelonen until 18:00 UTC",
+    ]
+    assert node.stages() == ["opening", "recording", "packing", "uploading"]
 
 
 _FILE = "tvopas/rec/FI-Nelonen.fi-29861820.mp4"

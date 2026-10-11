@@ -10,8 +10,9 @@ to interpret and nothing for a model to get wrong:
                   catalogue, and close the task with one line a person can read.
   tvopas.delete   delete the file, remove the catalogue item.
 
-Each stage is reported as a task event whose first word the app shows: `waiting`, `recording`,
-`packing`, `uploading`. A failure closes the task as failed with its code first (`STREAM_UNREACHABLE`,
+Each stage is reported as a task event whose first word the app shows: `waiting`, `opening` (the
+stream is asked for and has given nothing yet), `recording` (from the first picture), `packing`,
+`uploading`. A failure closes the task as failed with its code first (`STREAM_UNREACHABLE`,
 `GEO_BLOCKED`, `STREAM_ENDED_EARLY`, `NO_FFMPEG`, `TOO_LONG`, `QUOTA`, `UPLOAD_FAILED`, and the ones this
 side added for what the brief's seven do not cover: `BAD_TASK` (a scope that cannot be read), `TOO_LATE`
 (the programme was over before the task was reached), `RUN_LIMIT` (the agent runs one worker per job and
@@ -284,12 +285,22 @@ class _Stages:
         self._stage, self._detail, self._since = "", "", 0.0
         self._said = self._looked = self._peeked = time.monotonic()
         self._noted = 0.0
+        self._last = ""  # the last event sent, word for word
         self._ended = False
 
     def say(self, stage: str, detail: str = "") -> None:
+        """Say a stage as it begins. Said again (the stream delivers again after a drop) it is sent
+        only when something else was said in between: the line that is already the last one on the
+        task says it, and the stage's own clock keeps running."""
+        now = time.monotonic()
+        if stage != self._stage:
+            self._since = now
         self._stage, self._detail = stage, detail
-        self._since = self._said = time.monotonic()
-        self._event(f"{stage} {detail}".strip())
+        message = f"{stage} {detail}".strip()
+        if message == self._last:
+            return
+        self._said = now
+        self._event(message)
 
     def note(self, text: str, every: bool = False) -> None:
         """Something the person should see inside the current stage. The event begins with the stage's
@@ -308,6 +319,7 @@ class _Stages:
         self._event(f"{self._stage} {self._detail}: {text}")
 
     def _event(self, message: str) -> None:
+        self._last = message
         r = _call(self.agent, "aimeat_task_event", {"task_id": self.task_id, "type": "progress", "message": message})
         print(
             f"[{self.agent}] task {self.task_id}: {message}{'' if r is not None else '  (event not taken)'}",
@@ -411,7 +423,9 @@ def record_task(agent: str, task_id: str, req: Request) -> str:
     try:
 
         def on_stage(stage: str) -> None:
-            stages.say(stage, f"{what} until {_clock(req.stop)}" if stage == "recording" else what)
+            # "opening" until the stream delivers, "recording" from the first picture on (and said
+            # again when a stream that dropped delivers again), then "packing".
+            stages.say(stage, f"{what} until {_clock(req.stop)}" if stage in ("opening", "recording") else what)
 
         rec = sr.record(
             req.stream_url,
