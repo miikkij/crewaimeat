@@ -1247,3 +1247,118 @@ def test_an_injected_roster_is_never_written_to_a_home(monkeypatch, tmp_path):
     sp = _spawner(invoke_fn=lambda *_: None, roster_fn=lambda: ["a"])
     sp.refresh_roster()
     assert not spawn_state.roster_file().exists()
+
+
+# --------------------------------------------------------------------------- #
+# A NEW agent: its first task exists before this spawner has a park for it
+# --------------------------------------------------------------------------- #
+# The node creates a new agent's first task in the request that approves it. No wake for that task
+# can reach a spawner that does not serve the agent yet, so the only thing that finds it is the look
+# for un-announced work, and that look used to wait a whole interval (120 s) before its first turn.
+class _Worker:
+    """What `spawn_fn` hands back: a process that is still running."""
+
+    pid = 4242
+
+    @staticmethod
+    def poll():
+        return None
+
+
+def test_an_agent_that_joins_the_roster_with_an_open_task_gets_a_worker_in_that_pass(monkeypatch, tmp_path, capsys):
+    import threading
+
+    from crewaimeat import spawner as sp_mod
+
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path / "home"))
+    assert sp_mod.WORK_POLL_S >= 60, "the net keeps its interval; only the first look moved"
+    started, runs, asked = threading.Event(), [], []
+
+    def spawn(agent, run_id):
+        runs.append(agent)
+        started.set()
+        return _Worker()
+
+    roster = ["old"]
+    sp = _spawner(invoke_fn=lambda *_: None, roster_fn=lambda: list(roster), spawn_fn=spawn)
+
+    def open_tasks(agent):
+        asked.append(agent)
+        return ["first-task"] if agent == "koti-testi" else []
+
+    monkeypatch.setattr(sp, "_unwoken_work", open_tasks)
+    sp.refresh_roster()
+    roster.append("koti-testi")  # approved on the node: enrolled into the running daemon
+    sp.refresh_roster()
+    assert started.wait(5), "no worker within 5 s of the join: the first look still waits for the net's interval"
+    with sp._lock:  # the start happens under the lock; once it is free the worker is on the books
+        st = sp.state["koti-testi"]
+    assert runs == ["koti-testi"], "the agent with work waiting got a worker; the one without did not"
+    assert st.busy and st.trigger == "poll"
+    assert "koti-testi: work was already waiting when it joined (1)" in capsys.readouterr().err
+    assert sp._woken_tasks["koti-testi"] == {"first-task"}, "woken for once: the net will not start it again"
+    assert set(asked) == {"old", "koti-testi"}, "every agent that joins is looked at"
+
+
+def test_the_look_on_joining_leaves_a_stopped_or_working_agent_alone(monkeypatch):
+    """The first turn obeys what every turn obeys: no look while a worker runs, none for an agent the
+    owner stopped on the node."""
+    from crewaimeat import spawner as sp_mod
+    from crewaimeat.spawner import AgentState
+
+    monkeypatch.setattr(sp_mod, "STOPPED_ON_NODE", {"stopped"})
+    sp, asked = _spawner(), []
+    monkeypatch.setattr(sp, "_unwoken_work", lambda agent: asked.append(agent) or [])
+    for name in ("stopped", "working"):
+        sp.state[name] = AgentState(name)
+    sp.state["working"].proc = _Worker()
+    real_wait, waits = sp._stop.wait, []
+
+    def wait(_s):
+        waits.append(1)
+        for st in sp.state.values():
+            st.retired = True  # the generation ends at the first wait: only the joining turn ran
+        return real_wait(0)
+
+    monkeypatch.setattr(sp._stop, "wait", wait)
+    sp._work_poll_loop("stopped")
+    sp.state["working"].retired = False
+    sp._work_poll_loop("working")
+    assert asked == [] and len(waits) == 2
+
+
+def test_an_identity_the_daemon_starts_to_carry_brings_the_roster_read_forward(monkeypatch, tmp_path):
+    """The node enrols a new agent into the running daemon at once; the roster's turn came up to 30 s
+    later. The daemon's own status is loopback, so that is what is watched, and a change asks for one
+    roster read at the next tick."""
+    import time
+
+    from crewaimeat import spawner as sp_mod
+
+    held = {"a#o@n": "tunnel", "a": "tunnel"}
+    monkeypatch.setattr(sp_mod, "daemon_identities", lambda: dict(held))
+    sp = _spawner(root=tmp_path)
+    now = time.monotonic()
+    just_read = {"next_roster": now + 25, "last_roster": now - 1}
+
+    assert sp.daemon_attached_someone() is False, "the first look takes stock; the roster was just read"
+    assert sp.daemon_attached_someone() is False, "nothing changed"
+    assert sp.roster_due(**just_read) is False
+
+    held.update({"koti-testi#o@n": "tunnel", "koti-testi": "tunnel"})
+    assert sp.daemon_attached_someone() is True
+    sp._attached.set()
+    assert sp.roster_due(**just_read) is True, "read now, although the roster was read a second ago"
+    sp._attached.clear()
+    assert sp.daemon_attached_someone() is False, "said once per identity that appears"
+    assert sp_mod.ATTACH_WATCH_S < sp_mod.ROSTER_INTERVAL_S
+
+
+def test_a_refused_identity_or_a_silent_daemon_asks_for_no_roster_read(monkeypatch, tmp_path):
+    from crewaimeat import spawner as sp_mod
+
+    answers = [{"a": "tunnel"}, None, {"a": "tunnel", "moved-away": sp_mod.REFUSED}, {"a": "tunnel"}]
+    monkeypatch.setattr(sp_mod, "daemon_identities", lambda: answers.pop(0))
+    sp = _spawner(root=tmp_path)
+    assert [sp.daemon_attached_someone() for _ in range(4)] == [False, False, False, False]
+    assert sp._daemon_held == {"a"}, "a daemon that did not answer left what was known as it was"

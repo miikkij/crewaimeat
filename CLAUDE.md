@@ -268,6 +268,13 @@ edition shipped with 21 articles and no front page. `write-a`/`write-b`/`editori
   crew file (whole seconds, `0` = no limit; owner's ruling 2026-10-11, the recorder's run is as long as
   the programme). `Spawner.run_timeout_for` decides it, and the worker is told its real limit in
   `AIMEAT_SPAWN_RUN_TIMEOUT_S`. An agent defined on the node (no crew file here) has the default.
+- **A new agent's first task is there before anyone can be woken for it (2026-10-12).** The node
+  creates it in the request that approves the agent, so no wake reaches a spawner that has no park
+  for the agent yet. Two things cover it: the spawner asks the DAEMON (loopback `/local/status`,
+  every `ATTACH_WATCH_S`) whether it carries an identity it did not before and reads the roster at
+  once when it does, and the look for un-announced work takes its first turn the moment an agent
+  joins instead of one `WORK_POLL_S` later. Never shorten the roster interval to get there: that
+  polls the node from every home all day for a rare event.
 - **One owner, several computers (2026-10-11).** The node's roster is the OWNER's list; an agent's key
   is on ONE connector, and the owner can move it (`POST /v1/agents/v2/agents/:name/move`). Both
   runtimes cut the roster with `spawner.carried_here`: the daemon's LIVE status (`/local/status`)

@@ -73,6 +73,9 @@ ROSTER_INTERVAL_S = 30.0
 # How long a park waits after the daemon refused it (400: an agent this daemon does not carry). The
 # same pause paces the early roster read a refusal asks for.
 REFUSED_BACKOFF_S = 10.0
+# How often the daemon is asked (loopback, no node call) whether it carries an identity it did not
+# carry before. A new one brings the roster read forward: see `Spawner.daemon_attached_someone`.
+ATTACH_WATCH_S = 5.0
 
 # HOW OFTEN THE SPAWNER LOOKS FOR WORK NOBODY TOLD IT ABOUT. A wake is a push, and a push that is
 # never sent cannot be retried: the task sits `active` on the node, the agent reads `online`, the
@@ -188,6 +191,8 @@ class Spawner:
         self._threads: dict[str, list[threading.Thread]] = {}
         self._roster_note: str | None = None  # last roster complaint, printed once per change
         self._roster_asked = threading.Event()  # a refused park: read the roster now, not in 30 s
+        self._attached = threading.Event()  # the daemon carries someone new: read the roster now
+        self._daemon_held: set[str] | None = None  # what the daemon carried at the last look
         self._last_invoke_complaint: dict[str, float] = {}
 
     # ---------------------------------------------------------------- wake --- #
@@ -303,12 +308,24 @@ class Spawner:
 
     def _work_poll_loop(self, agent: str) -> None:
         """Ask for work a push may never have announced. Skipped while a worker runs — it is already
-        draining the queue, and the wake it would get is the one it is answering."""
+        draining the queue, and the wake it would get is the one it is answering.
+
+        THE FIRST LOOK IS AT ONCE, WHEN THE AGENT JOINS. The loop used to wait a whole interval before
+        it looked at all, and the one case where work is certain to be waiting un-announced is a new
+        agent: the node creates its first task in the same request that approves it, before this
+        spawner has a park for it, so no wake for that task can ever arrive. Measured on production
+        2026-10-12 (koti-testi): approved 06:05:04 UTC, joined the roster 06:05:29, and the worker
+        started at 06:07:29 with trigger=poll — two minutes of the owner's page reading "working"
+        over an agent nobody had started. The look is the same one, with the same once-per-task
+        rule; only its first turn moved."""
         mine = self.state.get(agent)
+        joining = True
         while not self._stop.is_set():
-            self._stop.wait(WORK_POLL_S)
-            if self._stop.is_set():
-                break
+            if not joining:
+                self._stop.wait(WORK_POLL_S)
+                if self._stop.is_set():
+                    break
+            was_joining, joining = joining, False
             st = self.state.get(agent)
             if st is None or st.retired or st is not mine:
                 return  # this generation is over; a re-join started its own poll
@@ -319,7 +336,8 @@ class Spawner:
             fresh = self._unwoken_work(agent)
             if fresh:
                 self._woken_tasks.setdefault(agent, set()).update(fresh)
-                _say(f"[spawner] {agent}: open task with no wake ({len(fresh)}) — starting a worker")
+                found = "work was already waiting when it joined" if was_joining else "open task with no wake"
+                _say(f"[spawner] {agent}: {found} ({len(fresh)}) — starting a worker")
                 self.on_wake(agent, trigger="poll")
 
     def _wake_loop(self, agent: str) -> None:
@@ -877,14 +895,41 @@ class Spawner:
             self._retire_agent(agent)
 
     def roster_due(self, next_roster: float, last_roster: float) -> bool:
-        """Read the roster now? At its regular turn, or sooner when a park was refused.
+        """Read the roster now? At its regular turn, or sooner: when a park was refused, or when the
+        daemon began to carry an identity it did not carry before.
 
-        The early read is paced by the refusal's own back-off: a roster that keeps listing an agent
-        this daemon will not serve (a fault, not a move) costs one extra read per `REFUSED_BACKOFF_S`
-        however many agents are refused, never one per refusal.
+        The early read after a refusal is paced by the refusal's own back-off: a roster that keeps
+        listing an agent this daemon will not serve (a fault, not a move) costs one extra read per
+        `REFUSED_BACKOFF_S` however many agents are refused, never one per refusal. A newly attached
+        identity needs no pacing of its own: it is an edge, raised once per identity that appears.
         """
         now = time.monotonic()
-        return now >= next_roster or (self._roster_asked.is_set() and now - last_roster >= REFUSED_BACKOFF_S)
+        return (
+            now >= next_roster
+            or self._attached.is_set()
+            or (self._roster_asked.is_set() and now - last_roster >= REFUSED_BACKOFF_S)
+        )
+
+    def daemon_attached_someone(self) -> bool:
+        """True when the daemon carries an identity now that it did not at the last look.
+
+        THE DAEMON KNOWS OF A NEW AGENT BEFORE THE ROSTER'S TURN COMES. The node enrols an agent into
+        the running daemon the moment its owner approves it; this spawner then learned of it only at
+        its next roster read, up to 30 s later (25 s on production 2026-10-12, between the approval
+        and "joined the roster"). Reading the roster more often would poll the NODE for every home,
+        all day, to save seconds on a rare event. The daemon's own status is loopback and reaches no
+        node, so it is what is watched, and one roster read follows a change.
+
+        The first look only takes stock: the roster was read a moment before. An identity the node
+        refuses (`auth_failed`) is not carried, so it raises nothing; a daemon that does not answer
+        leaves what was known as it was.
+        """
+        held = daemon_identities()
+        if held is None:
+            return False
+        live = {identity for identity, transport in held.items() if transport != REFUSED}
+        known, self._daemon_held = self._daemon_held, live
+        return known is not None and bool(live - known)
 
     # ----------------------------------------------------------------- run --- #
     def serve_forever(self) -> int:
@@ -909,11 +954,17 @@ class Spawner:
         )
         next_roster = time.monotonic() + self.roster_interval_s
         last_roster = time.monotonic()
+        next_attach_look = 0.0  # the first look takes stock of what the daemon carries now
         try:
             while not self._stop.is_set():
                 self.reap()
+                if self.roster_fn is None and time.monotonic() >= next_attach_look:
+                    next_attach_look = time.monotonic() + ATTACH_WATCH_S
+                    if self.daemon_attached_someone():
+                        self._attached.set()
                 if self.roster_due(next_roster, last_roster):
                     self._roster_asked.clear()
+                    self._attached.clear()
                     self.refresh_roster()
                     last_roster = time.monotonic()
                     next_roster = last_roster + self.roster_interval_s
