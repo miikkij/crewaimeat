@@ -21,7 +21,9 @@ it did — a retired agent's deliverables are still the owner's data.
     crewaimeat retire <agent> --apply --purge-node   # also disable its schedules on the node
     crewaimeat retire <agent> --apply --forget       # the NODE deleted it: delete what this machine keeps
 
-`--forget` IS FOR AN AGENT THAT NO LONGER EXISTS ON THE NODE, and it checks that first. Deleting an
+`--forget` IS FOR AN AGENT THAT NO LONGER EXISTS ON THE NODE, and it checks that first. The spawner
+does the same by itself when an agent leaves its roster as deleted (`Spawner.forget_departed`), so
+this command is for what is left from before that, or on a machine with no spawner running. Deleting an
 agent on the node revokes its sessions and removes its records there; nothing told this machine.
 Measured 2026-10-11 with the test agent `tarjoama-testi`: hours after the node deleted it, this home
 still held its key, its per-agent config, its line in serve.json (the daemon carrying it as
@@ -37,7 +39,6 @@ from __future__ import annotations
 import argparse
 import glob
 import json
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -70,105 +71,73 @@ def _crew_path(root: Path, agent: str) -> Path | None:
     return crew.path if crew else None
 
 
-def _identities(agent: str) -> list[str]:
-    """Every spelling this home files the agent under: its name, and the full identity
-    (`name#owner@node`) of each registration. An agent defined on the node runs under the identity,
-    so its caches, locks and run records are named by it. serve.json is the one place the identity
-    is written down — read it BEFORE the registration is dropped."""
-    idents = [agent]
+def _serve_doc() -> dict:
     try:
-        data = json.loads(_serve_path().read_text(encoding="utf-8"))
+        return json.loads(_serve_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return idents
-    for a in data.get("agents") or []:
-        gaii = a.get("gaii")
-        if a.get("agent") == agent and gaii and gaii not in idents:
-            idents.append(str(gaii))
-    return idents
+        return {}
+
+
+def _identities(agent: str) -> list[str]:
+    """Every identity this home can file the agent under: see `agent_files.identities_of`.
+
+    NOT READ FROM THE AGENT'S OWN REGISTRATION ALONE. It was — its line in serve.json was the one
+    place the full identity was written down — and since the connector removes that line itself
+    when the node deletes an agent, the lookup came back with the bare name, under which a
+    node-defined agent files nothing. The home's other agents say which owners and nodes it serves."""
+    from crewaimeat import agent_files
+
+    return agent_files.identities_of(agent, _serve_doc())
 
 
 def _node_still_lists(agent: str) -> tuple[bool | None, str]:
     """`(listed, why)`: does the NODE still list this agent? None when it could not be asked.
 
-    Asked through the daemon as a NEIGHBOUR of the same owner — never as the agent itself, whose
-    credential is the thing in doubt — with the spawner's own reader, so an agent the daemon already
-    calls refused is not the caller either. The listing is owner-scoped: the agent's owner comes
-    from its registration, and when that is already gone every owner this home serves is asked."""
+    The spawner's question, asked the spawner's way (`spawner.node_still_lists`): through the daemon,
+    as a neighbour of the same owner, never as the agent in doubt."""
     from crewaimeat import spawner
 
-    doc = spawner._serve_doc()
-    if not doc.get("port"):
-        return None, "no serve daemon is running here, so the node cannot be asked"
-    callers = spawner._owner_callers(doc)
-    owners = sorted({str(a["owner"]) for a in doc.get("agents") or [] if a.get("agent") == agent and a.get("owner")})
-    for owner in owners or sorted(callers):
-        ask_as = [c for c in callers.get(owner, []) if agent_local_name(c) != agent]
-        if not ask_as:
-            return None, f"no other agent of {owner} on this machine can ask the node"
-        try:
-            resp = spawner._ask_node_as(doc, ask_as, "/v1/agents")
-            rows = ((resp.json() or {}).get("data") or {}).get("agents") if resp.status_code == 200 else None
-        except Exception as exc:  # noqa: BLE001 — the daemon is down or answered something else
-            return None, f"the node could not be asked ({exc!r})"
-        if not isinstance(rows, list):
-            return None, f"the node did not answer the agent list for {owner} (HTTP {resp.status_code})"
-        if any(r.get("name") == agent for r in rows if isinstance(r, dict)):
-            return (
-                True,
-                f"the node still lists '{agent}' for {owner}: delete it there first, or retire without --forget",
-            )
-    return False, f"the node lists no agent named '{agent}'"
+    return spawner.node_still_lists(agent)
 
 
 def _forget_targets(root: Path, agent: str, idents: list[str]) -> list[Path]:
-    """The files and folders this machine keeps for the agent, existing ones only.
+    """The files and folders this machine keeps for the agent, existing ones only: the connector's
+    (a key or token, the per-agent config) where they are still there, and the runtime's own.
 
-    EXACT NAMES, NO PREFIX MATCHES: `news` must never take `news-fetcher` with it. Every path below
-    is built the way the code that writes it builds it, for the name and for each full identity."""
-    from crewaimeat import spawn_state
-    from crewaimeat.agent_manifest import agent_file_stem
+    EXACT NAMES, NO PREFIX MATCHES: `news` must never take `news-fetcher` with it."""
+    from crewaimeat import agent_files
 
-    home = _home()
-    name = glob.escape(agent)
-    found: list[Path] = []
-    for folder, suffix in (("tokens", ".token"), ("keys", ".key")):
-        found += sorted((home / folder).glob(f"{name}@*{suffix}"))
-    found += sorted(p for p in (home / "agents").glob(f"*/{name}") if p.is_dir())
-    for ident in idents:
-        cache = root / "logs" / ".readme_cache"
-        # by `agent_file_stem`, and by the raw identity too: until 2026-10-11 the README cache and
-        # the onboarding marker wrote `#` and `@` into the name, and such files are still on disks
-        for stem in dict.fromkeys((agent_file_stem(ident), ident)):
-            found += [cache / f"{stem}.hash", cache / f"{stem}.md"]
-            found.append(home / "logs" / ".locks" / f"onboarding_{stem}.attempt")
-        found.append(root / "logs" / ".locks" / f"{agent_file_stem(ident)}.lock")
-        found.append(root / "logs" / ".explore" / f"{agent_file_stem(ident)}.seq")
-        audit = spawn_state.audit_dir(ident)
-        if audit.is_dir():  # one audit file per run, and each run has one log named after it
-            found += [spawn_state.log_file(ident, run.stem) for run in sorted(audit.glob("*.json"))]
-        found += [audit, spawn_state.pid_file(ident)]
+    found = agent_files.credential_files(agent) + agent_files.runtime_files(root, idents)
     seen: set[Path] = set()
-    return [p for p in found if p.exists() and not (p in seen or seen.add(p))]
+    return [p for p in found if not (p in seen or seen.add(p))]
 
 
 def _forget_local(root: Path, agent: str, idents: list[str]) -> Step:
-    removed: list[str] = []
-    failed: list[str] = []
-    for p in _forget_targets(root, agent, idents):
-        try:
-            shown = p.relative_to(root).as_posix()
-        except ValueError:
-            shown = p.as_posix()
-        try:
-            shutil.rmtree(p) if p.is_dir() else p.unlink()
-            removed.append(shown)
-        except OSError as exc:
-            failed.append(f"{shown} ({exc.strerror or exc})")
+    """Delete them, and say what was deleted, what was left and why.
+
+    "NOTHING LEFT" IS SAID ONLY WHEN A SEARCH BY NAME FINDS NOTHING. Files that start with the
+    agent's name and belong to no identity this home can name are not deleted (they may be another
+    agent's) and are not passed over either: they are listed, and the step is not ok."""
+    from crewaimeat import agent_files
+
+    targets = _forget_targets(root, agent, idents)
+    strangers = agent_files.look_alikes(root, agent, targets)
+    removed, running, failed = agent_files.remove(root, targets)
+    said: list[str] = []
+    if removed:
+        said.append(f"deleted {len(removed)}: " + ", ".join(removed))
+    if running:
+        said.append("left in place: " + "; ".join(running))
     if failed:
-        return Step("local files", False, f"could NOT delete: {'; '.join(failed)}; deleted {len(removed)}")
-    if not removed:
+        said.append("could NOT delete: " + "; ".join(failed))
+    if strangers:
+        shown = ", ".join(p.name for p in strangers)
+        said.append(
+            f"NOT deleted, {len(strangers)} file(s) that start with this name under an owner this home does not serve: {shown}"
+        )
+    if not said:
         return Step("local files", True, "nothing left on this machine")
-    return Step("local files", True, f"deleted {len(removed)}: " + ", ".join(removed))
+    return Step("local files", not failed and not strangers, "; ".join(said))
 
 
 def plan(root: Path, agent: str, *, purge_node: bool, forget: bool = False) -> list[Step]:
@@ -200,8 +169,8 @@ def plan(root: Path, agent: str, *, purge_node: bool, forget: bool = False) -> l
         targets = _forget_targets(root, agent, _identities(agent))
         steps.append(
             Step(
-                f"local files: ONLY IF the node no longer lists '{agent}', delete its credential and "
-                f"its traces here ({len(targets)} found): " + (", ".join(p.name for p in targets) or "none")
+                f"local files: ONLY IF the node no longer lists '{agent}', delete what this machine "
+                f"keeps for it ({len(targets)} found by name): " + (", ".join(p.name for p in targets) or "none")
             )
         )
     else:

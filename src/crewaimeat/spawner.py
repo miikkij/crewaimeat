@@ -173,6 +173,7 @@ class Spawner:
     invoke_fn: object | None = None  # (agent, frame) -> {"ok", "result"}
     invoke_poll_fn: object | None = None  # (agent, timeout_s) -> frame dict | None
     roster_fn: object | None = None  # () -> list[str]; default discovers from crews/ + the node
+    gone_fn: object | None = None  # (agent) -> (listed: bool | None, why); default asks the node
     max_workers: int = MAX_WORKERS
     debounce_s: float = DEBOUNCE_S
     run_timeout_s: int = RUN_TIMEOUT_S
@@ -192,6 +193,7 @@ class Spawner:
         self._roster_note: str | None = None  # last roster complaint, printed once per change
         self._roster_asked = threading.Event()  # a refused park: read the roster now, not in 30 s
         self._attached = threading.Event()  # the daemon carries someone new: read the roster now
+        self._departed: list[str] = []  # left the roster; the node has not been asked about them yet
         self._daemon_held: set[str] | None = None  # what the daemon carried at the last look
         self._last_invoke_complaint: dict[str, float] = {}
 
@@ -835,7 +837,60 @@ class Spawner:
             st.retired = True
             if agent in self._queue:
                 self._queue.remove(agent)
+            if agent not in self._departed:
+                self._departed.append(agent)
         _say(f"[spawner] {agent}: left the roster — no longer parking for it")
+
+    def forget_departed(self) -> None:
+        """Remove the runtime's own files of an agent that left the roster BECAUSE THE NODE DELETED IT.
+
+        The connector removes the credential by itself when the node deletes an agent; what the
+        runtime filed for it stayed for good: a start lock, the README cache, the onboarding marker,
+        a pid file, and the audit record and log of every run. Measured 2026-10-12 (viive-testi):
+        seven files, and nothing that would ever remove them.
+
+        LEAVING THE ROSTER IS NOT BEING DELETED. An agent leaves when its owner moves it to another
+        computer, changes how it runs, or the daemon lets go of it for a moment. So the node is asked
+        the one question that tells them apart, the way `retire --forget` asks it (as a neighbour of
+        the same owner, never as the agent itself): does it still list this agent? Only a plain "no"
+        removes anything. "Yes" keeps every file, and so does a node that could not be asked — that
+        agent is asked about once and then left to the command.
+
+        A worker still running is waited for: its ending is settled first (the pid file goes then),
+        and its log is not pulled from under it. An agent back on the roster is no longer departed.
+        """
+        from crewaimeat import agent_files
+
+        ask = self.gone_fn if self.gone_fn is not None else (node_still_lists if self.roster_fn is None else None)
+        with self._lock:
+            waiting, self._departed = self._departed, []
+            ready: list[str] = []
+            for agent in waiting:
+                st = self.state.get(agent)
+                if st is not None and not st.retired:
+                    continue  # it joined again
+                if st is not None and st.busy:
+                    self._departed.append(agent)  # ask when its worker has ended
+                    continue
+                ready.append(agent)
+        if ask is None:
+            return
+        for agent in ready:  # the node call and the deleting both block: outside the lock
+            try:
+                listed, why = ask(agent)
+            except Exception as exc:  # noqa: BLE001 — a question that failed is a question unanswered
+                listed, why = None, f"the node could not be asked ({exc!r})"
+            if listed is not False:
+                if listed is None:
+                    _say(f"[spawner] {agent}: its local files stay — {why}")
+                continue
+            removed, running, failed = agent_files.remove(self.root, agent_files.runtime_files(self.root, [agent]))
+            parts = [f"removed {len(removed)} local file(s)" + (f": {', '.join(removed)}" if removed else "")]
+            if running:
+                parts.append("left in place: " + "; ".join(running))
+            if failed:
+                parts.append("could NOT delete: " + "; ".join(failed))
+            _say(f"[spawner] {agent}: deleted on the node — " + "; ".join(parts))
 
     def refresh_roster(self) -> None:
         """Re-read the roster and start/stop parks to match it.
@@ -968,6 +1023,8 @@ class Spawner:
                     self.refresh_roster()
                     last_roster = time.monotonic()
                     next_roster = last_roster + self.roster_interval_s
+                if self._departed:
+                    self.forget_departed()
                 spawn_state.write_json(spawn_state.status_file(), self.snapshot())
                 time.sleep(STATUS_INTERVAL_S)
         except KeyboardInterrupt:
@@ -1258,6 +1315,48 @@ def _ask_node_as(doc: dict, candidates: list[str], path: str, params: dict | Non
         if getattr(resp, "status_code", None) == 200:
             break
     return resp
+
+
+def node_still_lists(agent: str) -> tuple[bool | None, str]:
+    """`(listed, why)`: does the NODE still list this agent? None when it could not be asked.
+
+    Asked through the daemon as a NEIGHBOUR of the same owner — never as the agent itself, whose
+    credential is the thing in doubt — and never as an agent the daemon already calls refused. The
+    listing is owner-scoped. The owner comes from the identity when `agent` is one, else from the
+    agent's registration here, and when that is already gone every owner this home serves is asked.
+
+    `GET /v1/agents` unfiltered: every agent of the owner, whatever its run mode and whichever
+    connector holds it. So an agent that was MOVED, or changed from spawn to always-on, is listed,
+    and only one that no longer exists on the node is not.
+    """
+    name = agent_manifest.agent_local_name(agent)
+    doc = _serve_doc()
+    if not doc.get("port"):
+        return None, "no serve daemon is running here, so the node cannot be asked"
+    callers = _owner_callers(doc)
+    own = agent_manifest.identity_owner(agent)
+    owners = (
+        [own]
+        if own
+        else sorted({str(a["owner"]) for a in doc.get("agents") or [] if a.get("agent") == name and a.get("owner")})
+    )
+    for owner in owners or sorted(callers):
+        ask_as = [c for c in callers.get(owner, []) if agent_manifest.agent_local_name(c) != name]
+        if not ask_as:
+            return None, f"no other agent of {owner} on this machine can ask the node"
+        try:
+            resp = _ask_node_as(doc, ask_as, "/v1/agents")
+            rows = ((resp.json() or {}).get("data") or {}).get("agents") if resp.status_code == 200 else None
+        except Exception as exc:  # noqa: BLE001 — the daemon is down or answered something else
+            return None, f"the node could not be asked ({exc!r})"
+        if not isinstance(rows, list):
+            return None, f"the node did not answer the agent list for {owner} (HTTP {resp.status_code})"
+        if any(r.get("name") == name for r in rows if isinstance(r, dict)):
+            return (
+                True,
+                f"the node still lists '{name}' for {owner}: delete it there first, or retire without --forget",
+            )
+    return False, f"the node lists no agent named '{name}'"
 
 
 def install_id() -> str | None:

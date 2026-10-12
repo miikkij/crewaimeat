@@ -1362,3 +1362,170 @@ def test_a_refused_identity_or_a_silent_daemon_asks_for_no_roster_read(monkeypat
     sp = _spawner(root=tmp_path)
     assert [sp.daemon_attached_someone() for _ in range(4)] == [False, False, False, False]
     assert sp._daemon_held == {"a"}, "a daemon that did not answer left what was known as it was"
+
+
+# --------------------------------------------------------------------------- #
+# An agent the NODE DELETED: the runtime's own files go with it
+# --------------------------------------------------------------------------- #
+# The connector removes the key, the config and the serve.json line itself (aimeat-protocol
+# 3f644989c). The spawner removes what the runtime filed, once the node, asked as a neighbour of the
+# same owner, no longer lists the agent. Leaving the roster is not being deleted: a moved agent and a
+# node that could not be asked remove nothing.
+_GONE = "viive-testi#o@a-node"
+_GONE_STEM = "viive-testi_o_a-node"
+_SEVEN = (
+    ".aimeat/logs/.locks/onboarding_{stem}.attempt",
+    ".aimeat/spawn/audit/{stem}/{stem}-1a12.json",
+    ".aimeat/spawn/logs/{stem}-{stem}-1a12.log",
+    ".aimeat/spawn/running/{stem}.pid",
+    "logs/.locks/{stem}.lock",
+    "logs/.readme_cache/{stem}.hash",
+    "logs/.readme_cache/{stem}.md",
+)
+
+
+def _runtime_files(monkeypatch, tmp_path, stem=_GONE_STEM):
+    monkeypatch.setenv("AIMEAT_HOME", str(tmp_path / ".aimeat"))
+    files = []
+    for rel in _SEVEN:
+        f = tmp_path / rel.format(stem=stem)
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text('{"pid": 0}' if f.suffix == ".pid" else "x", encoding="utf-8")
+        files.append(f)
+    return files
+
+
+def _leaves_the_roster(tmp_path, gone_fn, roster=None):
+    roster = roster if roster is not None else [_GONE, "stays#o@a-node"]
+    sp = _spawner(root=tmp_path, invoke_fn=lambda *_: None, roster_fn=lambda: list(roster), gone_fn=gone_fn)
+    sp.refresh_roster()
+    roster.remove(_GONE)
+    sp.refresh_roster()
+    assert sp.state[_GONE].retired
+    return sp
+
+
+def test_an_agent_that_leaves_the_roster_as_deleted_has_its_files_removed(monkeypatch, tmp_path, capsys):
+    files = _runtime_files(monkeypatch, tmp_path)
+    kept = _runtime_files(monkeypatch, tmp_path, stem="stays_o_a-node")
+    asked = []
+    sp = _leaves_the_roster(tmp_path, lambda agent: asked.append(agent) or (False, "the node lists no such agent"))
+    assert all(f.exists() for f in files), "nothing is removed before the node was asked"
+    sp.forget_departed()
+    assert asked == [_GONE], "asked about the agent that left, once"
+    assert [f for f in files if f.exists()] == []
+    assert not (tmp_path / ".aimeat" / "spawn" / "audit" / _GONE_STEM).exists()
+    assert all(f.exists() for f in kept), "an agent still on the roster keeps every file"
+    said = capsys.readouterr().err
+    assert f"{_GONE}: deleted on the node — removed 7 local file(s)" in said
+    assert f"logs/.locks/{_GONE_STEM}.lock" in said
+    sp.forget_departed()
+    assert asked == [_GONE], "and not asked again"
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        (True, "the node still lists 'viive-testi' for o"),  # moved to another computer, or changed how it runs
+        (None, "the node could not be asked"),
+    ],
+    ids=["moved", "unanswered"],
+)
+def test_a_moved_agent_and_a_node_that_cannot_be_asked_remove_nothing(monkeypatch, tmp_path, capsys, answer):
+    files = _runtime_files(monkeypatch, tmp_path)
+    sp = _leaves_the_roster(tmp_path, lambda agent: answer)
+    sp.forget_departed()
+    assert all(f.exists() for f in files)
+    said = capsys.readouterr().err
+    assert "deleted on the node" not in said
+    if answer[0] is None:
+        assert f"{_GONE}: its local files stay — the node could not be asked" in said
+
+
+def test_a_roster_that_could_not_be_read_retires_nobody_and_so_removes_nothing(monkeypatch, tmp_path):
+    from crewaimeat import spawner as sp_mod
+
+    files = _runtime_files(monkeypatch, tmp_path)
+    monkeypatch.setattr(sp_mod, "daemon_identities", lambda: None)
+    answers = [[_GONE]]
+
+    def roster():
+        if answers:
+            return answers.pop()
+        raise sp_mod.RosterUnreadable("the node did not answer", [], {"o"})
+
+    sp = _spawner(root=tmp_path, invoke_fn=lambda *_: None, roster_fn=roster, gone_fn=lambda a: (False, "gone"))
+    sp.refresh_roster()
+    sp.refresh_roster()
+    sp.forget_departed()
+    assert not sp.state[_GONE].retired and all(f.exists() for f in files)
+
+
+def test_a_departed_agent_with_a_worker_still_running_is_asked_about_when_it_ends(monkeypatch, tmp_path):
+    files = _runtime_files(monkeypatch, tmp_path)
+    asked = []
+    sp = _spawner(
+        root=tmp_path,
+        invoke_fn=lambda *_: None,
+        roster_fn=lambda: list(roster),
+        gone_fn=lambda agent: asked.append(agent) or (False, "gone"),
+    )
+    roster = [_GONE]
+    sp.refresh_roster()
+    sp.state[_GONE].proc = _Worker()  # its one task is still being worked on
+    roster.clear()
+    sp.refresh_roster()
+    sp.forget_departed()
+    assert asked == [] and all(f.exists() for f in files), "its log is not pulled from under a running worker"
+    sp.state[_GONE].proc = None  # reaped
+    sp.forget_departed()
+    assert asked == [_GONE] and [f for f in files if f.exists()] == []
+
+
+def test_an_agent_back_on_the_roster_is_not_forgotten(monkeypatch, tmp_path):
+    files = _runtime_files(monkeypatch, tmp_path)
+    roster = [_GONE]
+    sp = _spawner(
+        root=tmp_path, invoke_fn=lambda *_: None, roster_fn=lambda: list(roster), gone_fn=lambda a: (False, "")
+    )
+    sp.refresh_roster()
+    roster.clear()
+    sp.refresh_roster()
+    roster.append(_GONE)  # the daemon let go of it for a moment
+    sp.refresh_roster()
+    sp.forget_departed()
+    assert all(f.exists() for f in files)
+
+
+def test_the_node_is_asked_about_a_departed_agent_as_a_neighbour_of_its_own_owner(monkeypatch, tmp_path):
+    from crewaimeat import spawner as sp_mod
+
+    doc = {
+        "port": 1,
+        "agents": [
+            {"agent": "neighbour", "owner": "o", "gaii": "neighbour#o@a-node", "transport": "tunnel"},
+            {"agent": "refused", "owner": "o", "gaii": "refused#o@a-node", "transport": sp_mod.REFUSED},
+            {"agent": "other", "owner": "p", "gaii": "other#p@a-node", "transport": "tunnel"},
+        ],
+    }
+    monkeypatch.setattr(sp_mod, "_serve_doc", lambda: doc)
+    asked = []
+
+    class _Rows:
+        status_code = 200
+
+        def __init__(self, names):
+            self._names = names
+
+        def json(self):
+            return {"data": {"agents": [{"name": n} for n in self._names]}}
+
+    def ask(doc_, candidates, path, params=None):
+        asked.append((list(candidates), path))
+        return _Rows(["neighbour", "moved-agent"])
+
+    monkeypatch.setattr(sp_mod, "_ask_node_as", ask)
+    assert sp_mod.node_still_lists(_GONE)[0] is False
+    assert sp_mod.node_still_lists("moved-agent#o@a-node")[0] is True, "moved or changed, it is still the owner's"
+    assert asked == [(["neighbour#o@a-node"], "/v1/agents")] * 2, "its own owner only, and never a refused caller"
+    assert sp_mod.node_still_lists("lonely#q@a-node")[0] is None, "an owner with nobody here to ask is not an answer"

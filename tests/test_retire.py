@@ -276,3 +276,108 @@ def test_forget_finds_the_files_under_the_stem_the_runtime_now_writes(tmp_path, 
     assert all(s.done for s in steps), [s for s in steps if not s.done]
     assert [p for p in new if p.exists()] == []
     assert "deleted 13" in next(s for s in steps if s.what == "local files").detail
+
+
+# --- the connector already removed its own files: the agent is found by NAME ------------------------ #
+# Since aimeat-protocol 3f644989c the connector deletes the key, the config folder and the serve.json
+# line of an agent the node deleted. What the runtime filed stays, and the identity those files are
+# named by is no longer written anywhere in the agent's own registration.
+
+SEVEN = (
+    ".aimeat/logs/.locks/onboarding_{stem}.attempt",
+    ".aimeat/spawn/audit/{stem}/{stem}-1a12.json",
+    ".aimeat/spawn/logs/{stem}-{stem}-1a12.log",
+    ".aimeat/spawn/running/{stem}.pid",
+    "logs/.locks/{stem}.lock",
+    "logs/.readme_cache/{stem}.hash",
+    "logs/.readme_cache/{stem}.md",
+)
+
+
+def _runtime_files_only(tmp_path: Path, monkeypatch, *, pid: int = 0) -> tuple[Path, list[Path]]:
+    """`viive-testi` as the new connector leaves it: no key, no config, no line in serve.json, and the
+    runtime's seven kinds of file. A neighbour of the same owner is still registered."""
+    root = _repo(tmp_path, monkeypatch, {}, served=["neighbour"])
+    home = root / ".aimeat"
+    doc = json.loads((home / "serve.json").read_text(encoding="utf-8"))
+    doc["agents"][0]["gaii"] = f"neighbour#{NODE}"
+    doc["port"] = 1
+    (home / "serve.json").write_text(json.dumps(doc), encoding="utf-8")
+    files = []
+    for rel in SEVEN:
+        f = root / rel.format(stem="viive-testi_o_a-node")
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps({"pid": pid, "run_id": "r"}) if f.suffix == ".pid" else "x", encoding="utf-8")
+        files.append(f)
+    return root, files
+
+
+def test_forget_finds_an_agent_with_no_key_no_config_and_no_registration_by_its_name(tmp_path, monkeypatch):
+    root, files = _runtime_files_only(tmp_path, monkeypatch)
+    _node_says(monkeypatch, False)
+    steps = retire.apply(root, "viive-testi", purge_node=False, forget=True)
+    assert all(s.done for s in steps), [s for s in steps if not s.done]
+    assert [f for f in files if f.exists()] == [], "all seven kinds are gone"
+    assert not (root / ".aimeat" / "spawn" / "audit" / "viive-testi_o_a-node").exists(), "and the audit folder"
+    detail = next(s for s in steps if s.what == "local files").detail
+    assert "nothing left" not in detail
+    assert "deleted 7" in detail, detail  # the audit folder is one entry, its record goes with it
+    for name in (
+        "onboarding_viive-testi_o_a-node.attempt",
+        "spawn/audit/viive-testi_o_a-node",
+        "viive-testi_o_a-node-viive-testi_o_a-node-1a12.log",
+        "spawn/running/viive-testi_o_a-node.pid",
+        "logs/.locks/viive-testi_o_a-node.lock",
+        "viive-testi_o_a-node.hash",
+        "viive-testi_o_a-node.md",
+    ):
+        assert name in detail, f"the report does not list {name}"
+    assert next(s for s in steps if s.what == "serve.json").detail == "was not registered"
+    agents = json.loads((root / ".aimeat" / "serve.json").read_text(encoding="utf-8"))["agents"]
+    assert [a["agent"] for a in agents] == ["neighbour"]
+
+
+def test_the_forget_plan_names_what_it_found_by_name(tmp_path, monkeypatch):
+    root, _files = _runtime_files_only(tmp_path, monkeypatch)
+    text = " ".join(s.what for s in retire.plan(root, "viive-testi", purge_node=False, forget=True))
+    assert "(7 found by name)" in text and "viive-testi_o_a-node.lock" in text
+
+
+def test_nothing_left_is_said_only_when_a_search_by_name_finds_nothing(tmp_path, monkeypatch):
+    root, _files = _runtime_files_only(tmp_path, monkeypatch)
+    _node_says(monkeypatch, False)
+    retire.apply(root, "viive-testi", purge_node=False, forget=True)
+    again = retire.apply(root, "viive-testi", purge_node=False, forget=True)
+    assert next(s for s in again if s.what == "local files").detail == "nothing left on this machine"
+
+
+def test_a_pid_file_of_a_worker_still_running_is_left_and_the_report_says_so(tmp_path, monkeypatch):
+    import os
+
+    root, files = _runtime_files_only(tmp_path, monkeypatch, pid=os.getpid())
+    _node_says(monkeypatch, False)
+    steps = retire.apply(root, "viive-testi", purge_node=False, forget=True)
+    pid_file = next(f for f in files if f.suffix == ".pid")
+    assert pid_file.exists(), "the manager finds the running worker by it"
+    assert [f for f in files if f.exists()] == [pid_file], "the other six kinds are gone"
+    detail = next(s for s in steps if s.what == "local files").detail
+    assert (
+        "deleted 6" in detail
+        and f"left in place: .aimeat/spawn/running/{pid_file.name} (worker pid {os.getpid()} is still running)"
+        in detail
+    )
+
+
+def test_files_that_only_start_with_the_name_are_reported_and_never_deleted(tmp_path, monkeypatch):
+    """`viive-testi_someone_other-node` is not an identity this home serves: it may be anybody's. It is
+    not deleted, and the report does not call the machine clean over it."""
+    root, _files = _runtime_files_only(tmp_path, monkeypatch)
+    stranger = root / "logs" / ".locks" / "viive-testi_someone_other-node.lock"
+    stranger.write_text("x", encoding="utf-8")
+    other = root / "logs" / ".locks" / "viive-testi-two_o_a-node.lock"  # another agent, same first letters
+    other.write_text("x", encoding="utf-8")
+    _node_says(monkeypatch, False)
+    step = next(s for s in retire.apply(root, "viive-testi", purge_node=False, forget=True) if s.what == "local files")
+    assert stranger.exists() and other.exists()
+    assert step.done is False and "viive-testi_someone_other-node.lock" in step.detail
+    assert "viive-testi-two" not in step.detail, "a different agent is not this one's look-alike"

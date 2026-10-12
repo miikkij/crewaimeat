@@ -175,11 +175,16 @@ status cells, append decisions), so the two sides stay synced without drifting p
   deliverable path is visible, the connector version exists in one place), liveness (`--live`, what the
   node believes). Runs in pre-commit + CI; `doctor-baseline.json` only ever shrinks.
   `crewaimeat retire <agent>` is the opposite of forging one; `crewaimeat costs` shows who spends
-  without producing. **An agent DELETED on the node leaves files here that nothing removes**: its key,
-  its line in serve.json (the daemon carries it as `auth_failed`), its README cache, locks and run
-  records. `crewaimeat retire <agent> --apply --forget` deletes them, after asking the node (as a
-  neighbour of the same owner) that the agent is really gone; while the node still lists it, or
-  cannot be asked, it changes nothing.
+  without producing. **When the node DELETES an agent, two parties clean up here.** The connector
+  removes its own (the key, the per-agent config, the line in serve.json; aimeat-protocol 3f644989c).
+  The spawner removes the runtime's (`Spawner.forget_departed`): the start lock, the README cache,
+  the onboarding marker, the pid file of a worker that has exited, and every run's audit record and
+  log. It does so only after the node, asked as a neighbour of the same owner, no longer lists the
+  agent: leaving the roster is also what a MOVED agent does. `crewaimeat retire <agent> --apply
+  --forget` is the same by hand, for what is left from before or where no spawner runs; it finds the
+  files by the agent's NAME under each owner and node the home serves (`crewaimeat.agent_files`),
+  never from the agent's own registration, which is already gone by then. No run log is kept back:
+  the repository has no retention rule for a deleted agent, so all of it goes.
 - **Two messaging channels — keep them distinct.** (1) dashboard/owner chat (`aimeat_message_*`): the
   agent ↔ its OWN owner, private, NOT federated — the daemon already triggers crews from it. (2) the
   **federated inbox** (`aimeat_dm_*`, AIMEAT "Postilaatikko", v1.30.1+): the agent → ANYONE on the
