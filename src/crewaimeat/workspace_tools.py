@@ -200,13 +200,45 @@ def _object_type(index, space: str) -> dict | None:
     return None
 
 
-def _current(index, type_name: str, record_id: str) -> dict | None:
-    """The record `record_id` as it stands: its draft when there is one (the newer copy), else published."""
-    for bucket in ("drafts", "objects"):
-        for rec in ((index or {}).get(bucket) or {}).get(type_name) or []:
-            if isinstance(rec, dict) and str(rec.get("id")) == record_id:
-                # The node's read stamps _createdAt/_updatedAt/_version on; they are not the record's.
-                return {k: v for k, v in rec.items() if not str(k).startswith("_")}
+def _current(agent_name: str, organism_id: str, ws: str, type_name: str, record_id: str) -> dict | None:
+    """The record `record_id` as it stands: its draft when there is one (the newer copy), else its
+    published value. None when the workspace has no such record in that space.
+
+    READ BY ITS ID, NEVER OUT OF THE INDEX. The read without ids answers titles only. This looked for
+    the record in that answer's `objects` and `drafts`, which the connector stopped sending with
+    aimeat-protocol 6fc3ef4d5 (2026-10-06): from then on every update found nothing, called itself a
+    create, and wrote ONLY the new fields over the record. Measured 2026-10-12 on a local node: a
+    phone number added to a contact removed its name and its email.
+
+    AN UPDATE THAT CANNOT SEE THE RECORD WRITES NOTHING. A refusal, no answer and an answer of
+    another shape all raise: "not found" is only ever the node's own word (the id absent from
+    `items`), because the write that follows a wrong "not found" replaces the record.
+    """
+    answer = _aimeat_call(
+        agent_name,
+        "aimeat_workspace_read",
+        {"organism_id": organism_id, "ws": ws, "ids": [record_id]},
+        return_error=True,
+    )
+    why = _refused(answer, f"read of {type_name} {record_id}")
+    if why:
+        raise WorkspaceWriteError(why)
+    items = answer.get("items") if isinstance(answer, dict) else None
+    if not isinstance(items, list):
+        keys = ", ".join(sorted(answer)) if isinstance(answer, dict) else type(answer).__name__
+        raise WorkspaceWriteError(
+            f"The read of {type_name} {record_id} came back without `items` (it has: {keys}), so whether the "
+            "record exists is not known. Nothing was written, because writing now could replace it."
+        )
+    for item in items:
+        if not isinstance(item, dict) or str(item.get("id")) != record_id:
+            continue
+        if item.get("space") not in (None, type_name):
+            continue  # the same id in another space is another record
+        # The node's _version/_createdAt/_updatedAt are on the item, beside the record, not in it.
+        body = item.get("draft") if isinstance(item.get("draft"), dict) else item.get("value")
+        if isinstance(body, dict):
+            return dict(body)
     return None
 
 
@@ -232,7 +264,7 @@ def write_record(agent_name: str, organism_id: str, ws: str, space: str, fields:
         raise WorkspaceWriteError(f"Workspace {ws} has no space {space!r}. Its spaces: {names}.")
     if ot.get("backing") == "rows" or ot.get("mode") == "rows":
         raise WorkspaceWriteError(f"{space!r} is a row space; append to it with append_workspace_rows.")
-    current = _current(index, str(ot.get("name")), record_id) if record_id else None
+    current = _current(agent_name, organism_id, ws, str(ot.get("name")), record_id) if record_id else None
     value = dict(current or {})
     value.update(fields)
     value = {k: v for k, v in value.items() if v is not None}

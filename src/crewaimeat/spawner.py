@@ -174,6 +174,7 @@ class Spawner:
     invoke_poll_fn: object | None = None  # (agent, timeout_s) -> frame dict | None
     roster_fn: object | None = None  # () -> list[str]; default discovers from crews/ + the node
     gone_fn: object | None = None  # (agent) -> (listed: bool | None, why); default asks the node
+    departed_fn: object | None = None  # () -> {gaii: record} | DEPARTED_UNSUPPORTED | None; default asks the daemon
     max_workers: int = MAX_WORKERS
     debounce_s: float = DEBOUNCE_S
     run_timeout_s: int = RUN_TIMEOUT_S
@@ -193,7 +194,9 @@ class Spawner:
         self._roster_note: str | None = None  # last roster complaint, printed once per change
         self._roster_asked = threading.Event()  # a refused park: read the roster now, not in 30 s
         self._attached = threading.Event()  # the daemon carries someone new: read the roster now
-        self._departed: list[str] = []  # left the roster; the node has not been asked about them yet
+        self._departed: list[str] = []  # left the roster; why they left has not been read yet
+        self._departed_retry_at = 0.0  # the daemon did not answer: when to ask it again
+        self._departed_looks: dict[str, int] = {}  # how often an agent with no record was looked up
         self._daemon_held: set[str] | None = None  # what the daemon carried at the last look
         self._last_invoke_complaint: dict[str, float] = {}
 
@@ -850,18 +853,26 @@ class Spawner:
         seven files, and nothing that would ever remove them.
 
         LEAVING THE ROSTER IS NOT BEING DELETED. An agent leaves when its owner moves it to another
-        computer, changes how it runs, or the daemon lets go of it for a moment. So the node is asked
-        the one question that tells them apart, the way `retire --forget` asks it (as a neighbour of
-        the same owner, never as the agent itself): does it still list this agent? Only a plain "no"
-        removes anything. "Yes" keeps every file, and so does a node that could not be asked — that
-        agent is asked about once and then left to the command.
+        computer, changes how it runs, or the daemon lets go of it for a moment. What tells them
+        apart is the node's own reason, and THE DAEMON HOLDS IT: it writes down each agent that left
+        on the node's word, 'moved' or 'deleted', and answers it on loopback (`GET /local/departed`,
+        aimeat-protocol 07c9090aa). So nothing is asked of the node: a record that says 'deleted'
+        removes the files, one that says 'moved' removes nothing, and so does no record at all (a
+        changed run mode, a deactivated account, a daemon that lost the agent for a moment).
+
+        That reading works where asking the node could not: with the node unreachable, and when the
+        agent that left was its owner's last one here, so that no caller was left to ask with.
+
+        A DAEMON OLDER THAN THE ROUTE ANSWERS 404, and only then is the node asked instead, the way
+        `retire --forget` asks it (as a neighbour of the same owner, never as the agent itself):
+        does it still list this agent? Only a plain "no" removes anything. A daemon that does not
+        answer at all is asked again later; nothing is removed on its silence.
 
         A worker still running is waited for: its ending is settled first (the pid file goes then),
         and its log is not pulled from under it. An agent back on the roster is no longer departed.
         """
-        from crewaimeat import agent_files
-
-        ask = self.gone_fn if self.gone_fn is not None else (node_still_lists if self.roster_fn is None else None)
+        if self._departed and time.monotonic() < self._departed_retry_at:
+            return
         with self._lock:
             waiting, self._departed = self._departed, []
             ready: list[str] = []
@@ -870,9 +881,50 @@ class Spawner:
                 if st is not None and not st.retired:
                     continue  # it joined again
                 if st is not None and st.busy:
-                    self._departed.append(agent)  # ask when its worker has ended
+                    self._departed.append(agent)  # read the reason when its worker has ended
                     continue
                 ready.append(agent)
+        if not ready:
+            return
+        read = (
+            self.departed_fn if self.departed_fn is not None else (daemon_departed if self.roster_fn is None else None)
+        )
+        records = read() if read is not None else DEPARTED_UNSUPPORTED
+        if records is None:  # the daemon did not answer: these wait, and it is asked again, not hammered
+            with self._lock:
+                self._departed = ready + self._departed
+            self._departed_retry_at = time.monotonic() + REFUSED_BACKOFF_S
+            return
+        if records is DEPARTED_UNSUPPORTED:
+            self._forget_by_asking_the_node(ready)
+            return
+        again: list[str] = []
+        for agent in ready:
+            reason = departure_reason(records, agent)
+            if reason is None:
+                # NO RECORD YET IS NOT NO RECORD. The roster can say an agent is gone a moment before
+                # the daemon has written down why (the frame and the roster read travel separately),
+                # so it is looked up twice more, a back-off apart, before it is left alone.
+                looks = self._departed_looks.get(agent, 0) + 1
+                if looks <= DEPARTED_LOOKS:
+                    self._departed_looks[agent] = looks
+                    again.append(agent)
+                else:
+                    self._departed_looks.pop(agent, None)
+                continue
+            self._departed_looks.pop(agent, None)
+            if reason == "deleted":
+                self._remove_runtime_files(agent, "deleted on the node, as the connector recorded")
+            else:
+                _say(f"[spawner] {agent}: moved to another connector — its local files stay")
+        if again:
+            with self._lock:
+                self._departed = again + self._departed
+            self._departed_retry_at = time.monotonic() + REFUSED_BACKOFF_S
+
+    def _forget_by_asking_the_node(self, ready: list[str]) -> None:
+        """The same decision for a daemon that has no `/local/departed`: ask the node, once per agent."""
+        ask = self.gone_fn if self.gone_fn is not None else (node_still_lists if self.roster_fn is None else None)
         if ask is None:
             return
         for agent in ready:  # the node call and the deleting both block: outside the lock
@@ -884,13 +936,41 @@ class Spawner:
                 if listed is None:
                     _say(f"[spawner] {agent}: its local files stay — {why}")
                 continue
-            removed, running, failed = agent_files.remove(self.root, agent_files.runtime_files(self.root, [agent]))
-            parts = [f"removed {len(removed)} local file(s)" + (f": {', '.join(removed)}" if removed else "")]
-            if running:
-                parts.append("left in place: " + "; ".join(running))
-            if failed:
-                parts.append("could NOT delete: " + "; ".join(failed))
-            _say(f"[spawner] {agent}: deleted on the node — " + "; ".join(parts))
+            self._remove_runtime_files(agent, "deleted on the node")
+
+    def _remove_runtime_files(self, agent: str, why: str) -> None:
+        from crewaimeat import agent_files
+
+        removed, running, failed = agent_files.remove(self.root, agent_files.runtime_files(self.root, [agent]))
+        parts = [f"removed {len(removed)} local file(s)" + (f": {', '.join(removed)}" if removed else "")]
+        if running:
+            parts.append("left in place: " + "; ".join(running))
+        if failed:
+            parts.append("could NOT delete: " + "; ".join(failed))
+        _say(f"[spawner] {agent}: {why} — " + "; ".join(parts))
+
+    def forget_deleted_while_away(self) -> None:
+        """At start: remove the runtime's files of every agent the node deleted while no spawner ran.
+
+        The node says why an agent left once, and the daemon keeps that on disk for exactly this: a
+        runtime that was not running then. An agent this spawner serves now is never touched (the
+        daemon does not report an identity it carries again, and this checks its own roster too).
+        A daemon without the route, or one that does not answer, changes nothing here.
+        """
+        read = (
+            self.departed_fn if self.departed_fn is not None else (daemon_departed if self.roster_fn is None else None)
+        )
+        records = read() if read is not None else None
+        if not isinstance(records, dict):
+            return
+        from crewaimeat import agent_files
+
+        serving = {a for a, st in self.state.items() if not st.retired}
+        for gaii, record in records.items():
+            if record.get("reason") != "deleted" or gaii in serving:
+                continue
+            if agent_files.runtime_files(self.root, [gaii]):
+                self._remove_runtime_files(gaii, "deleted on the node while this spawner was not running")
 
     def refresh_roster(self) -> None:
         """Re-read the roster and start/stop parks to match it.
@@ -1007,6 +1087,7 @@ class Spawner:
             f"{f' except {own_limits}' if own_limits else ''}, "
             f"roster re-read every {self.roster_interval_s:.0f}s)",
         )
+        self.forget_deleted_while_away()
         next_roster = time.monotonic() + self.roster_interval_s
         last_roster = time.monotonic()
         next_attach_look = 0.0  # the first look takes stock of what the daemon carries now
@@ -1425,6 +1506,56 @@ def placed_elsewhere() -> set[tuple[str, str]]:
 REFUSED = "auth_failed"  # the connector's word for an identity whose credential the node refused
 
 
+# How often an agent that left with no record at the daemon is looked up again, a back-off apart.
+DEPARTED_LOOKS = 2
+# The daemon has no `/local/departed` (it answered 404): a connector older than aimeat-protocol
+# 07c9090aa. Distinct from None, which is a daemon that did not answer at all.
+DEPARTED_UNSUPPORTED = "unsupported"
+
+
+def daemon_departed():
+    """Who left this connector home on the node's word, as `{gaii: record}` with `reason` ('moved' or
+    'deleted'), `agent`, `owner` and `at`. `DEPARTED_UNSUPPORTED` when the daemon has no such route
+    (404), None when it could not be asked.
+
+    Loopback, with the per-start secret from serve.json, and no node call: the daemon wrote the
+    record when the node's `auth_revoked` frame arrived, and keeps it on disk for 30 days or until
+    it carries the identity again.
+    """
+    doc = _serve_doc()
+    port = doc.get("port")
+    if not isinstance(port, int):
+        return None
+    import requests
+
+    try:
+        resp = requests.get(
+            f"http://127.0.0.1:{port}/local/departed", headers=spawn_state.serve_auth_headers(doc), timeout=10
+        )
+        if resp.status_code == 404:
+            return DEPARTED_UNSUPPORTED
+        rows = ((resp.json() or {}).get("data") or {}).get("departed") if resp.status_code == 200 else None
+    except Exception:  # noqa: BLE001 — a daemon mid-restart is weather; the caller asks again
+        return None
+    if not isinstance(rows, list):
+        return None
+    return {str(r["gaii"]): r for r in rows if isinstance(r, dict) and r.get("gaii")}
+
+
+def departure_reason(records: dict, agent: str) -> str | None:
+    """The node's reason for `agent` in the daemon's records, None when it has none.
+
+    By full identity. An agent known here by its bare name only (a crew file's) is matched by name
+    when exactly one record carries that name; two owners' agents of one name are never guessed.
+    """
+    record = records.get(agent)
+    if record is None and "#" not in str(agent):
+        named = [r for r in records.values() if r.get("agent") == agent]
+        record = named[0] if len(named) == 1 else None
+    reason = (record or {}).get("reason")
+    return reason if reason in ("moved", "deleted") else None
+
+
 def daemon_identities() -> dict[str, str] | None:
     """What the RUNNING daemon holds, as `{identity: transport}` — GAIIs and their bare names. None
     when the daemon could not be asked, which is not the same as holding nothing.
@@ -1560,7 +1691,16 @@ def discover_agents(root: Path) -> list[str]:
     if unreadable:
         # Raised before the unmet-request note below: with an owner unread, "the node does not list
         # it" is not something this call can know.
-        raise RosterUnreadable(note or "node roster unreadable", sorted(set(node)), unreadable)
+        #
+        # THE OWNERS THAT ANSWERED ARE STILL CUT TO THIS CONNECTOR. Their rows are each owner's whole
+        # list, on every computer. Raised uncut (measured 2026-10-12, a home of two owners where one
+        # account was deactivated), the three agents the other owner keeps on a second connector
+        # joined this roster on that read and were refused a park every 11 seconds. A daemon that
+        # does not answer for itself leaves everybody where they are.
+        answered = carried_here(sorted(set(node)), what=agent_manifest.RUN_SPAWN, placed=getattr(read, "placed", None))
+        if answered is None:
+            raise RosterUnreadable("the serve daemon did not say which agents it carries", [], {"*"})
+        raise RosterUnreadable(note or "node roster unreadable", answered, unreadable)
     # Said out loud, because a crew declaring spawn and NOT getting it is otherwise invisible: it
     # simply runs as a thread, which looks like nothing happened.
     asked = set(local_spawn_agents(root))

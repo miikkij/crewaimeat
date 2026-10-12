@@ -64,6 +64,14 @@ status cells, append decisions), so the two sides stay synced without drifting p
   **aimeat 3.20.0 refuses it with 401**. A crew gets it for free through `_serve_api()`; code that builds
   its own request to the daemon adds `serve_auth_headers(doc)` (or, where crewai must not be imported,
   `spawn_state.serve_auth_headers`). A new `/local/` call without it is a 3.20.0 outage waiting.
+- **`aimeat_workspace_read` without `ids` answers TITLES ONLY** (`index`, per space `{id, title,
+  published, has_draft}`); there is no `objects` and no `drafts` in it since aimeat-protocol
+  6fc3ef4d5 (2026-10-06). Values come with `ids`: `items: [{space, id, value, draft?}]` and
+  `missing`. `workspace_tools.write_record` reads the record by its id and writes NOTHING when that
+  read is refused or has another shape: an update that took "not seen" for "not there" wrote one
+  field over the whole record. The contract modules that still read `objects` from the bare read are
+  incident `incident-crewaimeat-contract-agents-read-objects-from-a-workspace-rea-mv59rexv`. A test
+  double of this read mirrors the measured shape (`tests/test_concierge_followup.py::WsNode`).
 - One crew = `crews/<name>_crew.py`; `build_domain(ctx) -> ([agents], [tasks])`; `AGENT_NAME` matches
   the name used in `aimeat connect --agent`.
 - **Skills** = portable SKILL.md expertise packs in `skills/<name>/` (see `skills/README.md`; contract
@@ -316,6 +324,17 @@ edition shipped with 21 articles and no front page. `write-a`/`write-b`/`editori
   every daemon start ends. Each resident thread has its own `CrewSpec.stop_event` (`aimeat-crewai>=0.33.0`):
   the host sets it when the agent leaves this connector's resident roster (moved, or changed to
   spawn), and that one loop ends within 5 s, after a kickoff in flight finishes.
+- **WHY an agent left is the daemon's word (2026-10-12).** The serve daemon writes down each agent
+  that left on the node's word (`GET /local/departed`, with the serve.json secret; `departed.json` in
+  the home; aimeat-protocol 07c9090aa). The spawner reads it: `deleted` removes the agent's runtime
+  files without asking the node, `moved` removes nothing, and no record (a deactivated account, a
+  changed run mode) removes nothing either. It is also read once at start, for an agent deleted while
+  no spawner ran. `spawner.node_still_lists` is asked only when the daemon answers 404, which is a
+  connector older than the route. A daemon that does not answer removes nothing.
+- **An owner that cannot be asked does not lift the cut.** `discover_agents` cuts the answered
+  owners' rows with `carried_here` on EVERY read, also the read that raises `RosterUnreadable`.
+  Raised uncut (2026-10-12, one of two owners deactivated), the other owner's agents on a second
+  connector joined this roster and were refused a park every 11 s.
 - **A STOPPED agent stays where it is (2026-10-11).** The owner stops and starts an agent on the node
   (`POST /v1/agents/{name}/stop|start`); the roster rows carry `stopped`. The node gives a stopped
   agent no new work and no wake, so the runtimes hold nothing back themselves: the spawner keeps its

@@ -20,7 +20,7 @@ import urllib.request
 import pytest
 import requests
 
-from tests.test_concierge_propose_live import AIMEAT_DIR, _free_port, _kill, _token
+from tests.test_concierge_propose_live import AIMEAT_DIR, _free_port, _kill, _token, connector_start
 
 AGENT = "crm"
 APP = "crm-sandbox.html"
@@ -97,7 +97,10 @@ def _manifest(base: str, oh: dict, app: str, tool: str, ext: str, description: s
     }
     entry = {"name": tool, "description": description, "action_id": f"ext:{ext}:{tool}", "inputSchema": schema}
     if price:
-        entry["price"] = price
+        # A MONEY price, in micro-units (1 EUR = 1_000_000). A morsel is never a price: since
+        # aimeat-protocol 87af3b81e (the owner's ruling of 2026-10-11) `price.morsels` is read as a
+        # pacing amount, and a tool that carries only that is free and runs for anyone.
+        entry["priceMoney"] = price
     r = requests.post(
         f"{base}/v1/memory",
         headers=oh,
@@ -162,7 +165,7 @@ def sandbox(tmp_path_factory):
         _manifest(
             base, oh, APP, "import_records", ext, "Import a whole file of records in ONE call (dry_run | apply).", None
         )
-        _manifest(base, sh, PRICED_APP, "audit", pext, "A priced audit.", {"morsels": 20})
+        _manifest(base, sh, PRICED_APP, "audit", pext, "A priced audit.", {"amount": 2_000_000, "currency": "EUR"})
 
         r = requests.post(
             f"{base}/v1/agents",
@@ -183,8 +186,7 @@ def sandbox(tmp_path_factory):
         from aimeat_crewai.mcp_client import ensure_serve
 
         doc = ensure_serve(
-            aimeat_command=["node", "--import", "tsx", "src/index.ts"],
-            spawn_cwd=str(AIMEAT_DIR),
+            **connector_start(),
             env={**os.environ, "AIMEAT_HOME": str(home)},
             start_timeout=120,
         )

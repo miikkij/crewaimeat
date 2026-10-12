@@ -88,6 +88,23 @@ pytestmark = [
 ]
 
 
+def connector_start() -> dict:
+    """How the serve daemon under test is started: the `aimeat_command` and `spawn_cwd` of `ensure_serve`.
+
+    From the aimeat-protocol checkout's SOURCE by default, which is what these tests have always run.
+    With `AIMEAT_CLI` set, from that file instead, resolved the way the fleet resolves it
+    (`node_engine.serve_command`): this is how an INSTALLED build is put under the same tests before
+    it is published, for example a release candidate packed with `npm pack` and installed into a
+    scratch prefix (`AIMEAT_CLI=<prefix>/node_modules/aimeat/dist/bin/aimeat.js`). The node still
+    comes from the checkout; only the connector changes.
+    """
+    if os.environ.get("AIMEAT_CLI", "").strip():
+        from crewaimeat.node_engine import serve_command
+
+        return {"aimeat_command": serve_command()}
+    return {"aimeat_command": ["node", "--import", "tsx", "src/index.ts"], "spawn_cwd": str(AIMEAT_DIR)}
+
+
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -226,8 +243,7 @@ def scene(tmp_path_factory):
         from aimeat_crewai.mcp_client import ensure_serve
 
         doc = ensure_serve(
-            aimeat_command=["node", "--import", "tsx", "src/index.ts"],
-            spawn_cwd=str(AIMEAT_DIR),
+            **connector_start(),
             env={**os.environ, "AIMEAT_HOME": str(s.home)},
             start_timeout=120,
         )
@@ -338,7 +354,10 @@ def test_the_proposal_is_on_the_node_and_names_the_crm(home):
     assert p["mode"] == "task-runner" and p["run_mode"] == "spawn"
     assert set(RUNTIME_WRITE_SCOPES) <= set(p["scopes"]), "what every run writes with"
     d = p["crew_def"]
-    assert home.crm["ws"] in d["tasks"][0]["description"], "the agent is told where its data is"
+    # By its NAME and its organism, which is what read_workspace takes (30142d8, 2026-10-02): the
+    # agent names the workspace in words and code looks the ids up, so the workspace id is not in it.
+    told = d["tasks"][0]["description"]
+    assert 'the workspace "CADENCE"' in told and home.crm["organism_id"] in told, "the agent is told where its data is"
     assert validate_crew_doc(d) == [], "the runtime that will run it accepts what the node keeps"
 
 

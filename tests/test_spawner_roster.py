@@ -1154,6 +1154,50 @@ def test_an_owner_that_answers_is_still_followed_while_another_cannot_be_asked(m
         sp._stop.set()
 
 
+def test_an_owner_that_cannot_be_asked_does_not_bring_in_what_another_computer_carries(monkeypatch, tmp_path):
+    """Measured 2026-10-12 on a local node: one owner's account was deactivated, so that owner could
+    not be asked, and on that read the spawner began to park on three agents of the OTHER owner that
+    a second connector carries. The daemon refused each park every 11 seconds (400 UNKNOWN_AGENT).
+    The roster of an owner that DID answer is the owner's whole list, and it is cut to this
+    connector on every read, whoever else could not be asked."""
+    from crewaimeat import spawner
+
+    here, away, b1 = f"here#alice@{NODE}", f"away#alice@{NODE}", f"b1#bob@{NODE}"
+    reads = iter([([here, away, b1], [], set()), ([here, away], ["bob: unreadable (HTTP 503)"], {"bob"})])
+    monkeypatch.setattr(spawner, "read_node_roster", lambda: next(reads))
+    monkeypatch.setattr(spawner, "_LAST_NOTE", {})
+    _daemon_holds(monkeypatch, here, b1)
+    sp = _quiet_spawner(tmp_path)
+    try:
+        sp.refresh_roster()
+        assert {k for k, v in sp.state.items() if not v.retired} == {here, b1}
+        sp.refresh_roster()  # bob cannot be asked
+        live = {k for k, v in sp.state.items() if not v.retired}
+        assert away not in live, "an agent another connector carries is not parked on"
+        assert live == {here, b1}, "alice's agent here stays, and bob's is kept until the node answers"
+    finally:
+        sp._stop.set()
+
+
+def test_an_unread_owner_and_a_silent_daemon_keep_every_agent(monkeypatch, tmp_path):
+    """The cut needs the daemon's own answer. Without it nothing is known, so nobody joins or leaves."""
+    from crewaimeat import spawner
+
+    here, away, b1 = f"here#alice@{NODE}", f"away#alice@{NODE}", f"b1#bob@{NODE}"
+    reads = iter([([here, away, b1], [], set()), ([here, away], ["bob: unreadable (HTTP 503)"], {"bob"})])
+    monkeypatch.setattr(spawner, "read_node_roster", lambda: next(reads))
+    monkeypatch.setattr(spawner, "_LAST_NOTE", {})
+    _daemon_holds(monkeypatch, here, b1)
+    sp = _quiet_spawner(tmp_path)
+    try:
+        sp.refresh_roster()
+        monkeypatch.setattr(spawner, "daemon_identities", lambda: None)
+        sp.refresh_roster()
+        assert {k for k, v in sp.state.items() if not v.retired} == {here, b1}
+    finally:
+        sp._stop.set()
+
+
 def test_start_up_with_an_unreadable_node_is_not_a_crash(monkeypatch, tmp_path):
     from crewaimeat import spawner
 
@@ -1529,3 +1573,186 @@ def test_the_node_is_asked_about_a_departed_agent_as_a_neighbour_of_its_own_owne
     assert sp_mod.node_still_lists("moved-agent#o@a-node")[0] is True, "moved or changed, it is still the owner's"
     assert asked == [(["neighbour#o@a-node"], "/v1/agents")] * 2, "its own owner only, and never a refused caller"
     assert sp_mod.node_still_lists("lonely#q@a-node")[0] is None, "an owner with nobody here to ask is not an answer"
+
+
+# --------------------------------------------------------------------------- #
+# The daemon says WHY an agent left (GET /local/departed), so the node is not asked
+# --------------------------------------------------------------------------- #
+# aimeat-protocol 07c9090aa: the serve daemon writes down each agent that left on the node's word,
+# 'moved' or 'deleted', and answers it on loopback. The spawner reads that. It asks the node only
+# when the daemon is older than the route (404), and it removes nothing on a daemon's silence.
+def _record(gaii, reason):
+    agent, _, rest = gaii.partition("#")
+    return {
+        "gaii": gaii,
+        "agent": agent,
+        "owner": rest.partition("@")[0],
+        "reason": reason,
+        "at": "2026-10-12T08:50:00.000Z",
+    }
+
+
+def _daemon_records(*records):
+    return lambda: {r["gaii"]: r for r in records}
+
+
+def _never_ask_the_node(agent):
+    raise AssertionError(f"the node was asked about {agent}: the daemon had already said why it left")
+
+
+def test_a_deleted_record_at_the_daemon_removes_the_files_and_the_node_is_not_asked(monkeypatch, tmp_path, capsys):
+    files = _runtime_files(monkeypatch, tmp_path)
+    roster = [_GONE, "stays#o@a-node"]
+    sp = _spawner(
+        root=tmp_path,
+        invoke_fn=lambda *_: None,
+        roster_fn=lambda: list(roster),
+        gone_fn=_never_ask_the_node,
+        departed_fn=_daemon_records(_record(_GONE, "deleted")),
+    )
+    sp.refresh_roster()
+    roster.remove(_GONE)
+    sp.refresh_roster()
+    sp.forget_departed()
+    assert [f for f in files if f.exists()] == [], "all seven kinds are gone on the daemon's word"
+    said = capsys.readouterr().err
+    assert f"{_GONE}: deleted on the node, as the connector recorded — removed 7 local file(s)" in said
+
+
+def test_a_moved_record_at_the_daemon_removes_nothing(monkeypatch, tmp_path, capsys):
+    files = _runtime_files(monkeypatch, tmp_path)
+    sp = _leaves_the_roster(tmp_path, _never_ask_the_node)
+    sp.departed_fn = _daemon_records(_record(_GONE, "moved"))
+    sp.forget_departed()
+    assert all(f.exists() for f in files)
+    assert f"{_GONE}: moved to another connector — its local files stay" in capsys.readouterr().err
+
+
+def test_an_agent_with_no_record_keeps_its_files_and_is_looked_up_again_before_it_is_left_alone(monkeypatch, tmp_path):
+    """A changed run mode, a deactivated account and a daemon that lost the agent for a moment leave
+    no record. The roster can also say an agent is gone a moment before the daemon wrote down why,
+    so no record is looked up again, and a record that arrives late still removes the files."""
+    from crewaimeat import spawner as sp_mod
+
+    files = _runtime_files(monkeypatch, tmp_path)
+    looked, answers = [], [{}, {}, {}]
+
+    def read():
+        looked.append(1)
+        return answers.pop(0) if answers else {}
+
+    sp = _leaves_the_roster(tmp_path, _never_ask_the_node)
+    sp.departed_fn = read
+    for _ in range(6):
+        sp._departed_retry_at = 0.0  # the back-off between looks is not what this test waits for
+        sp.forget_departed()
+    assert len(looked) == 1 + sp_mod.DEPARTED_LOOKS, "looked up, then twice more, then left alone"
+    assert all(f.exists() for f in files) and sp._departed == []
+
+    late = _leaves_the_roster(tmp_path, _never_ask_the_node, roster=[_GONE, "other#o@a-node"])
+    answers[:] = [{}, {_GONE: _record(_GONE, "deleted")}]
+    late.departed_fn = read
+    late.forget_departed()
+    assert all(f.exists() for f in files), "no record at the first look"
+    late._departed_retry_at = 0.0
+    late.forget_departed()
+    assert [f for f in files if f.exists()] == [], "the record that arrived a moment later is acted on"
+
+
+def test_a_daemon_older_than_the_route_falls_back_to_the_node(monkeypatch, tmp_path, capsys):
+    from crewaimeat import spawner as sp_mod
+
+    files = _runtime_files(monkeypatch, tmp_path)
+    asked = []
+    sp = _leaves_the_roster(tmp_path, lambda agent: asked.append(agent) or (False, "the node lists no such agent"))
+    sp.departed_fn = lambda: sp_mod.DEPARTED_UNSUPPORTED
+    sp.forget_departed()
+    assert asked == [_GONE], "404 on /local/departed: the node is asked, as before"
+    assert [f for f in files if f.exists()] == []
+    assert f"{_GONE}: deleted on the node — removed 7 local file(s)" in capsys.readouterr().err
+
+
+def test_a_daemon_that_does_not_answer_removes_nothing_and_is_asked_again_later(monkeypatch, tmp_path):
+    import time
+
+    files = _runtime_files(monkeypatch, tmp_path)
+    looked = []
+    sp = _leaves_the_roster(tmp_path, _never_ask_the_node)
+    sp.departed_fn = lambda: looked.append(1) or None
+    sp.forget_departed()
+    sp.forget_departed()
+    assert len(looked) == 1, "not asked again inside the back-off"
+    assert all(f.exists() for f in files) and sp._departed == [_GONE], "it still waits for the answer"
+    assert sp._departed_retry_at > time.monotonic()
+    sp._departed_retry_at = 0.0
+    sp.departed_fn = _daemon_records(_record(_GONE, "deleted"))
+    sp.forget_departed()
+    assert [f for f in files if f.exists()] == []
+
+
+def test_at_start_the_files_of_an_agent_deleted_while_no_spawner_ran_are_removed(monkeypatch, tmp_path, capsys):
+    """The daemon keeps the record on disk for a runtime that was not running when the node spoke."""
+    gone = _runtime_files(monkeypatch, tmp_path)
+    moved = _runtime_files(monkeypatch, tmp_path, stem="moved-away_o_a-node")
+    served = _runtime_files(monkeypatch, tmp_path, stem="stays_o_a-node")
+    sp = _spawner(
+        root=tmp_path,
+        invoke_fn=lambda *_: None,
+        roster_fn=lambda: ["stays#o@a-node"],
+        gone_fn=_never_ask_the_node,
+        departed_fn=_daemon_records(
+            _record(_GONE, "deleted"), _record("moved-away#o@a-node", "moved"), _record("stays#o@a-node", "deleted")
+        ),
+    )
+    sp.refresh_roster()
+    sp.forget_deleted_while_away()
+    assert [f for f in gone if f.exists()] == []
+    assert all(f.exists() for f in moved), "a moved agent keeps every file"
+    assert all(f.exists() for f in served), "an agent this spawner serves now is never touched"
+    assert f"{_GONE}: deleted on the node while this spawner was not running — removed 7" in capsys.readouterr().err
+
+
+def test_the_daemon_is_read_on_loopback_with_its_secret(monkeypatch, tmp_path):
+    from crewaimeat import spawner as sp_mod
+
+    monkeypatch.setattr(sp_mod, "_serve_doc", lambda: {"port": 4321, "secret": "s3cret"})
+    seen = []
+
+    class _Answer:
+        def __init__(self, status, body=None):
+            self.status_code, self._body = status, body
+
+        def json(self):
+            return self._body
+
+    answers = [
+        _Answer(200, {"ok": True, "data": {"departed": [_record(_GONE, "deleted")], "max_age_days": 30}}),
+        _Answer(404),
+        _Answer(401, {"ok": False}),
+    ]
+
+    def _get(url, **kw):
+        seen.append((url, kw.get("headers")))
+        return answers.pop(0)
+
+    import requests
+
+    monkeypatch.setattr(requests, "get", _get)
+    assert sp_mod.daemon_departed() == {_GONE: _record(_GONE, "deleted")}
+    assert seen == [("http://127.0.0.1:4321/local/departed", {"Authorization": "Bearer s3cret"})]
+    assert sp_mod.daemon_departed() is sp_mod.DEPARTED_UNSUPPORTED, "404: a daemon older than the route"
+    assert sp_mod.daemon_departed() is None, "a refusal is not an answer"
+    monkeypatch.setattr(sp_mod, "_serve_doc", lambda: {})
+    assert sp_mod.daemon_departed() is None, "no daemon"
+
+
+def test_a_bare_name_matches_one_record_and_never_guesses_between_two_owners():
+    from crewaimeat.spawner import departure_reason
+
+    one = {_GONE: _record(_GONE, "deleted")}
+    assert departure_reason(one, _GONE) == "deleted"
+    assert departure_reason(one, "viive-testi") == "deleted", "a crew-file agent is known here by its name"
+    two = one | {"viive-testi#p@a-node": _record("viive-testi#p@a-node", "moved")}
+    assert departure_reason(two, "viive-testi") is None
+    assert departure_reason(two, "viive-testi#p@a-node") == "moved"
+    assert departure_reason(one, "someone-else#o@a-node") is None

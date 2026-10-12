@@ -396,13 +396,22 @@ MANIFEST = {
 
 
 class WsNode:
-    """The four workspace tools as the connector answers them; refuses what it is told to."""
+    """The four workspace tools as the connector answers them; refuses what it is told to.
 
-    def __init__(self, *, refuse=(), objects=None, drafts=None):
+    THE READ HAS TWO ANSWERS, AS MEASURED 2026-10-12 on a local node through the connector's
+    /local/call (the published 3.26.1, the build the fleet ran that day and the next candidate all
+    answer alike). Without `ids`: the manifest and an INDEX, titles only -- no record values. With
+    `ids`: `items`, one per record found, with `value` (the published copy, or the draft of a record
+    never published) and `draft` when a draft exists, and `missing` for the ids it does not have.
+    `records` is `{id: {"value": ..., "draft": ...}}`; `read_ids` is what the by-id read answers
+    instead (a refusal, a body of another shape).
+    """
+
+    def __init__(self, *, refuse=(), records=None, read_ids=...):
         self.calls: list[tuple[str, dict]] = []
         self.refuse = set(refuse)
-        self.objects = objects or {}
-        self.drafts = drafts or {}
+        self.records = records or {}
+        self.read_ids = read_ids
 
     def __call__(self, agent_name, tool, payload, **kw):
         self.calls.append((tool, payload))
@@ -412,8 +421,27 @@ class WsNode:
             return {"organisms": [{"id": "o", "name": "Koe Oy"}]}
         if tool == "aimeat_workspace_list":
             return {"workspaces": [{"id": "w", "name": "CADENCE"}]}
+        if tool == "aimeat_workspace_read" and "ids" in payload:
+            if self.read_ids is not ...:
+                return self.read_ids
+            items = [
+                {"space": "contact", "id": i, "published": "value" in r, "_version": 3, "_updatedAt": "x", **r}
+                for i, r in self.records.items()
+                if i in payload["ids"]
+            ]
+            missing = [i for i in payload["ids"] if i not in self.records]
+            return {"organism_id": "o", "ws": "w", "mode": "content", "items": items, "missing": missing}
         if tool == "aimeat_workspace_read":
-            return {"manifest": MANIFEST, "objects": self.objects, "drafts": self.drafts}
+            index = [
+                {"id": i, "title": i, "published": True, "has_draft": "draft" in r} for i, r in self.records.items()
+            ]
+            return {
+                "manifest": MANIFEST,
+                "mode": "index",
+                "index": {"contact": index},
+                "counts": {"contact": len(index)},
+                "hint": "Titles only. Open the ones you need with aimeat_workspace_read(ids:[...]).",
+            }
         if tool == "aimeat_workspace_write":
             return {"written": "k", "id": payload.get("id") or "gen-1", "space": payload["space"], "mode": "records"}
         if tool == "aimeat_workspace_publish":
@@ -449,23 +477,52 @@ def test_a_new_record_is_written_and_published_under_the_space_s_namespace(ws):
 
 
 def test_an_update_is_merged_onto_the_record_as_it_stands(ws):
-    published = {"id": "c1", "name": "Testi Asiakas", "email": "t@example.com", "_version": 3}
-    draft = {
-        "id": "c1",
-        "name": "Testi Asiakas",
-        "email": "t@example.com",
-        "phone": "040",
-        "title": "CEO",
-        "_updatedAt": "x",
-    }
-    n = ws(objects={"contact": [published]}, drafts={"contact": [draft]})
+    published = {"id": "c1", "name": "Testi Asiakas", "email": "t@example.com"}
+    draft = {"id": "c1", "name": "Testi Asiakas", "email": "t@example.com", "phone": "040", "title": "CEO"}
+    n = ws(records={"c1": {"value": published, "draft": draft}})
     done = workspace_tools.write_record("crm", "o", "w", "contact", {"phone": "050", "email": None}, "c1")
     assert done["created"] is False
+    assert {"organism_id": "o", "ws": "w", "ids": ["c1"]} in n.sent("aimeat_workspace_read"), "read by its id"
     [w] = n.sent("aimeat_workspace_write")
     assert w["id"] == "c1"
     assert w["value"] == {"id": "c1", "name": "Testi Asiakas", "phone": "050", "title": "CEO"}, (
         "the newer draft is the base, the node's _meta is not the record's, a None removes a field"
     )
+
+
+def test_an_update_of_a_published_record_keeps_every_field_it_did_not_name(ws):
+    """Measured 2026-10-12 against a local node: the connector's read without ids answers titles only
+    (aimeat-protocol 6fc3ef4d5, 2026-10-06). The record was looked for in that answer's `objects`,
+    which is no longer there, so every update called itself a create and wrote ONLY the new field
+    over the record: a phone number added to a contact removed its name and its email."""
+    n = ws(records={"c1": {"value": {"id": "c1", "name": "Testi Asiakas", "email": "t@example.com"}}})
+    done = workspace_tools.write_record("crm", "o", "w", "contact", {"phone": "040 123 4567"}, "c1")
+    assert done["created"] is False
+    [w] = n.sent("aimeat_workspace_write")
+    assert w["value"] == {"id": "c1", "name": "Testi Asiakas", "email": "t@example.com", "phone": "040 123 4567"}
+
+
+def test_an_update_that_cannot_read_the_record_writes_nothing(ws):
+    """A record this call could not see is not a record that is not there. Writing then would replace it."""
+    refusal = {"ok": False, "error": {"code": "SCOPE_DENIED", "message": "This needs organism:read."}}
+    for answer, said in (
+        (refusal, "SCOPE_DENIED"),
+        (None, "did not answer"),
+        ({"manifest": MANIFEST, "objects": {}}, "without `items`"),
+    ):
+        n = ws(read_ids=answer)
+        with pytest.raises(workspace_tools.WorkspaceWriteError) as exc:
+            workspace_tools.write_record("crm", "o", "w", "contact", {"phone": "050"}, "c1")
+        assert said in str(exc.value), (answer, str(exc.value))
+        assert n.sent("aimeat_workspace_write") == [] and n.sent("aimeat_workspace_publish") == []
+
+
+def test_a_record_of_the_same_id_in_another_space_is_not_the_one_updated(ws):
+    other = {"space": "deal", "id": "c1", "value": {"id": "c1", "title": "A deal"}, "published": True}
+    n = ws(read_ids={"mode": "content", "items": [other], "missing": []})
+    done = workspace_tools.write_record("crm", "o", "w", "contact", {"name": "X"}, "c1")
+    assert done["created"] is True
+    assert n.sent("aimeat_workspace_write")[0]["value"] == {"name": "X"}
 
 
 def test_a_given_id_that_does_not_exist_yet_is_created_under_it(ws):

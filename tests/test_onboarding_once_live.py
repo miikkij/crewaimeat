@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 import requests
 
-from tests.test_concierge_propose_live import AIMEAT_DIR, _free_port, _kill, _token
+from tests.test_concierge_propose_live import AIMEAT_DIR, _free_port, _kill, _token, connector_start
 
 AGENT = "onboardee"
 
@@ -113,8 +113,7 @@ def place(tmp_path_factory):
         from aimeat_crewai.mcp_client import ensure_serve
 
         doc = ensure_serve(
-            aimeat_command=["node", "--import", "tsx", "src/index.ts"],
-            spawn_cwd=str(AIMEAT_DIR),
+            **connector_start(),
             env={**os.environ, "AIMEAT_HOME": str(home)},
             start_timeout=120,
         )
