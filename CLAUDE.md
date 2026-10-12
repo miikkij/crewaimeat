@@ -82,7 +82,10 @@ status cells, append decisions), so the two sides stay synced without drifting p
   that did not answer starts the tool's answer with `[news] NOT READ`, which is a fault and never
   "no news today". Add a feed only after measuring that it answers with dated items. And a tool's
   rate of use is part of a fix: a prompt that says "run all of these searches" is a load on a
-  shared engine that every other crew on the machine uses too.
+  shared engine that every other crew on the machine uses too. How to DESIGN a definition (which
+  tool for which question, what each task may read, how many tool calls, the three endings, the
+  order to verify in) is `skills/crew-definition-craft/`, also in the owner's skill registry on the
+  node as `user:happydude500001/crew-definition-craft`; republish it there when it changes.
 - One crew = `crews/<name>_crew.py`; `build_domain(ctx) -> ([agents], [tasks])`; `AGENT_NAME` matches
   the name used in `aimeat connect --agent`.
 - **Skills** = portable SKILL.md expertise packs in `skills/<name>/` (see `skills/README.md`; contract
