@@ -90,6 +90,20 @@ def test_an_item_missing_a_key_is_named_by_index_and_key():
     ]
 
 
+def test_an_item_may_ask_for_the_records_already_there():
+    """The owner's tick on the new-agent page. The daemon still subscribes with the three keys."""
+    doc = _doc(record_spaces=[{**SPACE, "backfill": True}])
+    assert validate_crew_doc(doc) == []
+    assert crewspec_from_json(doc).record_spaces == [SPACE]
+
+
+@pytest.mark.parametrize("bad", ["true", "false", 1, None])
+def test_backfill_is_a_boolean_or_it_is_refused(bad):
+    """A string "false" would read as true, and then every old record becomes a task."""
+    errors = validate_crew_doc(_doc(record_spaces=[{**SPACE, "backfill": bad}]))
+    assert errors == ["record_spaces[0]: backfill must be true or false"]
+
+
 def test_an_invalid_field_stops_the_spec_from_being_built():
     with pytest.raises(CrewDocError):
         crewspec_from_json(_doc(listen_for=["tasks"]))
@@ -181,6 +195,23 @@ def test_a_workspace_record_event_reaches_the_scan(spec, monkeypatch):
     assert seen == [(event, [SPACE])]
 
 
+def test_the_scan_is_handed_the_definition_s_item_so_it_sees_backfill(monkeypatch):
+    env = {"version": 1, "publishedAt": "2026-10-12T00:00:00Z", "agent_name": "support-drafts"}
+    env["doc"] = _doc(record_spaces=[{**SPACE, "backfill": True}])
+    monkeypatch.setattr(ja, "read_owner_key_strict", lambda agent, key, **_kw: env)
+    monkeypatch.setattr("crewaimeat.aimeat_crew._aimeat_call", lambda a, tool, payload, **_kw: {"ok": True})
+    monkeypatch.setattr(ja, "sync_contract_tag", lambda spec, **_kw: "unchanged")
+    captured: dict = {}
+    monkeypatch.setattr("crewaimeat.aimeat_crew.run_crew", lambda spec: captured.setdefault("spec", spec))
+    ja.run_json_agent("support-drafts")
+    seen: list = []
+    monkeypatch.setattr("crewaimeat.record_wake.RecordWake.on_event", lambda self, event, watched: seen.append(watched))
+
+    captured["spec"].on_record({"type": "workspace.record", **SPACE, "id": None, "op": "catchup"})
+
+    assert seen == [[{**SPACE, "backfill": True}]] and captured["spec"].record_spaces == [SPACE]
+
+
 def test_a_scan_the_node_refused_is_said_and_counted_as_a_refused_run(spec, monkeypatch, capsys):
     from crewaimeat import lifecycle
     from crewaimeat.record_wake import RecordWakeError
@@ -225,4 +256,4 @@ def test_the_menu_says_this_runtime_honours_record_spaces(monkeypatch):
 
     monkeypatch.setattr("crewaimeat.llm_choice.default_is_node_road", lambda agent_name: False)  # a node read
     ok, menu = ci.handle("crew.menu", {}, agent_name="node-agent")
-    assert ok and menu["features"] == ["record_spaces"]
+    assert ok and menu["features"] == ["record_spaces", "record_backfill"]

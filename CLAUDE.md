@@ -126,7 +126,11 @@ status cells, append decisions), so the two sides stay synced without drifting p
   time: the index's version number did not move on a measured republish). The task's description is
   the record itself and is what `{{ctx.prompt}}` receives (`record_wake.task_for`; the home's draft
   prompt in aimeat-protocol describes it, so change both). The first look at a space handles
-  nothing: the agent works on what is published after it was switched on. A record whose
+  nothing: the agent works on what is published after it was switched on, unless the space's item
+  says `"backfill": true` (the owner's tick on the page), which makes every published record there a
+  task, oldest first, on that first look only. One look makes at most ten tasks
+  (`record_wake.TASKS_PER_LOOK`); the rest need nobody to start them, because the new tasks wake the
+  agent and that worker's start is the next look. A record whose
   provenance names the agent as its generator makes no task, which is the only guard against an
   agent that writes into a space it watches (the node's event carries no author). Why a task and
   not a crew run on the event: the result, the failure, a refused permission and the owner's start
@@ -137,9 +141,11 @@ status cells, append decisions), so the two sides stay synced without drifting p
   agent per connector start, `Spawner.start_unsubscribed`) when the daemon's `/local/status` holds
   none of them, and for a node-defined agent that has not run on this computer. A retired
   engagement still starts a worker for each record (the node pushes regardless); the package's gate
-  then skips it, so no task is made and no model runs. `crew.menu` answers
-  `"features": ["record_spaces"]` (`crew_def.FEATURES`), which is how the page knows the runtime
-  behind a connector honours the field.
+  then skips it, so no task is made and no model runs. `crew.menu` answers `features` from
+  `crewaimeat.runtime_features.FEATURES` (`record_spaces`, `record_backfill`), and `serve_guard`
+  starts the daemon with the same list in `AIMEAT_RUNTIME_FEATURES` for the connector to send per
+  computer, which is how the page knows the runtime honours a field before any agent exists there.
+  A feature name goes into that tuple in the change that makes the field work, never before.
 - **The crew file is the ONE source for what an agent is.** Beside `build_domain`, a crew declares at
   module level: `LLM_PROFILE` (which `llm_providers.json` profile routes it), `TAGS` (the node's charset,
   `[a-z0-9._:-]`), `CAPABILITIES` ({technical: [{name,type}] OBJECTS, domain: [str], languages: [str]}),

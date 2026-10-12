@@ -21,10 +21,21 @@ count starts at -1 in a new process). So one rule serves both: read the space's 
 for each published record that is newer than what this agent has handled. What it has handled is a
 small memo on the NODE, under the agent's name, so it moves with the agent to another computer.
 
-THE FIRST LOOK AT A SPACE HANDLES NOTHING. The memo starts at the newest record that is there. An
-agent switched on over a workspace of five hundred old requests must not run five hundred tasks; it
-works on what is published from then on. The one exception is the record a real event names: that
-one was published while this agent was subscribed.
+THE FIRST LOOK AT A SPACE HANDLES NOTHING, UNLESS THE DEFINITION ASKS. The memo starts at the newest
+record that is there. An agent switched on over a workspace of five hundred old requests must not
+run five hundred tasks; it works on what is published from then on. The one exception is the record
+a real event names: that one was published while this agent was subscribed. A space whose item says
+`"backfill": true` (the owner's tick on the new-agent page, 2026-10-12) starts its memo empty
+instead, so every published record there becomes a task, oldest first. It acts on the first look
+only: a memo that exists is never reset by a definition that gains the key later.
+
+TEN TASKS A LOOK. One look makes at most TASKS_PER_LOOK tasks and leaves the rest for the next look.
+The next look needs nobody to start it: the new tasks wake the agent, that worker runs them, and
+its own start is a catch-up of each space. So work is never queued more than ten ahead of what has
+been done, the memo is saved after each batch, and an owner who stops the agent stops the chain. It
+holds for a backfill and for five hundred records imported at once alike. Records that make no task
+(the agent's own writes, ones gone since the index) do not count, or a batch of them would end the
+chain with work still waiting.
 
 AN AGENT'S OWN WRITE DOES NOT WAKE IT AGAIN. The node's event carries no author and is pushed to the
 writer too (aimeat-protocol connect-tunnel-push.ts), so an agent that writes into a space it watches
@@ -53,6 +64,11 @@ STATE_PREFIX = "crews.records."
 # mark moves past both, and the earlier-stamped one appears afterwards. Records inside this window are
 # remembered one by one (`recent`), so a late one is still new and a handled one is not repeated.
 ORDER_SLACK = timedelta(seconds=60)
+
+# How many tasks one look at a space makes. A worker runs the tasks it finds one after another under
+# the spawner's run limit (an hour by default), and ten runs of a crew fit that with room. It is the
+# size of a step, not a ceiling: every record gets its task, ten at a time.
+TASKS_PER_LOOK = 10
 
 
 class RecordWakeError(RuntimeError):
@@ -273,18 +289,25 @@ class RecordWake:
 
     # ------------------------------------------------------------------ scan --- #
     def scan(self, space: dict, *, named: str | None = None) -> list[dict]:
-        """Make a task for each record of `space` this agent has not handled. Returns what it did, one
-        {id, updated, task | skipped} per record. `named` is the id a real event carried: it is handled
-        even on the first look at a space."""
+        """Make a task for the records of `space` this agent has not handled, at most TASKS_PER_LOOK
+        tasks a look. Returns what it did, one {id, updated, task | skipped} per record. `named` is the
+        id a real event carried: it is handled even on the first look at a space. `space` is the
+        definition's item, so it may say `backfill`."""
         key = space_key(space)
         spaces = self.read_state()
         kind, ws_name, rows = self._index(space)
         type_name = str(kind.get("name"))
         first_look = key not in spaces
-        fresh, memo = new_records(rows, spaces.get(key))
-        if first_look and named:
+        backfill = first_look and space.get("backfill") is True
+        fresh, memo = new_records(rows, {"mark": "", "recent": {}} if backfill else spaces.get(key))
+        if first_look and named and not backfill:
             fresh = [e for e in rows if isinstance(e, dict) and str(e.get("id")) == named and e.get("published")]
-        if first_look:
+        if backfill:
+            self._say(
+                f"[{self.agent_name}] records: first look at {key}, which asks for the records already there; "
+                f"{len(fresh)} published record(s) become tasks, {TASKS_PER_LOOK} a look"
+            )
+        elif first_look:
             self._say(
                 f"[{self.agent_name}] records: first look at {key}; {len(rows)} record(s) there are taken as "
                 "handled, and the ones published from now on become tasks"
@@ -292,6 +315,12 @@ class RecordWake:
         done: list[dict] = []
         try:
             for entry in fresh:
+                if sum(1 for d in done if d.get("task")) >= TASKS_PER_LOOK:
+                    self._say(
+                        f"[{self.agent_name}] records: {len(fresh) - len(done)} more record(s) of {key} wait for "
+                        "the next look, which these tasks start"
+                    )
+                    break
                 done.append(self._handle(space, type_name, ws_name, entry))
                 memo = handled(memo, done[-1]["id"], done[-1]["updated"])
         finally:
@@ -325,11 +354,12 @@ class RecordWake:
     def on_event(self, event: dict, watched: list[dict]) -> list[dict]:
         """One `workspace.record` event from the daemon. An event for a space the definition does not
         name is not this agent's work and is said, not acted on."""
-        space = {k: event.get(k) for k in ("organism_id", "ws", "space")}
-        if space not in [{k: w.get(k) for k in ("organism_id", "ws", "space")} for w in watched]:
+        keys = ("organism_id", "ws", "space")
+        item = next((w for w in watched if all(w.get(k) == event.get(k) for k in keys)), None)
+        if item is None:
             self._say(
-                f"[{self.agent_name}] records: an event for {space_key(space)}, which the definition does not watch"
+                f"[{self.agent_name}] records: an event for {space_key(event)}, which the definition does not watch"
             )
             return []
         rid = event.get("id")
-        return self.scan(space, named=str(rid) if rid and event.get("op") != "catchup" else None)
+        return self.scan(item, named=str(rid) if rid and event.get("op") != "catchup" else None)

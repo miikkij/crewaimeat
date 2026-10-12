@@ -580,11 +580,6 @@ def _validate_tasks(tasks: Any, agent_keys: set[str]) -> list[str]:
 
 
 CONTRACT_TAG = "workspace-contract"  # the node's tag for an agent that works a workspace's records
-# What this runtime does with a definition beyond its agents and tasks, said in `crew.menu` so the
-# node's new-agent page offers a choice only where the runtime behind it honours the field. A string
-# goes in here in the same change that makes the field work, never before: a runtime that does not
-# send one is read as not having it.
-FEATURES = ("record_spaces",)
 _RECORD_SPACE_KEYS = ("organism_id", "ws", "space")
 _MAX_RECORD_SPACES = 20  # the shape agreed with the node's new-agent page, which writes this field
 
@@ -618,6 +613,10 @@ def _validate_record_spaces(spaces: Any, listen: Any) -> list[str]:
             ]
             if bad:
                 errors.append(f"record_spaces[{i}]: {', '.join(bad)} must be a non-empty string")
+            # `backfill` asks for the records already in the space on the agent's first look at it
+            # (record_wake). A string "false" would read as true, so only a boolean is taken.
+            if isinstance(sp, dict) and not isinstance(sp.get("backfill", False), bool):
+                errors.append(f"record_spaces[{i}]: backfill must be true or false")
     for kind in ("records", "tasks"):
         if kind not in hears:
             why = "they are what the agent is woken by" if kind == "records" else "each record becomes a task it runs"

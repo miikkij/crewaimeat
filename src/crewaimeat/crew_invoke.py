@@ -49,9 +49,10 @@ def handle(capability: str, payload: dict, *, agent_name: str) -> tuple[bool, di
     # is why it is answered before the doc check below.
     if capability == "crew.menu":
         from crewaimeat.agent_scopes import runtime_scopes
-        from crewaimeat.crew_def import FEATURES, TOOL_PURPOSES, TOOL_REGISTRY
+        from crewaimeat.crew_def import TOOL_PURPOSES, TOOL_REGISTRY
         from crewaimeat.llm import available_models, known_profiles
         from crewaimeat.llm_choice import default_is_node_road
+        from crewaimeat.runtime_features import FEATURES
 
         tools = [{"id": name, "purpose": TOOL_PURPOSES.get(name, "")} for name in sorted(TOOL_REGISTRY)]
         return True, {
@@ -63,7 +64,7 @@ def handle(capability: str, payload: dict, *, agent_name: str) -> tuple[bool, di
             # 2026-10-02: a proposal holding memory:read alone failed its first run on its deliverable write.
             # A NEW agent takes the owner's default road, so `ai:use` is in it when that default is the node.
             "required_scopes": runtime_scopes(node_road=default_is_node_road(agent_name)),
-            # The definition fields this runtime acts on (crew_def.FEATURES). Asked for by the node's
+            # The definition fields this runtime acts on (runtime_features.FEATURES). Asked for by the node's
             # new-agent page 2026-10-12: an older runtime ignores `record_spaces`, and an agent made
             # with it there would never be woken, with nothing on any screen to say why.
             "features": list(FEATURES),

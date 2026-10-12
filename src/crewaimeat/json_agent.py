@@ -406,7 +406,9 @@ def run_json_agent(agent_name: str, **overrides: Any) -> None:
     # the branch below the field would subscribe the spaces and then drop every wake they send. The
     # spaces are the ones this start subscribed: a definition that changes them is followed by the
     # next start, which for a spawned agent is its next run.
-    _watched = [dict(s) for s in (spec.record_spaces or []) if isinstance(s, dict)]
+    # From the definition, not the spec: the spec carries the three keys the daemon subscribes with,
+    # and the definition's item may also say `backfill`.
+    _watched = [dict(s) for s in (doc.get("record_spaces") or []) if isinstance(s, dict)] if spec.record_spaces else []
     sync_contract_tag(spec, watched=bool(_watched))
     _wake = None
 

@@ -412,3 +412,82 @@ def test_an_event_for_a_space_the_definition_does_not_name_is_left_alone(node):
         _wake(node, said).on_event({"type": "workspace.record", **other, "id": "d-1", "op": "created"}, [SPACE]) == []
     )
     assert node.calls == [] and "does not watch" in said[0]
+
+
+# ── the records already there, and ten tasks a look ──────────────────────────
+OLD = {**SPACE, "backfill": True}
+
+
+def _fill(node, count, *, start=0, writer=None):
+    for i in range(start, start + count):
+        node.put(f"r-{i:03d}", f"2026-10-0{1 + i // 60}T10:{i % 60:02d}:00.000Z", writer=writer)
+
+
+def test_a_space_that_asks_for_them_gets_a_task_for_each_record_already_there_oldest_first(node):
+    _fill(node, 3)
+    said: list = []
+
+    done = _wake(node, said).on_event({"type": "workspace.record", **SPACE, "id": None, "op": "catchup"}, [OLD])
+
+    assert [d["id"] for d in done] == ["r-000", "r-001", "r-002"] and len(node.tasks) == 3
+    assert "asks for the records already there; 3 published record(s) become tasks" in said[0]
+
+
+def test_twenty_five_old_records_are_three_looks_of_ten_ten_and_five(node):
+    """The looks need nobody to start them on a real fleet: each batch of tasks wakes the agent, and a
+    worker's start is a catch-up of each space. Here each look is called."""
+    _fill(node, 25)
+    wake = _wake(node)
+
+    sizes = [len(wake.scan(OLD)) for _ in range(4)]
+
+    assert sizes == [10, 10, 5, 0] and len(node.tasks) == 25
+    assert [t["title"].rsplit("/", 1)[1] for t in node.tasks] == [f"r-{i:03d}" for i in range(25)]
+
+
+def test_a_look_that_stops_at_ten_says_how_many_wait(node):
+    _fill(node, 12)
+    said: list = []
+
+    _wake(node, said).scan(OLD)
+
+    assert "2 more record(s)" in said[-1] and "wait for the next look" in said[-1]
+
+
+def test_records_that_make_no_task_do_not_use_up_the_ten(node):
+    """A batch of the agent's own writes would otherwise make no task, so nothing would wake the
+    agent again, and the records behind them would wait for somebody else's event."""
+    _fill(node, 12, writer=ME)
+    _fill(node, 11, start=12)
+    wake = _wake(node)
+
+    first = wake.scan(OLD)
+
+    assert [d.get("skipped") for d in first[:12]] == ["own write"] * 12
+    assert sum(1 for d in first if d.get("task")) == 10 and len(wake.scan(OLD)) == 1
+
+
+def test_ten_a_look_holds_without_backfill_too(node):
+    """Five hundred records imported at once into a watched space are the same problem."""
+    wake = _wake(node)
+    wake.scan(SPACE)
+    _fill(node, 14)
+
+    assert [len(wake.scan(SPACE)), len(wake.scan(SPACE)), len(wake.scan(SPACE))] == [10, 4, 0]
+
+
+def test_backfill_is_for_the_first_look_only(node):
+    """A definition that gains the key later must not send an agent back through a workspace it has
+    been working in for a year."""
+    _fill(node, 5)
+    wake = _wake(node)
+    wake.scan(SPACE)
+
+    assert wake.scan(OLD) == [] and node.tasks == []
+
+
+def test_a_backfill_of_an_empty_space_writes_its_memo_and_then_works_as_usual(node):
+    wake = _wake(node)
+    assert wake.scan(OLD) == [] and node.memo == {"spaces": {KEY: {"mark": "", "recent": {}}}}
+    _fill(node, 1)
+    assert len(wake.scan(OLD)) == 1

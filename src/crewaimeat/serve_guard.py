@@ -358,6 +358,14 @@ def _name_this_install() -> None:
     beside this daemon, and only the entrypoint that starts one can make it (scripts/start_fleet.*).
     """
     os.environ.setdefault("AIMEAT_INSTALL_NAME", default_install_name())
+    # WHAT THE RUNTIME ON THIS COMPUTER CAN DO, for the same reason in the same place. The connector
+    # sends it to the node for the computer, so the new-agent page can offer a choice (an agent woken
+    # by a workspace's records) on a computer that carries no agent yet to ask. It is the list
+    # `crew.menu` answers from, never a string typed into a start script: a script would announce a
+    # feature the installed code does not have, or keep quiet about one it has.
+    from crewaimeat.runtime_features import FEATURES, FEATURES_ENV
+
+    os.environ.setdefault(FEATURES_ENV, ",".join(FEATURES))
 
 
 def _guard_pytest() -> None:
