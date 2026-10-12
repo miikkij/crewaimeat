@@ -1,29 +1,95 @@
-"""discover flag — the liaison tool_filter gains aimeat_discover only when CrewSpec.discover is on."""
+"""The liaison's tool list: the package's default plus LIAISON_EXTRA_TOOLS, for every crew.
+
+`aimeat_discover` was the first extra, added only when CrewSpec.discover was on. Since 2026-10-12 it,
+`aimeat_invoke` and the three attached-MCP-server tools are in every liaison's list.
+"""
 
 from __future__ import annotations
 
 from aimeat_crewai.daemon import DAEMON_DEFAULT_TOOL_FILTER
 
-from crewaimeat.aimeat_crew import CrewSpec, _liaison_tool_filter
+from crewaimeat.aimeat_crew import LIAISON_EXTRA_TOOLS, CrewSpec, _extras_not_exposed, _liaison_tool_filter
 
 
-def test_default_filter_excludes_discover():
-    # The package default omits it on purpose (small models cope with ~24 tools).
+def test_the_packages_default_carries_none_of_the_extras():
+    # If the package ever adds one itself, the composed tuple must still name it once (below).
     assert "aimeat_discover" not in DAEMON_DEFAULT_TOOL_FILTER
+    assert "aimeat_invoke" not in DAEMON_DEFAULT_TOOL_FILTER
 
 
-def test_filter_off_is_the_default_set():
-    assert _liaison_tool_filter(False) == DAEMON_DEFAULT_TOOL_FILTER
-    assert "aimeat_discover" not in _liaison_tool_filter(False)
+def test_every_crew_gets_the_default_list_and_the_extras_once_each():
+    f = _liaison_tool_filter()
+    assert f[: len(DAEMON_DEFAULT_TOOL_FILTER)] == DAEMON_DEFAULT_TOOL_FILTER, "the package's list, untouched"
+    assert set(LIAISON_EXTRA_TOOLS) <= set(f)
+    assert len(f) == len(set(f)) == len(DAEMON_DEFAULT_TOOL_FILTER) + len(LIAISON_EXTRA_TOOLS)
+    assert LIAISON_EXTRA_TOOLS == (
+        "aimeat_discover",
+        "aimeat_invoke",
+        "aimeat_mcp_list",
+        "aimeat_mcp_tools",
+        "aimeat_mcp_call",
+    )
 
 
-def test_filter_on_adds_discover_once():
-    f = _liaison_tool_filter(True)
-    assert "aimeat_discover" in f
-    assert list(f).count("aimeat_discover") == 1
-    # everything from the default set is preserved
-    assert set(DAEMON_DEFAULT_TOOL_FILTER) <= set(f)
-    assert len(f) == len(DAEMON_DEFAULT_TOOL_FILTER) + 1
+def test_an_extra_can_be_left_out_and_a_default_tool_cannot():
+    f = _liaison_tool_filter(without=["aimeat_mcp_call", "aimeat_task_complete"])
+    assert "aimeat_mcp_call" not in f and "aimeat_mcp_list" in f
+    assert "aimeat_task_complete" in f, "a crew cannot work without its task tools"
+
+
+def _liaison_refusal(missing: list[str]) -> Exception:
+    # The sentence aimeat_crewai.liaison.create_liaison_agent raises with (0.33.0).
+    available = sorted({*DAEMON_DEFAULT_TOOL_FILTER, *LIAISON_EXTRA_TOOLS} - set(missing))
+    return RuntimeError(
+        f"tool_filter requested tools that the MCP server did not expose: {sorted(missing)}. Available: {available}"
+    )
+
+
+def test_an_extra_the_connector_does_not_offer_is_named_from_the_liaisons_refusal():
+    f = _liaison_tool_filter()
+    assert _extras_not_exposed(_liaison_refusal(["aimeat_mcp_call", "aimeat_mcp_tools"]), f) == [
+        "aimeat_mcp_tools",
+        "aimeat_mcp_call",
+    ]
+    # `aimeat_mcp_list` is offered, so it is in "Available" and must not be read as missing.
+    assert "aimeat_mcp_list" not in _extras_not_exposed(_liaison_refusal(["aimeat_mcp_call"]), f)
+
+
+def test_the_refusal_is_read_from_the_packages_own_raise(monkeypatch):
+    """Pinned against the REAL raise site, not the sentence copied above: a connector that offers
+    everything but two extras makes aimeat_crewai's liaison raise, and what it raises names them."""
+    from types import SimpleNamespace
+
+    import aimeat_crewai.liaison as liaison
+
+    offered = [n for n in _liaison_tool_filter() if n not in ("aimeat_invoke", "aimeat_mcp_call")]
+
+    class Connector:
+        def __init__(self, params):
+            self.tools = [SimpleNamespace(name=n) for n in offered]
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(liaison, "MCPServerAdapter", Connector)
+    f = _liaison_tool_filter()
+    try:
+        with liaison.create_liaison_agent(
+            mcp_server_params={"url": "http://127.0.0.1:1/v1/mcp"}, agent_name="x", skill_path=None, tool_filter=f
+        ):
+            raise AssertionError("the liaison started although the filter named tools the connector lacks")
+    except liaison.AimeatLiaisonError as exc:
+        missing = _extras_not_exposed(exc, f)
+    assert missing == ["aimeat_invoke", "aimeat_mcp_call"]
+    assert set(_liaison_tool_filter(without=missing)) == set(offered), "and the next start asks for what is offered"
+
+
+def test_a_missing_default_tool_or_another_error_drops_nothing():
+    f = _liaison_tool_filter()
+    assert _extras_not_exposed(_liaison_refusal(["aimeat_task_complete"]), f) == []
+    assert _extras_not_exposed(RuntimeError("No tools discovered through the MCP connection."), f) == []
+    # An extra already left out is not reported again, so the start loop cannot spin on it.
+    assert _extras_not_exposed(_liaison_refusal(["aimeat_mcp_call"]), _liaison_tool_filter(["aimeat_mcp_call"])) == []
 
 
 def test_crewspec_discover_defaults_off():

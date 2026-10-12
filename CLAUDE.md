@@ -76,6 +76,23 @@ status cells, append decisions), so the two sides stay synced without drifting p
   Workspace skills (2c) are OPT-IN: `workspace_skills=True` derives targets from record_spaces (or pass
   explicit `[{"organism_id","ws"}]`); precedence local > linked > workspace-auto. Default OFF — a
   workspace is a shared surface; any member's skill would ride into the crew's prompts.
+- **Attached MCP servers and the rest of the node's tools (2026-10-12).** An owner attaches other MCP
+  servers to their node for their agents; a crew reaches them with the tool id `mcp` (every server the
+  node lets the agent use) or `mcp:<server>` (ONE, named in the definition the owner approves), built in
+  `crewaimeat.mcp_tools` over `aimeat_mcp_list` / `_tools` / `_call`. The permission is `mcp:use`
+  (`mcp_tools.USE_SCOPES`; it opens the two lists too), and the proposer asks for it. A call has three
+  endings and the tool's answer starts with which one: the tool's own answer, `THE TOOL SAID NO.` (it
+  ran and refused: correct the arguments or report it), or nothing ran (`NOT ALLOWED` is the owner's
+  decision, `SERVER NEEDS REPAIR` is a person's job on the node). The refusal arrives through
+  `/local/call` with the node's CODE and no HTTP status, so the code is what `mcp_tools.refusal` reads.
+  Every crew's LIAISON is shown the package's 25 tools plus `LIAISON_EXTRA_TOOLS` (`aimeat_discover`,
+  `aimeat_invoke`, the three `aimeat_mcp_*`): `aimeat_invoke` runs any node tool by name, so the
+  agent's PERMISSIONS are the only limit on what the LIAISON's model can do on the node. That model
+  acts in three places: the plan of a task that waits for a person, the close of a run that came as a
+  message, and where a crew's agents delegate to it; the agents that do a crew's WORK take their tools
+  from the crew, so for them an attached server is the tool id. Add a tool to the list only with its
+  measured size: it is sent on every liaison call (about 18 500 tokens for the 25, 2 400 more for the
+  five).
 - **The crew file is the ONE source for what an agent is.** Beside `build_domain`, a crew declares at
   module level: `LLM_PROFILE` (which `llm_providers.json` profile routes it), `TAGS` (the node's charset,
   `[a-z0-9._:-]`), `CAPABILITIES` ({technical: [{name,type}] OBJECTS, domain: [str], languages: [str]}),

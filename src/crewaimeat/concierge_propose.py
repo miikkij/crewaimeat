@@ -41,6 +41,7 @@ import time
 from crewaimeat.agent_manifest import agent_route
 from crewaimeat.agent_scopes import runtime_scopes
 from crewaimeat.aimeat_crew import _aimeat_call, _aimeat_rest
+from crewaimeat.mcp_tools import USE_SCOPES as MCP_USE_SCOPES
 from crewaimeat.workspace_tools import READ_SCOPES, WRITE_SCOPES
 
 # Every proposed agent gets `decline_request`: asked for something outside its purpose, it says so and the
@@ -67,6 +68,10 @@ NAME_RE = re.compile(r"^[a-z][a-z0-9-]{2,39}$")
 #   article_fetch  read the article behind a link         (no node call)
 #   schedule    manage its own node schedules              workflow:read, task:write (schedule-gate.ts)
 #   dm          read and reply in its inbox                messages:read, messages:send
+#   mcp         use the MCP servers attached to the node   mcp:use -- CALLING a tool needs it
+#               (routes/mcp-servers.ts), and it opens the two lists as well, which take mcp:read OR
+#               mcp:use. Measured 2026-10-12: an agent holding mcp:use alone listed the servers, listed
+#               one's tools and called one. mcp_tools.USE_SCOPES is the one source.
 PROPOSABLE_TOOLS: dict[str, tuple[str, ...]] = {
     "memory": ("memory:read", "memory:write"),
     "workspace": READ_SCOPES,
@@ -75,7 +80,24 @@ PROPOSABLE_TOOLS: dict[str, tuple[str, ...]] = {
     "article_fetch": (),
     "schedule": ("workflow:read", "task:write"),
     "dm": ("messages:read", "messages:send"),
+    "mcp": MCP_USE_SCOPES,
 }
+
+
+def tool_scopes(tool: str) -> tuple[str, ...] | None:
+    """The scopes the tool id `tool` needs, or None when it is not one a proposed agent may be given.
+
+    `mcp:<server>` (ONE attached server, named in the definition the owner approves) needs what `mcp`
+    needs. It is the only selector form offered: a decision rule is allowed per agent on the node, which
+    a proposal cannot arrange.
+    """
+    if tool in PROPOSABLE_TOOLS:
+        return PROPOSABLE_TOOLS[tool]
+    head, sep, selector = tool.partition(":")
+    if head == "mcp" and sep and selector:
+        return PROPOSABLE_TOOLS["mcp"]
+    return None
+
 
 # Where the concierge keeps a schedule it promised, until the agent it belongs to exists.
 PENDING_PREFIX = "proposals.pending."
@@ -119,7 +141,7 @@ def compute_scopes(tools: list[str], held: list[str] | None, *, node_road: bool 
     """
     wanted: list[str] = []
     runtime = runtime_scopes(node_road=node_road)
-    for s in ("memory:read", *runtime, *(s for t in tools for s in PROPOSABLE_TOOLS.get(t, ()))):
+    for s in ("memory:read", *runtime, *(s for t in tools for s in tool_scopes(t) or ())):
         if s not in wanted:
             wanted.append(s)
     if held is None:
@@ -165,6 +187,15 @@ def build_crew_def(
             "When the request is to add or change something, look the record up first so you update it "
             "rather than create a duplicate, write it with write_workspace_record, and say which records "
             "you created or updated. Never claim a write the tool did not confirm.\n\n"
+        )
+    if any(t == "mcp" or t.startswith("mcp:") for t in tools):
+        # The far side's tool names and arguments are its own, so the agent reads them before it calls
+        # (a guessed tool name is answered by the server, and reads like the server being broken).
+        data += (
+            "Your owner attached other systems to their node as MCP servers, and your tools reach them. "
+            "List a server's tools before you call one, and pass the arguments in the shape that list "
+            "shows; never guess a server or a tool name. When a call answers that it was not allowed or "
+            "that the server needs repair, nothing ran: say so, and do not present the work as done.\n\n"
         )
     task = {
         "id": "run",
@@ -276,12 +307,17 @@ def propose(
         return f"'{schedule_cron}' is not a 5-field cron (minute hour day month weekday), e.g. '0 7 * * *' for 07:00 daily."
 
     chosen = _parse_tools(tools)
-    from crewaimeat.crew_def import TOOL_REGISTRY
+    from crewaimeat.crew_def import TOOL_REGISTRY, resolve_tool
 
     offered = sorted(t for t in PROPOSABLE_TOOLS if t in TOOL_REGISTRY)
-    unknown = [t for t in chosen if t not in offered]
+    # The runtime's own resolver decides what builds, so `mcp:<server>` is accepted here exactly when
+    # the definition it lands in will validate.
+    unknown = [t for t in chosen if tool_scopes(t) is None or resolve_tool(t) is None]
     if unknown:
-        return f"I cannot give an agent {', '.join(unknown)}. The tools I can give: {', '.join(offered)}."
+        return (
+            f"I cannot give an agent {', '.join(unknown)}. The tools I can give: {', '.join(offered)}; "
+            "and mcp:<server> for one attached MCP server by its name."
+        )
     if schedule_cron and "schedule" in chosen:
         # ASK ONLY FOR WHAT ITS RUNS CALL. "Every morning" is a clock the CONCIERGE sets once the agent
         # exists (start_proposed, POST /v1/agents/<name>/schedules with the concierge's own credential);

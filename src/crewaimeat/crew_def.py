@@ -223,6 +223,33 @@ def _tools_workspace_write(agent_name: str, ctx: Any) -> list:
     return list(make_workspace_write_tools(agent_name))
 
 
+def _tools_mcp(agent_name: str, ctx: Any) -> list:
+    # The MCP servers the OWNER attached to their node (an issue tracker, a wiki, a warehouse): list
+    # them, list one's tools with their arguments, call one. The node holds the address and the
+    # credential and decides every call (mcp:use, and the owner's grant per agent and server).
+    from crewaimeat.mcp_tools import make_mcp_tools
+
+    return list(make_mcp_tools(agent_name))
+
+
+def _make_mcp_one(server: str):
+    """A factory bound to ONE attached server, for the `mcp:<server>` form; None for a selector that
+    cannot name a server, so the definition is refused where it is validated."""
+    from crewaimeat.mcp_tools import SERVER_NAME_RE
+
+    if not SERVER_NAME_RE.match(server):
+        return None
+
+    def _factory(agent_name: str, ctx: Any) -> list:
+        # Nothing is asked of the node at build: whether the server exists and whether this agent may
+        # use it is the node's answer to the first call, and the model reads it in the node's words.
+        from crewaimeat.mcp_tools import make_mcp_server_tools
+
+        return list(make_mcp_server_tools(agent_name, server))
+
+    return _factory
+
+
 def _tools_decline(agent_name: str, ctx: Any) -> list:
     # `decline_request`: the agent says it will not carry out this request, and the task ends as
     # DECLINED with its reason instead of done (crewaimeat.decline). Bound to THIS run's task.
@@ -269,6 +296,7 @@ TOOL_REGISTRY: dict[str, Any] = {
     "decide": _tools_decide,
     "workspace": _tools_workspace,
     "workspace_write": _tools_workspace_write,
+    "mcp": _tools_mcp,
     "decline": _tools_decline,
 }
 
@@ -280,8 +308,12 @@ TOOL_REGISTRY: dict[str, Any] = {
 # named by them, and different for every owner and every day -- there is nothing to enumerate here
 # and nothing this file could enumerate that would not be out of date. So the head is registered and
 # the selector is passed through to the runtime, which asks the node what the owner actually allows.
+#
+# `mcp:<server>` is the same case: the servers attached to a node are its owner's, named by them.
+# `mcp` on its own is every server the node lets the agent use; `mcp:orders` is that one server.
 _SELECTOR_TOOLS: dict[str, Any] = {
     "decide": _make_decide_one,
+    "mcp": _make_mcp_one,
 }
 
 
@@ -341,6 +373,11 @@ TOOL_PURPOSES: dict[str, str] = {
     "decide": "ask the owner's DECISION RULES — one tool per rule, named after the job; the rule holds the questions, thresholds and bands and you send only the state. `decide:<rule>` picks one rule instead of all of them",
     "workspace": "READ the owner's organisms and workspaces by name: list them, read one workspace's index (spaces + record titles), then the records you need. Read-only",
     "workspace_write": "everything `workspace` reads, PLUS create or update a record (published at once; an update is merged onto the record as it stands) and append or replace rows. Needs organism:write",
+    "mcp": (
+        "use the MCP servers your owner attached to their node (other systems: an issue tracker, a wiki, a "
+        "warehouse): list them, list one server's tools with their arguments, call one. The node holds the "
+        "credential. `mcp:<server>` gives the agent ONE named server instead of all of them. Needs mcp:use"
+    ),
     "decline": "say you will NOT carry out this request (no tool or access for it, or not yours to do), with the reason; the task then ends as declined, not done",
 }
 
@@ -455,7 +492,8 @@ def _validate_agents(agents: Any) -> tuple[list[str], set[str]]:
                     if resolve_tool(tn) is None:
                         errors.append(
                             f"agents[{i}] ({key}): unknown tool {tn!r} (known: {sorted(TOOL_REGISTRY)}"
-                            f"; and {sorted(_SELECTOR_TOOLS)} take a selector, e.g. 'decide:sort-a-message')"
+                            f"; and {sorted(_SELECTOR_TOOLS)} take a selector, e.g. 'decide:sort-a-message' "
+                            "or 'mcp:orders')"
                         )
         ad = a.get("allow_delegation")
         if ad is not None and not isinstance(ad, bool):

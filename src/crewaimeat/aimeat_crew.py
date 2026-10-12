@@ -70,6 +70,7 @@ from aimeat_crewai import (  # noqa: E402
     stdio_params,
 )
 from aimeat_crewai.daemon import DAEMON_DEFAULT_TOOL_FILTER, _default_propose_crew  # noqa: E402
+from aimeat_crewai.liaison import AimeatLiaisonError  # noqa: E402 — raised when a filtered tool is not offered
 from aimeat_crewai.mcp_client import AimeatServeError  # noqa: E402 — raised when no live serve daemon
 from crewai import Agent, Crew, Process, Task  # noqa: E402
 
@@ -257,14 +258,10 @@ class CrewSpec:
     #   before onboarding, then exit for re-auth (None = wait indefinitely)
     services: list[dict] | None = None  # {name, description} capabilities to declare at
     #   onboarding via aimeat_onboarding_declare_services
-    discover: bool = False  # give this crew's liaison the MASTER DIRECTORY tool `aimeat_discover` (aimeat-
-    #   crewai>=0.10.0, node/connector>=1.32) by ADDING it to the daemon tool_filter (the default 24-tool
-    #   allowlist omits it). One faceted query across every node domain (capabilities/workflows/knowledge/
-    #   decisions/research/material/companies/docs/apps/memory) -> the agent can ask "what already exists
-    #   here I can reuse?" before acting. The 0.10.0 liaison backstory already steers it to call discover
-    #   FIRST, so no extra prompt is needed — this flag just makes the tool LOADABLE. Turn ON for
-    #   researchers / planners / coordinators / delegators / a head agent; leave OFF for single-purpose
-    #   executors (they don't need to survey the node before doing their one job).
+    discover: bool = False  # DECLARES that this crew surveys the node before it acts (a researcher, a
+    #   planner, a coordinator, a head agent). The tool itself, `aimeat_discover`, is in EVERY crew's
+    #   liaison list since 2026-10-12 (LIAISON_EXTRA_TOOLS), so this flag no longer decides whether it
+    #   loads; it stays because crew definitions and the forge prompts carry it.
     skills: list | None = None  # SKILL.md skills this crew's agents carry: bare names (directories
     #   under <cwd>/skills, env CREWAIMEAT_SKILLS_DIR overrides) or direct paths to skill dirs. Loaded +
     #   validated at DAEMON START via crewaimeat.skills.load_skills — a missing/malformed skill kills
@@ -2362,11 +2359,62 @@ def _verify_mode_for(verify_mode: str | None, task_count: int, agent_name: str) 
     return verify_mode
 
 
-def _liaison_tool_filter(discover: bool):
-    """The daemon liaison's MCP tool allowlist: the default ~24-tool set, plus `aimeat_discover` (the master
-    directory) when `discover` is on. The default filter omits discover, so without this the 0.10.0 liaison
-    backstory would steer at a tool it can't load."""
-    return (*DAEMON_DEFAULT_TOOL_FILTER, "aimeat_discover") if discover else DAEMON_DEFAULT_TOOL_FILTER
+# What every crew's liaison is shown beside the package's own list (DAEMON_DEFAULT_TOOL_FILTER, 25 tools
+# for onboarding, tasks, memory, knowledge and the owner's messages). Composed HERE and not in
+# aimeat-crewai, so it reaches the fleet with this repository and waits for no release of the package.
+#
+# WHY THESE FIVE. The node's catalogue has about 430 tools and the liaison's model saw 25 of them, so
+# everything else needed a Python wrapper written here first (58 distinct tools had one by 2026-10-12)
+# and what nobody had wrapped could not be done at all. An owner's attached MCP servers were the
+# sharpest case: made for their agents, and no agent here could list one (owner, 2026-10-12).
+#   aimeat_discover   finds what exists on the node, across every kind of content, in one call
+#   aimeat_invoke     runs any other node tool by name: the door to the rest of the catalogue
+#   aimeat_mcp_list / _tools / _call   the MCP servers the owner attached to their node
+# The node decides each call by the agent's permissions; being shown a tool grants nothing.
+#
+# WHOSE MODEL THIS REACHES. The liaison's, and the liaison acts in three places: the plan of a task
+# that waits for a person (PROPOSE of an agent that is not a task-runner), the close of a run that came
+# as a message (it writes the result and replies), and wherever a crew's agents delegate to it. The
+# agents that do a crew's WORK take their tools from the crew, not from this list: for them the
+# attached servers are the tool id `mcp` (crewaimeat.mcp_tools).
+#
+# The list stays short on purpose: the whole catalogue is 1.56 M characters of schema and overflowed
+# model adapters, which is why the package filters at all. Measured against aimeat 3.26.1 (o200k): the
+# default 25 are 18 539 tokens as the model is sent them, and these five add 2 407. It is sent on
+# every call the liaison's model makes.
+LIAISON_EXTRA_TOOLS: tuple[str, ...] = (
+    "aimeat_discover",
+    "aimeat_invoke",
+    "aimeat_mcp_list",
+    "aimeat_mcp_tools",
+    "aimeat_mcp_call",
+)
+
+
+def _liaison_tool_filter(without: Iterable[str] = ()) -> tuple[str, ...]:
+    """The daemon liaison's MCP tool allowlist: the package's default list plus LIAISON_EXTRA_TOOLS.
+
+    `without` names extras to leave out, for a connector that does not expose them (see
+    `_extras_not_exposed`). The default list is never cut here.
+    """
+    skip = set(without) | set(DAEMON_DEFAULT_TOOL_FILTER)
+    return (*DAEMON_DEFAULT_TOOL_FILTER, *(t for t in LIAISON_EXTRA_TOOLS if t not in skip))
+
+
+def _extras_not_exposed(exc: BaseException, tool_filter: Iterable[str]) -> list[str]:
+    """The LIAISON_EXTRA_TOOLS in `tool_filter` that the liaison's refusal `exc` names as not exposed.
+
+    aimeat_crewai's liaison raises when a filter names a tool the connector did not offer, and that
+    ends the crew at start. For the package's own list that is right: a crew cannot work without its
+    task tools. For an extra it is not: a connector older than a tool, or one that offers a tool only
+    to an agent permitted to use it, must cost that one tool and nothing else. The message lists what
+    was asked for and missing first and everything available after it, so only the first part is read.
+    """
+    asked_and_missing = str(exc).split("Available:", 1)[0]
+    if "did not expose" not in asked_and_missing:
+        return []
+    current = set(tool_filter)
+    return [t for t in LIAISON_EXTRA_TOOLS if t in current and f"'{t}'" in asked_and_missing]
 
 
 def _valid_chat_commands(cmds) -> list[dict]:
@@ -3204,12 +3252,10 @@ def run_crew(spec: CrewSpec) -> None:
     # workspace-skills auto-attach sees the SAME set without re-running discovery).
     _records = _resolved_record_spaces()
 
-    # Tool filter for the daemon liaison: the default ~24-tool allowlist, plus aimeat_discover (the master
-    # directory) when this crew opts in. The 0.10.0 liaison backstory steers it to discover first; without
-    # this the tool would be filtered out and that steering would point at a tool the liaison can't load.
-    _tool_filter: Any = _liaison_tool_filter(spec.discover)
-    if spec.discover:
-        print(f"[{spec.agent_name}] discover ON -> liaison tool_filter += aimeat_discover", file=sys.stderr)
+    # Tool filter for the daemon liaison: the package's default list plus LIAISON_EXTRA_TOOLS, for every
+    # crew. (`spec.discover` used to add aimeat_discover for the crews that opted in; it is in every
+    # liaison's list now, and the flag is still what a definition and the forge prompts carry.)
+    _tool_filter: Any = _liaison_tool_filter()
 
     # PROPOSE-phase override: the onboarding smoke test task gets its TODO plan proposed DETERMINISTICALLY
     # (the node's accept_test_task step passes on exactly this call — leaving it to the LLM propose crew
@@ -3283,6 +3329,19 @@ def run_crew(spec: CrewSpec) -> None:
                 **({"stop_event": spec.stop_event} if spec.stop_event is not None else {}),
             )
             return
+        except AimeatLiaisonError as exc:
+            # The connector did not offer one of the EXTRA tools. Start without it and say so; a
+            # missing tool of the package's own list is not ours to drop, and raises as before.
+            _missing = _extras_not_exposed(exc, _tool_filter)
+            if not _missing:
+                raise
+            print(
+                f"[{spec.agent_name}] the connector does not offer {', '.join(_missing)} to this agent; "
+                "starting without it. The liaison cannot use what it is not shown: check the connector's "
+                "version (`crewaimeat connector`) and the agent's permissions.",
+                file=sys.stderr,
+            )
+            _tool_filter = tuple(t for t in _tool_filter if t not in _missing)
         except AimeatServeError as exc:
             _serve_attempt += 1
             if _serve_attempt > SERVE_DAEMON_RETRIES:

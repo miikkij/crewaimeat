@@ -439,7 +439,9 @@ def _concierge_tools(sink: dict, *, ask_to: str | None = None, ask_conv: str | N
         `purpose`: one sentence naming their data, e.g. 'Reads the open deals in CADENCE every morning and
         names the ones to act on today'. `instructions`: what the agent does on each run, in plain words.
         `workspace`: the workspace it works on (its name, e.g. 'CADENCE'). `tools`: comma-separated, only
-        from memory, workspace, workspace_write, web, article_fetch, schedule, dm. A named workspace adds
+        from memory, workspace, workspace_write, web, article_fetch, schedule, dm, mcp. 'mcp' lets the agent
+        use the MCP servers attached to this node (other systems: an issue tracker, a wiki); 'mcp:<server>'
+        gives it ONE of them by its name, and either asks the owner for mcp:use. A named workspace adds
         'workspace' (read only) itself; give 'workspace_write' when the agent must ADD or CHANGE records
         there (contacts, deals, tasks), which also asks the owner for organism:write. Name only the tools
         each RUN calls: every tool asks the owner for permissions. 'schedule' is for an agent that manages
