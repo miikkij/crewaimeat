@@ -61,7 +61,7 @@ def node(monkeypatch):
     monkeypatch.setattr(ja, "read_owner_key_strict", lambda agent, key, **_kw: _read(agent, key))
     monkeypatch.setattr(
         "crewaimeat.aimeat_crew._aimeat_call",
-        lambda a, tool, payload: state["writes"].append({"agent": a, "tool": tool, **payload}) or {"ok": True},
+        lambda a, tool, payload, **_kw: state["writes"].append({"agent": a, "tool": tool, **payload}) or {"ok": True},
     )
     return state
 

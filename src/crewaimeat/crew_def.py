@@ -579,6 +579,52 @@ def _validate_tasks(tasks: Any, agent_keys: set[str]) -> list[str]:
     return errors
 
 
+CONTRACT_TAG = "workspace-contract"  # the node's tag for an agent that works a workspace's records
+# What this runtime does with a definition beyond its agents and tasks, said in `crew.menu` so the
+# node's new-agent page offers a choice only where the runtime behind it honours the field. A string
+# goes in here in the same change that makes the field work, never before: a runtime that does not
+# send one is read as not having it.
+FEATURES = ("record_spaces",)
+_RECORD_SPACE_KEYS = ("organism_id", "ws", "space")
+_MAX_RECORD_SPACES = 20  # the shape agreed with the node's new-agent page, which writes this field
+
+
+def _validate_record_spaces(spaces: Any, listen: Any) -> list[str]:
+    """`record_spaces` makes the agent a workspace-contract agent: the daemon subscribes each
+    {organism_id, ws, space} and a record published there becomes a task (crewaimeat.record_wake).
+    `space` is the NAMESPACE the node matches the record's key against ("shared.support-requests"),
+    not the object type's name. The field and "records" in `listen_for` go together, and "tasks" with
+    them, because a record reaches the crew as a task: either one alone would be an agent that looks
+    subscribed and is never woken, so both are refused here by name."""
+    hears = listen if isinstance(listen, list) else ["tasks"]
+    if spaces is None:
+        if "records" in hears:
+            return [
+                'listen_for: "records" needs `record_spaces`: name the workspace spaces whose records wake '
+                'this agent, as [{"organism_id": ..., "ws": ..., "space": <the space\'s namespace>}]'
+            ]
+        return []
+    errors: list[str] = []
+    if not isinstance(spaces, list) or not 1 <= len(spaces) <= _MAX_RECORD_SPACES:
+        errors.append(
+            f'record_spaces: must be a list of 1 to {_MAX_RECORD_SPACES} {{"organism_id", "ws", "space"}} objects'
+        )
+    else:
+        for i, sp in enumerate(spaces):
+            bad = [
+                k
+                for k in _RECORD_SPACE_KEYS
+                if not (isinstance(sp, dict) and isinstance(sp.get(k), str) and sp[k].strip())
+            ]
+            if bad:
+                errors.append(f"record_spaces[{i}]: {', '.join(bad)} must be a non-empty string")
+    for kind in ("records", "tasks"):
+        if kind not in hears:
+            why = "they are what the agent is woken by" if kind == "records" else "each record becomes a task it runs"
+            errors.append(f'record_spaces: needs "{kind}" in `listen_for` ({why}); write ["tasks", "records"]')
+    return errors
+
+
 def validate_crew_doc(doc: Any) -> list[str]:
     """Return a list of human-readable problems with ``doc`` (empty list == valid). Runs BEFORE any
     CrewAI object is built, so a bad definition is rejected at the boundary, not at run time. Catches:
@@ -623,6 +669,7 @@ def validate_crew_doc(doc: Any) -> list[str]:
             for kind in listen:
                 if kind not in _LISTEN_KINDS:
                     errors.append(f"listen_for: {kind!r} must be one of {_LISTEN_KINDS}")
+    errors.extend(_validate_record_spaces(doc.get("record_spaces"), listen))
 
     prof = doc.get("llm_profile")
     if prof is not None:
@@ -846,6 +893,9 @@ def crewspec_from_json(doc: dict, **overrides: Any):
         kwargs["max_concurrent_tasks"] = int(doc["max_concurrent"])
     if doc.get("listen_for") is not None:
         kwargs["listen_for"] = tuple(doc["listen_for"])
+    if doc.get("record_spaces") is not None:
+        # The same items CrewSpec.record_spaces and the connector's /local/subscribe take.
+        kwargs["record_spaces"] = [{k: sp[k] for k in _RECORD_SPACE_KEYS} for sp in doc["record_spaces"]]
     if doc.get("skills") is not None:
         kwargs["skills"] = list(doc["skills"])  # run_crew loads+validates at start; ctx.skills at build
     offers = doc.get("offers")

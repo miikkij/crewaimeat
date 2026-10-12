@@ -115,6 +115,31 @@ status cells, append decisions), so the two sides stay synced without drifting p
   from the crew, so for them an attached server is the tool id. Add a tool to the list only with its
   measured size: it is sent on every liaison call (about 18 500 tokens for the 25, 2 400 more for the
   five).
+- **A definition can be a workspace-contract agent: `record_spaces` (2026-10-12).** A JSON crew
+  definition names the workspace spaces whose records wake its agent, as the top-level
+  `"record_spaces": [{"organism_id", "ws", "space"}]` with `"listen_for": ["tasks", "records"]`
+  (`space` is the NAMESPACE, e.g. `shared.support-requests`; the node's new-agent page writes the
+  field, so its shape is shared with aimeat-protocol). `crewaimeat.record_wake` turns a record into a
+  REAL TASK in code, with no model: every record event, and the catch-up a spawned worker gets on
+  each start, reads the space's index and the agent creates a task for itself for each published
+  record newer than its memo (`crews.records.<agent>` on the node, keyed on the record's publish
+  time: the index's version number did not move on a measured republish). The task's description is
+  the record itself and is what `{{ctx.prompt}}` receives (`record_wake.task_for`; the home's draft
+  prompt in aimeat-protocol describes it, so change both). The first look at a space handles
+  nothing: the agent works on what is published after it was switched on. A record whose
+  provenance names the agent as its generator makes no task, which is the only guard against an
+  agent that writes into a space it watches (the node's event carries no author). Why a task and
+  not a crew run on the event: the result, the failure, a refused permission and the owner's start
+  rule all live on tasks, and the package's synthetic record task would be completed as a task the
+  node does not have. **The subscription lives in the serve daemon's memory and is made by a
+  worker**, so a connector restart drops it with nothing to announce that: each worker leaves the
+  spaces it asked for in `<home>/spawn/subscribed/`, and the spawner starts one worker (once per
+  agent per connector start, `Spawner.start_unsubscribed`) when the daemon's `/local/status` holds
+  none of them, and for a node-defined agent that has not run on this computer. A retired
+  engagement still starts a worker for each record (the node pushes regardless); the package's gate
+  then skips it, so no task is made and no model runs. `crew.menu` answers
+  `"features": ["record_spaces"]` (`crew_def.FEATURES`), which is how the page knows the runtime
+  behind a connector honours the field.
 - **The crew file is the ONE source for what an agent is.** Beside `build_domain`, a crew declares at
   module level: `LLM_PROFILE` (which `llm_providers.json` profile routes it), `TAGS` (the node's charset,
   `[a-z0-9._:-]`), `CAPABILITIES` ({technical: [{name,type}] OBJECTS, domain: [str], languages: [str]}),

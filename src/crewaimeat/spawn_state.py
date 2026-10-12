@@ -106,6 +106,31 @@ def lock_file() -> Path:
     return spawn_dir() / ".spawner.lock"
 
 
+# The spawner names the agent to its worker in this variable, spelled as the spawner spells it (the
+# node's identity), so what the worker leaves for the spawner is filed where the spawner looks.
+SPAWN_AGENT_ENV = "AIMEAT_SPAWN_AGENT"
+
+
+def subscribed_file(agent: str) -> Path:
+    """Which workspace record spaces `agent`'s last worker asked the connector to subscribe.
+
+    THE CONNECTOR FORGETS THEM WHEN IT RESTARTS. A record subscription lives in the serve daemon's
+    memory and is made only by a worker's own start, so after a connector restart nothing wakes a
+    records-driven agent until something else happens to start it (measured on a local node
+    2026-10-12: subscriptions 0 after the restart, a published record started no worker). The worker
+    cannot notice that, because it is not running. So it leaves the list here, and the spawner, which
+    is running, compares it with what the daemon holds. An agent that watches no space leaves an
+    empty list, which also says: this agent has run on this computer."""
+    return spawn_dir() / "subscribed" / f"{_safe(agent)}.json"
+
+
+def note_subscribed(spaces: list[dict]) -> None:
+    """Called by a worker at start. Does nothing outside a spawned worker (no spawner reads it)."""
+    agent = os.environ.get(SPAWN_AGENT_ENV)
+    if agent:
+        write_json(subscribed_file(agent), {"spaces": list(spaces or [])})
+
+
 def audit_file(agent: str, run_id: str) -> Path:
     return audit_dir(agent) / f"{_safe(run_id)}.json"
 

@@ -175,6 +175,7 @@ class Spawner:
     roster_fn: object | None = None  # () -> list[str]; default discovers from crews/ + the node
     gone_fn: object | None = None  # (agent) -> (listed: bool | None, why); default asks the node
     departed_fn: object | None = None  # () -> {gaii: record} | DEPARTED_UNSUPPORTED | None; default asks the daemon
+    subscriptions_fn: object | None = None  # () -> (daemon start, {identity: count}) | None; default asks the daemon
     max_workers: int = MAX_WORKERS
     debounce_s: float = DEBOUNCE_S
     run_timeout_s: int = RUN_TIMEOUT_S
@@ -198,6 +199,7 @@ class Spawner:
         self._departed_retry_at = 0.0  # the daemon did not answer: when to ask it again
         self._departed_looks: dict[str, int] = {}  # how often an agent with no record was looked up
         self._daemon_held: set[str] | None = None  # what the daemon carried at the last look
+        self._record_runs: dict[str, object] = {}  # agent -> the daemon start it was started for its record spaces
         self._last_invoke_complaint: dict[str, float] = {}
 
     # ---------------------------------------------------------------- wake --- #
@@ -596,6 +598,7 @@ class Spawner:
         """The environment one worker starts in."""
         env = dict(os.environ)
         env["AIMEAT_SPAWN_RUN_ID"] = run_id
+        env[spawn_state.SPAWN_AGENT_ENV] = agent  # so what the worker leaves for us is filed under our spelling
         env["AIMEAT_HOME"] = str(spawn_state.aimeat_home())
         # The worker is told the limit it actually runs under (0 = none), so work that knows its own
         # length can refuse a job it would be ended in the middle of. Reading SPAWN_RUN_TIMEOUT_S in
@@ -1066,6 +1069,54 @@ class Spawner:
         known, self._daemon_held = self._daemon_held, live
         return known is not None and bool(live - known)
 
+    def start_unsubscribed(self) -> list[str]:
+        """Start one worker for each agent whose record spaces the connector does not hold. Returns
+        the agents started.
+
+        A RECORD SUBSCRIPTION IS MADE BY A WORKER AND KEPT BY THE CONNECTOR, IN MEMORY. So an agent
+        that is woken by workspace records hears nothing after the connector restarts, and nothing
+        before its first run on a computer (a new agent whose approval started no run, an agent the
+        owner moved here). No push can announce that: the push is what is missing. Measured on a
+        local node 2026-10-12: the daemon's status read `subscriptions: 0` after a restart, a record
+        was published, and no worker started.
+
+        The daemon's status is loopback and reaches no node. Each worker leaves the spaces it asked
+        for (`spawn_state.subscribed_file`), and an agent is started when that list is not empty and
+        the daemon holds none of them. An agent with no such file has not run here: it is started
+        when it has no crew file in this repository, since only its definition on the node can say
+        whether it watches a space. The worker subscribes, and its start is a catch-up of each space.
+
+        ONCE PER AGENT PER CONNECTOR START. A worker that cannot subscribe (a definition that does
+        not load, a space the node refuses) leaves the daemon at zero, and without the limit that
+        would be a new worker every few seconds for a fault no run can mend.
+        """
+        seen = (self.subscriptions_fn or daemon_subscriptions)()
+        if seen is None:
+            return []  # the daemon could not be asked: nothing is known, so nothing is started
+        daemon, held = seen
+        started: list[str] = []
+        for agent, st in list(self.state.items()):
+            if st.retired or st.busy or agent in STOPPED_ON_NODE or self._record_runs.get(agent) == daemon:
+                continue
+            holds = held.get(agent)
+            if holds is None:
+                continue  # not carried by this daemon, or a daemon that does not report subscriptions
+            note = spawn_state.read_json(spawn_state.subscribed_file(agent))
+            if note is None:
+                if agent_manifest.manifest_for(agent_manifest.agent_local_name(agent), self.root) is not None:
+                    continue  # a crew file's agent leaves its note on its next run
+                why = "it has not run on this computer yet"
+            else:
+                wants = len(note.get("spaces") or [])
+                if not wants or holds > 0:
+                    continue
+                why = f"the connector holds none of its {wants} record space(s)"
+            self._record_runs[agent] = daemon
+            _say(f"[spawner] {agent}: {why} — starting a worker, which subscribes and reads what it missed")
+            self.on_wake(agent, trigger="records")
+            started.append(agent)
+        return started
+
     # ----------------------------------------------------------------- run --- #
     def serve_forever(self) -> int:
         self.sweep_orphans()
@@ -1098,6 +1149,7 @@ class Spawner:
                     next_attach_look = time.monotonic() + ATTACH_WATCH_S
                     if self.daemon_attached_someone():
                         self._attached.set()
+                    self.start_unsubscribed()
                 if self.roster_due(next_roster, last_roster):
                     self._roster_asked.clear()
                     self._attached.clear()
@@ -1590,6 +1642,41 @@ def daemon_identities() -> dict[str, str] | None:
             if v:
                 out[str(v)] = transport
     return out
+
+
+def daemon_subscriptions() -> tuple[object, dict[str, int]] | None:
+    """`(which daemon start this is, {identity: record spaces it holds for that agent})`, by GAII and
+    by bare name. None when the daemon could not be asked.
+
+    The count is the daemon's own (`/local/status`, loopback): it is what the connector re-sends to
+    the node on every reconnect, and it is empty again after the daemon restarts. An agent the node
+    refuses is left out, and so is a row with no count (a connector older than the field): absent
+    means not known, never zero.
+    """
+    doc = _serve_doc()
+    port = doc.get("port")
+    if not isinstance(port, int):
+        return None
+    import requests
+
+    try:
+        resp = requests.get(
+            f"http://127.0.0.1:{port}/local/status", headers=spawn_state.serve_auth_headers(doc), timeout=10
+        )
+        rows = ((resp.json() or {}).get("data") or {}).get("agents") if resp.status_code == 200 else None
+    except Exception:  # noqa: BLE001 — a daemon mid-restart is weather; it is asked again in a moment
+        return None
+    if not isinstance(rows, list):
+        return None
+    out: dict[str, int] = {}
+    for a in rows:
+        count = a.get("subscriptions") if isinstance(a, dict) else None
+        if not isinstance(count, int) or isinstance(count, bool) or str(a.get("transport") or "") == REFUSED:
+            continue
+        for v in (a.get("gaii"), a.get("agent")):
+            if v:
+                out[str(v)] = count
+    return (doc.get("pid"), port), out
 
 
 def carried_here(agents: list[str], *, what: str, say=None, placed=None) -> list[str] | None:

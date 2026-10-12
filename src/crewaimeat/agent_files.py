@@ -70,7 +70,7 @@ def runtime_files(root: Path, idents: list[str]) -> list[Path]:
         if "#" in ident:  # a log whose audit record is gone: `<stem>-<stem>-<run>.log`, both halves exact
             logs = spawn_state.spawn_dir() / "logs"
             found += sorted(logs.glob(f"{glob.escape(stem)}-{glob.escape(stem)}-*.log"))
-        found += [audit, spawn_state.pid_file(ident)]
+        found += [audit, spawn_state.pid_file(ident), spawn_state.subscribed_file(ident)]
     seen: set[Path] = set()
     return [p for p in found if p.exists() and not (p in seen or seen.add(p))]
 

@@ -45,7 +45,7 @@ from typing import Any
 
 from crewaimeat.crew_def import CrewDocError, build_domain_from_json, validate_crew_doc
 from crewaimeat.crew_registry import registry_key
-from crewaimeat.memory_tools import MemoryReadRefused, read_owner_key_strict
+from crewaimeat.memory_tools import MemoryReadFailed, MemoryReadRefused, read_owner_key_strict
 
 # Where the runtime says what it actually loaded. One key, overwritten — this is a live status, not a
 # history, and the history of DEFINITIONS lives in the node's own `.version.N` keys.
@@ -269,6 +269,47 @@ def seed_from_staged(agent_name: str) -> tuple[dict, int | None] | None:
     return load_def(agent_name)
 
 
+def sync_contract_tag(spec: Any, *, watched: bool, held=None, write=None) -> str:
+    """Give an agent whose definition names `record_spaces` the node's `workspace-contract` tag.
+
+    The tag is how an agent that works a workspace's records is found on the node (skill
+    aimeat-workspace-contracts), and it follows from the field alone, so it is derived: nobody writes
+    it into a definition. Returns what was done, for the log and the tests.
+
+    A definition that declares `tags` has its whole set pushed by run_crew, so the tag is added to
+    that set. One that declares none leaves the node's tags alone, and they may be the owner's or an
+    app's (a role tag is how an app finds its agent): there the node's own set is read and the one
+    tag is added to it. `held` and `write` are the node read and write, handed in by a test.
+
+    ONLY EVER ADDED. A tag on the node may be there because its owner put it there, and a runtime
+    that takes away what it did not set is the mistake `aimeat_agent_mode_set` made on every start
+    until 2026-09-02. A definition that stops watching keeps the tag until a person removes it; an
+    agent that watches nothing costs no node read here.
+    """
+    from crewaimeat.crew_def import CONTRACT_TAG
+
+    if not watched:
+        return "not watched"
+    if spec.tags is not None:
+        if CONTRACT_TAG not in spec.tags:
+            spec.tags = [*spec.tags, CONTRACT_TAG]
+        return "in the definition's tags"
+    from crewaimeat.aimeat_crew import _node_tags, _set_tags_if_changed
+
+    now = (held or _node_tags)(spec.agent_name)
+    if now is None:
+        print(
+            f"[{spec.agent_name}] the node did not say which tags it holds; {CONTRACT_TAG} is not set",
+            file=sys.stderr,
+        )
+        return "unknown"
+    if CONTRACT_TAG in now:
+        return "unchanged"
+    verdict = (write or _set_tags_if_changed)(spec.agent_name, [*now, CONTRACT_TAG])
+    print(f"[{spec.agent_name}] tag {CONTRACT_TAG} added: {verdict}", file=sys.stderr)
+    return "added"
+
+
 def run_json_agent(agent_name: str, **overrides: Any) -> None:
     """Run the agent whose crew is defined on the node. The five-line loader in `crews/` calls this.
 
@@ -359,10 +400,45 @@ def run_json_agent(agent_name: str, **overrides: Any) -> None:
         spec.listen_for = (*_listen, "records")
     _caller_on_record = spec.on_record
 
+    # A DEFINITION THAT NAMES `record_spaces` IS A CONTRACT AGENT. The daemon subscribes the spaces
+    # (run_crew hands them over), and a record published there arrives on the same queue as the
+    # definition wake above. This handler is on that queue for every node-defined agent, so without
+    # the branch below the field would subscribe the spaces and then drop every wake they send. The
+    # spaces are the ones this start subscribed: a definition that changes them is followed by the
+    # next start, which for a spawned agent is its next run.
+    _watched = [dict(s) for s in (spec.record_spaces or []) if isinstance(s, dict)]
+    sync_contract_tag(spec, watched=bool(_watched))
+    _wake = None
+
+    def _on_workspace_record(event):  # noqa: ANN001
+        nonlocal _wake
+        from crewaimeat.record_wake import RecordWake, RecordWakeError
+
+        if _wake is None:
+            _wake = RecordWake(spec.agent_name)
+        try:
+            _wake.on_event(event, _watched)
+        except (RecordWakeError, MemoryReadRefused, MemoryReadFailed) as exc:
+            where = f"{event.get('organism_id')}/{event.get('ws')}/{event.get('space')}"
+            print(
+                f"[{agent_name}] records: could NOT make tasks from {where}: {exc}. Nothing was assumed; "
+                "the space is read again on the next record or the next start.",
+                file=sys.stderr,
+            )
+            if isinstance(exc, MemoryReadRefused) or getattr(exc, "refused", False):
+                # The node's verdict, not weather: the run is counted as refused (the worker exits 3),
+                # so it is not re-run into the same refusal and its record says what the owner gives.
+                from crewaimeat.lifecycle import note_refused
+
+                note_refused(f"(records of {where})", str(exc))
+
     def _on_record(event):  # noqa: ANN001 — the daemon's event dict
-        if str((event or {}).get("type") or "") == "crew.def_updated":
+        kind = str((event or {}).get("type") or "")
+        if kind == "crew.def_updated":
             live.refresh()
             return None
+        if kind == "workspace.record" and _watched:
+            return _on_workspace_record(event)
         return _caller_on_record(event) if _caller_on_record else None
 
     spec.on_record = _on_record

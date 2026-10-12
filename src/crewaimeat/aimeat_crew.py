@@ -3251,6 +3251,14 @@ def run_crew(spec: CrewSpec) -> None:
     # record_spaces may be a 0-arg callable (resolved at daemon start, memoized above so the
     # workspace-skills auto-attach sees the SAME set without re-running discovery).
     _records = _resolved_record_spaces()
+    # Left for the spawner, which re-starts this agent when the connector has lost the subscription
+    # (spawn_state.subscribed_file). Best-effort: a note that cannot be written must not stop the run.
+    try:
+        from crewaimeat import spawn_state as _spawn_state
+
+        _spawn_state.note_subscribed(list(_records or []) if "records" in _listen else [])
+    except OSError as exc:
+        print(f"[{spec.agent_name}] could not note the subscribed record spaces: {exc}", file=sys.stderr)
 
     # Tool filter for the daemon liaison: the package's default list plus LIAISON_EXTRA_TOOLS, for every
     # crew. (`spec.discover` used to add aimeat_discover for the crews that opted in; it is in every
