@@ -72,6 +72,17 @@ status cells, append decisions), so the two sides stay synced without drifting p
   field over the whole record. The contract modules that still read `objects` from the bare read are
   incident `incident-crewaimeat-contract-agents-read-objects-from-a-workspace-rea-mv59rexv`. A test
   double of this read mirrors the measured shape (`tests/test_concierge_followup.py::WsNode`).
+- **"Today's news" is the tool id `news`, never `web` (2026-10-12).** `news_headlines(topic, hours,
+  max_items)` reads the publishers' own RSS feeds (`crewaimeat.news_headlines.NEWS_FEEDS`: politiikka,
+  kotimaa, paauutiset; Yle, HS, IS, IL) in one call: no query, no search engine. Two node-defined
+  agents asked the web search for the day's news and failed twice in one afternoon: first the model
+  wrote the date into the query (no headline contains it), then the machine's SearXNG was blocked by
+  its sources after about a hundred queries in an hour (Google News and Startpage CAPTCHA), every
+  query came back empty, the agent searched to its iteration limit and the 18:00 task failed. A feed
+  that did not answer starts the tool's answer with `[news] NOT READ`, which is a fault and never
+  "no news today". Add a feed only after measuring that it answers with dated items. And a tool's
+  rate of use is part of a fix: a prompt that says "run all of these searches" is a load on a
+  shared engine that every other crew on the machine uses too.
 - One crew = `crews/<name>_crew.py`; `build_domain(ctx) -> ([agents], [tasks])`; `AGENT_NAME` matches
   the name used in `aimeat connect --agent`.
 - **Skills** = portable SKILL.md expertise packs in `skills/<name>/` (see `skills/README.md`; contract

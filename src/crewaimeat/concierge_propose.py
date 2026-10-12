@@ -65,6 +65,7 @@ NAME_RE = re.compile(r"^[a-z][a-z0-9-]{2,39}$")
 #               and append rows                            memory write; publishing and rows take
 #               organism:write). workspace_tools.READ_SCOPES / WRITE_SCOPES are the one source.
 #   web         search the live web                       (no node call)
+#   news        today's headlines from publishers' feeds  (no node call)
 #   article_fetch  read the article behind a link         (no node call)
 #   schedule    manage its own node schedules              workflow:read, task:write (schedule-gate.ts)
 #   dm          read and reply in its inbox                messages:read, messages:send
@@ -77,6 +78,7 @@ PROPOSABLE_TOOLS: dict[str, tuple[str, ...]] = {
     "workspace": READ_SCOPES,
     "workspace_write": WRITE_SCOPES,
     "web": (),
+    "news": (),
     "article_fetch": (),
     "schedule": ("workflow:read", "task:write"),
     "dm": ("messages:read", "messages:send"),

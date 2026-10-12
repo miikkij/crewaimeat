@@ -90,6 +90,13 @@ def _tools_web(agent_name: str, ctx: Any) -> list:
     return list(_web_tools())
 
 
+def _tools_news(agent_name: str, ctx: Any) -> list:
+    # Today's headlines of a topic from the publishers' own feeds. Not a search: see news_headlines.
+    from crewaimeat.news_headlines import make_news_tools
+
+    return list(make_news_tools())
+
+
 def _tools_schedule(agent_name: str, ctx: Any) -> list:
     from crewaimeat.scheduler import make_schedule_tools
 
@@ -281,6 +288,7 @@ def _make_decide_one(rule_id: str):
 TOOL_REGISTRY: dict[str, Any] = {
     "memory": _tools_memory,
     "web": _tools_web,
+    "news": _tools_news,
     "schedule": _tools_schedule,
     "dm": _tools_dm,
     "delegate": _tools_delegate,
@@ -339,7 +347,14 @@ def resolve_tool(tool_id: str) -> Any | None:
 # its human-facing description; keep the two key sets in lockstep).
 TOOL_PURPOSES: dict[str, str] = {
     "memory": "read/write the owner's node memory at EXACT keys with a chosen visibility (public/owner)",
-    "web": "search the live web (SearXNG if reachable, else keyless DuckDuckGo)",
+    "web": "search the live web for a SUBJECT (SearXNG if reachable, else keyless DuckDuckGo)",
+    "news": (
+        "today's news headlines of a topic, read straight from Finnish publishers' own feeds (Yle, Helsingin "
+        "Sanomat, Ilta-Sanomat, Iltalehti; topics politiikka, kotimaa, paauutiset): ONE call returns the day's "
+        "list with source, time, URL and summary. Give an agent this, not `web`, whenever its work is \"today's "
+        "news\": a search engine needs a query, today's news has none, and a metasearch asked twenty times in "
+        "one run is blocked by its sources. Pair it with article_fetch"
+    ),
     "schedule": "create/list/update/delete AIMEAT node cron schedules (fire offline, 0 tokens)",
     "dm": "read + reply to the agent's federated inbox (agent-to-agent messages)",
     "delegate": "discover peer crews and delegate a subtask to one, then wait for its result",
