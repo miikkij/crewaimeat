@@ -69,8 +69,11 @@ status cells, append decisions), so the two sides stay synced without drifting p
   6fc3ef4d5 (2026-10-06). Values come with `ids`: `items: [{space, id, value, draft?}]` and
   `missing`. `workspace_tools.write_record` reads the record by its id and writes NOTHING when that
   read is refused or has another shape: an update that took "not seen" for "not there" wrote one
-  field over the whole record. The contract modules that still read `objects` from the bare read are
-  incident `incident-crewaimeat-contract-agents-read-objects-from-a-workspace-rea-mv59rexv`. A test
+  field over the whole record. The contract modules read a workspace
+  through `workspace_tools.read_workspace_objects` (index, then the records by id; 9816ef0,
+  2026-10-13), which is where a new reader of a whole space goes too: twenty-seven reads of the
+  missing `objects` had run for a week with no error, and postman sent the morning report twice a
+  day because its "already there" check never matched. A test
   double of this read mirrors the measured shape (`tests/test_concierge_followup.py::WsNode`).
 - **"Today's news" is the tool id `news`, never `web` (2026-10-12).** `news_headlines(topic, hours,
   max_items)` reads the publishers' own RSS feeds (`crewaimeat.news_headlines.NEWS_FEEDS`: politiikka,
