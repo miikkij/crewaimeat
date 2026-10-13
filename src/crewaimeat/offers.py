@@ -20,6 +20,7 @@ import fnmatch
 import json
 import re
 import sys
+from functools import partial
 from zoneinfo import ZoneInfo
 
 from aimeat_crewai.workflow_spec import (  # published grammar + compat check
@@ -32,6 +33,7 @@ from aimeat_crewai.workflow_spec import (  # published grammar + compat check
 
 from crewaimeat.agent_manifest import agent_key, agent_route, crew_key
 from crewaimeat.aimeat_crew import _aimeat_call
+from crewaimeat.workspace_tools import read_workspace_objects
 
 # Where these contracts are adopted today — used only to fetch a REAL deliverable sample.
 _SAMPLE_ORG = "b784641b-a4dd-4d69-adb6-9954dc813e1e"
@@ -317,10 +319,7 @@ def fetch_sample(agent: str, out_space: dict | None) -> str:
     try:
         # quiet: the sample workspace may not exist on this node (e.g. a dev node) — that just means
         # 'untested', handled below, not a failure worth logging on every agent start.
-        data = (
-            _aimeat_call(agent, "aimeat_workspace_read", {"organism_id": _SAMPLE_ORG, "ws": _SAMPLE_WS}, quiet=True)
-            or {}
-        )
+        data = read_workspace_objects(partial(_aimeat_call, agent, quiet=True), _SAMPLE_ORG, _SAMPLE_WS) or {}
         items = (data.get("objects", {}) or {}).get(out_space["space"]) or []
         if not items:
             return "untested"

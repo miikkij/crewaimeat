@@ -32,6 +32,7 @@ import sys
 from crewai.tools import tool
 
 from crewaimeat.aimeat_crew import _aimeat_call, member_workspaces, today_local
+from crewaimeat.workspace_tools import read_workspace_objects
 
 AGENT = "cadence-followup"
 
@@ -441,7 +442,7 @@ def read_all_crm_records(oid: str, wid: str) -> dict | None:
     """Read every field of the five CRM spaces in (oid, wid). The proven 0.16.x connector returns full
     record values under `objects[<space>]`; a newer two-step connector returns id/title index stubs —
     detected here and batch-opened with ids:[...]. Returns {space: [records]} or None (no access)."""
-    data = _call("aimeat_workspace_read", {"organism_id": oid, "ws": wid})
+    data = read_workspace_objects(_call, oid, wid, spaces=_CRM_SPACES)
     if not data or data.get("manifest") is None:
         return None
     objects = data.get("objects") or {}

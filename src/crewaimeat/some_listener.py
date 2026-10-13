@@ -17,11 +17,13 @@ import json
 import os
 import re
 import sys
+from functools import partial
 
 import requests
 from crewai.tools import tool
 
 from crewaimeat.aimeat_crew import _aimeat_call, today_local
+from crewaimeat.workspace_tools import read_workspace_objects
 
 # Topics that signal a genuine fit for AIMEAT (agent substrate / shared memory / multi-agent).
 KEYWORDS = [
@@ -106,7 +108,7 @@ def _sync_to_radar(ranked: list[dict], date: str) -> dict:
     Skips hits already present (by id) so a re-scan never overwrites a human's triage (status/angle).
     Best-effort: logs loudly on failure, never crashes the scan.
     """
-    data = _aimeat_call("some-listener", "aimeat_workspace_read", {"organism_id": _ORG_ID, "ws": _RADAR_WS})
+    data = read_workspace_objects(partial(_aimeat_call, "some-listener"), _ORG_ID, _RADAR_WS)
     if not data or data.get("manifest") is None:
         # Same-owner sub-agents currently can't access the owner's organism workspaces via the connector
         # (list=[], read manifest=null, write=NO_SPACE) even as org members — a known platform gap.

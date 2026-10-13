@@ -33,6 +33,7 @@ from crewai.tools import tool
 from crewaimeat.aimeat_crew import _aimeat_call, member_workspaces, today_local
 from crewaimeat.article_extract import _trafilatura_text
 from crewaimeat.llm import get_llm
+from crewaimeat.workspace_tools import read_workspace_objects
 
 AGENT = "web-researcher"
 IN_SPACE, IN_NS = "market-scan-request", "shared.market_scan_requests"
@@ -171,7 +172,7 @@ def _spawn_company_requests(oid: str, wid: str, companies: list[str], scan_rid: 
     from crewaimeat.company_contract import IN_SPACE as CO_SPACE
     from crewaimeat.company_contract import slugify
 
-    data = _call("aimeat_workspace_read", {"organism_id": oid, "ws": wid}) or {}
+    data = read_workspace_objects(_call, oid, wid, spaces=(CO_SPACE,)) or {}
     if not any(t.get("name") == CO_SPACE for t in ((data.get("manifest") or {}).get("objectTypes") or [])):
         return 0  # this workspace hasn't adopted the company-research contract — skip quietly
     existing = {r.get("id") for r in (data.get("objects", {}) or {}).get(CO_SPACE, [])}
@@ -221,7 +222,7 @@ def process_market_scans(max_items: int = 2, targets: list[tuple[str, str]] | No
     for oid, wid in pairs:
         if processed + failed >= max_items:
             break
-        data = _call("aimeat_workspace_read", {"organism_id": oid, "ws": wid})
+        data = read_workspace_objects(_call, oid, wid, spaces=(IN_SPACE, OUT_SPACE))
         if not data or data.get("manifest") is None:
             continue
         reqs = (data.get("objects", {}) or {}).get(IN_SPACE) or []

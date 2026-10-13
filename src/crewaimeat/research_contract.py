@@ -23,6 +23,7 @@ from crewaimeat.aimeat_crew import _aimeat_call, member_workspaces, today_local
 from crewaimeat.article_extract import _MIN_CHARS, _trafilatura_text
 from crewaimeat.fetch_pipeline import _searxng_urls
 from crewaimeat.llm import get_llm
+from crewaimeat.workspace_tools import read_workspace_objects
 
 AGENT = "web-researcher"
 IN_SPACE, IN_NS = "research-request", "shared.research_requests"
@@ -128,7 +129,7 @@ def process_research_requests(max_items: int = 5, targets: list[tuple[str, str]]
     for oid, wid in pairs:
         if processed + failed >= max_items:
             break
-        data = _call("aimeat_workspace_read", {"organism_id": oid, "ws": wid})
+        data = read_workspace_objects(_call, oid, wid, spaces=(IN_SPACE, OUT_SPACE))
         if not data or data.get("manifest") is None:
             continue
         reqs = (data.get("objects", {}) or {}).get(IN_SPACE) or []

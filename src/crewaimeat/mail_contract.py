@@ -33,6 +33,7 @@ from crewai.tools import tool
 from crewaimeat.aimeat_crew import _aimeat_call, member_workspaces, today_local
 from crewaimeat.engagements import engaged_pairs
 from crewaimeat.local_marks import last_local_run, mark_local_run
+from crewaimeat.workspace_tools import published_ids, read_workspace_objects
 
 AGENT = "postman"
 IN_SPACE, IN_NS = "mail-request", "shared.mail_requests"
@@ -190,7 +191,7 @@ def process_mail(max_items: int = 5, targets: list[tuple[str, str]] | None = Non
     for oid, wid in pairs:
         if sent + failed >= max_items:
             break
-        data = _call("aimeat_workspace_read", {"organism_id": oid, "ws": wid})
+        data = read_workspace_objects(_call, oid, wid, spaces=(IN_SPACE,))
         if not data or data.get("manifest") is None:
             continue
         for rec in (data.get("objects", {}) or {}).get(IN_SPACE) or []:
@@ -270,7 +271,7 @@ def _day_image() -> tuple[bytes, str] | None:
 
 def _radar_section(radar: list[dict]) -> str:
     """The freshest SOME-radar opportunities + reply drafts from the Social Radar workspace."""
-    d = _call("aimeat_workspace_read", {"organism_id": _HOME_ORG, "ws": _RADAR_WS}) or {}
+    d = read_workspace_objects(_call, _HOME_ORG, _RADAR_WS) or {}
     objs = d.get("objects", {}) or {}
     draft_space = next((s for s in objs if "draft" in s.lower() or "reply" in s.lower()), None)
     drafts = len(objs.get(draft_space) or []) if draft_space else 0
@@ -334,7 +335,7 @@ def _ingest_radar_lines(text: str, found_date: str) -> dict:
     """Parse strict 'SCORE | PLATFORM | TITLE | URL | WHY' lines -> Social Radar opportunity records."""
     import hashlib
 
-    d = _call("aimeat_workspace_read", {"organism_id": _HOME_ORG, "ws": _RADAR_WS}) or {}
+    d = read_workspace_objects(_call, _HOME_ORG, _RADAR_WS) or {}
     existing = {o.get("id") for o in (d.get("objects", {}) or {}).get("opportunity", [])}
     added = skipped = bad = rejected = 0
     for line in text.splitlines():
@@ -464,7 +465,7 @@ _COMPETITOR_QUERIES = [
 
 def _radar_items() -> list[dict]:
     """Fresh SOME-radar opportunities (title+url) — shared by the radar section + the analyst."""
-    d = _call("aimeat_workspace_read", {"organism_id": _HOME_ORG, "ws": _RADAR_WS}) or {}
+    d = read_workspace_objects(_call, _HOME_ORG, _RADAR_WS) or {}
     objs = d.get("objects", {}) or {}
     opp_space = next((s for s in objs if "opportunit" in s.lower()), None)
     return (
@@ -623,9 +624,12 @@ def morning_report_due(now: datetime.datetime | None = None) -> bool:
     if not (now.hour == _MORNING_HOUR and now.minute < 30):
         return False
     rid = f"morning-{now.date().isoformat()}"
-    d = _call("aimeat_workspace_read", {"organism_id": _HOME_ORG, "ws": _HOME_WS}) or {}
-    existing = {r.get("id") for r in (d.get("objects", {}) or {}).get(IN_SPACE) or []}
-    return rid not in existing
+    # Only whether today's record is there is asked, so its id in the index is enough and no record is
+    # opened. Anything but finding it means due: a read that fails must cost a second mail at worst,
+    # never the first (this check read a field the answer no longer had, and from 2026-10-10 the
+    # report went out twice in every run).
+    d = read_workspace_objects(_call, _HOME_ORG, _HOME_WS, spaces=()) or {}
+    return rid not in published_ids(d, IN_SPACE)
 
 
 def build_morning_report() -> dict:

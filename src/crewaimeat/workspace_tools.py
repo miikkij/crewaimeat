@@ -41,6 +41,7 @@ Everything goes through `_aimeat_call`, the connector's /local/call surface ever
 from __future__ import annotations
 
 import json
+import sys
 import uuid
 
 from crewaimeat.aimeat_crew import _aimeat_call
@@ -139,6 +140,78 @@ def workspace_records(agent_name: str, organism_id: str, ws: str, ids: list[str]
     return _aimeat_call(
         agent_name, "aimeat_workspace_read", {"organism_id": organism_id, "ws": ws, "ids": ids}, quiet=True
     )
+
+
+OBJECTS_BATCH = 50  # record ids opened per read
+
+
+def read_workspace_objects(read, organism_id: str, ws: str, spaces=None):
+    """One workspace as the contract modules read it: the node's index answer, with `objects` filled
+    in as {space name: [the published records, each with its id]}.
+
+    THE READ WITHOUT IDS ANSWERS TITLES ONLY (aimeat-protocol 6fc3ef4d5, 2026-10-06), and twenty-seven
+    places here went on reading `objects` from it. They got nothing and no error: a contract agent saw
+    no requests, and a check for "is it already there" never matched. Measured on production
+    2026-10-13: postman sent the morning report twice in every run from 2026-10-10 on, because
+    `morning_report_due` looked for today's record in a field that was gone. The values come with a
+    second read by ids, so this is that second read, in one place.
+
+    `read(tool, payload)` is the caller's own node call (its `_call`, or `_aimeat_call` bound to its
+    agent). `spaces` limits which spaces are opened; every declared space still has a key, so "does
+    the workspace declare it" reads as before. An answer that already carries `objects` (a connector
+    older than the change) is returned as it came.
+
+    NOT SEEN IS NOT THE SAME AS NOT THERE. When any read of the records does not come back, the
+    answer is None, as for a workspace that could not be read at all: a caller that took half a list
+    for the whole would write again what it could not see.
+    """
+    where = {"organism_id": organism_id, "ws": ws}
+    data = read("aimeat_workspace_read", dict(where))
+    if not isinstance(data, dict) or not isinstance(data.get("manifest"), dict):
+        return data
+    if isinstance(data.get("objects"), dict):
+        return data
+    index = data.get("index") if isinstance(data.get("index"), dict) else {}
+    objects: dict[str, list[dict]] = {}
+    for kind in data["manifest"].get("objectTypes") or []:
+        name = kind.get("name") if isinstance(kind, dict) else None
+        if not name:
+            continue
+        objects[name] = []
+        if (spaces is not None and name not in spaces) or "rows" in (kind.get("backing"), kind.get("mode")):
+            continue
+        ids = [
+            str(r["id"]) for r in index.get(name) or [] if isinstance(r, dict) and r.get("id") and r.get("published")
+        ]
+        for start in range(0, len(ids), OBJECTS_BATCH):
+            got = read("aimeat_workspace_read", {**where, "space": name, "ids": ids[start : start + OBJECTS_BATCH]})
+            items = got.get("items") if isinstance(got, dict) else None
+            if not isinstance(items, list):
+                print(
+                    f"[workspace] the records of {name} in {ws} could not be read "
+                    f"({len(ids)} listed); the workspace is treated as not read",
+                    file=sys.stderr,
+                )
+                return None
+            for item in items:
+                value = item.get("value") if isinstance(item, dict) else None
+                if isinstance(value, dict) and item.get("published") and item.get("space") in (None, name):
+                    objects[name].append({**value, "id": value.get("id") or item.get("id")})
+    return {**data, "objects": objects}
+
+
+def published_ids(data, space: str) -> set[str]:
+    """The ids of the PUBLISHED records of one space, from an answer of `read_workspace_objects`. From
+    the index when the answer has one (no record is opened for it), else from `objects`."""
+    if not isinstance(data, dict):
+        return set()
+    index = data.get("index")
+    if isinstance(index, dict):
+        return {
+            str(r["id"]) for r in index.get(space) or [] if isinstance(r, dict) and r.get("id") and r.get("published")
+        }
+    listed = (data.get("objects") or {}).get(space) or []
+    return {str(r["id"]) for r in listed if isinstance(r, dict) and r.get("id")}
 
 
 def render_workspaces(found: list[dict]) -> str:

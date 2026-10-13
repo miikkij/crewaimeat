@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import datetime
 import sys
+from functools import partial
 
 from crewaimeat.aimeat_crew import _aimeat_call
+from crewaimeat.workspace_tools import read_workspace_objects
 
 AGENT = "some-analyst"
 HOME_ORG = "b784641b-a4dd-4d69-adb6-9954dc813e1e"
@@ -38,7 +40,7 @@ def _ws_read(agent: str = AGENT) -> dict[str, list]:
     The connector's `aimeat_workspace_read` returns FULL records under `objects` (the AppDev MCP
     surface returns a lighter `index` instead — different shapes, same tool name, so read the one we
     actually get). ~1 MB for 964 records, fetched once a day by an agent, never by the browser."""
-    d = _aimeat_call(agent, "aimeat_workspace_read", {"organism_id": HOME_ORG, "ws": RADAR_WS})
+    d = read_workspace_objects(partial(_aimeat_call, agent), HOME_ORG, RADAR_WS)
     objs = (d or {}).get("objects") if isinstance(d, dict) else None
     return objs if isinstance(objs, dict) else {}
 

@@ -30,6 +30,7 @@ import re
 
 from crewaimeat import local_marks
 from crewaimeat.aimeat_crew import _aimeat_call, member_workspaces
+from crewaimeat.workspace_tools import read_workspace_objects
 
 AGENT = "feedback-wisdom"
 
@@ -405,7 +406,7 @@ def mirror_targets() -> list[tuple[str, str]]:
     from crewaimeat.engagements import engaged_pairs
 
     for oid, wid in engaged_pairs(AGENT, member_workspaces(AGENT), contract=CONTRACT["id"]):
-        data = _call("aimeat_workspace_read", {"organism_id": oid, "ws": wid})
+        data = read_workspace_objects(_call, oid, wid, spaces=())
         if data and data.get("manifest") is not None and _ws_has_space(data):
             out.append((oid, wid))
     return out

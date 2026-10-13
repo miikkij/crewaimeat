@@ -12,12 +12,14 @@ playbook: value first, disclose the builder, mention AIMEAT only when it truly f
 from __future__ import annotations
 
 import sys
+from functools import partial
 
 from crewai.tools import tool
 
 from crewaimeat.aimeat_crew import _aimeat_call
 from crewaimeat.llm import get_llm
 from crewaimeat.some_listener import _ORG_ID, _RADAR_WS
+from crewaimeat.workspace_tools import read_workspace_objects
 
 _MIN_FIT = 3  # skip low-fit opportunities
 
@@ -37,7 +39,7 @@ _AIMEAT = (
 
 def _read(space_key: str):
     """Return the published records of one space, or None if the workspace isn't accessible."""
-    data = _aimeat_call("some-analyst", "aimeat_workspace_read", {"organism_id": _ORG_ID, "ws": _RADAR_WS})
+    data = read_workspace_objects(partial(_aimeat_call, "some-analyst"), _ORG_ID, _RADAR_WS)
     if not data or data.get("manifest") is None:
         return None
     return data.get("objects", {}).get(space_key, []) or []

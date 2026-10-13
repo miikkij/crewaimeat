@@ -27,8 +27,10 @@ from __future__ import annotations
 
 import datetime
 import sys
+from functools import partial
 
 from crewaimeat.aimeat_crew import _aimeat_call
+from crewaimeat.workspace_tools import read_workspace_objects
 
 WRITER = "postman"  # the single GAII the app reads from
 INDEX_KEY = "aamukatsaus.share.index"
@@ -156,7 +158,7 @@ def backfill_briefings(limit: int = 60) -> dict:
 
     Gaps only — a dated key that already exists is never replaced by a truncated recovery."""
     idx_now = {it.get("key") for it in _list("mail.morning.public.", WRITER)}
-    d = _aimeat_call(WRITER, "aimeat_workspace_read", {"organism_id": HOME_ORG, "ws": HOME_WS}) or {}
+    d = read_workspace_objects(partial(_aimeat_call, WRITER), HOME_ORG, HOME_WS) or {}
     reqs = [o for o in ((d.get("objects") or {}).get("mail-request") or []) if isinstance(o, dict)]
     mornings = sorted(
         (o for o in reqs if str(o.get("id", "")).startswith("morning-")),

@@ -37,6 +37,7 @@ from crewai.tools import tool
 
 from crewaimeat.aimeat_crew import _aimeat_call, member_workspaces, today_local
 from crewaimeat.ledger_report import report_llm_usage
+from crewaimeat.workspace_tools import read_workspace_objects
 
 AGENT = "image-scout"
 IN_SPACE, IN_NS = "moodboard-request", "shared.moodboard_requests"
@@ -326,7 +327,7 @@ def process_moodboards(max_items: int = 2, targets: list[tuple[str, str]] | None
     for oid, wid in pairs:
         if processed + failed >= max_items:
             break
-        data = _call("aimeat_workspace_read", {"organism_id": oid, "ws": wid})
+        data = read_workspace_objects(_call, oid, wid, spaces=(IN_SPACE, OUT_SPACE))
         if not data or data.get("manifest") is None:
             continue
         reqs = (data.get("objects", {}) or {}).get(IN_SPACE) or []

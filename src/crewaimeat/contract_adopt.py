@@ -23,10 +23,12 @@ from __future__ import annotations
 import json
 import re
 import sys
+from functools import partial
 
 from crewai import Agent, Task
 
 from crewaimeat.aimeat_crew import BuildContext, _aimeat_call, member_workspaces
+from crewaimeat.workspace_tools import read_workspace_objects
 
 
 def task_scope(task: dict) -> dict:
@@ -140,7 +142,7 @@ def ensure_routed_workspaces(agent: str, contract: dict, task: dict | None) -> l
     for oid, wid in member_workspaces(agent):
         if oid != org:
             continue
-        data = _aimeat_call(agent, "aimeat_workspace_read", {"organism_id": oid, "ws": wid})
+        data = read_workspace_objects(partial(_aimeat_call, agent), oid, wid, spaces=())
         if not data or data.get("manifest") is None:
             continue  # no access (grant missing) or not a real workspace — skip, never crash
         if not _ws_declares(data, contract):

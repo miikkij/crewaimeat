@@ -28,6 +28,7 @@ from crewai.tools import tool
 
 from crewaimeat.aimeat_crew import _aimeat_call, member_workspaces
 from crewaimeat.llm import get_llm
+from crewaimeat.workspace_tools import read_workspace_objects
 
 AGENT = "activity-reporter"
 IN_SPACE, IN_NS = "activity-tracking", "shared.activity_tracking"
@@ -163,7 +164,7 @@ def process_activity_reports(targets: list[tuple[str, str]] | None = None) -> di
     nowiso = now.isoformat()
     made = failed = 0
     for org_id, ws_id in pairs:
-        d = _call("aimeat_workspace_read", {"organism_id": org_id, "ws": ws_id})
+        d = read_workspace_objects(_call, org_id, ws_id, spaces=(IN_SPACE, OUT_SPACE))
         if not d or d.get("manifest") is None:
             continue
         cfgs = (d.get("objects", {}) or {}).get(IN_SPACE) or []
