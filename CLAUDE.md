@@ -146,6 +146,20 @@ status cells, append decisions), so the two sides stay synced without drifting p
   starts the daemon with the same list in `AIMEAT_RUNTIME_FEATURES` for the connector to send per
   computer, which is how the page knows the runtime honours a field before any agent exists there.
   A feature name goes into that tuple in the change that makes the field work, never before.
+- **A definition crew can be a workflow step: `task_scope` (2026-10-13).** A workflow step's task
+  carries its run's variables as scope entries `var.<name>` (a run an event starts also carries
+  `var.event_*`) and the key its deliverable is expected at as `deliverable_key`. A Python pipeline
+  reads those in its own code; a definition has none, so for a crew built from a definition
+  (`CrewSpec.task_scope`, set by `crewspec_from_json`, False for every Python crew) the scaffold
+  does it in `crewaimeat.task_scope`: the deliverable is published at the scope's key, in code, and
+  the `var.*` entries follow the task's text as name: value lines marked as data, not instructions.
+  Only a key under the agent's own `crews.<name>.` is taken; any other key, or one with a
+  `{placeholder}` left in it, keeps the result under the agent's own key and FAILS the task with
+  the reason, because a result the workflow cannot find is a step that would time out with no word.
+  The three workflow signals of a definition go ON ITS FIRST OFFER OBJECT (`offers[0]`:
+  `required_to_function`, `success_signal`, `deliverable_location: {key}`), all three or none; the
+  definition's top-level `signals` is validated and read by nothing. `crew.menu` names the feature
+  `task_scope`.
 - **The crew file is the ONE source for what an agent is.** Beside `build_domain`, a crew declares at
   module level: `LLM_PROFILE` (which `llm_providers.json` profile routes it), `TAGS` (the node's charset,
   `[a-z0-9._:-]`), `CAPABILITIES` ({technical: [{name,type}] OBJECTS, domain: [str], languages: [str]}),

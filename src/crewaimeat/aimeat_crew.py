@@ -184,6 +184,11 @@ class CrewSpec:
     #   until the process ends, as before. This is how fleet_host lets go of ONE agent thread without
     #   stopping the others — an always-on agent the owner moved to another computer or switched to
     #   spawn. It is not how an agent is STOPPED: the node holds a stopped agent by itself.
+    task_scope: bool = False  # the crew is built from a DEFINITION, so the scaffold reads the task's
+    #   scope for it (crewaimeat.task_scope): the deliverable is published at the scope's
+    #   `deliverable_key` (a workflow step's key), and the scope's `var.*` entries follow the task's
+    #   text as data. False for a Python crew, whose own code reads its scope: the pipelines that
+    #   are workflow steps today must not have their keys or their prompts changed under them.
     one_shot: bool = False  # SPAWNED mode: run ONE daemon cycle (PROPOSE -> EXECUTE -> messages ->
     #   records -> dms) and return, instead of looping forever. The spawner starts this process on a
     #   tunnel wake and the process exits when the cycle is done, so an idle agent costs nothing at all
@@ -2905,6 +2910,13 @@ def run_crew(spec: CrewSpec) -> None:
         )
         verify_mode = verify_override or (gate["verify"] if gate else None) or spec.verify
         mem_key = _memory_key(spec.agent_name, spec.memory_key_prefix, {"id": tid, "description": prompt})
+        scope_block = ""
+        if spec.task_scope:
+            # A workflow step's task says WHERE its result is expected and WHAT the run carries. Both
+            # are read in code (crewaimeat.task_scope); the model is handed no key to manage.
+            from crewaimeat import task_scope as _task_scope
+
+            mem_key, scope_block = _task_scope.apply(task, spec.agent_name, mem_key)
         print(
             f"[{spec.agent_name}] build crew for task {tid} -> key {mem_key}"
             + (f" (+ shared {shared_key})" if shared_key else ""),
@@ -2927,7 +2939,7 @@ def run_crew(spec: CrewSpec) -> None:
 
         ctx = BuildContext(
             task=task,
-            prompt=prompt,
+            prompt=prompt + scope_block,  # the key, the progress line and the gate above saw the text alone
             llm=llm,
             today=_now_context(),
             directives=directives,

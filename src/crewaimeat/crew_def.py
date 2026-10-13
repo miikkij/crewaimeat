@@ -874,6 +874,9 @@ def crewspec_from_json(doc: dict, **overrides: Any):
         agent_name=doc["agent_name"],
         build_domain=partial(build_domain_from_json, doc),
         process=process,
+        # A definition has no code of its own to read a workflow step's scope with, so the scaffold
+        # does it: the deliverable goes to the scope's key and the run's variables reach the crew.
+        task_scope=True,
     )
     if doc.get("readme_md") is not None:
         kwargs["readme_md"] = doc["readme_md"]

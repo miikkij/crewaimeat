@@ -256,4 +256,4 @@ def test_the_menu_says_this_runtime_honours_record_spaces(monkeypatch):
 
     monkeypatch.setattr("crewaimeat.llm_choice.default_is_node_road", lambda agent_name: False)  # a node read
     ok, menu = ci.handle("crew.menu", {}, agent_name="node-agent")
-    assert ok and menu["features"] == ["record_spaces", "record_backfill"]
+    assert ok and menu["features"][:2] == ["record_spaces", "record_backfill"]

@@ -16,6 +16,10 @@ from __future__ import annotations
 FEATURES = (
     "record_spaces",  # a definition names workspace spaces whose records become tasks (record_wake)
     "record_backfill",  # a record space may ask for the records already there: {"backfill": true}
+    # A definition crew can be a workflow step: its deliverable is published at the task scope's
+    # `deliverable_key`, and the scope's `var.*` entries reach the crew as data (crewaimeat.task_scope).
+    # The home writes workflow signals into a definition's offer only for a runtime that says this.
+    "task_scope",
 )
 
 FEATURES_ENV = "AIMEAT_RUNTIME_FEATURES"  # comma-separated, read by the connector at daemon start
