@@ -363,9 +363,9 @@ def _name_this_install() -> None:
     # by a workspace's records) on a computer that carries no agent yet to ask. It is the list
     # `crew.menu` answers from, never a string typed into a start script: a script would announce a
     # feature the installed code does not have, or keep quiet about one it has.
-    from crewaimeat.runtime_features import FEATURES, FEATURES_ENV
+    from crewaimeat.runtime_features import FEATURES_ENV, features
 
-    os.environ.setdefault(FEATURES_ENV, ",".join(FEATURES))
+    os.environ.setdefault(FEATURES_ENV, ",".join(features()))
 
 
 def _guard_pytest() -> None:

@@ -97,6 +97,18 @@ def _tools_news(agent_name: str, ctx: Any) -> list:
     return list(make_news_tools())
 
 
+BROWSER_TOOL = "browser"  # the one tool whose limits are a field of the definition: `browser_domains`
+
+
+def _tools_browser(agent_name: str, ctx: Any, domains: Any = None) -> list:
+    # A browser fenced to the hosts the definition names (crewaimeat.fenced_browser). The interpreter
+    # hands it `browser_domains`; called without them it raises, since a browser with no list is not
+    # something an owner approved.
+    from crewaimeat.fenced_browser import make_fenced_browser_tools
+
+    return make_fenced_browser_tools(agent_name, domains)
+
+
 def _tools_schedule(agent_name: str, ctx: Any) -> list:
     from crewaimeat.scheduler import make_schedule_tools
 
@@ -289,6 +301,7 @@ TOOL_REGISTRY: dict[str, Any] = {
     "memory": _tools_memory,
     "web": _tools_web,
     "news": _tools_news,
+    BROWSER_TOOL: _tools_browser,
     "schedule": _tools_schedule,
     "dm": _tools_dm,
     "delegate": _tools_delegate,
@@ -354,6 +367,14 @@ TOOL_PURPOSES: dict[str, str] = {
         "list with source, time, URL and summary. Give an agent this, not `web`, whenever its work is \"today's "
         "news\": a search engine needs a query, today's news has none, and a metasearch asked twenty times in "
         "one run is blocked by its sources. Pair it with article_fetch"
+    ),
+    BROWSER_TOOL: (
+        "open pages of the web sites the definition names in `browser_domains` in a real browser on the "
+        "agent's computer, read them, and fill in a form WITHOUT sending it: the browser reaches no other "
+        "host and never sends a form or any request with a body, it fills no password, payment card or "
+        "file field, and at the control that sends a form it stops and says what it filled, so the person "
+        "sends it themselves. Needs `browser_domains` (1 to 20 hostnames). For reading the open web give "
+        "`web` and `article_fetch` instead"
     ),
     "schedule": "create/list/update/delete AIMEAT node cron schedules (fire offline, 0 tokens)",
     "dm": "read + reply to the agent's federated inbox (agent-to-agent messages)",
@@ -624,6 +645,46 @@ def _validate_record_spaces(spaces: Any, listen: Any) -> list[str]:
     return errors
 
 
+def _validate_browser_domains(doc: dict) -> list[str]:
+    """`browser_domains` is the list of hostnames the `browser` tool may open, and the two go together.
+
+    A member with the tool and no list is refused: a browser with no limit is not something an owner
+    approves by reading a purpose. A list no member can use is refused too, because the page shows
+    those sites to the owner as something the agent will open. Each entry is a hostname and nothing
+    more (crewaimeat.fenced_browser.hostname_problem); whether it answers a public address is checked
+    when the browser starts, on the computer that runs it.
+    """
+    from crewaimeat.fenced_browser import MAX_HOSTS, hostname_problem
+
+    agents = doc.get("agents") if isinstance(doc.get("agents"), list) else []
+    users = [
+        _agent_key(a) or f"agents[{i}]"
+        for i, a in enumerate(agents)
+        if isinstance(a, dict) and isinstance(a.get("tools"), list) and BROWSER_TOOL in a["tools"]
+    ]
+    domains = doc.get("browser_domains")
+    if domains is None:
+        if users:
+            return [
+                f"browser_domains: {', '.join(users)} has the tool `browser`, so the definition must name the "
+                'hostnames it may open, as ["example.com", ...]'
+            ]
+        return []
+    errors: list[str] = []
+    if not isinstance(domains, list) or not 1 <= len(domains) <= MAX_HOSTS:
+        errors.append(f"browser_domains: must be a list of 1 to {MAX_HOSTS} hostnames")
+    else:
+        for i, name in enumerate(domains):
+            problem = hostname_problem(name)
+            if problem:
+                errors.append(f"browser_domains[{i}]: {name!r} {problem}")
+        if len(set(map(str, domains))) != len(domains):
+            errors.append("browser_domains: a hostname is named twice")
+    if not users:
+        errors.append("browser_domains: no member has the tool `browser`, so nothing would open these sites")
+    return errors
+
+
 def validate_crew_doc(doc: Any) -> list[str]:
     """Return a list of human-readable problems with ``doc`` (empty list == valid). Runs BEFORE any
     CrewAI object is built, so a bad definition is rejected at the boundary, not at run time. Catches:
@@ -669,6 +730,7 @@ def validate_crew_doc(doc: Any) -> list[str]:
                 if kind not in _LISTEN_KINDS:
                     errors.append(f"listen_for: {kind!r} must be one of {_LISTEN_KINDS}")
     errors.extend(_validate_record_spaces(doc.get("record_spaces"), listen))
+    errors.extend(_validate_browser_domains(doc))
 
     prof = doc.get("llm_profile")
     if prof is not None:
@@ -812,11 +874,17 @@ def build_domain_from_json(doc: dict, ctx: Any) -> tuple[list, list]:
 
     agents_by_key: dict[str, Any] = {}
     agent_objs: list = []
+    browsers: list = []  # every member's browser, for the record that goes under the result
     for a in doc["agents"]:
         tools: list = []
         for tn in a.get("tools") or []:
             # validate_crew_doc has already refused an unresolvable name; this is the same resolver,
             # so the two can never disagree about what a tool id means.
+            if tn == BROWSER_TOOL:  # its fence is the definition's own list, not something ctx carries
+                made = _tools_browser(agent_name, ctx, doc.get("browser_domains"))
+                browsers.extend(made)
+                tools.extend(made)
+                continue
             tools.extend(resolve_tool(tn)(agent_name, ctx))
         tools = _unique_tools(tools, f"{doc['agent_name']}/{a['role']}")
         kwargs: dict[str, Any] = dict(
@@ -849,6 +917,12 @@ def build_domain_from_json(doc: dict, ctx: Any) -> tuple[list, list]:
             kwargs["context"] = context
         if tk.get("async"):
             kwargs["async_execution"] = True
+        if browsers and tk is doc["tasks"][-1]:
+            # What the browser did is not the model's to retell: its own record goes under the crew's
+            # result, in code (crewaimeat.fenced_browser.record_guardrail).
+            from crewaimeat.fenced_browser import record_guardrail
+
+            kwargs["guardrail"] = record_guardrail(browsers)
         task = Task(**kwargs)
         tasks_by_id[tk["id"]] = task
         task_objs.append(task)

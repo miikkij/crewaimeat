@@ -103,6 +103,7 @@ markers = [
     "local_process: explicit Python subprocess test inheriting the offline network guard",
     "node_syntax: permit node --check only, parsing JavaScript without executing it",
     "ffmpeg: permit ffmpeg and ffprobe subprocesses (and the taskkill that ends one), for media tests against a loopback stream",
+    "browser: permit the driver inside the installed playwright package, for a real Chromium against loopback pages (its resolver rules reach no other host)",
 ]
 addopts = "-q"
 pythonpath = [".", "tests"]

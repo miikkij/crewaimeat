@@ -160,6 +160,33 @@ status cells, append decisions), so the two sides stay synced without drifting p
   `required_to_function`, `success_signal`, `deliverable_location: {key}`), all three or none; the
   definition's top-level `signals` is validated and read by nothing. `crew.menu` names the feature
   `task_scope`.
+- **A definition agent's browser is fenced by what the browser can do, not by what the model is
+  told (2026-10-13).** The tool id `browser` needs the definition's top-level `browser_domains`, 1 to
+  20 hostnames and nothing but hostnames; either one without the other is refused. It is
+  `crewaimeat.fenced_browser`, a module beside `browser_tool.py` (web-tester's tool, whose list comes
+  from the machine's environment and may be empty, is not this and is not to be given to a
+  definition). Three fences, each measured with a real Chromium: (1) Chromium's own resolver rules
+  map each allowed name to an address this module resolved and checked public, and everything else
+  to NOTFOUND: another name, a redirect to another name, a redirect to an IP address and a typed IP
+  address were refused before any connection. Playwright's route handler is NOT called for a
+  redirect's later hops, so the rules are what hold a redirect. (2) One handler lets through GET and
+  HEAD to an allowed host and nothing else, so no request with a body leaves, whoever asks: the
+  model, the page, a script, a Worker. (3) The tool presses no control that submits a form and has
+  no key press, which is what stops a GET form (a search box). NOT PROMISED: a page's own script can
+  put typed text into a GET address to its own host, and a site that acts on a plain link acts when
+  it is opened; both reach only a host the owner named. No password, payment card or file field is
+  filled, every call is a fresh browser with no profile, a download is not saved, and screenshots
+  stay under `logs/.browser/fenced/` for seven days. **The browser's own record goes under the
+  task's result in code** (`record_guardrail`, a CrewAI task guardrail that only adds): on the first
+  run with a real model the agent made one refused call and reported pages it had never opened. A
+  WebSocket is taken over and never connected; closing it from inside the handler stalls a sync
+  session (measured). A test that drives the real browser takes the `browser` and `loopback` marks,
+  which permit Playwright's own driver and loopback and nothing else.
+  `CREWAIMEAT_BROWSER_TEST_HOSTS` pins a listed name to this computer for a proof against a local
+  page; it is the machine's environment, which a definition, a page and a model cannot set.
+  The tool is offered in `crew.menu`, and the feature `browser_domains` announced, only on a computer
+  that has a Chromium (`runtime_features.browser_installed`, read from the disk; the playwright
+  package comes with the install, the Chromium is `uv run playwright install chromium`).
 - **The crew file is the ONE source for what an agent is.** Beside `build_domain`, a crew declares at
   module level: `LLM_PROFILE` (which `llm_providers.json` profile routes it), `TAGS` (the node's charset,
   `[a-z0-9._:-]`), `CAPABILITIES` ({technical: [{name,type}] OBJECTS, domain: [str], languages: [str]}),
