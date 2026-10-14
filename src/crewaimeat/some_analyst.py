@@ -7,19 +7,25 @@ replies, or contacts anyone.
 
 The loop + dedup are deterministic code; only the reply prose is the LLM's job, and it follows the
 playbook: value first, disclose the builder, mention AIMEAT only when it truly fits, never astroturf.
+
+2026-10-15: only opportunities found in the last FRESH_DAYS are drafted (a reply to a week-old
+conversation reaches nobody), hiring threads never are, each draft is told the length its network
+takes, and the run opens only the opportunity records (the drafted ids come from the index).
 """
 
 from __future__ import annotations
 
+import datetime
 import sys
 from functools import partial
 
 from crewai.tools import tool
 
-from crewaimeat.aimeat_crew import _aimeat_call
+from crewaimeat.aimeat_crew import _aimeat_call, today_local
 from crewaimeat.llm import get_llm
 from crewaimeat.some_listener import _ORG_ID, _RADAR_WS
-from crewaimeat.workspace_tools import read_workspace_objects
+from crewaimeat.some_sources import HIRING
+from crewaimeat.workspace_tools import published_ids, read_workspace_objects
 
 _MIN_FIT = 3  # skip low-fit opportunities
 
@@ -38,11 +44,38 @@ _AIMEAT = (
 
 
 def _read(space_key: str):
-    """Return the published records of one space, or None if the workspace isn't accessible."""
-    data = read_workspace_objects(partial(_aimeat_call, "some-analyst"), _ORG_ID, _RADAR_WS)
+    """Return the published records of one space, or None if the workspace isn't accessible.
+
+    Only that space is opened (2026-10-15): reading every space to draft five replies opened about
+    2,200 records a run.
+    """
+    data = read_workspace_objects(partial(_aimeat_call, "some-analyst"), _ORG_ID, _RADAR_WS, spaces=[space_key])
     if not data or data.get("manifest") is None:
         return None
     return data.get("objects", {}).get(space_key, []) or []
+
+
+def _drafted_ids():
+    """The ids of the drafts already written, from the index alone (no record opened)."""
+    data = read_workspace_objects(partial(_aimeat_call, "some-analyst"), _ORG_ID, _RADAR_WS, spaces=[])
+    if not data or data.get("manifest") is None:
+        return set()
+    return published_ids(data, "reply-draft")
+
+
+# A reply to a conversation that ended a week ago reaches nobody.
+FRESH_DAYS = 7
+
+# What each network takes in one reply, so a draft fits where it would be posted.
+_LENGTH = {"bluesky": "at most 300 characters", "mastodon": "at most 480 characters", "x": "at most 270 characters"}
+
+
+def _fresh(opp: dict, today: datetime.date) -> bool:
+    try:
+        found = datetime.date.fromisoformat(str(opp.get("found_date") or "")[:10])
+    except ValueError:
+        return False
+    return (today - found).days <= FRESH_DAYS
 
 
 def _draft_reply(opp: dict, llm) -> tuple[str, str]:
@@ -58,6 +91,7 @@ def _draft_reply(opp: dict, llm) -> tuple[str, str]:
         f"- mention-AIMEAT hint: spam_risk={opp.get('spam_risk')} "
         "(welcome = a mention is likely fine; borderline = lead with value, mention only if it flows; "
         "no = do NOT mention AIMEAT at all)\n\n"
+        f"Length: {_LENGTH.get(str(opp.get('source')), 'a short paragraph or two')}.\n"
         "Write ONLY the reply (plain text, no preamble, ready to paste). Then a final line:\n"
         "APPROACH: <one line — the angle, and whether you mentioned AIMEAT and why>"
     )
@@ -79,7 +113,8 @@ def draft_opportunities(limit: int = 5) -> dict:
     if opps is None:
         print("[some-analyst] Social Radar not accessible to this agent — skipping.", file=sys.stderr)
         return {"drafted": 0, "failed": 0, "candidates": 0, "no_access": True}
-    existing = {d.get("id") for d in (_read("reply-draft") or [])}
+    existing = _drafted_ids()
+    today = datetime.date.fromisoformat(today_local())
     candidates = [
         o
         for o in opps
@@ -87,6 +122,8 @@ def draft_opportunities(limit: int = 5) -> dict:
         and o.get("spam_risk") != "no"
         and int(o.get("fit_score") or 0) >= _MIN_FIT
         and f"draft-{o.get('id')}" not in existing
+        and _fresh(o, today)
+        and not HIRING.search(str(o.get("title") or ""))
     ]
     candidates.sort(key=lambda o: int(o.get("fit_score") or 0), reverse=True)
     candidates = candidates[:limit]
