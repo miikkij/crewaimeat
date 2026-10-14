@@ -96,6 +96,38 @@ def test_an_unreadable_schedule_list_is_a_finding_too(tmp_path, monkeypatch):
     assert any(f.rule == "live.unreachable" and "schedules" in f.subject for f in report.findings)
 
 
+def test_the_schedule_list_is_read_as_an_agent_that_holds_the_scope(tmp_path, monkeypatch):
+    """aimeat 4.0.0 enforces the REST scope words. Asked as the first agent in serve.json, which did
+    not hold workflow:read, the read was refused and the refusal stayed on that agent's page
+    (measured 2026-10-14). The roster says who holds the word, so that agent is asked."""
+    root = _repo(tmp_path, {"a_crew.py": CREW.format(agent="a", extra="")}, served=["a", "b", "c"])
+    roster = [
+        {"name": "a", "tags": ["x"], "default_scopes": ["memory:read", "memory:write"]},
+        {"name": "b", "tags": ["x"], "default_scopes": ["memory:read", "workflow:read"]},
+        {"name": "c", "tags": ["x"], "default_scopes": ["*"]},
+    ]
+    asked = []
+    monkeypatch.setattr("crewaimeat.aimeat_crew._aimeat_call", lambda *_a, **_k: {"agents": roster})
+    monkeypatch.setattr(
+        "crewaimeat.aimeat_crew._aimeat_rest", lambda agent, *_a, **_k: asked.append(agent) or {"managed": []}
+    )
+    report = _run(root)
+    assert asked == ["b"], "the first holder of the word, never the agent without it"
+    assert "live.unreachable" not in _rules(report)
+
+
+def test_when_no_agent_holds_the_scope_the_node_is_not_asked(tmp_path, monkeypatch):
+    root = _repo(tmp_path, {"a_crew.py": CREW.format(agent="a", extra="")}, served=["a"])
+    roster = [{"name": "a", "tags": ["x"], "default_scopes": ["memory:read"]}]
+    asked = []
+    monkeypatch.setattr("crewaimeat.aimeat_crew._aimeat_call", lambda *_a, **_k: {"agents": roster})
+    monkeypatch.setattr("crewaimeat.aimeat_crew._aimeat_rest", lambda *a, **_k: asked.append(a) or {"managed": []})
+    report = _run(root)
+    assert asked == [], "a call that is refused leaves a refusal on the agent's page"
+    [finding] = [f for f in report.findings if f.rule == "live.unreachable"]
+    assert "workflow:read" in finding.message and "workflow:read" in finding.fix
+
+
 def test_a_node_with_genuinely_no_schedules_is_not_called_unreachable(tmp_path, monkeypatch):
     """The distinction that matters: `live.schedule.missing` is an ERROR, so treating "nothing
     scheduled" as "could not look" would invent an outage on a node that is simply idle."""

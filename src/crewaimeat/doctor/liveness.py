@@ -79,8 +79,49 @@ def check(inv: Inventory, report: Report) -> None:
         return
     report.lenses_run.append("live")
     _agents(inv, roster, report)
-    _schedules(inv, agent, report)
+    reader = _schedule_reader(inv, roster, agent)
+    if reader:
+        _schedules(inv, reader, report)
+    else:
+        report.add(
+            Finding(
+                "live.unreachable",
+                WARN,
+                "GET /v1/schedules",
+                f"no agent this home serves holds {SCHEDULE_READ_SCOPE}, and from aimeat 4.0.0 the node refuses "
+                "the schedule list to any other agent (and keeps the refusal on that agent's page), so the "
+                "schedule half was not asked and nothing below says which triggers are live",
+                f"grant {SCHEDULE_READ_SCOPE} to one agent of this home, for example workflow-manager",
+            )
+        )
     _workflow_triggers(report)
+
+
+SCHEDULE_READ_SCOPE = "workflow:read"
+
+
+def _schedule_reader(inv: Inventory, roster: list, fallback: str) -> str | None:
+    """The agent to read `GET /v1/schedules` as: one this home serves that HOLDS the scope word.
+
+    Any agent used to do. From aimeat 4.0.0 the node enforces the scope words of its REST routes
+    (REST_SCOPE_GATES_ENFORCED_IN; before, the call was allowed and counted), and asked as the first
+    agent in serve.json the read was refused, and the refusal stayed on that agent's page for its
+    owner to read (measured 2026-10-14: aamun-poliittinen-roast, "workflow:read required"). The roster
+    the lens has just read carries each agent's `default_scopes`, so the reader is chosen from it and
+    an agent without the word is never asked. A roster without the field (a node older than it) keeps
+    the old choice. None: nobody here holds the word.
+    """
+    rows = [a for a in roster if isinstance(a, dict)]
+    if not any("default_scopes" in a for a in rows):
+        return fallback
+    served = set(inv.served)
+    holders = sorted(
+        a["name"]
+        for a in rows
+        if a.get("name") in served or a.get("gaii") in served
+        if {SCHEDULE_READ_SCOPE, "*"} & set(a.get("default_scopes") or [])
+    )
+    return holders[0] if holders else None
 
 
 def _agents(inv: Inventory, roster: list, report: Report) -> None:
