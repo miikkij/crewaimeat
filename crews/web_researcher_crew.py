@@ -147,35 +147,92 @@ def build_domain(ctx):
     return (agents, tasks)
 
 
+# ── The contract checks, and the clock that runs them ─────────────────────────────────────────
+# A RECORD EVENT IS NOT A CLOCK. A recurring `market-scan-request` (status active, period_hours 168) is
+# DUE when its period has passed, and nothing is written at that moment, so no record event comes. The
+# weekly `aimeat-weekly` scan last ran 2026-09-06 and nothing woke it for six weeks. The clock is a node
+# schedule (kind agent_task) that gives this agent a task; two things here turn that task into the checks:
+#   - `idle_hook`: a spawned worker runs it ONCE per run, whatever woke it (run_once.py), and a resident
+#     daemon on its idle cycles. So every wake also checks the three contracts, as activity-reporter does.
+#   - `on_task`: a task marked as a contract check (scope kind "contract-check", or the title
+#     "contract-check") is answered in CODE with the checks' result: no research crew, no model.
+# Each process_* is deterministic: the CHECK uses no model, which runs only for a request that is due.
+# The output-dedup (scan-<id>-<date>) and the machine's own run marks (local_marks.ran_within) still
+# stop a double run, whichever wake came first.
+CONTRACT_CHECK_KIND = "contract-check"
+CONTRACT_CHECK_REUSE_S = 300  # a check this recent in the same worker answers the task; it is not rerun
+_LAST_PASS: dict = {}
+
+
+def contract_pass(targets: list[tuple[str, str]] | None = None) -> dict:
+    """Fulfil what is due in all THREE contracts: research, market-scan, company-research.
+
+    `targets` scopes the scans to one event's workspace; None is the discovery path (every workspace this
+    agent serves, minus a retired engagement), which is what a clock wake needs.
+    """
+    from crewaimeat.company_contract import process_company_research
+    from crewaimeat.market_contract import process_market_scans
+    from crewaimeat.research_contract import process_research_requests
+
+    return {
+        "research": process_research_requests(max_items=3, targets=targets),
+        "market-scan": process_market_scans(max_items=2, targets=targets),
+        "company-research": process_company_research(max_items=3, targets=targets),
+    }
+
+
+def _said(res: dict, why: str) -> None:
+    for name, counts in res.items():
+        if counts.get("processed") or counts.get("failed"):
+            print(f"[{AGENT_NAME}] {name} ({why}): {counts}")
+
+
+def clock_pass() -> dict:
+    """The checks on the discovery path, remembered so a contract-check task in the same worker reuses them."""
+    import time
+
+    res = contract_pass()
+    _LAST_PASS.update(at=time.monotonic(), result=res)
+    _said(res, "clock")
+    return res
+
+
+def is_contract_check(task: dict | None) -> bool:
+    from crewaimeat.contract_adopt import task_scope
+
+    task = task or {}
+    if task_scope(task).get("kind") == CONTRACT_CHECK_KIND:
+        return True
+    return str(task.get("title") or "").strip().lower() == CONTRACT_CHECK_KIND
+
+
+def on_task(task: dict) -> str | None:
+    """A contract-check task, done in code; None for every other task, which the research crew does."""
+    import time
+
+    if not is_contract_check(task):
+        return None
+    recent = _LAST_PASS.get("at") is not None and time.monotonic() - _LAST_PASS["at"] < CONTRACT_CHECK_REUSE_S
+    res = _LAST_PASS["result"] if recent else clock_pass()
+    lines = [f"{name}: {c.get('processed', 0)} done, {c.get('failed', 0)} failed" for name, c in res.items()]
+    return "Contract check (research, market-scan, company-research): " + "; ".join(lines) + "."
+
+
 def run() -> None:
     # adapt_to_task: research tasks classify as 'fact' -> cool temp (0.15) + grounding rule (no invented
     # specifics, honest "not found") + a final faithfulness-verify pass over the summary before publish,
     # on top of the crew's own Source Verifier. score_to_stats: keep the self-verify as introspection.
     #
-    # Event-driven (aimeat-crewai 0.7.0): a pushed request record (or the catch-up on connect) wakes us,
-    # across all THREE of this agent's contracts — research, market-scan, company-research. Each process_*
-    # is a DETERMINISTIC scan that fulfils any pending requests (the CHECK uses NO LLM; the LLM runs only to
-    # distil a request that actually exists). No idle polling — idle minutes cost zero tokens.
+    # Event-driven (aimeat-crewai 0.7.0): a pushed request record (or the catch-up on connect) wakes us
+    # for that workspace; a node schedule's task is the clock for recurring requests (see above).
     from crewaimeat.company_contract import CONTRACT as COMPANY_CONTRACT
-    from crewaimeat.company_contract import process_company_research
     from crewaimeat.market_contract import CONTRACT as MARKET_CONTRACT
-    from crewaimeat.market_contract import process_market_scans
-    from crewaimeat.research_contract import process_research_requests
 
     # targets scopes every scan to the event's OWN workspace (no member rediscovery/full re-scan per
     # event). The event may be for any of the three spaces; the non-matching scans just read that one
     # workspace's (usually empty) space and dedupe — bounded and cheap.
     def _on_record(event) -> None:
-        targets = record_event_targets(event)
-        res = process_research_requests(max_items=3, targets=targets)
-        if res.get("processed") or res.get("failed"):
-            print(f"[{AGENT_NAME}] research-contract event: {res}")
-        scans = process_market_scans(max_items=2, targets=targets)  # SECOND contract: market-scan
-        if scans.get("processed") or scans.get("failed"):
-            print(f"[{AGENT_NAME}] market-scan event: {scans}")
-        cos = process_company_research(max_items=3, targets=targets)  # THIRD contract: company-research
-        if cos.get("processed") or cos.get("failed"):
-            print(f"[{AGENT_NAME}] company-research event: {cos}")
+        _said(contract_pass(record_event_targets(event)), "record event")
 
     run_crew(
         CrewSpec(
@@ -188,6 +245,10 @@ def run() -> None:
             listen_for=("tasks", "records"),
             record_spaces=lambda: contract_record_spaces(AGENT_NAME, CONTRACT, MARKET_CONTRACT, COMPANY_CONTRACT),
             on_record=_on_record,
+            on_task=on_task,
+            idle_hook=clock_pass,
+            # A resident daemon checks every 15 minutes; a spawned worker once per run (run_once.py).
+            idle_hook_seconds=900,
         )
     )
 
