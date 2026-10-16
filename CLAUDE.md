@@ -118,6 +118,16 @@ status cells, append decisions), so the two sides stay synced without drifting p
   from the crew, so for them an attached server is the tool id. Add a tool to the list only with its
   measured size: it is sent on every liaison call (about 18 500 tokens for the 25, 2 400 more for the
   five).
+- **What was published, and the replies to it: the tool id `connections` (2026-10-16), READ-ONLY.**
+  `crewaimeat.connections_tools`: `list_connection_history` (GET `/v1/connections/attempts`; the node
+  takes only `limit`, max 200, so the `providers` / `exclude_providers` / `since` / `status` filters run
+  here) and `read_connection_replies` (POST `/v1/connections/attempts/{id}/replies`, sent once: on X
+  every read is billed, so the descriptions say X at most once a week). `_node_read` lets those two
+  requests through and refuses every other method and path. The permissions are `connections:read` +
+  `connections:read-through` (`connections_tools.READ_SCOPES`, which the proposer reads); never
+  `connections:use`, which would open both and also publishes. **The node lists only what the asking
+  identity published** (`resolveIdentity`: an agent is its own GAII), so an agent does not see what its
+  owner published in person; the empty answer says so.
 - **A definition can be a workspace-contract agent: `record_spaces` (2026-10-12).** A JSON crew
   definition names the workspace spaces whose records wake its agent, as the top-level
   `"record_spaces": [{"organism_id", "ws", "space"}]` with `"listen_for": ["tasks", "records"]`

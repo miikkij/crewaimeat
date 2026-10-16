@@ -269,6 +269,14 @@ def _make_mcp_one(server: str):
     return _factory
 
 
+def _tools_connections(agent_name: str, ctx: Any) -> list:
+    # What the agent published through its connected accounts, and the replies to one item. READ-ONLY:
+    # the module lets only the two reads reach the node (crewaimeat.connections_tools).
+    from crewaimeat.connections_tools import make_connections_tools
+
+    return list(make_connections_tools(agent_name))
+
+
 def _tools_decline(agent_name: str, ctx: Any) -> list:
     # `decline_request`: the agent says it will not carry out this request, and the task ends as
     # DECLINED with its reason instead of done (crewaimeat.decline). Bound to THIS run's task.
@@ -318,6 +326,7 @@ TOOL_REGISTRY: dict[str, Any] = {
     "workspace": _tools_workspace,
     "workspace_write": _tools_workspace_write,
     "mcp": _tools_mcp,
+    "connections": _tools_connections,
     "decline": _tools_decline,
 }
 
@@ -413,6 +422,13 @@ TOOL_PURPOSES: dict[str, str] = {
         "use the MCP servers your owner attached to their node (other systems: an issue tracker, a wiki, a "
         "warehouse): list them, list one server's tools with their arguments, call one. The node holds the "
         "credential. `mcp:<server>` gives the agent ONE named server instead of all of them. Needs mcp:use"
+    ),
+    "connections": (
+        "READ what the agent published through its own connected social accounts (newest first, filtered by "
+        "provider and date) and the replies people wrote to one published item (Mastodon, Bluesky, YouTube, X, "
+        "Facebook Page, Instagram, Reddit; LinkedIn refuses). Read-only: it never posts, answers or deletes. On X "
+        "every read is billed, so X replies at most once a week. Needs connections:read and "
+        "connections:read-through"
     ),
     "decline": "say you will NOT carry out this request (no tool or access for it, or not yours to do), with the reason; the task then ends as declined, not done",
 }

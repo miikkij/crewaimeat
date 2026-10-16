@@ -41,6 +41,7 @@ import time
 from crewaimeat.agent_manifest import agent_route
 from crewaimeat.agent_scopes import runtime_scopes
 from crewaimeat.aimeat_crew import _aimeat_call, _aimeat_rest
+from crewaimeat.connections_tools import READ_SCOPES as CONNECTIONS_READ_SCOPES
 from crewaimeat.mcp_tools import USE_SCOPES as MCP_USE_SCOPES
 from crewaimeat.workspace_tools import READ_SCOPES, WRITE_SCOPES
 
@@ -73,6 +74,10 @@ NAME_RE = re.compile(r"^[a-z][a-z0-9-]{2,39}$")
 #               (routes/mcp-servers.ts), and it opens the two lists as well, which take mcp:read OR
 #               mcp:use. Measured 2026-10-12: an agent holding mcp:use alone listed the servers, listed
 #               one's tools and called one. mcp_tools.USE_SCOPES is the one source.
+#   connections read its own publish history and the       connections:read (GET /v1/connections/attempts),
+#               replies to one published item               connections:read-through (POST .../:id/replies).
+#               connections:use would open both, and it also publishes, so it is never asked for here.
+#               connections_tools.READ_SCOPES is the one source.
 PROPOSABLE_TOOLS: dict[str, tuple[str, ...]] = {
     "memory": ("memory:read", "memory:write"),
     "workspace": READ_SCOPES,
@@ -83,6 +88,7 @@ PROPOSABLE_TOOLS: dict[str, tuple[str, ...]] = {
     "schedule": ("workflow:read", "task:write"),
     "dm": ("messages:read", "messages:send"),
     "mcp": MCP_USE_SCOPES,
+    "connections": CONNECTIONS_READ_SCOPES,
 }
 
 
