@@ -177,6 +177,7 @@ class Spawner:
     departed_fn: object | None = None  # () -> {gaii: record} | DEPARTED_UNSUPPORTED | None; default asks the daemon
     subscriptions_fn: object | None = None  # () -> (daemon start, {identity: count}) | None; default asks the daemon
     definition_fn: object | None = None  # (agent) -> its node definition dict | None; default reads crews.registry
+    offers_fn: object | None = None  # (root, [agent]) -> None; default starts the offers publish pass
     max_workers: int = MAX_WORKERS
     debounce_s: float = DEBOUNCE_S
     run_timeout_s: int = RUN_TIMEOUT_S
@@ -1071,6 +1072,32 @@ class Spawner:
         known, self._daemon_held = self._daemon_held, live
         return known is not None and bool(live - known)
 
+    def publish_offers_at_start(self) -> list[str]:
+        """Hand every crew-file agent this spawner serves to ONE offers publish pass. Returns them.
+
+        A spawn-mode agent publishes its offers at its own worker's start, so a changed offer of an
+        agent nobody wakes never reached the node: on 2026-10-16 julkaisu-toimittaja's new offer was
+        missing after a fleet restart and the workflow step naming it was refused. The pass publishes
+        only what differs from the node's copy (offers.publish_changed). It runs in a process of its
+        own because building an offer imports crewai, and it starts no worker. A node-defined agent has
+        no crew file to build an offer from, and a parked crew advertises nothing. Never raises: a
+        pass that cannot start is said once and the spawner goes on.
+        """
+        agents = []
+        for agent in sorted(a for a, st in self.state.items() if not st.retired):
+            man = agent_manifest.manifest_for(agent_manifest.agent_local_name(agent), self.root)
+            if man is not None and man.live:
+                agents.append(agent)
+        if not agents:
+            return []
+        try:
+            (self.offers_fn or launch_offer_publish)(self.root, agents)
+        except Exception as exc:  # noqa: BLE001 — offers are a description of the agents, not their work
+            _say(f"[spawner] the offers publish pass did not start ({exc!r}); offers publish at each worker's start")
+            return []
+        _say(f"[spawner] offers: checking {len(agents)} crew-file agent(s) against the node, publishing what changed")
+        return agents
+
     def declares_records(self, agent: str, daemon: object) -> bool | None:
         """Whether `agent` is woken by workspace records, by its own declaration. None = not known.
 
@@ -1171,6 +1198,7 @@ class Spawner:
             f"roster re-read every {self.roster_interval_s:.0f}s)",
         )
         self.forget_deleted_while_away()
+        self.publish_offers_at_start()
         next_roster = time.monotonic() + self.roster_interval_s
         last_roster = time.monotonic()
         next_attach_look = 0.0  # the first look takes stock of what the daemon carries now
@@ -1674,6 +1702,28 @@ def daemon_identities() -> dict[str, str] | None:
             if v:
                 out[str(v)] = transport
     return out
+
+
+def launch_offer_publish(root: Path, agents: list[str]):
+    """Start `python -m crewaimeat.offers --publish-changed <agents>` and do not wait for it.
+
+    Its output goes to the spawn logs (`offers-<time>.log`), so what it published or could not is
+    readable afterwards. None under pytest, where no real process is started."""
+    if "pytest" in sys.modules:
+        return None
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    log = spawn_state.spawn_dir() / "logs" / f"offers-{stamp}.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with open(log, "w", encoding="utf-8", errors="replace") as handle:
+        # The child keeps its own copy of the handle; closing ours here does not end its output.
+        return subprocess.Popen(  # noqa: S603 — argv list, no shell; the command is ours
+            [sys.executable, "-m", "crewaimeat.offers", "--publish-changed", *agents],
+            cwd=str(root),
+            env=dict(os.environ),
+            stdin=subprocess.DEVNULL,
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+        )
 
 
 # crew_registry.REGISTRY_PREFIX, spelled here because importing crew_registry imports crew_def and with it

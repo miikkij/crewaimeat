@@ -468,8 +468,15 @@ edition shipped with 21 articles and no front page. `write-a`/`write-b`/`editori
   some-listener / mroom code means by "works once attached". Run cross-organism reads in-fleet.
 - **Restart the fleet** after changing a crew's declaration (`TAGS`/`CAPABILITIES`/`LLM_PROFILE`/
   `OFFERS`), the providers file, or after adopting a new contract — none of it takes hold until
-  re-attach. Tags and capabilities are pushed to the node ON START, so an identity edit is invisible
-  on the node until the agent re-attaches.
+  re-attach. **Offers reach the node at the spawner's start** (2026-10-16): it hands every crew-file
+  agent it serves to one short process, `python -m crewaimeat.offers --publish-changed <agents>`
+  (output in `.aimeat/spawn/logs/offers-<time>.log`), which publishes an agent's offers only when the
+  node's copy is missing or differs from the crew file, sample excerpts aside; no worker starts, and
+  the spawner itself still imports no crewai. Before that, a spawn agent nobody woke kept its old
+  offers through any restart, and a workflow step naming the new offer was refused. Tags and
+  capabilities are still pushed at a WORKER's start, so for a spawn agent an identity edit is
+  invisible on the node until the agent next runs. By hand, for one agent:
+  `publish_offers_any("<agent>")` (the bare name or the full identity).
 
 ## Cross-organism display — a different org shows another's data
 - A different organism (even the SAME owner) reads another's data via a **public memory key** +

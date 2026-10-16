@@ -679,8 +679,15 @@ def publish_offers_any(agent: str, with_samples: bool = True) -> bool:
     the offer under a key nothing reads and printed "published". A fallback that turns the one
     error that says "you asked for the wrong thing" into a success is how the offer stayed off the
     owner's page with no line anywhere saying so. The direct write remains only for a route that
-    could not be REACHED, which is a different fault and writes the key the node itself reads."""
-    doc = offers_doc_any(agent, with_samples=with_samples)
+    could not be REACHED, which is a different fault and writes the key the node itself reads.
+
+    `agent` may be the bare name or the full identity (`name#owner@node`). The document is built by
+    the NAME, which is what a crew file declares; the call goes out as `agent`, so a home that holds
+    two owners' agents of one name still says whose. Handed a GAII it used to find no crew and print
+    "nothing to publish" (2026-10-16)."""
+    from crewaimeat.agent_manifest import agent_local_name
+
+    doc = offers_doc_any(agent_local_name(agent), with_samples=with_samples)
     if not doc["offers"]:
         print(f"[offers] {agent}: nothing to publish", file=sys.stderr)
         return False
@@ -756,3 +763,102 @@ def publish_meta_offer(agent: str, meta: dict, with_sample: bool = False) -> tup
 def publish_all(with_samples: bool = True) -> dict:
     agents = dict.fromkeys(PILOT_AGENTS + crew_offer_agents())
     return {agent: publish_offers_any(agent, with_samples=with_samples) for agent in agents}
+
+
+# ── at the spawner's start: publish what changed, and only that ──────────────────────────────────
+# A spawn-mode agent publishes its offers at its own worker's start, and an agent nobody wakes never
+# starts one: julkaisu-toimittaja's new offer `vie-lahettimeen` stayed off the node through a fleet
+# restart on 2026-10-16, and a workflow step naming it was refused. The spawner, which starts with the
+# fleet, runs `python -m crewaimeat.offers --publish-changed <agents>` once (spawner.launch_offer_publish):
+# a short process that pays the crewai import this module needs (aimeat_crewai.workflow_spec) and
+# exits, so the spawner stays light. It is not a worker: no task, no model, no agent run.
+
+_UNREAD = object()  # the node's copy could not be read, which is not the same as "it holds none"
+
+
+def _comparable(offer: dict) -> dict:
+    """An offer as the comparison sees it: everything but the deliverable's sample, which is a live
+    excerpt of the agent's last output and changes whenever the agent works."""
+    o = json.loads(json.dumps(offer, default=str))
+    d = o.get("deliverable")
+    if isinstance(d, dict):
+        d.pop("sample", None)
+    return o
+
+
+def offers_differ(built: list[dict], held) -> bool:
+    """True when the node's offers document is missing or says something the built one does not.
+
+    Field by field over what the BUILT offer carries, so a field the node adds when it stores an offer
+    (availability, requirements) is not a difference, while every field this side declares is."""
+    held_offers = held.get("offers") if isinstance(held, dict) else None
+    if not isinstance(held_offers, list) or not held_offers or len(held_offers) != len(built):
+        return True
+    for mine, theirs in zip(built, held_offers, strict=True):
+        if not isinstance(theirs, dict):
+            return True
+        a, b = _comparable(mine), _comparable(theirs)
+        if any(b.get(k) != v for k, v in a.items()):
+            return True
+    return False
+
+
+def _held_offers(agent: str):
+    """What the node holds at `agents.<name>.offers`: the document, None for no key, or _UNREAD."""
+    answer = _aimeat_call(agent, "aimeat_memory_read", {"key": f"{agent_key(agent)}.offers"}, return_error=True)
+    if answer is None:
+        return _UNREAD
+    if isinstance(answer, dict) and answer.get("ok") is False:
+        code = str((answer.get("error") or {}).get("code") or "")
+        return None if code in ("NOT_FOUND", "MEMORY_NOT_FOUND") else _UNREAD
+    value = answer.get("value") if isinstance(answer, dict) else None
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return _UNREAD
+    return value if isinstance(value, dict) else None
+
+
+def publish_changed(agents: list[str]) -> dict[str, str]:
+    """For each agent: publish its offers when the node's copy is missing, unreadable or different.
+
+    Returns {agent: "published" | "unchanged" | "no offers" | "FAILED ..."}. One agent's failure is
+    recorded and the next agent is still done."""
+    from crewaimeat.agent_manifest import agent_local_name
+
+    out: dict[str, str] = {}
+    for agent in agents:
+        try:
+            built = offers_doc_any(agent_local_name(agent), with_samples=False).get("offers") or []
+            if not built:
+                out[agent] = "no offers"
+                continue
+            held = _held_offers(agent)
+            if held is not _UNREAD and not offers_differ(built, held):
+                out[agent] = "unchanged"
+                continue
+            out[agent] = "published" if publish_offers_any(agent, with_samples=True) else "FAILED (see above)"
+        except Exception as exc:  # noqa: BLE001 — the next agent is still owed its pass
+            out[agent] = f"FAILED ({exc!r})"
+    return out
+
+
+def main(argv: list[str] | None = None) -> int:
+    """`python -m crewaimeat.offers --publish-changed <agent> ...`: the spawner's start-up pass."""
+    import argparse
+
+    ap = argparse.ArgumentParser(prog="crewaimeat.offers")
+    ap.add_argument("--publish-changed", nargs="+", metavar="AGENT", required=True)
+    args = ap.parse_args(argv)
+    result = publish_changed(args.publish_changed)
+    for agent, what in result.items():
+        print(f"[offers] {agent}: {what}", file=sys.stderr)
+    changed = sum(1 for v in result.values() if v == "published")
+    failed = sum(1 for v in result.values() if v.startswith("FAILED"))
+    print(f"[offers] start-up pass: {len(result)} agent(s), {changed} published, {failed} failed", file=sys.stderr)
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
