@@ -176,6 +176,7 @@ class Spawner:
     gone_fn: object | None = None  # (agent) -> (listed: bool | None, why); default asks the node
     departed_fn: object | None = None  # () -> {gaii: record} | DEPARTED_UNSUPPORTED | None; default asks the daemon
     subscriptions_fn: object | None = None  # () -> (daemon start, {identity: count}) | None; default asks the daemon
+    definition_fn: object | None = None  # (agent) -> its node definition dict | None; default reads crews.registry
     max_workers: int = MAX_WORKERS
     debounce_s: float = DEBOUNCE_S
     run_timeout_s: int = RUN_TIMEOUT_S
@@ -200,6 +201,7 @@ class Spawner:
         self._departed_looks: dict[str, int] = {}  # how often an agent with no record was looked up
         self._daemon_held: set[str] | None = None  # what the daemon carried at the last look
         self._record_runs: dict[str, object] = {}  # agent -> the daemon start it was started for its record spaces
+        self._declared: dict[str, tuple[object, bool | None]] = {}  # agent -> (daemon start, declares records?)
         self._last_invoke_complaint: dict[str, float] = {}
 
     # ---------------------------------------------------------------- wake --- #
@@ -1069,6 +1071,26 @@ class Spawner:
         known, self._daemon_held = self._daemon_held, live
         return known is not None and bool(live - known)
 
+    def declares_records(self, agent: str, daemon: object) -> bool | None:
+        """Whether `agent` is woken by workspace records, by its own declaration. None = not known.
+
+        A crew file answers statically and costs nothing. A crew defined on the node (no crew file, or
+        one that says CREW_DEF_SOURCE = "node") answers with its `crews.registry.<agent>`, read through
+        the daemon as the agent itself, ONCE per connector start: this is asked every few seconds for
+        every parked agent the daemon holds no space for, and a definition changes far less often.
+        """
+        cached = self._declared.get(agent)
+        if cached is not None and cached[0] == daemon:
+            return cached[1]
+        man = agent_manifest.manifest_for(agent_manifest.agent_local_name(agent), self.root)
+        if man is not None and man.record_spaces is not None:
+            answer: bool | None = man.record_spaces
+        else:
+            doc = (self.definition_fn or read_definition)(agent)
+            answer = None if doc is None else agent_manifest.doc_declares_records(doc)
+        self._declared[agent] = (daemon, answer)
+        return answer
+
     def start_unsubscribed(self) -> list[str]:
         """Start one worker for each agent whose record spaces the connector does not hold. Returns
         the agents started.
@@ -1080,15 +1102,24 @@ class Spawner:
         local node 2026-10-12: the daemon's status read `subscriptions: 0` after a restart, a record
         was published, and no worker started.
 
-        The daemon's status is loopback and reaches no node. Each worker leaves the spaces it asked
-        for (`spawn_state.subscribed_file`), and an agent is started when that list is not empty and
-        the daemon holds none of them. An agent with no such file has not run here: it is started
-        when it has no crew file in this repository, since only its definition on the node can say
-        whether it watches a space. The worker subscribes, and its start is a catch-up of each space.
+        The daemon's status is loopback and reaches no node. An agent the daemon holds no record
+        space for is started when ONE of these says it watches records:
+          - what it DECLARES: its crew file (`Manifest.record_spaces`, read statically), else its
+            definition on the node (`crews.registry.<agent>`, read once per connector start);
+          - the note its last worker left (`spawn_state.subscribed_file`): the spaces it asked for.
+        An agent that declares nothing and left no note, and whose definition could not be read, is
+        started too: it has not run here, and only a run can find out.
+
+        WHY THE DECLARATION AND NOT ONLY THE NOTE. The note is written by a worker, and only a
+        subscription makes a worker start for a record. So an agent with a crew file that had not run
+        since the notes arrived was never subscribed and never ran again: web-researcher and
+        cadence-followup on this machine, 2026-10-16 (a republished market-scan request started no
+        worker; web-researcher's last run was 2026-09-06). An agent without records is never started
+        here, so approving a tasks-only agent costs no worker.
 
         ONCE PER AGENT PER CONNECTOR START. A worker that cannot subscribe (a definition that does
-        not load, a space the node refuses) leaves the daemon at zero, and without the limit that
-        would be a new worker every few seconds for a fault no run can mend.
+        not load, a space the node refuses, no workspace to watch yet) leaves the daemon at zero, and
+        without the limit that would be a new worker every few seconds for a fault no run can mend.
         """
         seen = (self.subscriptions_fn or daemon_subscriptions)()
         if seen is None:
@@ -1099,18 +1130,19 @@ class Spawner:
             if st.retired or st.busy or agent in STOPPED_ON_NODE or self._record_runs.get(agent) == daemon:
                 continue
             holds = held.get(agent)
-            if holds is None:
-                continue  # not carried by this daemon, or a daemon that does not report subscriptions
+            if holds is None or holds > 0:
+                continue  # not carried by this daemon (or no count reported), or already subscribed
             note = spawn_state.read_json(spawn_state.subscribed_file(agent))
-            if note is None:
-                if agent_manifest.manifest_for(agent_manifest.agent_local_name(agent), self.root) is not None:
-                    continue  # a crew file's agent leaves its note on its next run
-                why = "it has not run on this computer yet"
-            else:
-                wants = len(note.get("spaces") or [])
-                if not wants or holds > 0:
-                    continue
+            wants = len((note or {}).get("spaces") or [])
+            declares = None if wants else self.declares_records(agent, daemon)
+            if wants:
                 why = f"the connector holds none of its {wants} record space(s)"
+            elif declares:
+                why = "it declares record spaces and the connector holds none of them"
+            elif declares is None and note is None:
+                why = "it has not run on this computer yet, and its definition could not be read"
+            else:
+                continue  # it watches no records
             self._record_runs[agent] = daemon
             _say(f"[spawner] {agent}: {why} — starting a worker, which subscribes and reads what it missed")
             self.on_wake(agent, trigger="records")
@@ -1642,6 +1674,50 @@ def daemon_identities() -> dict[str, str] | None:
             if v:
                 out[str(v)] = transport
     return out
+
+
+# crew_registry.REGISTRY_PREFIX, spelled here because importing crew_registry imports crew_def and with it
+# crewai (~160 MB); the spawner's value is that idling is free. A test holds the two equal.
+_REGISTRY_PREFIX = "crews.registry."
+
+
+def definition_key(agent: str) -> str:
+    """`crews.registry.<name>`: the same key crew_registry.registry_key builds, by the agent's NAME."""
+    return _REGISTRY_PREFIX + agent_manifest.agent_local_name(agent)
+
+
+def read_definition(agent: str) -> dict | None:
+    """The crew definition the node holds for `agent`, or None when it could not be read or there is none.
+
+    Read through the daemon AS the agent (its own namespace, owner_scope as a worker reads it), with
+    the daemon's secret. The stored value is an envelope `{.., doc}` or a bare document; a JSON
+    string is parsed. Nothing here validates it: the spawner only asks whether it watches records.
+    """
+    doc = _serve_doc()
+    port = doc.get("port")
+    if not isinstance(port, int):
+        return None
+    import requests
+
+    try:
+        r = requests.post(
+            f"http://127.0.0.1:{port}/local/call/aimeat_memory_read",
+            json={"key": definition_key(agent), "owner_scope": True},
+            headers={"X-Aimeat-Agent": agent, **spawn_state.serve_auth_headers(doc)},
+            timeout=20,
+        )
+        data = (r.json() or {}).get("data") if r.status_code == 200 else None
+    except Exception:  # noqa: BLE001 — not read is "not known", and the caller treats it so
+        return None
+    value = data.get("value") if isinstance(data, dict) else None
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return None
+    if not isinstance(value, dict):
+        return None
+    return value["doc"] if isinstance(value.get("doc"), dict) else value
 
 
 def daemon_subscriptions() -> tuple[object, dict[str, int]] | None:

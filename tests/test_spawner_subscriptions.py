@@ -34,7 +34,7 @@ def own_home(tmp_path, monkeypatch):
     monkeypatch.setenv("AIMEAT_HOME", str(tmp_path / "home"))
 
 
-def _spawner(tmp_path, held, *, daemon="daemon-1", agents=(A,)):
+def _spawner(tmp_path, held, *, daemon="daemon-1", agents=(A,), definition_fn=None):
     from crewaimeat.spawner import Spawner
 
     started: list[str] = []
@@ -49,6 +49,7 @@ def _spawner(tmp_path, held, *, daemon="daemon-1", agents=(A,)):
         root=tmp_path,
         spawn_fn=spawn,
         subscriptions_fn=lambda: None if state["held"] is None else (state["daemon"], dict(state["held"])),
+        definition_fn=definition_fn,
     )
     return sp, started, state
 
@@ -211,3 +212,133 @@ def test_no_daemon_in_serve_json_is_not_an_empty_daemon(monkeypatch):
 
     monkeypatch.setattr(spawner, "_serve_doc", lambda: {})
     assert spawner.daemon_subscriptions() is None
+
+
+# ── an agent is subscribed for what it DECLARES, without waiting for a first run ─────────────
+# Measured 2026-10-16: web-researcher (a crew file, record_spaces through contract_record_spaces) had
+# not run since 2026-09-06 and had no note, so the spawner never started it, the connector held no
+# subscription, and a republished market-scan request woke nobody.
+
+RECORDS_CREW = (
+    'AGENT_NAME = "watcher"\nRUN_MODE = "spawn"\n\n'
+    "def build_domain(ctx):\n    ...\n\n"
+    "def run():\n"
+    "    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain,\n"
+    '        listen_for=("tasks", "records"), record_spaces=lambda: contract_record_spaces(AGENT_NAME, C)))\n'
+)
+TASKS_CREW = (
+    'AGENT_NAME = "worker"\nRUN_MODE = "spawn"\n\n'
+    "def build_domain(ctx):\n    ...\n\n"
+    "def run():\n    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain))\n"
+)
+GTM_VIESTITTAJA = "gtm-viestittaja#happydude500001@aimeat-finland-001-genesis"
+GTM_MITTARI = "gtm-mittari#happydude500001@aimeat-finland-001-genesis"
+CRM = {"organism_id": "b9c552d1-6a73-40f7-9d2c-91172c7f1332", "ws": "ws-mrkj9sbei68", "space": "crm.contacts"}
+DEFS = {
+    GTM_VIESTITTAJA: {"agent_name": "gtm-viestittaja", "listen_for": ["tasks", "records"], "record_spaces": [CRM]},
+    GTM_MITTARI: {"agent_name": "gtm-mittari", "listen_for": ["tasks"]},
+}
+
+
+def _crew(tmp_path, name, text):
+    crews = tmp_path / "crews"
+    crews.mkdir(exist_ok=True)
+    (crews / f"{name}_crew.py").write_text(text, encoding="utf-8")
+
+
+def test_a_crew_file_that_declares_record_spaces_is_started_with_no_note(tmp_path, capsys):
+    _crew(tmp_path, "watcher", RECORDS_CREW)
+    sp, started, _ = _spawner(tmp_path, {"watcher": 0}, agents=("watcher",))
+    assert sp.start_unsubscribed() == ["watcher"] and started == ["watcher"]
+    assert "declares record spaces" in capsys.readouterr().err + capsys.readouterr().out
+
+
+def test_a_crew_file_without_record_spaces_is_not_started(tmp_path):
+    _crew(tmp_path, "worker", TASKS_CREW)
+    sp, started, _ = _spawner(tmp_path, {"worker": 0}, agents=("worker",))
+    assert sp.start_unsubscribed() == [] and started == []
+
+
+def test_a_node_defined_agent_is_started_by_its_definition_and_a_tasks_only_one_is_not(tmp_path):
+    asked: list[str] = []
+
+    def definition(agent):
+        asked.append(agent)
+        return DEFS.get(agent)
+
+    sp, started, _ = _spawner(
+        tmp_path, {GTM_VIESTITTAJA: 0, GTM_MITTARI: 0}, agents=(GTM_VIESTITTAJA, GTM_MITTARI), definition_fn=definition
+    )
+    assert sp.start_unsubscribed() == [GTM_VIESTITTAJA] and started == [GTM_VIESTITTAJA]
+    assert sp.start_unsubscribed() == [], "the next look, same connector start: nobody again"
+    assert sorted(asked) == sorted([GTM_VIESTITTAJA, GTM_MITTARI]), "each definition read once per connector start"
+
+
+def test_an_agent_already_subscribed_is_not_started(tmp_path):
+    _crew(tmp_path, "watcher", RECORDS_CREW)
+    sp, started, state = _spawner(
+        tmp_path,
+        {"watcher": 1, GTM_VIESTITTAJA: 1},
+        agents=("watcher", GTM_VIESTITTAJA),
+        definition_fn=DEFS.get,
+    )
+    assert sp.start_unsubscribed() == [] and started == []
+
+
+def test_a_subscribed_agent_is_not_started_twice_for_one_connector_start(tmp_path):
+    _crew(tmp_path, "watcher", RECORDS_CREW)
+    sp, started, state = _spawner(tmp_path, {"watcher": 0}, agents=("watcher",))
+    sp.start_unsubscribed()
+    sp.state["watcher"].proc = None  # the worker ran, and subscribed
+    state["held"] = {"watcher": 1}
+    assert sp.start_unsubscribed() == [] and started == ["watcher"]
+
+
+def test_the_crew_files_of_this_repository_say_what_they_watch():
+    from crewaimeat import agent_manifest
+
+    root = Path(__file__).resolve().parents[1]
+    by = agent_manifest.by_agent(root, refresh=True)
+    assert by["web-researcher"].record_spaces is True
+    assert by["cadence-followup"].record_spaces is True
+    assert by["some-listener"].record_spaces is False
+
+
+def test_the_definition_key_is_the_registry_key():
+    from crewaimeat.crew_registry import registry_key
+    from crewaimeat.spawner import definition_key
+
+    assert definition_key(GTM_VIESTITTAJA) == registry_key(GTM_VIESTITTAJA) == "crews.registry.gtm-viestittaja"
+
+
+@pytest.mark.parametrize(
+    ("value", "declares"),
+    [
+        ({"version": 1, "doc": DEFS[GTM_VIESTITTAJA]}, True),  # the envelope publish_crew_def writes
+        (DEFS[GTM_MITTARI], False),  # a bare document
+        ('{"doc": {"listen_for": ["tasks", "records"], "record_spaces": [{"x": 1}]}}', True),  # stored as text
+    ],
+)
+def test_the_definition_is_read_through_the_daemon_as_the_agent(monkeypatch, value, declares):
+    from crewaimeat import agent_manifest, spawner
+
+    sent = {}
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"ok": True, "data": {"key": "crews.registry.gtm-viestittaja", "value": value}}
+
+    def post(url, json=None, headers=None, **kw):
+        sent.update(url=url, json=json, headers=headers)
+        return _Resp()
+
+    monkeypatch.setattr(spawner, "_serve_doc", lambda: {"port": 4711, "pid": 99, "secret": "s"})
+    monkeypatch.setattr("requests.post", post)
+    doc = spawner.read_definition(GTM_VIESTITTAJA)
+    assert agent_manifest.doc_declares_records(doc) is declares
+    assert sent["url"] == "http://127.0.0.1:4711/local/call/aimeat_memory_read"
+    assert sent["json"]["key"] == "crews.registry.gtm-viestittaja"
+    assert sent["headers"]["X-Aimeat-Agent"] == GTM_VIESTITTAJA

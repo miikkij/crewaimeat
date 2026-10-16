@@ -238,6 +238,10 @@ class Manifest:
     #   hour). The hour is the guard against a model stuck in a loop; an agent whose honest work is longer
     #   than that (a recording is as long as the programme) says so here instead of being cut off.
     mode: str | None = None  # the AIMEAT agent MODE this crew expects (MODE / "mode"); None = task-runner.
+    record_spaces: bool | None = None  # True when the crew is woken by workspace records (a `record_spaces`
+    #   with "records" in `listen_for`), False when it is not, None when this file cannot say: a crew
+    #   whose definition lives on the node (CREW_DEF_SOURCE = "node"). The spawner subscribes a True one
+    #   at every connector start without waiting for its first run (spawner.start_unsubscribed).
     has_build_domain: bool = False
     has_run: bool = False
     is_brain_stub: bool = False
@@ -368,6 +372,37 @@ def _json_doc_path(literals: dict, tree: ast.Module, root: Path) -> Path | None:
     return None
 
 
+def doc_declares_records(doc) -> bool:
+    """A crew definition (a crew_defs/*.json document or the node's `crews.registry.<agent>`) that is
+    woken by workspace records: a non-empty `record_spaces` and "records" in `listen_for`, the pair
+    crew_def.validate_crew_doc requires together."""
+    if not isinstance(doc, dict):
+        return False
+    spaces, listen = doc.get("record_spaces"), doc.get("listen_for")
+    return isinstance(spaces, list) and bool(spaces) and isinstance(listen, list) and "records" in listen
+
+
+def _crewspec_declares_records(tree: ast.AST) -> bool:
+    """A Python crew whose CrewSpec(...) passes `record_spaces=` (not None) and lists "records" in
+    `listen_for`. Read from the call's keywords, statically: the value itself is usually a callable
+    (contract_record_spaces) that only a run resolves."""
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        name = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else ""
+        if name != "CrewSpec":
+            continue
+        kw = {k.arg: k.value for k in node.keywords if k.arg}
+        spaces = kw.get("record_spaces")
+        if spaces is None or (isinstance(spaces, ast.Constant) and spaces.value is None):
+            continue
+        listen = kw.get("listen_for")
+        if listen is not None and any(isinstance(n, ast.Constant) and n.value == "records" for n in ast.walk(listen)):
+            return True
+    return False
+
+
 def read(path: Path, root: Path) -> Manifest | None:
     """One crew file -> its Manifest. None when the file cannot be parsed at all."""
     try:
@@ -388,7 +423,7 @@ def read(path: Path, root: Path) -> Manifest | None:
     # and would otherwise report a perfectly healthy agent as having no identity, no offer and no
     # routing. What we cannot see, we name; we do not accuse.
     if str(literals.get("CREW_DEF_SOURCE") or "").strip().lower() == "node":
-        kind = "node"
+        kind = "node"  # record_spaces stays None: only the definition on the node can say
     elif doc_path and doc_path.exists():
         kind = "json"
         try:
@@ -399,10 +434,12 @@ def read(path: Path, root: Path) -> Manifest | None:
         for json_key, field in _JSON_KEYS.items():
             if doc.get(json_key) is not None:
                 fields[field] = doc[json_key]
+        fields["record_spaces"] = doc_declares_records(doc)
     else:
         for const, field in _CONSTANTS.items():
             if const in literals:
                 fields[field] = literals[const]
+        fields["record_spaces"] = _crewspec_declares_records(tree)
 
     return Manifest(
         agent=agent or "",
