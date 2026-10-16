@@ -430,6 +430,11 @@ def published_refs(agent_name: str) -> list[dict]:
 
     The gate record `julkaisu.<ref>.portti` is the human's decision, so it — not a guess about what
     "published" means — is what the measurer keys on.
+
+    THE ENGINE WRITES `{picks: [<option id>], by?, answeredAt}` (aimeat-protocol
+    services/workflow/engine-human.ts applyHumanAnswer). This read only `paatos` / `decision`, which
+    no gate the engine answered carries, so every approved run looked unpublished and nothing was
+    ever measured. Both shapes are read: `picks` first, the old fields for records written by hand.
     """
     r = _aimeat_call(agent_name, "aimeat_memory_list", {"owner_scope": True, "prefix": "julkaisu.", "limit": 500}) or {}
     out = []
@@ -447,14 +452,23 @@ def published_refs(agent_name: str) -> list[dict]:
                 value = {"paatos": value}
         if not isinstance(value, dict):
             continue
-        decision = str(value.get("paatos") or value.get("decision") or "").strip().casefold()
+        picks = value.get("picks")
+        if isinstance(picks, list) and picks:
+            decision = str(picks[0]).strip().casefold()
+        else:
+            decision = str(value.get("paatos") or value.get("decision") or "").strip().casefold()
         if decision not in ("hyvaksy", "hyväksy", "approve", "approved", "julkaistu", "published"):
             continue
         out.append(
             {
                 "ref": m.group(1),
                 "at": str(
-                    value.get("at") or value.get("paatettu") or it.get("updated_at") or it.get("updatedAt") or ""
+                    value.get("at")
+                    or value.get("answeredAt")
+                    or value.get("paatettu")
+                    or it.get("updated_at")
+                    or it.get("updatedAt")
+                    or ""
                 ),
                 "julkaistu": [c for c in (value.get("julkaistu") or value.get("kanavat") or []) if isinstance(c, str)],
             }

@@ -937,6 +937,30 @@ def test_only_approved_gates_are_measured(monkeypatch):
     assert [r["ref"] for r in refs] == ["a"] and refs[0]["julkaistu"] == ["linkedin"]
 
 
+def test_the_gate_answer_the_workflow_engine_writes_is_read(monkeypatch):
+    """The engine's human-input step writes {picks: [<option id>], by?, answeredAt} to the gate key
+    (aimeat-protocol services/workflow/engine-human.ts applyHumanAnswer). Reading only `paatos` left
+    every approved run unmeasured."""
+    monkeypatch.setattr(
+        jd,
+        "_aimeat_call",
+        lambda a, tool, payload: {
+            "items": [
+                {
+                    "key": "julkaisu.a.portti",
+                    "value": {"picks": ["hyvaksy"], "by": "happydude500001", "answeredAt": "2026-10-16T11:00:00Z"},
+                },
+                {"key": "julkaisu.b.portti", "value": {"picks": ["hylkaa"], "answeredAt": "2026-10-16T11:00:00Z"}},
+                {"key": "julkaisu.c.portti", "value": {"picks": ["uusiksi"]}},
+                {"key": "julkaisu.d.portti", "value": {"paatos": "hyvaksy", "at": "2026-08-20T10:00:00Z"}},
+            ]
+        },
+    )
+    refs = jd.published_refs("julkaisu-mittari")
+    assert [r["ref"] for r in refs] == ["a", "d"], "the engine's picks and the old paatos field both count"
+    assert refs[0]["at"] == "2026-10-16T11:00:00Z", "the answer's own time is when it was approved"
+
+
 def test_an_attempt_is_placed_by_what_it_names_not_by_a_guess():
     assert jd._attempt_ref({"target_key": "julkaisu.p1a2b3c.linkedin"}) == "p1a2b3c"
     assert jd._attempt_ref({"ref": "p9z8y7x"}) == "p9z8y7x"
