@@ -41,6 +41,7 @@ import time
 from crewaimeat.agent_manifest import agent_route
 from crewaimeat.agent_scopes import runtime_scopes
 from crewaimeat.aimeat_crew import _aimeat_call, _aimeat_rest
+from crewaimeat.connections_tools import READ_AS_OWNER as CONNECTIONS_READ_AS_OWNER
 from crewaimeat.connections_tools import READ_SCOPES as CONNECTIONS_READ_SCOPES
 from crewaimeat.mcp_tools import USE_SCOPES as MCP_USE_SCOPES
 from crewaimeat.workspace_tools import READ_SCOPES, WRITE_SCOPES
@@ -74,10 +75,13 @@ NAME_RE = re.compile(r"^[a-z][a-z0-9-]{2,39}$")
 #               (routes/mcp-servers.ts), and it opens the two lists as well, which take mcp:read OR
 #               mcp:use. Measured 2026-10-12: an agent holding mcp:use alone listed the servers, listed
 #               one's tools and called one. mcp_tools.USE_SCOPES is the one source.
-#   connections read its own publish history and the       connections:read (GET /v1/connections/attempts),
-#               replies to one published item               connections:read-through (POST .../:id/replies).
-#               connections:use would open both, and it also publishes, so it is never asked for here.
-#               connections_tools.READ_SCOPES is the one source.
+#   connections read the publish history and the replies   connections:read (GET /v1/connections/attempts),
+#               to one published item, its own and its     connections:read-through (POST .../:id/replies),
+#               owner's                                     connections:read-as-owner (the owner's items).
+#               connections:use would open its own items, and it also publishes, so it is never asked for.
+#               read-as-owner is outside every wildcard on the node, so a concierge holding `*` does not
+#               hold it (NO_WILDCARD below) and it is left out and named unless held by name: the owner
+#               ticks it on the agent's page. connections_tools.READ_SCOPES is the one source.
 PROPOSABLE_TOOLS: dict[str, tuple[str, ...]] = {
     "memory": ("memory:read", "memory:write"),
     "workspace": READ_SCOPES,
@@ -123,8 +127,18 @@ def _plain(text: str) -> str:
     return str(text or "").replace("{{", "{").replace("}}", "}").strip()
 
 
+# The node's words that no wildcard carries (`*` or `<area>:*`): the owner gives each by hand. A proposal
+# that asked for one the concierge does not hold BY NAME would be wider than the concierge and refused whole
+# (SCOPE_ESCALATION), so it is left out and named instead, also when the concierge's own list is unknown.
+NO_WILDCARD = frozenset({CONNECTIONS_READ_AS_OWNER})
+
+
 def _covered(held: list[str], scope: str) -> bool:
-    if "*" in held or scope in held:
+    if scope in held:
+        return True
+    if scope in NO_WILDCARD:
+        return False
+    if "*" in held:
         return True
     return f"{scope.split(':', 1)[0]}:*" in held
 
@@ -152,8 +166,8 @@ def compute_scopes(tools: list[str], held: list[str] | None, *, node_road: bool 
     for s in ("memory:read", *runtime, *(s for t in tools for s in tool_scopes(t) or ())):
         if s not in wanted:
             wanted.append(s)
-    if held is None:
-        return wanted, []
+    if held is None:  # the node's own ceiling decides, except for a word no wildcard carries
+        return [s for s in wanted if s not in NO_WILDCARD], [s for s in wanted if s in NO_WILDCARD]
     return [s for s in wanted if _covered(held, s)], [s for s in wanted if not _covered(held, s)]
 
 

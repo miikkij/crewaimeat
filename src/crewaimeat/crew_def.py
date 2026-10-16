@@ -424,11 +424,12 @@ TOOL_PURPOSES: dict[str, str] = {
         "credential. `mcp:<server>` gives the agent ONE named server instead of all of them. Needs mcp:use"
     ),
     "connections": (
-        "READ what the agent published through its own connected social accounts (newest first, filtered by "
-        "provider and date) and the replies people wrote to one published item (Mastodon, Bluesky, YouTube, X, "
-        "Facebook Page, Instagram, Reddit; LinkedIn refuses). Read-only: it never posts, answers or deletes. On X "
-        "every read is billed, so X replies at most once a week. Needs connections:read and "
-        "connections:read-through"
+        "READ what the agent and its owner published through their connected social accounts (newest first, "
+        "each item marked as the agent's or the owner's, filtered by provider and date) and the replies people "
+        "wrote to one published item (Mastodon, Bluesky, YouTube, X, Facebook Page, Instagram, Reddit; LinkedIn "
+        "refuses). Read-only: it never posts, answers or deletes. On X every read is billed, so X replies at most "
+        "once a week. Needs connections:read and connections:read-through; the owner's items also need "
+        "connections:read-as-owner, which the owner gives by hand on the agent's page (no wildcard covers it)"
     ),
     "decline": "say you will NOT carry out this request (no tool or access for it, or not yours to do), with the reason; the task then ends as declined, not done",
 }

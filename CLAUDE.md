@@ -124,10 +124,14 @@ status cells, append decisions), so the two sides stay synced without drifting p
   here) and `read_connection_replies` (POST `/v1/connections/attempts/{id}/replies`, sent once: on X
   every read is billed, so the descriptions say X at most once a week). `_node_read` lets those two
   requests through and refuses every other method and path. The permissions are `connections:read` +
-  `connections:read-through` (`connections_tools.READ_SCOPES`, which the proposer reads); never
-  `connections:use`, which would open both and also publishes. **The node lists only what the asking
-  identity published** (`resolveIdentity`: an agent is its own GAII), so an agent does not see what its
-  owner published in person; the empty answer says so.
+  `connections:read-through` + `connections:read-as-owner` (`connections_tools.READ_SCOPES`, which the
+  proposer reads); never `connections:use`, which would open the agent's own items and also publishes.
+  **The owner's items need `connections:read-as-owner`** (Jouni, 2026-10-16): the node reads the agent's
+  own items always and the owner's only with that word, and marks each history item `holder` own or
+  owner, which the list shows. **No wildcard carries it**, on the node or in
+  `concierge_propose.NO_WILDCARD`: a concierge holding `*` leaves it out of a proposal and names it, and
+  the owner ticks it by hand on the agent's page. A history with none of the owner's items says what
+  they would take, because an empty list cannot tell "nothing published" from "not allowed to see".
 - **A definition can be a workspace-contract agent: `record_spaces` (2026-10-12).** A JSON crew
   definition names the workspace spaces whose records wake its agent, as the top-level
   `"record_spaces": [{"organism_id", "ws", "space"}]` with `"listen_for": ["tasks", "records"]`

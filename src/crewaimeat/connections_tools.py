@@ -21,14 +21,18 @@ services/connections/history.ts, services/connections/replies.ts):
        409 NOT_READABLE is a platform that will never allow it (LinkedIn by design, a provider with no
        reader, comments turned off, a deleted post); 502 REPLIES_UNAVAILABLE may work later.
 
-WHOSE HISTORY. The node lists the items whose publisher is the identity that asks
-(`resolveIdentity`: an agent is its own GAII, and only the owner in person is the owner's GHII). So an
-agent sees what IT published through its own connected accounts, not what its owner published in
-person; an empty list says that, so the model does not read it as "nothing was published".
+WHOSE HISTORY. Both reads take the holders the caller may read (aimeat-protocol
+services/connections/access.ts connectionHoldersOf): the agent's own items always, and its OWNER's
+items when the agent holds `connections:read-as-owner`, the permission the owner ticks by hand on the
+agent's page and that no wildcard covers (Jouni, 2026-10-16). Each history item carries `holder`:
+"own" or "owner", and the list shows it. An agent without the permission sees only what it published
+itself, so a list with no owner's item says what it would take; the model must not read it as "the
+owner published nothing".
 
-Access is the node's. READ_SCOPES names the two words an agent needs for both reads without being
-able to publish (`connections:use` would cover both, and it also publishes). Nothing here checks them
-first: the node does, and its refusal reaches the model in the node's own words.
+Access is the node's. READ_SCOPES names the three words an agent needs for both reads, its owner's
+items included, without being able to publish (`connections:use` would cover the agent's own items,
+and it also publishes). Nothing here checks them first: the node does, and its refusal reaches the
+model in the node's own words.
 """
 
 from __future__ import annotations
@@ -39,9 +43,11 @@ from urllib.parse import urlencode
 
 from crewaimeat.aimeat_crew import _aimeat_rest
 
-# The words the node asks for (see the module docstring). `connections:read` opens the history and
-# `connections:read-through` the replies; neither publishes.
-READ_SCOPES = ("connections:read", "connections:read-through")
+# The words the node asks for (see the module docstring). `connections:read` opens the history,
+# `connections:read-through` the replies, and `connections:read-as-owner` adds the owner's items to
+# both; none of them publishes. The last one is outside every wildcard, so `*` does not hold it.
+READ_AS_OWNER = "connections:read-as-owner"
+READ_SCOPES = ("connections:read", "connections:read-through", READ_AS_OWNER)
 
 HISTORY_PATH = "/v1/connections/attempts"
 NODE_HISTORY_MAX = 200  # the route's own ceiling (routes/connections.ts)
@@ -66,7 +72,7 @@ NOT_DONE = "NOT DONE."
 NO_ANSWER = "NO ANSWER."
 REFUSED_HERE = "REFUSED BY THIS TOOL, NOTHING SENT."
 
-_NOT_ALLOWED_CODES = frozenset({"SCOPE_DENIED", "CONNECTIONS_DISABLED", "FORBIDDEN"})
+_NOT_ALLOWED_CODES = frozenset({"SCOPE_DENIED", "CONNECTIONS_DISABLED", "FORBIDDEN", "READ_AS_OWNER_REQUIRED"})
 
 
 class NotARead(ValueError):
@@ -183,7 +189,18 @@ def list_attempts(agent_name: str, *, limit=20, providers="", exclude_providers=
         keep.append(a)
     if len(keep) > want:
         notes.append(f"{len(keep) - want} more matched; raise limit to see them.")
+    if not any(a.get("holder") == "owner" for a in rows):
+        notes.append(OWNER_NOTE)
     return keep[:want], notes, ""
+
+
+# Said whenever the node's answer holds none of the owner's items: either the owner published nothing
+# here, or the agent lacks the permission that shows them. Which one cannot be told from the answer.
+OWNER_NOTE = (
+    "None of these is your owner's. Your owner's published items are listed only when you hold "
+    f"{READ_AS_OWNER}, a permission your owner gives you by hand on your page under Agents; without it, "
+    "an empty or short list does not mean your owner published nothing. Say which one you cannot tell."
+)
 
 
 def _metrics(latest) -> str:
@@ -195,18 +212,17 @@ def _metrics(latest) -> str:
 
 def render_attempts(items: list[dict], notes: list[str]) -> str:
     if not items:
-        lines = [
-            "No published item matches. The node lists only what was published under YOUR identity, through "
-            "accounts you connected yourself; what your owner published in person is not in this list."
-        ]
+        lines = ["No published item matches."]
     else:
         lines = [
             f"{len(items)} published item(s), newest first. Pass an item's id to read_connection_replies; only "
-            "an item with status done was published, so only it can have replies."
+            "an item with status done was published, so only it can have replies. `yours` is an item you "
+            "published, `your owner's` one your owner published."
         ]
         for a in items:
+            holder = "your owner's" if a.get("holder") == "owner" else "yours"
             line = (
-                f"- id {a.get('id')} | {a.get('provider') or 'unknown'} ({a.get('accountLabel') or '?'}) | "
+                f"- id {a.get('id')} | {holder} | {a.get('provider') or 'unknown'} ({a.get('accountLabel') or '?'}) | "
                 f"{a.get('status') or '?'} | {a.get('createdAt') or '?'}"
             )
             if a.get("externalRef"):
@@ -314,10 +330,11 @@ def make_connections_tools(agent_name: str) -> list:
     return [
         _described(
             "list_connection_history",
-            "What YOU have published through your connected accounts, newest first. Each item says its status "
-            "(done, failed, rejected, held, queued or in_flight), where it landed (the post's address at the "
-            "provider), the account it went out through, and the latest numbers the node took of it. The item "
-            "id is what read_connection_replies takes. Only your own publishes are listed. Filters: `limit` "
+            "What YOU have published through your connected accounts, and what your OWNER published when you "
+            f"hold {READ_AS_OWNER} (a permission your owner gives by hand), newest first. Each item says whose "
+            "it is (yours or your owner's), its status (done, failed, rejected, held, queued or in_flight), where "
+            "it landed (the post's address at the provider), the account it went out through, and the latest "
+            "numbers the node took of it. The item id is what read_connection_replies takes. Filters: `limit` "
             '(default 20, max 200), `providers` (only these, comma-separated, e.g. "mastodon,bluesky"), '
             '`exclude_providers` (leave these out, e.g. "x"), `since` (a date, 2026-10-15, or a time), '
             '`status` ("done" lists only what was published). ' + _X_RULE,
@@ -325,7 +342,7 @@ def make_connections_tools(agent_name: str) -> list:
         ),
         _described(
             "read_connection_replies",
-            "Read what people answered to one item you published (its id from list_connection_history is "
+            "Read what people answered to one item you or your owner published (its id from list_connection_history is "
             "attempt_id; `limit` is how many replies at most, default 100, max 200). Works for Mastodon, "
             "Bluesky, YouTube, X, a Facebook Page, Instagram and Reddit; LinkedIn refuses by design, because it "
             "lets only select partners read the comments on a member's post. It reads from the provider NOW "
@@ -334,7 +351,8 @@ def make_connections_tools(agent_name: str) -> list:
             "that need an answer, the criticism worth taking seriously, the overall tone; do not paste them "
             f'all back. An answer that starts with "{NOT_READABLE}" means the platform will never allow it '
             f'(LinkedIn, a provider with no reader, comments turned off, a deleted post); "{NOT_NOW}" means it '
-            f'may work later; "{NOT_ALLOWED}" means your owner has not given you the permission. This tool '
+            f'may work later; "{NOT_ALLOWED}" means your owner has not given you the permission (an item of '
+            f"your owner's needs {READ_AS_OWNER}). This tool "
             "never posts, answers or deletes anything.",
             read_connection_replies,
         ),

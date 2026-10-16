@@ -165,10 +165,37 @@ def test_a_date_that_is_not_one_never_reaches_the_node(node):
     assert n.calls == []
 
 
-def test_an_empty_history_says_whose_publishes_are_listed(node):
+def test_an_empty_history_names_the_permission_the_owners_items_need(node):
     node(history={"attempts": []})
     out = _tools()["list_connection_history"].run()
-    assert "under YOUR identity" in out and "owner published in person is not in this list" in out
+    assert "No published item matches." in out
+    assert "connections:read-as-owner" in out and "does not mean your owner published nothing" in out
+
+
+def test_each_item_says_whose_it_is(node):
+    owner_item = _attempt("a-owner-1", "linkedin", "2026-10-16T08:00:00.000Z", holder="owner")
+    own_item = _attempt("a-own-1", "mastodon", "2026-10-15T08:00:00.000Z", holder="own")
+    node(history={"attempts": [owner_item, own_item]})
+    out = _tools()["list_connection_history"].run()
+    assert "id a-owner-1 | your owner's | linkedin" in out
+    assert "id a-own-1 | yours | mastodon" in out
+    assert "connections:read-as-owner" not in out, "the owner's items are there, so nothing is missing"
+
+
+def test_a_history_with_only_own_items_says_what_the_owners_would_take(node):
+    node(history=HISTORY)  # every item is the agent's own
+    out = _tools()["list_connection_history"].run()
+    assert "None of these is your owner's" in out and "connections:read-as-owner" in out
+
+
+def test_an_owners_item_without_the_permission_is_the_owners_decision(node):
+    node(
+        replies=_refused(
+            "READ_AS_OWNER_REQUIRED", "This item is your owner's; reading it needs connections:read-as-owner.", 403
+        )
+    )
+    out = _tools()["read_connection_replies"].run(attempt_id=AID)
+    assert out.startswith(ct.NOT_ALLOWED) and "connections:read-as-owner" in out
 
 
 def test_a_missing_permission_reaches_the_model_in_the_nodes_words(node):
@@ -323,13 +350,29 @@ def test_the_crew_menu_offers_it(monkeypatch):
     assert "connections:read" in row["purpose"]
 
 
-def test_the_proposer_asks_for_the_two_read_words_and_never_for_use():
+def test_the_proposer_asks_for_the_three_read_words_and_never_for_use():
     from crewaimeat import concierge_propose
 
-    assert ct.READ_SCOPES == ("connections:read", "connections:read-through")
+    assert ct.READ_SCOPES == ("connections:read", "connections:read-through", "connections:read-as-owner")
     assert concierge_propose.PROPOSABLE_TOOLS["connections"] is ct.READ_SCOPES
     asked, left_out = concierge_propose.compute_scopes(["connections"], ["*"])
-    assert {"connections:read", "connections:read-through"} <= set(asked) and left_out == []
     assert "connections:use" not in asked, "use publishes; this tool never does"
     asked, left_out = concierge_propose.compute_scopes(["connections"], ["memory:read", "memory:write"])
-    assert left_out == ["connections:read", "connections:read-through"], "capped at what the proposer holds"
+    assert left_out == list(ct.READ_SCOPES), "capped at what the proposer holds"
+
+
+def test_read_as_owner_is_asked_for_only_when_the_proposer_holds_it_by_name():
+    """No wildcard carries connections:read-as-owner on the node, so a concierge holding `*` does not
+    hold it: asking for it would make the proposal wider than the proposer and refused whole."""
+    from crewaimeat import concierge_propose
+
+    asked, left_out = concierge_propose.compute_scopes(["connections"], ["*"])
+    assert {"connections:read", "connections:read-through"} <= set(asked)
+    assert left_out == ["connections:read-as-owner"], "left out and named, for the owner to tick by hand"
+    asked, left_out = concierge_propose.compute_scopes(["connections"], ["connections:*", "memory:*"])
+    assert "connections:read-as-owner" in left_out, "an area wildcard does not carry it either"
+    asked, left_out = concierge_propose.compute_scopes(["connections"], ["*", "connections:read-as-owner"])
+    assert "connections:read-as-owner" in asked and left_out == []
+    asked, left_out = concierge_propose.compute_scopes(["connections"], None)
+    assert "connections:read-as-owner" not in asked and left_out == ["connections:read-as-owner"]
+    assert "connections:read" in asked, "an unknown list still leaves the rest to the node's own ceiling"
