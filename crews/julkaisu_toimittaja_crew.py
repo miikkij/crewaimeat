@@ -83,7 +83,39 @@ OFFERS = [
             "varmuus": "En löytänyt lukua siitä, kuinka moni keskeytti asennuksen uudelleenkytkennän kohdalla.",
             "lahde": "https://aimeat.io/changelog.json#2026-08-24",
         },
-    }
+    },
+    {
+        # The step after the workflow's last gate: the approved pieces become LÄHETIN draft posts.
+        # Code only (crewaimeat.julkaisu_lahetin): no model, and nothing is sent to any network.
+        "id": "vie-lahettimeen",
+        "title": "Vie hyväksytyt tekstit LÄHETTIMEEN luonnoksiksi",
+        "ask": "Kun olet hyväksynyt julkaisun portilla, vien LinkedIn-postauksen ja X-ketjun LÄHETTIMEN "
+        "tilaan AIMEAT-viestintä luonnoksiksi, LinkedIn-postaukseen ensimmäisen kuvan. En lähetä mitään "
+        "mihinkään: sinä tai tiimisi lähetätte LÄHETTIMESTÄ. Jos joku on jo muokannut tai lähettänyt "
+        "postauksen, en kirjoita sen päälle.",
+        "example": "Vie tämän ajon tekstit LÄHETTIMEEN",
+        "cost": "cheap",
+        "latency": "seconds",
+        "tags": ["julkaisupoyta", "lahetin"],
+        "repeatability": "idempotent",
+        "verification": "deterministic",
+        "dataHandling": "local-only",
+        "json": True,
+        "consequences": [],
+        "required_to_function": {"kind": "deterministic", "op": "nonempty", "key": "julkaisu.{ref}.portti"},
+        "success_signal": {"kind": "deterministic", "op": "nonempty", "key": "julkaisu.{ref}.lahetin"},
+        "deliverable_location": {"key": "julkaisu.{ref}.lahetin"},
+        "sample": {
+            "space": {"organism_id": "fbb51de5-56d5-4143-9871-b998a1187655", "ws": "ws-mv8q4o8aefu"},
+            "gate": "hyvaksy",
+            "posts": {
+                "jp-2026-10-16-linkedin": {"channel": "linkedin", "updatedAt": "2026-10-16T12:00:00Z"},
+                "jp-2026-10-16-x": {"channel": "x", "updatedAt": "2026-10-16T12:00:00Z"},
+            },
+            "report": ["linkedin: draft jp-2026-10-16-linkedin written.", "x: draft jp-2026-10-16-x written."],
+            "at": "2026-10-16T12:00:00Z",
+        },
+    },
 ]
 
 README = """[[FIGLET:slant]["Toimittaja"]]
@@ -100,6 +132,9 @@ varmuus) — ja lisään valitun merkinnän `julkaisu.kerrottu`-listaan, jottei 
 **En kirjoita postauksia enkä julkaise mitään.** Kirjoittajat lukevat aineiston ja valitsevat sanat.
 
 **Mitä en pysty varmistamaan**, sen kerron kentässä `varmuus` — en keksi ennen-tilaa jota en löytänyt.
+
+**Portin jälkeen** (`vie-lahettimeen`): kun julkaisu on hyväksytty, vien LinkedIn-postauksen ja
+X-ketjun LÄHETTIMEEN luonnoksiksi. En lähetä mitään; ihminen lähettää LÄHETTIMESTÄ.
 """
 
 
@@ -134,8 +169,19 @@ def build_domain(ctx: BuildContext):
     return ([editor], [task])
 
 
+def on_task(task: dict) -> str | None:
+    """The `vie-lahettimeen` step, done in code; None for the editor's own task, which needs the model."""
+    from crewaimeat.julkaisu_lahetin import is_lahetin_task, vie_lahettimeen
+
+    if not is_lahetin_task(task):
+        return None
+    return vie_lahettimeen(AGENT_NAME, task=task, task_id=(task or {}).get("id"))
+
+
 def run() -> None:
-    run_crew(CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README, temperature=0.4))
+    run_crew(
+        CrewSpec(agent_name=AGENT_NAME, build_domain=build_domain, readme_md=README, temperature=0.4, on_task=on_task)
+    )
 
 
 if __name__ == "__main__":

@@ -57,6 +57,7 @@ TAUSTA_KEY = "julkaisu.{ref}.tausta"
 KULMAT_KEY = "julkaisu.{ref}.kulmat"
 VALINTA_KEY = "julkaisu.{ref}.valinta"
 GROK_KEY = "julkaisu.{ref}.grok"
+LAHETIN_KEY = "julkaisu.{ref}.lahetin"  # what julkaisu_lahetin wrote into LÄHETIN, and when
 OHJAAJAT_KEY = "julkaisu.ohjaajat"
 
 # The chosen angle's fields a writer works from.
