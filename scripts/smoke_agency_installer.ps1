@@ -23,8 +23,11 @@ try {
         if (-not (Test-Path -LiteralPath (Join-Path $runtimePath $file))) { throw "Packaged resource missing: $file" }
     }
     # agency 2.0 ships its own engine: a portable Node and the AIMEAT connector, never the machine's.
+    # [\\/] and not [\/]: in a .NET pattern [\/] is the forward slash alone, and an
+    # installed path on Windows has backslashes, so that pattern found no connector (the second release
+    # run of agency-v2.0.0, 2026-10-22).
     $nodeExe = @(Get-ChildItem -LiteralPath $installRoot -File -Recurse -Filter 'node.exe' | Where-Object { $_.Directory.Name -eq 'node' })
-    $connectorJs = @(Get-ChildItem -LiteralPath $installRoot -File -Recurse -Filter 'aimeat.js' | Where-Object { $_.FullName -match 'connector[\/]node_modules[\/]aimeat[\/]dist[\/]bin' })
+    $connectorJs = @(Get-ChildItem -LiteralPath $installRoot -File -Recurse -Filter 'aimeat.js' | Where-Object { $_.FullName -match 'connector[\\/]node_modules[\\/]aimeat[\\/]dist[\\/]bin' })
     if ($nodeExe.Count -ne 1 -or $connectorJs.Count -ne 1) { throw 'Expected one bundled node.exe and one bundled connector' }
     $connectorVersion = & $nodeExe[0].FullName $connectorJs[0].FullName --version
     if ($LASTEXITCODE -ne 0) { throw 'Bundled connector does not run on the bundled node' }
