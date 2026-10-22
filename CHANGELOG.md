@@ -4,6 +4,59 @@ Notable changes to crewaimeat. Format loosely follows [Keep a Changelog](https:/
 Dates are the working dates. A change reaches a running fleet only on its next restart, because the
 daemons import the modules at start. `git log` has the measurement behind each entry.
 
+## [0.9.0] — 2026-10-22 — definition agents grow up, and every open security alert is closed
+
+### Security
+- **Every open Dependabot alert is closed** (a1ba666, 90bc43b): Pillow 13.0.0, certifi 2026.10.19,
+  uv 0.13.5, virtualenv 21.14.12, pypdf 6.21.2 and OpenTelemetry 1.45.1 in `uv.lock`, rustls 0.23.46 in
+  aimeat-agency's `Cargo.lock`. The mcp advisory is dismissed as not used: it is in the SDK's server
+  transport, and mcp is only a client here (crewai pins `mcp~=1.28.1`).
+- **Python 3.11 is the floor** (`requires-python >=3.11,<3.14`): Pillow 13 supports nothing older, and
+  with 3.10 allowed the lock kept the vulnerable Pillow for it. Nothing here ran 3.10.
+- **uv over crewai's cap**: `[tool.uv] override-dependencies = ["uv>=0.13.4"]` (crewai 1.15.26 caps uv
+  below 0.12 for its own command line, which nothing here runs). Drop it when crewai lifts its cap.
+
+### Added
+- **Definition agents (a crew written as JSON on the node) can do far more without a crew file:**
+  - `news`: today's headlines of a topic straight from the publishers' RSS feeds (Yle, HS, IS, IL), with
+    no search engine; `[news] NOT READ` is a fault, never "no news today".
+  - `record_spaces`: the workspace spaces whose published records wake the agent; each record becomes a
+    real task, `backfill` asks for what is already there, ten tasks a look.
+  - `task_scope`: as a workflow step, the deliverable lands at the key the step names and the run's
+    variables reach the task as data.
+  - `browser` with `browser_domains`: a browser fenced to the named hosts by the browser itself (resolver
+    rules, GET and HEAD only, no form is sent).
+  - `mcp` / `mcp:<server>`: the MCP servers the owner attached to their node; the liaison also sees
+    `aimeat_discover`, `aimeat_invoke` and the three `aimeat_mcp_*` tools.
+  - `connections` (read-only): what the agent and, with `connections:read-as-owner`, its owner published
+    through connected accounts, and the replies to one item.
+- **Crew tools**: `file_fetch` (download, unpack and pick a big file while streaming, and pipe the
+  records on), `stream_record` (record a live HLS stream into one MP4 in the owner's storage), and
+  `app_tools` sees the owner's own unpriced app tools.
+- **Skill `crew-definition-craft`**: how to design a definition that works on its first real run.
+- **Machines**: a connector serves only its own agents, the spawner reads from the daemon why an agent
+  left (`/local/departed`), a crew states its own run limit (`RUN_TIMEOUT_S`), the owner's stop is
+  honoured (aimeat-crewai 0.33.0), and offers reach the node at the spawner's start.
+- **Products**: TV-opas recorder agent; julkaisupöytä's approved posts become LÄHETIN drafts; a paid sale
+  in the AIMEAT store becomes a CADENCE contact and a won deal; social radar reads Bluesky and Mastodon.
+
+### Fixed
+- **An agent's identity travels in the transport and its name spells its keys and routes**: 47 sites had
+  built keys and paths from the full identity, and a credential is found by name and never sent as a
+  bearer.
+- **Workspace reads follow the connector**: since aimeat-protocol 6fc3ef4d5 a read without ids answers
+  titles only; the contract modules open records by id through one reader, and an update reads its
+  record by id instead of writing one field over it.
+- **Spawner**: a new agent's first task gets a worker at once, a burst of wakes starts one process, an
+  owner that cannot be asked does not bring in agents another connector carries, and a deleted agent's
+  runtime files are removed.
+- **`doctor --live`** reads the schedule list as an agent that holds `workflow:read` (aimeat 4.0.0
+  enforces REST scope words).
+
+### Changed
+- **The aimeat connector pin is 4.1.2** (npm latest); aimeat 4.0.0 changed the node's REST scope checks
+  and removed the old morsel price fields, which no offer here uses.
+
 ## [0.8.1] — 2026-10-04 — the node's own road does not override this machine's routing
 
 ### Changed

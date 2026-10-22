@@ -1,6 +1,6 @@
 [project]
 name = "crewaimeat"
-version = "0.8.1"
+version = "0.9.0"
 description = "AIMEAT × CrewAI integration: a validated crew template (liaison + daemon + live progress + date injection) for connecting CrewAI crews to AIMEAT.io, with example crews."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"  # 3.11 since 2026-10-22: Pillow 13.0.0, which closes nine security advisories (one critical), supports nothing older, and with 3.10 allowed the lock kept the vulnerable 12.3.0 for it. Nothing here ran 3.10: .python-version is 3.12, crewaimeat is not on PyPI, and the repositories that use it run 3.12 and 3.13.
