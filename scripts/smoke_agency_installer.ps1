@@ -65,27 +65,6 @@ try {
     $page = Invoke-WebRequest "$base/?boot=$env:AIMEAT_AGENCY_TOKEN"
     if ($page.Content -match '__AGENCY_TOKEN__') { throw 'Cockpit token injection failed' }
     Write-Host 'Installer smoke passed: bundle resources, bundled engine, provisioning, health, auth and HTML.'
-} catch { $ready = $false }
-        if ($ready) { break }
-        Start-Sleep -Seconds 1
-    }
-    if (-not $ready) { throw 'Packaged cockpit did not become ready' }
-    $denied = Invoke-WebRequest "$base/api/brains" -SkipHttpErrorCheck
-    if ($denied.StatusCode -ne 401) { throw 'Missing token was not rejected' }
-    $headers = @{Authorization = "Bearer $env:AIMEAT_AGENCY_TOKEN"}
-    $templates = Invoke-RestMethod "$base/api/templates" -Headers $headers
-    if (-not $templates.templates) { throw 'Packaged templates missing' }
-    $body = @{agent_name='smoke-agent'; template_id='topic-watcher'} | ConvertTo-Json
-    $brain = Invoke-RestMethod "$base/api/brains" -Method Post -Headers $headers -ContentType 'application/json' -Body $body
-    if ($brain.agent_name -ne 'smoke-agent') { throw 'Brain creation failed' }
-    $read = Invoke-RestMethod "$base/api/brains/smoke-agent" -Headers $headers
-    if ($read.version -ne $brain.version) { throw 'Persisted brain differs' }
-    $memory = Invoke-RestMethod "$base/api/memory/smoke-agent" -Headers $headers
-    if ($null -eq $memory.records) { throw 'Memory route missing' }
-    $page = Invoke-WebRequest "$base/?boot=$env:AIMEAT_AGENCY_TOKEN"
-    if ($page.Content -match '__AGENCY_TOKEN__') { throw 'Cockpit token injection failed' }
-    Invoke-RestMethod "$base/api/brains/smoke-agent" -Method Delete -Headers $headers | Out-Null
-    Write-Host 'Installer smoke passed: bundle resources, provisioning, health, auth, brain persistence, memory and HTML.'
 } catch {
     foreach ($log in @('cockpit.log','cockpit.err.log')) {
         $logPath = Join-Path $smokeRoot $log
