@@ -3,7 +3,7 @@ name = "crewaimeat"
 version = "0.8.1"
 description = "AIMEAT × CrewAI integration: a validated crew template (liaison + daemon + live progress + date injection) for connecting CrewAI crews to AIMEAT.io, with example crews."
 readme = "README.md"
-requires-python = ">=3.10,<3.14"
+requires-python = ">=3.11,<3.14"  # 3.11 since 2026-10-22: Pillow 13.0.0, which closes nine security advisories (one critical), supports nothing older, and with 3.10 allowed the lock kept the vulnerable 12.3.0 for it. Nothing here ran 3.10: .python-version is 3.12, crewaimeat is not on PyPI, and the repositories that use it run 3.12 and 3.13.
 dependencies = [
     "crewai[tools]>=1.15.26",  # 1.15.26 (2026-10-08): rwlock ownership kept when an acquisition is interrupted; brings chromadb ~=1.5.9 (drops posthog telemetry) and caps instructor <1.16. 1.15.24: dependency advisories, context windows centralised, message summarisation moved into SummarizeMessages. 1.15.23: THROTTLED PROVIDER CALLS ARE RETRIED INSIDE crewai (behaviour change: a 429 now reaches MultiProviderLLM's fall-through later, after crewai's own retries; measure one run after the restart) + SQLite connections closed in flow persistence. 1.15.22 (2026-09-16): CRLF accepted in inline skill definitions (our skills on Windows); SQLite connections closed in kickoff task-output storage; memory honours read_only on update()/recall(); `reasoning_effort` sent to EVERY OpenAI reasoning model and the forced final answer requested as a user turn (behaviour change for gpt-oss-120b on the coding profile: measure one run after the restart); OpenRouter as an embedding provider. 1.15.21: gateway errors inside an HTTP 200 are detected (the empty-choices case of SCAFFOLD_CANON item 6); streamed tool-call arguments preserved; JSON checkpoints UTF-8. 1.15.19: model-call hooks run on every path and propagate a deny; security floors pypdf 6.16.2 + nltk 3.10.3. 1.15.18 (2026-08-27): Anthropic default max_tokens for large tool calls + tool-result preserved when the final answer is empty + Claude Sonnet 4.6 -> 1M context mapping + crew_memory no longer recorded as a bare string + task-failure/kickoff message-role fixes. The bulk of the release (conversational flows to stable) we do not use. 1.15.6: execution_end hook fires on FAILED crews/flows + strict tool schema names. 1.15.3: fixed after_llm_call hooks breaking native tool execution + per-call usage metrics on kickoff results + token usage under both names (all directly help our hook-based ledger metering). 1.14.7: per-run state isolation (concurrent daemons), custom-BaseLLM
     #                           restore fix, aiohttp/docling CVE fixes, faster import
@@ -63,6 +63,13 @@ packages = ["src/crewaimeat"]
 "src/crewaimeat/agency/static" = "crewaimeat/agency/static"
 "src/crewaimeat/agency/templates" = "crewaimeat/agency/templates"
 "src/crewaimeat/agency2/static" = "crewaimeat/agency2/static"
+
+[tool.uv]
+# crewai 1.15.26 caps uv below 0.12 (for its own command line, which nothing here runs), and 0.13.4 is the
+# first uv whose bundled CA store no longer trusts the emSign roots with compromised intermediate keys
+# (GHSA-hq85-5cpj-mr62, critical). The uv this pulls is .venv/Scripts/uv.exe, the one the owner runs every
+# day. The owner's decision of 2026-10-22: lift the cap here, and drop this line once crewai lifts its own.
+override-dependencies = ["uv>=0.13.4"]
 
 [dependency-groups]
 dev = ["pytest>=8.0", "textual>=0.60", "ruff>=0.6", "pre-commit>=3.5", "fastapi>=0.110", "uvicorn>=0.27", "httpx>=0.27"]  # textual: TUI tests; fastapi/uvicorn/httpx: cockpit + its TestClient; ruff: lint+format; pre-commit: git hooks
