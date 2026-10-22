@@ -11,17 +11,16 @@ from aimeat_crewai.daemon import DAEMON_DEFAULT_TOOL_FILTER
 from crewaimeat.aimeat_crew import LIAISON_EXTRA_TOOLS, CrewSpec, _extras_not_exposed, _liaison_tool_filter
 
 
-def test_the_packages_default_carries_none_of_the_extras():
-    # If the package ever adds one itself, the composed tuple must still name it once (below).
-    assert "aimeat_discover" not in DAEMON_DEFAULT_TOOL_FILTER
-    assert "aimeat_invoke" not in DAEMON_DEFAULT_TOOL_FILTER
+def test_the_packages_default_carries_the_extras_since_0_35():
+    # aimeat-crewai 0.35.0 added all five to its own list; the composed tuple names each once (below).
+    assert set(LIAISON_EXTRA_TOOLS) <= set(DAEMON_DEFAULT_TOOL_FILTER)
 
 
 def test_every_crew_gets_the_default_list_and_the_extras_once_each():
     f = _liaison_tool_filter()
     assert f[: len(DAEMON_DEFAULT_TOOL_FILTER)] == DAEMON_DEFAULT_TOOL_FILTER, "the package's list, untouched"
     assert set(LIAISON_EXTRA_TOOLS) <= set(f)
-    assert len(f) == len(set(f)) == len(DAEMON_DEFAULT_TOOL_FILTER) + len(LIAISON_EXTRA_TOOLS)
+    assert len(f) == len(set(f)) == len({*DAEMON_DEFAULT_TOOL_FILTER, *LIAISON_EXTRA_TOOLS})
     assert LIAISON_EXTRA_TOOLS == (
         "aimeat_discover",
         "aimeat_invoke",

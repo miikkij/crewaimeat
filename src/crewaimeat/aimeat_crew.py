@@ -2387,6 +2387,10 @@ def _verify_mode_for(verify_mode: str | None, task_count: int, agent_name: str) 
 # model adapters, which is why the package filters at all. Measured against aimeat 3.26.1 (o200k): the
 # default 25 are 18 539 tokens as the model is sent them, and these five add 2 407. It is sent on
 # every call the liaison's model makes.
+#
+# aimeat-crewai 0.35.0 put the same five in DAEMON_DEFAULT_TOOL_FILTER (30 names), and loads them only
+# where the connector offers them -- but only for a daemon that passes NO filter. This one passes its
+# own, which the package requires in full, so leaving out what a connector lacks stays our job.
 LIAISON_EXTRA_TOOLS: tuple[str, ...] = (
     "aimeat_discover",
     "aimeat_invoke",
@@ -2400,10 +2404,12 @@ def _liaison_tool_filter(without: Iterable[str] = ()) -> tuple[str, ...]:
     """The daemon liaison's MCP tool allowlist: the package's default list plus LIAISON_EXTRA_TOOLS.
 
     `without` names extras to leave out, for a connector that does not expose them (see
-    `_extras_not_exposed`). The default list is never cut here.
+    `_extras_not_exposed`). An extra is left out also where the package's own list carries it (0.35.0
+    on); any other name of that list is never cut here.
     """
-    skip = set(without) | set(DAEMON_DEFAULT_TOOL_FILTER)
-    return (*DAEMON_DEFAULT_TOOL_FILTER, *(t for t in LIAISON_EXTRA_TOOLS if t not in skip))
+    gone = set(without) & set(LIAISON_EXTRA_TOOLS)
+    base = tuple(t for t in DAEMON_DEFAULT_TOOL_FILTER if t not in gone)
+    return (*base, *(t for t in LIAISON_EXTRA_TOOLS if t not in gone and t not in base))
 
 
 def _extras_not_exposed(exc: BaseException, tool_filter: Iterable[str]) -> list[str]:
