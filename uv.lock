@@ -708,7 +708,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aimeat-crewai", extras = ["data", "parquet"], specifier = ">=0.36.1" },
+    { name = "aimeat-crewai", extras = ["data", "parquet"], specifier = ">=0.37.0" },
     { name = "crewai", extras = ["tools"], specifier = ">=1.15.28" },
     { name = "ddgs", specifier = ">=6.0" },
     { name = "fastapi", marker = "extra == 'agency'", specifier = ">=0.110" },
