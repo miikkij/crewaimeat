@@ -4,9 +4,9 @@
 # runs in CI, not here, to keep commits quick.
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.18
+    rev: v0.17.3
     hooks:
-      - id: ruff            # lint, auto-fixing what it safely can
+      - id: ruff-check      # lint, auto-fixing what it safely can
         args: [--fix]
       - id: ruff-format     # format (already a no-op on the current tree — line-length 120)
 
