@@ -25,12 +25,12 @@ from crewaimeat.workflow_spec import WORKFLOWS, _default_reader, check_workflow,
 AGENT = "workflow-inspector"
 _TZ = ZoneInfo("Europe/Helsinki")
 _MAX_RERUNS = 4  # bounded: one workflow has at most a handful of steps
-# A step that stays red is re-run at most once per this many hours, per (date, edition, step).
-# Re-running a write step means WRITING THE ARTICLES AGAIN — 20-25 minutes of a paid model. The
-# repair is for a transient miss; a step that is still red after one attempt is not transient, and
-# paying for the articles again on every hourly inspection buys nothing. Measured 2026-09-20:
-# 15 inspections of the same red step, $5.12 and 1 149 model calls in a day.
-_RERUN_COOLDOWN_H = 6.0
+# A step is re-run ONCE per (date, edition, step), never again. Re-running a write step means
+# WRITING THE ARTICLES AGAIN — 15-30 minutes of a paid model. The repair is for a transient miss; a
+# step that is still red after one attempt is not transient, and paying for the articles again buys
+# nothing. Measured 2026-09-20: 15 inspections of the same red step, $5.12 and 1 149 model calls in
+# a day. The six-hour cooldown that answered it still let four re-writes a day through: 2026-10-20 to
+# 10-29, $6.63 and 583 calls, three quarters of the fleet's spend, for an edition that stayed red.
 _RERUN_MARK = "workflow-inspector-rerun"
 
 
@@ -99,9 +99,25 @@ def inspect(wf_id: str, params: dict, *, repair: bool = True, lister=None) -> di
     steps_by_id = {s["id"]: s for s in wf["steps"]}
 
     actions: list[str] = []
+    diagnoses: list[str] = []
+    # A run in which no step has produced anything did not START: the node refused it, has not
+    # reached its trigger yet, or its saver lost a permission. A re-run cannot start a workflow; it can
+    # only do the whole edition in this process, at the inspector's expense. From 2026-10-21 the node
+    # refused every run ("workflow-manager no longer holds memory:read-as-owner") and the hourly
+    # inspection wrote the edition itself four times a day, in a process whose model calls the ledger
+    # files under workflow-inspector, while the cause sat unread on the node.
+    not_started = not any(s["state"] == "GREEN" for s in check_workflow(wf_id, vars, lister=lister)["steps"])
+    if not_started:
+        if repair:
+            actions.append("No re-run: no step of this run has produced anything, so the workflow did not start.")
+        diagnoses.append(
+            f"**{wf_id}** did not run for {date} {edition}. Read the workflow's runs on the node: a refused "
+            "run names its reason (a permission of the agent that saved it, or its spending limit). "
+            "Nothing is repaired here until a run has started."
+        )
     # Tier 1 — walk in order; re-run the FIRST output-RED-but-input-GREEN step, then re-check all.
     reruns = 0
-    while reruns < _MAX_RERUNS:
+    while reruns < _MAX_RERUNS and not not_started:
         run = check_workflow(wf_id, vars, lister=lister)
         # Re-run the first OUTPUT-RED step (its input is GREEN by definition of the state); an
         # input-RED step is left for its upstream to fix first.
@@ -110,10 +126,10 @@ def inspect(wf_id: str, params: dict, *, repair: bool = True, lister=None) -> di
             break
         sid = target["id"]
         rid = f"{date}:{edition}:{sid}"
-        if local_marks.ran_within(_RERUN_MARK, rid, _RERUN_COOLDOWN_H):
+        if local_marks.last_local_run(_RERUN_MARK, rid) is not None:
             actions.append(
-                f"Tier-1 re-run `{sid}` SKIPPED — already re-run within {_RERUN_COOLDOWN_H:g} h and still "
-                "red, so it is not a transient miss. It needs a person, not another paid re-run."
+                f"Tier-1 re-run `{sid}` SKIPPED — re-run once already for this edition and still red, so it "
+                "is not a transient miss. It needs a person, not another paid re-run."
             )
             break
         actions.append(f"Tier-1 re-run `{sid}` (output-RED, input-GREEN) …")
@@ -130,9 +146,8 @@ def inspect(wf_id: str, params: dict, *, repair: bool = True, lister=None) -> di
     fixed = [s["id"] for s in final["steps"] if s["state"] == "GREEN"]
     still_red = [s for s in final["steps"] if s["state"] != "GREEN"]
 
-    # Tier 2 — classify what remains RED.
-    diagnoses: list[str] = []
-    for s in still_red:
+    # Tier 2 — classify what remains RED (a run that did not start has one cause, named above).
+    for s in [] if not_started else still_red:
         step = steps_by_id[s["id"]]
         agents = step.get("agent")
         agents = agents if isinstance(agents, list) else [agents]
