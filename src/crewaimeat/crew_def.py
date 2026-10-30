@@ -56,6 +56,41 @@ _ALLOWED_CTX = ("prompt", "today", "directives")
 _PLACEHOLDER_RE = re.compile(r"\{\{\s*ctx\.(\w+)\s*\}\}")
 _TAG_RE = re.compile(r"^[a-z0-9._-]+$")  # AIMEAT tag charset (no ':' or '@' — those go in capabilities)
 _LISTEN_KINDS = ("tasks", "messages", "records", "dms")  # the event surfaces CrewSpec.listen_for accepts
+CAPABILITY_TYPES = ("mcp", "skill", "tool")
+
+
+def capability_errors(payload: dict) -> list[str]:
+    """What is wrong with a capabilities payload, one line per fault; empty when it is well formed.
+
+    The contract: technical is a list of {"name": str, "type": "mcp"|"skill"|"tool"}; domain and
+    languages are lists of non-empty strings. ONE check for both places that read it: `validate` (so
+    `aimeat_crew_validate` refuses the definition before it is published) and the start-up guard in
+    `aimeat_crew._validate_capabilities` (so a crew file never reports it to the node). On 2026-10-30 a
+    definition with `"domain": "travel advisories of five foreign ministries"` passed validate, which
+    only asked for an object, and then failed every spawn: the guard walked the string character by
+    character and refused its spaces.
+    """
+    bad: list[str] = []
+    for field in ("technical", "domain", "languages"):
+        value = payload.get(field)
+        if value is not None and not isinstance(value, list):
+            bad.append(f"{field} is a {type(value).__name__}, expected a list: {value!r}")
+    technical = payload.get("technical")
+    for entry in technical if isinstance(technical, list) else []:
+        if not isinstance(entry, dict):
+            bad.append(f"technical entry {entry!r} is a {type(entry).__name__}, expected {{name, type}}")
+        elif not str(entry.get("name") or "").strip():
+            bad.append(f"technical entry {entry!r} has no name")
+        elif entry.get("type") not in CAPABILITY_TYPES:
+            bad.append(
+                f"technical entry {entry!r} has type {entry.get('type')!r}, expected one of {list(CAPABILITY_TYPES)}"
+            )
+    for field in ("domain", "languages"):
+        value = payload.get(field)
+        for entry in value if isinstance(value, list) else []:
+            if not isinstance(entry, str) or not entry.strip():
+                bad.append(f"{field} entry {entry!r} is not a non-empty string")
+    return bad
 
 
 class CrewDocError(ValueError):
@@ -770,6 +805,8 @@ def validate_crew_doc(doc: Any) -> list[str]:
     caps = doc.get("capabilities")
     if caps is not None and not isinstance(caps, dict):
         errors.append("capabilities: must be an object {technical, domain, languages}")
+    elif caps is not None:
+        errors.extend(f"capabilities: {e}" for e in capability_errors(caps))
 
     skills = doc.get("skills")
     if skills is not None:

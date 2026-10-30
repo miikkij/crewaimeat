@@ -2497,9 +2497,6 @@ def _publish_readme(agent_name: str, readme_md: str, commands: list[dict] | None
     print(f"[{agent_name}] published README to {agent_key(agent_name)}.readme: {bool(res)}", file=sys.stderr)
 
 
-_CAPABILITY_TYPES = {"mcp", "skill", "tool"}
-
-
 def _validate_capabilities(agent_name: str, payload: dict) -> None:
     """Reject a malformed capabilities payload BEFORE it reaches the node. Raises ValueError.
 
@@ -2507,32 +2504,23 @@ def _validate_capabilities(agent_name: str, payload: dict) -> None:
       technical  list of {"name": str, "type": "mcp"|"skill"|"tool"}
       domain     list of str   (free phrases; ':' and '@' allowed, e.g. "consumes:ledger-request")
       languages  list of str
+    The check itself is `crew_def.capability_errors`, which a definition's validate runs too.
 
     Why this raises instead of warning: `aimeat_agent_capabilities_report` OVERWRITES the agent's whole
     capability set, and the node accepts a wrong-shaped payload without complaint — so a typo does not
     fail, it quietly makes the agent unmatchable in discovery. That is the worst kind of bug this repo
     has: a green run with a broken result. Fail at the boundary, name the agent and the offending entry.
     """
-    bad: list[str] = []
-    for entry in payload.get("technical") or []:
-        if not isinstance(entry, dict):
-            bad.append(f"technical entry {entry!r} is a {type(entry).__name__}, expected {{name, type}}")
-        elif not str(entry.get("name") or "").strip():
-            bad.append(f"technical entry {entry!r} has no name")
-        elif entry.get("type") not in _CAPABILITY_TYPES:
-            bad.append(
-                f"technical entry {entry!r} has type {entry.get('type')!r}, expected one of {sorted(_CAPABILITY_TYPES)}"
-            )
-    for field in ("domain", "languages"):
-        for entry in payload.get(field) or []:
-            if not isinstance(entry, str) or not entry.strip():
-                bad.append(f"{field} entry {entry!r} is not a non-empty string")
+    from crewaimeat.crew_def import capability_errors
+
+    bad = capability_errors(payload)
     if bad:
         raise ValueError(
             f"[{agent_name}] capabilities payload is malformed and would be reported to the node as-is "
             f"(the node accepts it and the agent silently stops matching in discovery):\n  - "
             + "\n  - ".join(bad)
-            + "\nFix the entry in src/crewaimeat/fleet_identity.py or the crew's CrewSpec.capabilities."
+            + "\nFix the entry in src/crewaimeat/fleet_identity.py, the crew's CrewSpec.capabilities, or the "
+            "definition's top-level `capabilities` (republish it)."
         )
 
 

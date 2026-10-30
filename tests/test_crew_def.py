@@ -214,6 +214,32 @@ def test_bad_tag_charset():
     assert any("charset" in e and "bad:tag" in e for e in validate_crew_doc(doc))
 
 
+def test_a_capabilities_field_that_is_not_a_list_is_refused_by_validate():
+    # varoituskartta-vahti, 2026-10-30: this passed validate and failed every spawn at the start-up guard.
+    doc = _minimal_doc()
+    doc["capabilities"] = {"domain": "travel advisories of five foreign ministries", "languages": ["fi", "en"]}
+    errors = validate_crew_doc(doc)
+    assert any(e.startswith("capabilities: domain is a str, expected a list") for e in errors)
+    assert not any("entry ' '" in e for e in errors)  # the field is named, not its characters
+
+
+def test_well_formed_capabilities_pass_validate():
+    doc = _minimal_doc()
+    doc["capabilities"] = {
+        "technical": [{"name": "memory", "type": "tool"}],
+        "domain": ["travel-advisories", "consumes:ledger-request"],
+        "languages": ["fi"],
+    }
+    assert validate_crew_doc(doc) == []
+
+
+def test_the_start_up_guard_names_a_string_field_too():
+    from crewaimeat.aimeat_crew import _validate_capabilities
+
+    with pytest.raises(ValueError, match="domain is a str, expected a list"):
+        _validate_capabilities("demo", {"domain": "travel advisories"})
+
+
 def test_malformed_signal():
     doc = _minimal_doc()
     doc["signals"] = {"success_signal": {"kind": "deterministic", "op": "not-a-real-op", "key": "k"}}
