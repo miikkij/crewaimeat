@@ -263,7 +263,10 @@ def report(*, do_install: bool = False, do_bump: bool = False, hook: bool = Fals
         code = NOT_CHECKED
     target = latest
 
-    if target and older(inst, target):
+    # A machine with NO aimeat is the furthest behind there is. `older(None, ...)` is False by design
+    # (unknown is never "older"), and that is how start_fleet --install once installed nothing on a
+    # machine whose global install had gone, and then failed to spawn the serve daemon (2026-10-31).
+    if target and (inst is None or older(inst, target)):
         if do_install:
             ok, msg = install(target)
             print(f"  -> {msg}")
@@ -272,7 +275,8 @@ def report(*, do_install: bool = False, do_bump: bool = False, hook: bool = Fals
             else:
                 code = BEHIND
         else:
-            print("  -> installed is behind: uv run crewaimeat connector --install  (fleet stopped)")
+            state = "missing" if inst is None else "behind"
+            print(f"  -> installed is {state}: uv run crewaimeat connector --install  (fleet stopped)")
             code = BEHIND
 
     if target and older(pin, target):
@@ -284,6 +288,9 @@ def report(*, do_install: bool = False, do_bump: bool = False, hook: bool = Fals
             print("  -> repo pin is behind: uv run crewaimeat connector --bump-pin")
             code = BEHIND
 
+    if inst is None:
+        print(f"  !! no aimeat connector to run ({why_inst}): the serve daemon cannot start")
+        return BELOW_FLOOR
     if older(inst, floor):
         print(f"  !! installed {inst} is BELOW the floor {floor}: a task can be created and never wake an agent")
         return BELOW_FLOOR

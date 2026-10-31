@@ -73,6 +73,30 @@ def test_below_floor_wins_over_everything(world):
     assert cv.report(do_install=True) == cv.BELOW_FLOOR
 
 
+def test_a_missing_connector_is_installed(world, monkeypatch, capsys):
+    """2026-10-31: the global install had gone, --install read "UNKNOWN", installed nothing, and the
+    serve daemon then failed to spawn with WinError 2."""
+    world["installed"] = (None, "no `aimeat` CLI found (npm i -g aimeat)")
+    calls = []
+    monkeypatch.setattr(cv, "install", lambda v: calls.append(v) or (True, f"installed aimeat@{v}"))
+    assert cv.report(do_install=True) == cv.BEHIND  # the pin is still behind in this world
+    assert calls == ["3.17.0"]
+    assert "installed aimeat@3.17.0" in capsys.readouterr().out
+
+
+def test_a_missing_connector_that_cannot_be_installed_stops_the_start(world, monkeypatch, capsys):
+    world["installed"] = (None, "no `aimeat` CLI found (npm i -g aimeat)")
+    monkeypatch.setattr(cv, "install", lambda v: (False, "npm not found — install Node.js"))
+    assert cv.report(do_install=True) == cv.BELOW_FLOOR
+    assert "serve daemon cannot start" in capsys.readouterr().out
+
+
+def test_a_missing_connector_without_install_is_named_missing(world, capsys):
+    world["installed"] = (None, "no `aimeat` CLI found (npm i -g aimeat)")
+    assert cv.report() == cv.BELOW_FLOOR
+    assert "installed is missing" in capsys.readouterr().out
+
+
 def test_install_is_refused_under_a_live_serve_daemon(world):
     world["pids"] = [4321]
     ok, msg = cv.install("3.17.0")
