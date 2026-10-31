@@ -3,6 +3,7 @@
   "_added": "2026-09-04, after the connector moved to keys and the daemon began carrying all 66 principals instead of 50 — the migration working, not something breaking. Four were retired instead (dify, openhands, scope-probe2, secretary); these twelve stay, and every one of them is an agent whose runtime is somebody else's chat program.",
   "spare": [
     "analyst",
+    "claude-code",
     "claude-desktop-home-mcp",
     "claude-desktop-home-mcp-appdev",
     "claude-mcp-work",

@@ -44,6 +44,7 @@ from crewaimeat.aimeat_crew import _aimeat_call, _aimeat_rest
 from crewaimeat.connections_tools import READ_AS_OWNER as CONNECTIONS_READ_AS_OWNER
 from crewaimeat.connections_tools import READ_SCOPES as CONNECTIONS_READ_SCOPES
 from crewaimeat.mcp_tools import USE_SCOPES as MCP_USE_SCOPES
+from crewaimeat.notify_tool import SCOPES as NOTIFY_SCOPES
 from crewaimeat.workspace_tools import READ_SCOPES, WRITE_SCOPES
 
 # Every proposed agent gets `decline_request`: asked for something outside its purpose, it says so and the
@@ -82,6 +83,8 @@ NAME_RE = re.compile(r"^[a-z][a-z0-9-]{2,39}$")
 #               read-as-owner is outside every wildcard on the node, so a concierge holding `*` does not
 #               hold it (NO_WILDCARD below) and it is left out and named unless held by name: the owner
 #               ticks it on the agent's page. connections_tools.READ_SCOPES is the one source.
+#   notify      the result to its own owner, in the bell   notifications:send (POST /v1/notifications);
+#               and by email                               notify_tool.SCOPES is the one source.
 PROPOSABLE_TOOLS: dict[str, tuple[str, ...]] = {
     "memory": ("memory:read", "memory:write"),
     "workspace": READ_SCOPES,
@@ -93,6 +96,7 @@ PROPOSABLE_TOOLS: dict[str, tuple[str, ...]] = {
     "dm": ("messages:read", "messages:send"),
     "mcp": MCP_USE_SCOPES,
     "connections": CONNECTIONS_READ_SCOPES,
+    "notify": NOTIFY_SCOPES,
 }
 
 

@@ -321,6 +321,14 @@ def _tools_decline(agent_name: str, ctx: Any) -> list:
     return [make_decline_tool(agent_name, task.get("id") if isinstance(task, dict) else None)]
 
 
+def _tools_notify(agent_name: str, ctx: Any) -> list:
+    # `notify`: the result to the agent's OWN owner, in the bell and by email (aimeat_notify email:true,
+    # crewaimeat.notify_tool). Reaches nobody else.
+    from crewaimeat.notify_tool import make_notify_tool
+
+    return [make_notify_tool(agent_name)]
+
+
 def _tools_decide(agent_name: str, ctx: Any) -> list:
     # The owner's DECISION RULES, one CrewAI tool each: the questions, the thresholds and the bands
     # are theirs, written once on the node, and the crew sends only the state. The agent sees a tool
@@ -363,6 +371,7 @@ TOOL_REGISTRY: dict[str, Any] = {
     "mcp": _tools_mcp,
     "connections": _tools_connections,
     "decline": _tools_decline,
+    "notify": _tools_notify,
 }
 
 # Tool ids that take a SELECTOR after a colon: `decide:sort-a-message` is one decision rule, and
@@ -467,6 +476,11 @@ TOOL_PURPOSES: dict[str, str] = {
         "connections:read-as-owner, which the owner gives by hand on the agent's page (no wildcard covers it)"
     ),
     "decline": "say you will NOT carry out this request (no tool or access for it, or not yours to do), with the reason; the task then ends as declined, not done",
+    "notify": (
+        "send the finished result to the agent's OWN owner: their notifications and, by default, an email to "
+        "their verified address (at most 10 a day, nobody else). Give it to an agent whose result the person "
+        "wants delivered, such as a morning news review; its last task calls it once. Needs notifications:send"
+    ),
 }
 
 # The EXCHANGE bundle may be referenced whole (id "exchange") OR by any single tool name (the node
