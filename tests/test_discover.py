@@ -83,6 +83,21 @@ def test_the_refusal_is_read_from_the_packages_own_raise(monkeypatch):
     assert set(_liaison_tool_filter(without=missing)) == set(offered), "and the next start asks for what is offered"
 
 
+def test_the_packages_own_optional_tools_are_dropped_when_not_offered():
+    """2026-10-31: aimeat-crewai 0.38.0 put aimeat_goal_get/_work in its default list, connector 4.1.2
+    did not offer them, and every crew in the fleet stopped at start."""
+    from aimeat_crewai.daemon import DAEMON_TOOLS_IF_OFFERED
+
+    goal = [t for t in DAEMON_TOOLS_IF_OFFERED if t.startswith("aimeat_goal_")]
+    assert goal, "the package names its goal tools as optional"
+    f = _liaison_tool_filter()
+    assert set(goal) <= set(f)
+    missing = _extras_not_exposed(_liaison_refusal(goal), f)
+    assert sorted(missing) == sorted(goal)
+    assert not set(goal) & set(_liaison_tool_filter(without=missing))
+    assert "aimeat_task_complete" in _liaison_tool_filter(without=missing)
+
+
 def test_a_missing_default_tool_or_another_error_drops_nothing():
     f = _liaison_tool_filter()
     assert _extras_not_exposed(_liaison_refusal(["aimeat_task_complete"]), f) == []

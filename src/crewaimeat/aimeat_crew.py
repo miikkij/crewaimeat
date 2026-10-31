@@ -69,7 +69,7 @@ from aimeat_crewai import (  # noqa: E402
     serve_params,
     stdio_params,
 )
-from aimeat_crewai.daemon import DAEMON_DEFAULT_TOOL_FILTER, _default_propose_crew  # noqa: E402
+from aimeat_crewai.daemon import DAEMON_DEFAULT_TOOL_FILTER, DAEMON_TOOLS_IF_OFFERED, _default_propose_crew  # noqa: E402
 from aimeat_crewai.liaison import AimeatLiaisonError  # noqa: E402 — raised when a filtered tool is not offered
 from aimeat_crewai.mcp_client import AimeatServeError  # noqa: E402 — raised when no live serve daemon
 from crewai import Agent, Crew, Process, Task  # noqa: E402
@@ -2399,6 +2399,17 @@ LIAISON_EXTRA_TOOLS: tuple[str, ...] = (
     "aimeat_mcp_call",
 )
 
+# What a start may go without: the extras above, and every tool the package itself loads only when the
+# connector offers it (DAEMON_TOOLS_IF_OFFERED). The package drops those for a daemon that passes no
+# filter; this one passes its own, which the package requires in full. aimeat-crewai 0.38.0 added
+# aimeat_goal_get and aimeat_goal_work to its default list, connector 4.1.2 does not offer them, and on
+# 2026-10-31 every crew in the fleet stopped at start ("tool_filter requested tools that the MCP server
+# did not expose") until this read the package's own list of optional tools.
+_DROPPABLE_TOOLS: tuple[str, ...] = (
+    *LIAISON_EXTRA_TOOLS,
+    *(t for t in DAEMON_TOOLS_IF_OFFERED if t not in LIAISON_EXTRA_TOOLS),
+)
+
 
 def _liaison_tool_filter(without: Iterable[str] = ()) -> tuple[str, ...]:
     """The daemon liaison's MCP tool allowlist: the package's default list plus LIAISON_EXTRA_TOOLS.
@@ -2407,7 +2418,7 @@ def _liaison_tool_filter(without: Iterable[str] = ()) -> tuple[str, ...]:
     `_extras_not_exposed`). An extra is left out also where the package's own list carries it (0.35.0
     on); any other name of that list is never cut here.
     """
-    gone = set(without) & set(LIAISON_EXTRA_TOOLS)
+    gone = set(without) & set(_DROPPABLE_TOOLS)
     base = tuple(t for t in DAEMON_DEFAULT_TOOL_FILTER if t not in gone)
     return (*base, *(t for t in LIAISON_EXTRA_TOOLS if t not in gone and t not in base))
 
@@ -2425,7 +2436,7 @@ def _extras_not_exposed(exc: BaseException, tool_filter: Iterable[str]) -> list[
     if "did not expose" not in asked_and_missing:
         return []
     current = set(tool_filter)
-    return [t for t in LIAISON_EXTRA_TOOLS if t in current and f"'{t}'" in asked_and_missing]
+    return [t for t in _DROPPABLE_TOOLS if t in current and f"'{t}'" in asked_and_missing]
 
 
 def _valid_chat_commands(cmds) -> list[dict]:
