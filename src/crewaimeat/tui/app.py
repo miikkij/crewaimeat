@@ -231,16 +231,19 @@ class FleetApp(App):
         try:
             index = self._node_index
             snap = await read_in_background(lambda: self._snapshot_fn(index))
+            if not self.is_running:
+                return  # the app closed while the read ran: nothing is left to show it on
             self._health_errors.pop("local", None)
             self._apply(snap)
         except Exception as exc:  # noqa: BLE001 - a failed probe must leave Quit available
             self._health_errors["local"] = str(exc)
-            self.query_one("#statusbar", Static).update(f"Fleet refresh failed: {exc}")
+            if self.is_running:
+                self.query_one("#statusbar", Static).update(f"Fleet refresh failed: {exc}")
         finally:
             self._reading.discard("local")
             self._health_pending.discard("local")
         self.update_health()
-        if index is not self._node_index:
+        if self.is_running and index is not self._node_index:
             self.refresh_local()  # a node read finished while this local snapshot was being built
 
     @work(group="node")
@@ -272,12 +275,15 @@ class FleetApp(App):
         self._reading.add("versions")
         try:
             vr = await read_in_background(versions.version_report)
+            if not self.is_running:
+                return
             self._version_report = vr
             self._health_errors.pop("versions", None)
             self.query_one("#versions", Static).update(render.versions_line(vr, self.lang))
         except Exception as exc:  # noqa: BLE001
             self._health_errors["versions"] = str(exc)
-            self.query_one("#versions", Static).update(f"Version check failed: {exc}")
+            if self.is_running:
+                self.query_one("#versions", Static).update(f"Version check failed: {exc}")
         finally:
             self._reading.discard("versions")
             self._health_pending.discard("versions")
@@ -610,6 +616,8 @@ class FleetApp(App):
             data = dict(readme=None, config=i18n.t("d.failed", key[1]).format(error=exc), logs="", guidance="")
         finally:
             self._reading.discard("detail")
+        if not self.is_running:
+            return
         if key != self._detail_key:
             if self._detail_key is not None:
                 self._refresh_detail(self._detail_key)
