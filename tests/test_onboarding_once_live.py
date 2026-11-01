@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 import requests
 
+from tests.owner_login import register_owner
 from tests.test_concierge_propose_live import AIMEAT_DIR, _free_port, _kill, _token, connector_start
 
 AGENT = "onboardee"
@@ -90,10 +91,7 @@ def place(tmp_path_factory):
         else:
             pytest.fail("node did not become ready within 120 s")
 
-        owner = f"onbowner{int(time.time())}"
-        r = requests.post(f"{base}/v1/owners", json={"name": owner, "public_key": "placeholder"}, timeout=20)
-        assert r.status_code == 201, r.text
-        owner_headers = {"Authorization": f"Bearer {_token(base, owner, r.json()['data']['private_key'], agent=False)}"}
+        owner, owner_headers = register_owner(base, f"onbowner{int(time.time())}")
         r = requests.post(
             f"{base}/v1/agents",
             headers=owner_headers,

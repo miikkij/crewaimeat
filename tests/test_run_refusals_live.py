@@ -38,9 +38,13 @@ from pathlib import Path
 
 import pytest
 import requests
+from owner_login import register_owner
+
+from crewaimeat.agent_scopes import NODE_DEFAULT_SCOPES
 
 NODE_ID = "aimeat-local-001-dev"
-DEFAULTS = ["memory:read", "memory:write", "memory:delete", "catalogue:read"]
+# The node's stock default, as crewaimeat states it: the test below measures the two against each other.
+DEFAULTS = list(NODE_DEFAULT_SCOPES)
 
 
 def _aimeat_dir() -> Path | None:
@@ -143,11 +147,12 @@ class Node:
     agents: dict = {}  # name -> (gaii, token), registered in the fixture
 
 
-# Every agent a test needs, registered up front with the four defaults and nothing more. Up front because
+# Every agent a test needs, registered up front with the node's defaults and nothing more. Up front because
 # signing an agent's token runs `node`, and conftest allows no process but Python inside a test body.
 AGENTS = ("concierge", "clean-agent", "granted-later")
-# What a basic agent the node's button makes holds: memory and its own tasks, and no agent:write.
-BASIC = ["memory:read", "memory:write", "task:read", "task:write"]
+# What a basic agent the node's button makes holds: memory, its own tasks and the owner's agent list
+# (agent:read, which GET /v1/agents asks from node 4.0.0), and no agent:write.
+BASIC = ["memory:read", "memory:write", "task:read", "task:write", "agent:read"]
 BASIC_AGENTS = ("basic-held", "basic-differs", "basic-old-node")
 # The tags a crew definition declares, which the button seeds on the agent it makes.
 DECLARED_TAGS = ["crew:basic", "role:writer"]
@@ -171,7 +176,7 @@ def node(tmp_path_factory):
         "AIMEAT_RL_WORK": "10000",
         "AIMEAT_RL_MEMORY": "10000",
     }
-    # The STOCK default on purpose: the whole point is an agent that holds the four defaults and nothing
+    # The STOCK default on purpose: the whole point is an agent that holds the defaults and nothing
     # more, which is what the sold seat held. A test node that grants `*` could never refuse anything.
     env.pop("AIMEAT_DEFAULT_AGENT_SCOPES", None)
     proc = subprocess.Popen(
@@ -206,11 +211,7 @@ def node(tmp_path_factory):
                 time.sleep(0.3)
         else:
             pytest.fail("node did not become ready within 120 s")
-        r = requests.post(f"{n.base}/v1/owners", json={"name": n.owner, "public_key": "placeholder"}, timeout=20)
-        assert r.status_code == 201, r.text
-        n.owner_headers = {
-            "Authorization": f"Bearer {_token(n.base, n.owner, r.json()['data']['private_key'], agent=False)}"
-        }
+        n.owner, n.owner_headers = register_owner(n.base, n.owner)
         n.agents = {name: _register(n, name, DEFAULTS) for name in AGENTS}
         n.agents.update({name: _register(n, name, BASIC) for name in BASIC_AGENTS})
         yield n
@@ -448,12 +449,13 @@ def test_once_the_owner_gives_the_permission_the_refusal_closes(node, agent_home
 # ── what an agent asks for at approval ──────────────────────────────────────────────────────
 
 
-def _approve(node: Node, name: str, scopes: list[str]) -> list[str]:
-    """Device-authorize `name` asking for `scopes`, approve it as the owner without editing the list,
-    and return what the node actually granted."""
+def _approve(node: Node, name: str, scopes: list[str] | None) -> list[str]:
+    """Device-authorize `name` asking for `scopes` (None: naming none), approve it as the owner without
+    editing the list, and return what the node actually granted."""
+    asked = {"scopes": scopes} if scopes is not None else {}
     d = requests.post(
         f"{node.base}/v1/agents/device-authorize",
-        json={"agent_name": name, "owner": node.owner, "scopes": scopes},
+        json={"agent_name": name, "owner": node.owner, **asked},
         timeout=20,
     ).json()
     assert d.get("ok"), d
@@ -467,6 +469,14 @@ def _approve(node: Node, name: str, scopes: list[str]) -> list[str]:
     assert v.get("ok"), v
     got = requests.get(f"{node.base}/v1/agents/{name}/refusals", headers=node.owner_headers, timeout=20).json()
     return got["data"]["granted_scopes"]
+
+
+def test_crewaimeats_copy_of_the_node_default_is_what_the_node_grants(node):
+    # A request REPLACES the node's default (below), so crewaimeat lists the default itself, and that
+    # copy fell behind: four words while node 4.0.0 granted eight, so a new agent went without
+    # agent:read and its first start was refused reading its own row (found 2026-11-01).
+    granted = _approve(node, "asks-nothing", None)
+    assert set(granted) == set(NODE_DEFAULT_SCOPES), sorted(set(granted) ^ set(NODE_DEFAULT_SCOPES))
 
 
 def test_what_crewaimeat_asks_for_is_exactly_what_a_new_agent_is_granted(node):

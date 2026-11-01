@@ -69,7 +69,7 @@ def test_grade_fails_when_prompt_not_used(tmp_path, monkeypatch):
 def test_grade_pure_reasoning_passes_with_no_tools(tmp_path, monkeypatch):
     path = _write(monkeypatch, tmp_path, "g5", [])
     g = grade(_order("pure-reasoning"), path)  # forbids every tool; a tool-less crew is correct
-    assert g.wired == [] and g.passed
+    assert g.wired == [] and g.passed, g
 
 
 def test_grade_no_file_is_not_built():

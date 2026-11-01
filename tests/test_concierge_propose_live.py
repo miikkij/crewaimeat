@@ -34,23 +34,28 @@ from pathlib import Path
 
 import pytest
 import requests
+from owner_login import register_owner
 
 NODE_ID = "aimeat-local-001-dev"
 CONCIERGE = "concierge"
 PROPOSED = "morning-deals"
-# What the hosted anchor holds after the 2026-10-02 roll (aimeat-commercial provision.ts plus the two
-# organism words), so the cap the concierge applies is the one a real place applies.
+# What the hosted anchor holds (aimeat-commercial fleet-control-service/src/provision.ts, as of
+# 2026-10-20: agent:read since node 4.0.0 asks it for GET /v1/agents, ai:use and storage:write before
+# that), so the cap the concierge applies is the one a real place applies.
 HOSTED_SCOPES = [
     "memory:read",
     "memory:write",
     "memory:delete",
     "catalogue:read",
+    "agent:read",
     "agent:write",
     "task:write",
     "workflow:read",
     "wallet:read",
     "organism:read",
     "organism:write",
+    "ai:use",
+    "storage:write",
 ]
 
 
@@ -215,12 +220,7 @@ def scene(tmp_path_factory):
         else:
             pytest.fail("node did not become ready within 120 s")
 
-        owner = f"cpowner{int(time.time())}"
-        r = requests.post(f"{s.base}/v1/owners", json={"name": owner, "public_key": "placeholder"}, timeout=20)
-        assert r.status_code == 201, r.text
-        s.owner_headers = {
-            "Authorization": f"Bearer {_token(s.base, owner, r.json()['data']['private_key'], agent=False)}"
-        }
+        owner, s.owner_headers = register_owner(s.base, f"cpowner{int(time.time())}")
 
         r = requests.post(
             f"{s.base}/v1/agents",
@@ -362,7 +362,8 @@ def test_the_proposal_is_on_the_node_and_names_the_crm(home):
 
 
 def test_the_reply_gives_the_approval_address_and_no_outside_product(home):
-    assert "/v1/profile?tab=agents" in home.reply
+    # The node builds the address; since 4.x it opens the proposal on the home page.
+    assert "/v1/home?new-agent=1&proposal=" in home.reply
     for outside in ("CrewAI Studio", "HubSpot", "Salesforce", "Pipedrive", "Zapier"):
         assert outside not in home.reply
     assert f"start {PROPOSED}" in home.reply

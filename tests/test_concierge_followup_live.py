@@ -29,6 +29,7 @@ from types import SimpleNamespace
 
 import pytest
 import requests
+from owner_login import register_owner
 from test_concierge_propose_live import AIMEAT_DIR, _free_port, _kill, _token, connector_start
 from test_concierge_propose_live import pytestmark as _live_marks
 
@@ -101,12 +102,7 @@ def scene(tmp_path_factory):
     serve_pid = None
     old_home = os.environ.get("AIMEAT_HOME")
     try:
-        owner = f"fuowner{int(time.time())}"
-        r = requests.post(f"{s.base}/v1/owners", json={"name": owner, "public_key": "placeholder"}, timeout=20)
-        assert r.status_code == 201, r.text
-        s.owner_headers = {
-            "Authorization": f"Bearer {_token(s.base, owner, r.json()['data']['private_key'], agent=False)}"
-        }
+        owner, s.owner_headers = register_owner(s.base, f"fuowner{int(time.time())}")
         for name, scopes in ((CLERK, WRITER_SCOPES), (READER, READER_SCOPES)):
             r = requests.post(
                 f"{s.base}/v1/agents",

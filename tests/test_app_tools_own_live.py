@@ -20,6 +20,7 @@ import urllib.request
 import pytest
 import requests
 
+from tests.owner_login import register_owner
 from tests.test_concierge_propose_live import AIMEAT_DIR, _free_port, _kill, _token, connector_start
 
 AGENT = "crm"
@@ -39,10 +40,7 @@ IMPORT_SCRIPT = (
 
 
 def _owner(base: str) -> tuple[str, dict]:
-    name = f"o{int(time.time() * 1000) % 10**9}"
-    r = requests.post(f"{base}/v1/owners", json={"name": name, "public_key": "placeholder"}, timeout=20)
-    assert r.status_code == 201, r.text
-    return name, {"Authorization": f"Bearer {_token(base, name, r.json()['data']['private_key'], agent=False)}"}
+    return register_owner(base, f"o{int(time.time() * 1000) % 10**9}")
 
 
 def _app_with_tool(base: str, owner: str, oh: dict, app: str, tool: str, script: str, price: dict | None) -> str:

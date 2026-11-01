@@ -1,6 +1,6 @@
 """The permissions an agent asks for when it is approved: one list, for every place that registers one.
 
-WHY ASK AT ALL. A connector that names no scopes gets the node's four defaults, and the owner has to know
+WHY ASK AT ALL. A connector that names no scopes gets the node's defaults, and the owner has to know
 to tick more on the consent page. Nobody did: on a sold seat the crew's identity push
 (`PATCH /v1/agents/concierge/tags`) needed agent:write, the agent held the four defaults, and the run
 exited 0 with every write refused (2026-09-29). Since aimeat 3.21.0, `aimeat connect --scopes a,b,c`
@@ -13,7 +13,7 @@ THE DEFAULTS ARE IN THE LIST ON PURPOSE. For a NEW agent the node grants what wa
 its default (routes/agents/device-auth.ts v1.9.0), so a request that named only what the scaffold needs
 beyond the defaults would approve an agent with no memory access -- and memory is where every crew puts
 its deliverable. `NODE_DEFAULT_SCOPES` is the node's stock default (config.ts, AIMEAT_DEFAULT_AGENT_SCOPES);
-an operator can change theirs, and a crew still needs these four whatever the node's default says.
+an operator can change theirs, and a crew still needs these whatever the node's default says.
 
 NOT ON A RE-APPROVAL. For an agent that already exists, requested scopes REPLACE what it holds (only the
 scopes no wildcard carries survive). Asking again would cut an agent the owner gave `*` down to this list
@@ -26,8 +26,23 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-# The node's stock default for an agent that names nothing (aimeat config.ts, defaultAgentScopes).
-NODE_DEFAULT_SCOPES: tuple[str, ...] = ("memory:read", "memory:write", "memory:delete", "catalogue:read")
+# The node's stock default for an agent that names nothing (aimeat config.ts SHIPPED_DEFAULT_AGENT_SCOPES).
+# Four words until node 4.0.0, eight since. The four that came with it are not decoration: GET /v1/agents
+# asks agent:read from 4.0.0, and every start reads the agent's own row there before its tags push
+# (aimeat_crew._node_tags). With the old copy here a new agent was approved WITHOUT it, that read was
+# refused, and since aimeat-crewai 0.31.0 a refused call fails the run; aimeat-commercial met the same
+# word on 2026-10-20 as a spawner that ran no agent. Found 2026-11-01 when the live suites, dark since
+# 4.0.0, ran again. tests/test_run_refusals_live.py measures this list against a real node.
+NODE_DEFAULT_SCOPES: tuple[str, ...] = (
+    "memory:read",
+    "memory:write",
+    "memory:delete",
+    "catalogue:read",
+    "organism:read",
+    "agent:read",
+    "messages:send",
+    "storage:write",
+)
 
 # What a run of EVERY agent needs beyond the defaults: NOTHING, measured against the routes a run
 # calls (aimeat-protocol main, 2026-10-02):

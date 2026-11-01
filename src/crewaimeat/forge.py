@@ -412,7 +412,7 @@ def register_agent(
         wanted,
     ]
     # ASK FOR THE PERMISSIONS, ON A NEW AGENT ONLY (connector >= 3.21.0, which the pin guarantees). A new
-    # agent that names nothing gets the node's four defaults, and what its crew's TOOLS need beyond them
+    # agent that names nothing gets the node's defaults, and what its crew's TOOLS need beyond them
     # (a schedule's task:write, say) is then refused on its first run -- the sold seat of 2026-09-29 was
     # the identity push, which has needed no word of its own since aimeat-protocol bcd4027ed. The list
     # carries the defaults too, because
