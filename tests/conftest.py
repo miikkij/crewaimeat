@@ -24,6 +24,9 @@ for _p in (str(ROOT), str(ROOT / "tests")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+# Every failure written to logs/test-failures.jsonl, and the skip lock CI turns on (tests/run_record.py).
+pytest_plugins = ["run_record"]
+
 # Construction-only: a dummy key lets get_llm()/LLM(...) build without raising; nothing is called.
 _collection_home = tempfile.TemporaryDirectory(prefix="crewaimeat-collection-")
 os.environ["AIMEAT_HOME"] = _collection_home.name
@@ -122,6 +125,12 @@ def offline_processes(monkeypatch, request):
         _BROWSER_ALLOWED = False
 
 
+def _forget_serve_daemon() -> None:
+    crew_module = sys.modules.get("crewaimeat.aimeat_crew")  # not loaded yet: nothing cached
+    if crew_module is not None:
+        crew_module._serve_reset()
+
+
 @pytest.fixture(autouse=True)
 def offline_runtime(tmp_path, monkeypatch, request):
     """Each test owns its connector state. Unexpected network calls fail even inside broad catches.
@@ -132,6 +141,11 @@ def offline_runtime(tmp_path, monkeypatch, request):
     monkeypatch.setenv("AIMEAT_HOME", str(tmp_path / "aimeat"))
     monkeypatch.setenv("LLM_PROVIDERS_FILE", str(tmp_path / "no-providers.json"))
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-not-used")
+    # A new home has no daemon, so the daemon a previous test found is forgotten too. The transport
+    # caches it per process: a live suite's daemon stayed cached after its module ended, and a later
+    # offline test called its dead port (test_exchange_tools, position 929 of a full run, 2026-11-01).
+    _forget_serve_daemon()
+    request.addfinalizer(_forget_serve_daemon)
     allow_loopback = request.node.get_closest_marker("loopback") is not None
     connect = socket.socket.connect
     connect_ex = socket.socket.connect_ex

@@ -1,0 +1,17 @@
+{
+  "_why": "Every test that may be skipped where CREWAIMEAT_SKIP_LOCK=1 (CI), and why. Any other skip fails the run (tests/run_record.py). Add an entry only with the reason the test cannot run there; remove one as soon as nothing needs it.",
+  "allowed": [
+    {
+      "test": "tests/test_agent_manifest.py::test_the_central_routing_map_holds_overrides_only",
+      "reason": "llm_providers.json is per machine and untracked, so a fresh checkout has no override list to check"
+    },
+    {
+      "test": "tests/test_tui_startup.py::test_quit_exits_python_without_waiting_for_stalled_read",
+      "reason": "Windows only: the offline child guard blocks the socketpair Windows asyncio needs"
+    },
+    {
+      "test": "tests/test_run_refusals_live.py::test_on_an_older_node_differing_tags_are_still_refused_and_the_run_says_so",
+      "reason": "proves the behaviour on a node before aimeat-protocol bcd4027ed; CI checks out main, which is after it"
+    }
+  ]
+}

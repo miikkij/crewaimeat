@@ -110,6 +110,6 @@ markers = [
     "ffmpeg: permit ffmpeg and ffprobe subprocesses (and the taskkill that ends one), for media tests against a loopback stream",
     "browser: permit the driver inside the installed playwright package, for a real Chromium against loopback pages (its resolver rules reach no other host)",
 ]
-addopts = "-q"
+addopts = "-q -rfEs"
 pythonpath = [".", "tests"]
 filterwarnings = ["ignore::DeprecationWarning"]

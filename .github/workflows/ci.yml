@@ -31,6 +31,21 @@ jobs:
       - name: Sync dependencies (incl. dev)
         run: uv sync --frozen --group dev
 
+      # The tools some tests drive for real, so those tests RUN here instead of skipping: the fenced
+      # browser (a security boundary: resolver rules, GET/HEAD only, no form sent) needs a Chromium,
+      # and the stream recorder needs ffmpeg + ffprobe. Until 2026-11-01 neither was installed, and
+      # their tests were among the 76 a green run skipped without a word.
+      - name: Chromium for the browser tests
+        run: uv run playwright install --with-deps chromium
+
+      - name: ffmpeg for the media tests (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: ffmpeg for the media tests (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg -y --no-progress
+
       # Format + lint are HARD gates: the tree was formatted and auto-fixed in the adoption commit,
       # and the handful of grandfathered findings carry targeted `# noqa` or sit in the ignore list
       # (see [tool.ruff.lint] in pyproject.toml). New/changed code is also held to these by pre-commit.
@@ -40,9 +55,23 @@ jobs:
       - name: Ruff lint
         run: uv run ruff check src tests crews
 
-      # The deterministic test floor: no LLM, no network (see [tool.pytest.ini_options]).
+      # The deterministic test floor: no LLM, no network (see [tool.pytest.ini_options]). The live
+      # suites run in their own job below. CREWAIMEAT_SKIP_LOCK: a skip that tests/skip-allowlist.json
+      # does not name fails the run (tests/run_record.py), so a test cannot stop running unseen.
       - name: Pytest
-        run: uv run pytest
+        env:
+          CREWAIMEAT_SKIP_LOCK: "1"
+        run: uv run pytest --ignore-glob="*_live.py"
+
+      # Every failure, with its traceback, its neighbour in the run and the machine's load, is a line
+      # in this file (tests/run_record.py): a failure that does not come back can still be read.
+      - name: Failure record
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-failures-${{ matrix.os }}
+          path: logs/test-failures.jsonl
+          if-no-files-found: ignore
 
       # The reconciliation gate — the check ruff structurally cannot perform. Ruff reads one file and
       # asks whether the statement is well formed; doctor reads the whole repo and asks whether the
@@ -54,3 +83,60 @@ jobs:
       # may only SHRINK: a new violation of a baselined rule still fails the build.
       - name: Doctor (registries + route conformance)
         run: uv run crewaimeat doctor --strict
+
+  # The live suites (tests/*_live.py): a REAL node started from aimeat-protocol's source on SQLite,
+  # a real serve daemon, real refusals. They need a checkout of aimeat-protocol, and CI had none, so
+  # they skipped on every run; on the one machine that had one they stopped in their fixture from node
+  # 4.0.0 (2026-10-12, owner-key sign-in removed) until 2026-11-01, and hid a production fault the
+  # whole time (973bf75: new agents approved without agent:read). aimeat-protocol is public, so the
+  # checkout needs no secret. Its main branch is what production deploys, so a change there that
+  # breaks crewaimeat shows here on the next push.
+  live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: aimeat-protocol (main)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: miikkij/aimeat-protocol
+          path: aimeat-protocol
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          package_json_file: aimeat-protocol/aimeat/package.json
+
+      - name: Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.x
+          cache: pnpm
+          cache-dependency-path: aimeat-protocol/aimeat/pnpm-lock.yaml
+
+      - name: aimeat-protocol dependencies
+        working-directory: aimeat-protocol/aimeat
+        run: pnpm install --frozen-lockfile
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies (incl. dev)
+        run: uv sync --frozen --group dev
+
+      - name: Live suites
+        env:
+          AIMEAT_PROTOCOL_DIR: ${{ github.workspace }}/aimeat-protocol
+          CREWAIMEAT_SKIP_LOCK: "1"
+        run: uv run pytest tests/*_live.py
+
+      - name: Failure record
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-failures-live
+          path: logs/test-failures.jsonl
+          if-no-files-found: ignore

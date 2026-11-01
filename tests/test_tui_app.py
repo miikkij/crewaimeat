@@ -3,11 +3,24 @@ process table is read and no network call is made. Proves compose + the snapshot
 render pipeline work end to end."""
 
 import asyncio
+import time
 
 from textual.widgets import DataTable, Static, TabPane
 
 from crewaimeat.tui.app import FleetApp
 from crewaimeat.tui.fleet_state import AgentRow, FleetSnapshot
+
+
+async def _until(pilot, read, done, seconds: float = 20.0):
+    """Pause until `done(read())` holds or `seconds` pass, then return the last read. A thread worker
+    posts back when the machine lets it: one pause was enough on an idle machine and not under load
+    (test_config_pane_shows_offers_and_contracts read "Loading details...", 2026-11-01)."""
+    deadline = time.monotonic() + seconds
+    value = read()
+    while not done(value) and time.monotonic() < deadline:
+        await pilot.pause(0.05)
+        value = read()
+    return value
 
 
 def _snap():
@@ -106,9 +119,9 @@ def test_live_test_run_shows_result(monkeypatch):
             await pilot.pause()
             app.query_one("#test-input", Input).value = "ping"
             await pilot.press("enter")
-            for _ in range(5):  # let the thread worker post back
-                await pilot.pause()
-            out = str(app.query_one("#test-out", Static).render())
+            out = await _until(
+                pilot, lambda: str(app.query_one("#test-out", Static).render()), lambda v: "PONG" in v
+            )  # the thread worker posts back
             assert "PONG from news-fetcher" in out
             assert app._test_busy is False
 
@@ -189,7 +202,7 @@ def test_config_pane_shows_offers_and_contracts():
         app = FleetApp(show_intro=False, auto_node=False, snapshot_fn=lambda ni: snap, node_index_fn=lambda c: {})
         async with app.run_test() as pilot:
             await pilot.pause()
-            cfg = str(app.query_one("#cfg", Static).render())
+            cfg = await _until(pilot, lambda: str(app.query_one("#cfg", Static).render()), lambda v: "Loading" not in v)
             assert "research" in cfg
             assert "contracts" in cfg
 
