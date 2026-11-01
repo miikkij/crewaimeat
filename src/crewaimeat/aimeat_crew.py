@@ -1047,23 +1047,42 @@ def record_event_targets(event: dict) -> list[tuple[str, str]] | None:
     return [(oid, wid)] if oid and wid else None
 
 
-def _node_tags(agent_name: str, call=None) -> list[str] | None:
-    """The tags the node holds for this agent, read off its OWN row of aimeat_agents_list (the connector's
-    GET /v1/agents, which carries `tags` on every row). None when the node could not say: no answer, no
-    list, or no row for this agent."""
-    from crewaimeat.agent_manifest import agent_local_name
+def _own_gaii(agent_name: str) -> str | None:
+    """This agent's full identity (`name#owner@node`): the name itself when it already is one (an agent
+    defined on the node runs under it), else its ONE line in this home's serve.json. None when the home
+    holds no line for it, or two (one name under two owners), because a guess would read somebody else."""
+    from crewaimeat import spawn_state
 
-    call = call or _aimeat_call
-    data = call(agent_name, "aimeat_agents_list", {}, quiet=True)
-    rows = data.get("agents") if isinstance(data, dict) else data
-    if not isinstance(rows, list):
+    if "#" in agent_name and "@" in agent_name:
+        return agent_name
+    doc = spawn_state.read_json(spawn_state.aimeat_home() / "serve.json") or {}
+    found = {
+        str(row.get("gaii"))
+        for row in doc.get("agents") or []
+        if isinstance(row, dict) and row.get("agent") == agent_name and "#" in str(row.get("gaii") or "")
+    }
+    return found.pop() if len(found) == 1 else None
+
+
+def _node_tags(agent_name: str, call=None) -> list[str] | None:
+    """The tags the node holds for this agent, read off its own PUBLIC profile (aimeat_agent_profile,
+    the connector's GET /v1/agents/:gaii, which asks no permission). None when the node could not say:
+    no identity to ask by, no answer, or a profile of somebody else.
+
+    NOT the agent list. It read its own row off aimeat_agents_list (GET /v1/agents) until 2026-11-01,
+    and that route asks agent:read from node 4.0.0. Six agents made through a proposal or the node's
+    page hold no agent:read; kauppa-crm was refused the read on each of its seven starts since
+    2026-10-16, and each refusal stayed on its page as a permission it was missing. A start reads
+    only what the node shows anyone about this agent."""
+    gaii = _own_gaii(agent_name)
+    if gaii is None:
         return None
-    me = agent_local_name(agent_name)
-    for row in rows:
-        if isinstance(row, dict) and agent_local_name(str(row.get("name") or "")) == me:
-            tags = row.get("tags")
-            return [str(t) for t in tags] if isinstance(tags, list) else []
-    return None
+    call = call or _aimeat_call
+    data = call(agent_name, "aimeat_agent_profile", {"gaii": gaii}, quiet=True)
+    if not isinstance(data, dict) or str(data.get("gaii") or "") != gaii:
+        return None
+    tags = data.get("tags")
+    return [str(t) for t in tags] if isinstance(tags, list) else []
 
 
 def _set_tags_if_changed(agent_name: str, tags: list[str], call=None) -> str:
@@ -1080,8 +1099,8 @@ def _set_tags_if_changed(agent_name: str, tags: list[str], call=None) -> str:
     no task (measured on a hosted place, 2026-10-02). The button that makes those agents seeds the same
     tags the definition declares, so reading first is what lets the run finish there. On a node at
     bcd4027ed an agent sets its own tags with no permission word, and the read merely saves a write.
-    Not knowing (no list, no row) is not "unchanged": the write goes out, and a node that refuses it
-    says so.
+    Not knowing (no identity, no profile) is not "unchanged": the write goes out, and a node that
+    refuses it says so. The read itself asks no permission (`_node_tags`).
     """
     call = call or _aimeat_call
     wanted = [str(t) for t in tags]
@@ -2756,7 +2775,7 @@ def run_crew(spec: CrewSpec) -> None:
 
     # 1b2) The agent's capability TAGS, on every start (so they survive re-onboarding), so the
     #      ecosystem-app agent picker recommends it by TAG, not only by exact name. WRITTEN ONLY WHEN
-    #      THEY DIFFER from what the node holds: `_set_tags_if_changed` reads the agent's own row first.
+    #      THEY DIFFER from what the node holds: `_set_tags_if_changed` reads the agent's own profile first.
     if _tags:
         verdict = _set_tags_if_changed(spec.agent_name, list(_tags))
         print(f"[{spec.agent_name}] capability tags {list(_tags)}: {verdict}", file=sys.stderr)

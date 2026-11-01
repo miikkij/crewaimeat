@@ -33,6 +33,7 @@ import shutil
 import socket
 import subprocess
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -150,9 +151,10 @@ class Node:
 # Every agent a test needs, registered up front with the node's defaults and nothing more. Up front because
 # signing an agent's token runs `node`, and conftest allows no process but Python inside a test body.
 AGENTS = ("concierge", "clean-agent", "granted-later")
-# What a basic agent the node's button makes holds: memory, its own tasks and the owner's agent list
-# (agent:read, which GET /v1/agents asks from node 4.0.0), and no agent:write.
-BASIC = ["memory:read", "memory:write", "task:read", "task:write", "agent:read"]
+# Memory and its own tasks, and nothing else: no agent:write, and no agent:read either. The button's
+# basic agents hold agent:read (GET /v1/agents asks it from node 4.0.0), but six agents made through a
+# proposal do not, and a start must run to done without it (aimeat_crew._node_tags, 2026-11-01).
+BASIC = ["memory:read", "memory:write", "task:read", "task:write"]
 BASIC_AGENTS = ("basic-held", "basic-differs", "basic-old-node")
 # The tags a crew definition declares, which the button seeds on the agent it makes.
 DECLARED_TAGS = ["crew:basic", "role:writer"]
@@ -284,17 +286,21 @@ def _task(node: Node, name: str, tid: str) -> dict:
 def _as_agent_call(node: Node, name: str, token: str):
     """The tools a run makes, as the agent, straight at the node's routes (in a crew they go over the
     daemon). Each one is the connector's own handler for that tool (tool-call-defs-agent.ts): the task
-    tools POST the task's route, aimeat_agents_list is GET /v1/agents, aimeat_agent_tags_set is
-    PATCH /v1/agents/<target>/tags, and the answer is the envelope's data or None on a refusal."""
+    tools POST the task's route, aimeat_agents_list is GET /v1/agents, aimeat_agent_profile is
+    GET /v1/agents/<gaii>, aimeat_agent_tags_set is PATCH /v1/agents/<target>/tags, and the answer is
+    the envelope's data or None on a refusal."""
     routes = {"aimeat_task_complete": "complete", "aimeat_task_fail": "fail"}
     headers = {"Authorization": f"Bearer {token}"}
 
     def call(_agent_name, tool, payload, **_kw):
         if tool == "aimeat_agents_list":
             r = requests.get(f"{node.base}/v1/agents", headers=headers, timeout=20).json()
+        elif tool == "aimeat_agent_profile":
+            gaii = urllib.parse.quote(payload["gaii"], safe="")
+            r = requests.get(f"{node.base}/v1/agents/{gaii}", headers=headers, timeout=20).json()
         elif tool == "aimeat_agent_tags_set":
             r = requests.patch(
-                f"{node.base}/v1/agents/{payload['target_agent_name']}/tags",
+                f"{node.base}/v1/agents/{urllib.parse.quote(payload['target_agent_name'], safe='')}/tags",
                 headers=headers,
                 json={"tags": payload.get("tags") or []},
                 timeout=20,
@@ -535,7 +541,8 @@ def test_a_basic_agent_whose_tags_the_node_holds_runs_to_done_with_nothing_refus
     _seed_tags(node, name, DECLARED_TAGS)
     tid, since, call = _basic_run(node, name)
 
-    assert _set_tags_if_changed(name, DECLARED_TAGS, call=call) == "unchanged"
+    # By its full identity, as an agent defined on the node runs (a crew file's finds it in serve.json).
+    assert _set_tags_if_changed(node.agents[name][0], DECLARED_TAGS, call=call) == "unchanged"
     _deliver_and_complete(node, name, tid, since, call)
 
     assert _task(node, name, tid)["status"] == "done"
@@ -555,7 +562,7 @@ def test_a_basic_agent_whose_tags_differ_writes_them_and_runs_to_done(node, agen
     _seed_tags(node, name, ["crew:old"])
     tid, since, call = _basic_run(node, name)
 
-    assert _set_tags_if_changed(name, DECLARED_TAGS, call=call) == "written"
+    assert _set_tags_if_changed(node.agents[name][0], DECLARED_TAGS, call=call) == "written"
     _deliver_and_complete(node, name, tid, since, call)
 
     assert _task(node, name, tid)["status"] == "done"
@@ -574,7 +581,7 @@ def test_on_an_older_node_differing_tags_are_still_refused_and_the_run_says_so(n
     _seed_tags(node, name, ["crew:old"])
     tid, since, call = _basic_run(node, name)
 
-    assert _set_tags_if_changed(name, DECLARED_TAGS, call=call) == "failed"
+    assert _set_tags_if_changed(node.agents[name][0], DECLARED_TAGS, call=call) == "failed"
     refused = _wait_for_refusals(name, since)
     assert any("agent:write" in (x.get("needed") or []) for x in refused), refused
     _deliver_and_complete(node, name, tid, since, call)

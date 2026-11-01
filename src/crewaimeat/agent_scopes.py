@@ -28,10 +28,10 @@ from collections.abc import Iterable
 
 # The node's stock default for an agent that names nothing (aimeat config.ts SHIPPED_DEFAULT_AGENT_SCOPES).
 # Four words until node 4.0.0, eight since. The four that came with it are not decoration: GET /v1/agents
-# asks agent:read from 4.0.0, and every start reads the agent's own row there before its tags push
-# (aimeat_crew._node_tags). With the old copy here a new agent was approved WITHOUT it, that read was
-# refused, and since aimeat-crewai 0.31.0 a refused call fails the run; aimeat-commercial met the same
-# word on 2026-10-20 as a spawner that ran no agent. Found 2026-11-01 when the live suites, dark since
+# asks agent:read from 4.0.0, and every start read the agent's own row there before its tags push
+# (aimeat_crew._node_tags, which reads the public profile since 2026-11-01). With the old copy here a
+# new agent was approved WITHOUT it and that read was refused; aimeat-commercial met the same word on
+# 2026-10-20 as a spawner that ran no agent. Tools that list the owner's agents still need it. Found 2026-11-01 when the live suites, dark since
 # 4.0.0, ran again. tests/test_run_refusals_live.py measures this list against a real node.
 NODE_DEFAULT_SCOPES: tuple[str, ...] = (
     "memory:read",
