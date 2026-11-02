@@ -146,21 +146,24 @@ def _answer_of(task: object) -> str:
 
 
 def _records_in(answer: str) -> list | None:
-    """The JSON list of objects that ENDS the answer, in a code fence or not; None when there is none.
+    """The LAST JSON list of objects anywhere in the answer, however it is wrapped; None when there is none.
 
-    A model's turn can carry its working notes before the list, and what comes before it is not read.
-    Measured on varoituskartta-vahti, 2026-11-02: several KB of notes, then the list in a fence on one
-    run, and `Let me final[{...}]` on the next. A list with anything after it is part of the notes."""
-    text = answer.strip().removesuffix("```").rstrip()
+    A model's turn can carry its working notes around the list. Measured on varoituskartta-vahti,
+    2026-11-02: several KB of notes, then the list in a fence on one run, and `Let me final[{...}]` on the
+    next. Finding it is deliberately lenient (the owner's call, 2026-11-02), because what decides is the
+    prefix and `value_schema`: a draft that passes them is a right record, and one that does not stores
+    nothing."""
     decoder = json.JSONDecoder()
-    for start in re.finditer(r"\[\s*\{", text):
+    found = None
+    resume = 0
+    for start in re.finditer(r"\[\s*\{", answer):
+        if start.start() < resume:  # inside the list just read
+            continue
         try:
-            records, end = decoder.raw_decode(text, start.start())
+            found, resume = decoder.raw_decode(answer, start.start())
         except ValueError:
             continue
-        if end == len(text):
-            return records
-    return None
+    return found
 
 
 def write_answer(agent_name: str, task_id: str, required: dict, answer: str) -> None:

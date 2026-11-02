@@ -376,9 +376,22 @@ def test_working_notes_before_a_fenced_list_are_not_read(writes):
     assert [w["key"] for w in writes.made] == ["kartta.c.RU"]
 
 
-def test_a_list_in_the_notes_with_text_after_it_is_not_taken(writes):
-    ro.write_answer("kartta", "t1", WRITES, 'Maybe [{"key": "kartta.c.RU", "value": 1}], or not.')
-    assert writes.made == []
+def test_text_after_the_list_does_not_hide_it(writes):
+    ro.write_answer("kartta", "t1", WRITES, 'Here it is: [{"key": "kartta.c.RU", "value": 1}]\n\nAll written.')
+    assert [w["key"] for w in writes.made] == ["kartta.c.RU"]
+    assert lifecycle.take_outcome("t1") is None
+
+
+def test_the_last_list_is_the_answer_and_a_draft_before_it_is_not_written(writes):
+    answer = 'Draft: [{"key": "kartta.c.XX", "value": 0}] Final: [{"key": "kartta.c.RU", "value": 1}]'
+    ro.write_answer("kartta", "t1", WRITES, answer)
+    assert [w["key"] for w in writes.made] == ["kartta.c.RU"]
+
+
+def test_a_list_cut_off_at_the_end_leaves_the_last_whole_one_to_the_checks(writes):
+    answer = 'Draft: [{"key": "kartta.c.bad", "value": "text"}] Final: [{"key": "kartta.c.RU", "val'
+    ro.write_answer("kartta", "t1", WRITES, answer)
+    assert writes.made == [], "the draft is not of the definition's shape, so nothing is stored"
     assert lifecycle.take_outcome("t1")[0] is True
 
 
