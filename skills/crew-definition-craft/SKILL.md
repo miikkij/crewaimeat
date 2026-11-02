@@ -3,7 +3,7 @@ name: crew-definition-craft
 description: How to design a crew definition (the JSON document of agents, tasks and tools that an AIMEAT agent runs on the crewaimeat runtime) so that it works on its first real run. Covers which tool answers which question (today's news is `news`, never the web search), giving each task only what its job needs, saying how many tool calls a job takes, the three endings that must not read alike, output an app can read, and the order to verify in. Use when you write or change a definition for aimeat_agent_propose, aimeat_crew_publish or a crew_defs file, and when an agent's run found nothing, failed, or was marked done with nothing in it.
 license: MIT
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
   audience: author
 ---
 
@@ -94,6 +94,15 @@ full of it). Write each ending into the definition:
 - Tell the next task what to do with each: the line above, a real list, and "anything else that is
   not a list". For the last one it says that the list was not produced, never that there was nothing.
 - When the right outcome is that the work cannot be done at all, give the agent `decline`.
+
+**When a run must leave records behind, name them.** A model can say it wrote and not have written:
+one agent ended done three times with nothing saved, because a turn with no tool call is the run's
+final answer. Where `crew.menu` lists the feature `required_outcome`, add it at the top level:
+`"required_outcome": {"memory_prefix": "varoituskartta.c.", "namespace": "agent", "none_when": "NOTHING QUEUED"}`.
+
+A run that changed no record under the prefix in the agent's own memory then ends failed. `none_when`
+is the run's ending 2, and the last task's answer must be exactly those words, nothing around them.
+Do not name a prefix under `crews.` or `agents.`: the runtime writes there on every run.
 
 ## 5. Output an app can read
 

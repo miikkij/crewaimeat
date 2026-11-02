@@ -165,6 +165,12 @@ def note_outcome(task_id: str | None, message: str, *, failed: bool = False) -> 
         _OUTCOMES[task_id] = (bool(failed), message)
 
 
+def has_failed_outcome(task_id: str | None) -> bool:
+    """True when the run has already recorded that this task failed. Left in place for the completion."""
+    with _LOCK:
+        return bool(_OUTCOMES.get(task_id or "", (False, ""))[0])
+
+
 def take_outcome(task_id: str | None) -> tuple[bool, str] | None:
     """(failed, message) the run recorded for this task, or None; clears it."""
     with _LOCK:

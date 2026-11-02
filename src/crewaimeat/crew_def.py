@@ -797,6 +797,9 @@ def validate_crew_doc(doc: Any) -> list[str]:
                     errors.append(f"listen_for: {kind!r} must be one of {_LISTEN_KINDS}")
     errors.extend(_validate_record_spaces(doc.get("record_spaces"), listen))
     errors.extend(_validate_browser_domains(doc))
+    from crewaimeat.required_outcome import validation_errors
+
+    errors.extend(validation_errors(doc.get("required_outcome")))
 
     prof = doc.get("llm_profile")
     if prof is not None:
@@ -1040,6 +1043,8 @@ def crewspec_from_json(doc: dict, **overrides: Any):
     if doc.get("record_spaces") is not None:
         # The same items CrewSpec.record_spaces and the connector's /local/subscribe take.
         kwargs["record_spaces"] = [{k: sp[k] for k in _RECORD_SPACE_KEYS} for sp in doc["record_spaces"]]
+    if doc.get("required_outcome") is not None:
+        kwargs["required_outcome"] = dict(doc["required_outcome"])
     if doc.get("skills") is not None:
         kwargs["skills"] = list(doc["skills"])  # run_crew loads+validates at start; ctx.skills at build
     offers = doc.get("offers")

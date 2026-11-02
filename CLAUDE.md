@@ -177,6 +177,15 @@ status cells, append decisions), so the two sides stay synced without drifting p
   `required_to_function`, `success_signal`, `deliverable_location: {key}`), all three or none; the
   definition's top-level `signals` is validated and read by nothing. `crew.menu` names the feature
   `task_scope`.
+- **A definition can name what a run must leave behind: `required_outcome` (2026-11-02).** The top-level
+  `{"memory_prefix", "namespace": "agent", "none_when"}` (agreed with aimeat-protocol; the node stores it
+  unread). `crewaimeat.required_outcome` reads the agent's own records under the prefix before the crew is
+  built and again at the close, and a run that changed none of them is FAILED unless its answer is exactly
+  `none_when`. Versions and not times: a write adds one to the version, and no clock is involved. A prefix
+  under `crews.` or `agents.` is refused, because the scaffold writes there on every run. A run that came
+  as a message is not checked. `crew.menu` names the feature `required_outcome`. An agent may publish its
+  definition without the field and needs no owner for it (Jouni, 2026-11-02), unlike `browser_domains`:
+  the field grants nothing, it is the check of an agent that wants to be checked.
 - **A definition agent's browser is fenced by what the browser can do, not by what the model is
   told (2026-10-13).** The tool id `browser` needs the definition's top-level `browser_domains`, 1 to
   20 hostnames and nothing but hostnames; either one without the other is refused. It is

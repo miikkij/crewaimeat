@@ -13,6 +13,8 @@ What the offline tests cannot show, and these do:
   - once the owner gives the permission, the refusal closes, so "then the task can run again" is true;
   - a token issued before the record got the word is refused while the node's list stays empty (it leaves
     out what the record holds), and the run still ends FAILED, by its own count (crew77, 2026-11-02);
+  - a required outcome reads the node's real list: nothing written fails the task, and writing a record
+    passes, also when the value is the same as before, because the version moves (crewaimeat.required_outcome);
   - `--scopes` REPLACES the node default for a new agent. This is the claim the whole requested-scopes
     list is built around, and an agent that asks only for what it needs beyond the defaults is really
     approved WITHOUT memory access. Proven here against the node rather than read off its source.
@@ -152,7 +154,7 @@ class Node:
 
 # Every agent a test needs, registered up front with the node's defaults and nothing more. Up front because
 # signing an agent's token runs `node`, and conftest allows no process but Python inside a test body.
-AGENTS = ("concierge", "clean-agent", "granted-later", "narrow-token")
+AGENTS = ("concierge", "clean-agent", "granted-later", "narrow-token", "outcome-agent")
 # Memory and its own tasks, and nothing else: no agent:write, and no agent:read either. The button's
 # basic agents hold agent:read (GET /v1/agents asks it from node 4.0.0), but six agents made through a
 # proposal do not, and a start must run to done without it (aimeat_crew._node_tags, 2026-11-01).
@@ -486,6 +488,35 @@ def test_a_token_narrower_than_its_record_fails_the_run_though_the_nodes_list_is
     said = str(events.get("data"))
     assert "agent:write" in said and "issued without it" in said, said
     assert tid in lifecycle.refused_runs()
+
+
+def test_a_required_outcome_is_read_from_the_node(node, agent_home):
+    from crewaimeat import lifecycle, required_outcome
+
+    name = "outcome-agent"
+    _gaii, token = _agent(node, name, DEFAULTS)
+    required = {"memory_prefix": "kartta.c.", "namespace": "agent"}
+    call = _as_agent_call(node, name, token)
+    write = {"key": "kartta.c.RU", "value": {"at": "same"}}
+
+    def run(*, writes: bool) -> str:
+        tid = _active_task(node, name)
+        since = lifecycle.run_started_iso()
+        before = required_outcome.record_versions(name, "kartta.c.")
+        assert before is not None
+        if writes:
+            ok = requests.post(
+                f"{node.base}/v1/memory", headers={"Authorization": f"Bearer {token}"}, json=write, timeout=20
+            )
+            assert ok.status_code in (200, 201), ok.text
+        close = _callbacks(call).complete_callback(name, tid, since=since)
+        required_outcome.checked_close(name, tid, required, before, object(), close)(None)
+        return _task(node, name, tid)["status"]
+
+    assert run(writes=False) == "failed", "nothing written under the prefix"
+    assert run(writes=True) == "done", "a new record"
+    assert run(writes=True) == "done", "the same value again still moves the version"
+    assert run(writes=False) == "failed", "an old record does not count for a new run"
 
 
 # ── what an agent asks for at approval ──────────────────────────────────────────────────────

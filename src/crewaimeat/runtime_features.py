@@ -26,6 +26,9 @@ FEATURES = (
     # `deliverable_key`, and the scope's `var.*` entries reach the crew as data (crewaimeat.task_scope).
     # The home writes workflow signals into a definition's offer only for a runtime that says this.
     "task_scope",
+    # A definition names what a run must write, and a run that wrote nothing there ends failed
+    # (crewaimeat.required_outcome).
+    "required_outcome",
 )
 
 # The `browser` tool opens only the hostnames the definition names in `browser_domains`

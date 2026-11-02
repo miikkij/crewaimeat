@@ -184,6 +184,8 @@ class CrewSpec:
     #   until the process ends, as before. This is how fleet_host lets go of ONE agent thread without
     #   stopping the others — an always-on agent the owner moved to another computer or switched to
     #   spawn. It is not how an agent is STOPPED: the node holds a stopped agent by itself.
+    required_outcome: dict | None = None  # what a run must leave behind (crewaimeat.required_outcome): a
+    #   definition's field, checked in code before the task is closed.
     task_scope: bool = False  # the crew is built from a DEFINITION, so the scaffold reads the task's
     #   scope for it (crewaimeat.task_scope): the deliverable is published at the scope's
     #   `deliverable_key` (a workflow step's key), and the scope's `var.*` entries follow the task's
@@ -2950,6 +2952,12 @@ def run_crew(spec: CrewSpec) -> None:
             from crewaimeat import task_scope as _task_scope
 
             mem_key, scope_block = _task_scope.apply(task, spec.agent_name, mem_key)
+        # Read before anything in this run can write: the check at the close compares against it.
+        outcome_before = None
+        if spec.required_outcome and task.get("_source") != "message":
+            from crewaimeat.required_outcome import record_versions
+
+            outcome_before = record_versions(spec.agent_name, spec.required_outcome["memory_prefix"])
         print(
             f"[{spec.agent_name}] build crew for task {tid} -> key {mem_key}"
             + (f" (+ shared {shared_key})" if shared_key else ""),
@@ -3148,6 +3156,12 @@ def run_crew(spec: CrewSpec) -> None:
                 auto_revert=spec.auto_revert_on_fail,
                 since=run_since,
             )
+            if spec.required_outcome and tasks:
+                from crewaimeat.required_outcome import checked_close
+
+                finalize.callback = checked_close(
+                    spec.agent_name, tid, spec.required_outcome, outcome_before, tasks[-1], finalize.callback
+                )
 
         # Self-evolution monitor (doc 20 P1): after the task, read own reputation and, if a gated
         # signal fires, propose an evolution to the owner. Chained after finalize; best-effort.
