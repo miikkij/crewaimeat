@@ -3,7 +3,7 @@ name: crew-definition-craft
 description: How to design a crew definition (the JSON document of agents, tasks and tools that an AIMEAT agent runs on the crewaimeat runtime) so that it works on its first real run. Covers which tool answers which question (today's news is `news`, never the web search), giving each task only what its job needs, saying how many tool calls a job takes, the three endings that must not read alike, output an app can read, and the order to verify in. Use when you write or change a definition for aimeat_agent_propose, aimeat_crew_publish or a crew_defs file, and when an agent's run found nothing, failed, or was marked done with nothing in it.
 license: MIT
 metadata:
-  version: "1.2.0"
+  version: "1.3.0"
   audience: author
 ---
 
@@ -107,7 +107,10 @@ Do not name a prefix under `crews.` or `agents.`: the runtime writes there on ev
 **Better, leave the writing out of the model's work.** With `"write_answer": "public"` in that object
 (or `"owner"`, feature `required_outcome_write`), the last task's answer is only the JSON list
 `[{"key": "...", "value": ...}]`, and the runtime writes it. Give the task no `memory` tool and no save
-step. A key outside the prefix is not written.
+step. `write_answer` needs `value_schema`: a JSON Schema each value must match, with `additionalProperties:
+false` where a wrong key would matter, and any `$ref` inside the schema. A list wrong in any way (a value
+of the wrong shape, a key outside the prefix) stores nothing and fails the run. Write one exact example of
+a record into the task as well: the schema refuses a wrong list, and the example is what gets a right one.
 
 ## 5. Output an app can read
 

@@ -7,6 +7,7 @@ at `_aimeat_rest`. The real node is in test_run_refusals_live.py.
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -54,6 +55,7 @@ def _doc(**fields) -> dict:
 
 def test_a_definition_with_the_field_is_valid_and_one_without_stays_valid():
     assert validate_crew_doc(_doc(required_outcome=REQUIRED)) == []
+    assert validate_crew_doc(_doc(required_outcome=THE_MAP)) == []
     assert validate_crew_doc(_doc()) == []
 
 
@@ -71,6 +73,26 @@ def test_a_definition_with_the_field_is_valid_and_one_without_stays_valid():
         ({"memory_prefix": "kartta.", "namespace": "agent", "none_when": " "}, "none_when"),
         ({"memory_prefix": "kartta.", "namespace": "agent", "must": 1}, "unknown field"),
         ({"memory_prefix": "kartta.", "namespace": "agent", "write_answer": "private"}, "visibility"),
+        ({"memory_prefix": "kartta.", "namespace": "agent", "write_answer": "public"}, "value_schema"),
+        ({"memory_prefix": "kartta.", "namespace": "agent", "value_schema": {"type": "object"}}, "name both"),
+        (
+            {
+                "memory_prefix": "kartta.",
+                "namespace": "agent",
+                "write_answer": "public",
+                "value_schema": {"type": "nope"},
+            },
+            "not a valid JSON Schema",
+        ),
+        (
+            {
+                "memory_prefix": "kartta.",
+                "namespace": "agent",
+                "write_answer": "public",
+                "value_schema": {"properties": {"a": {"$ref": "https://schemas.invalid/x.json"}}},
+            },
+            "must stay inside",
+        ),
     ],
 )
 def test_a_wrong_field_is_refused_when_the_definition_is_read(value, says):
@@ -120,6 +142,11 @@ def test_the_words_of_nothing_to_do_pass_exactly_and_ask_nothing(node):
     ro.check("kartta", "t1", REQUIRED, {}, "NOTHING QUEUED")
     assert lifecycle.take_outcome("t1") is None
     assert node.asked == []
+
+
+def test_working_notes_before_the_words_of_nothing_to_do_are_not_read(node):
+    ro.check("kartta", "t1", REQUIRED, {}, "The queue was empty.\nNOTHING QUEUED")
+    assert lifecycle.take_outcome("t1") is None
 
 
 @pytest.mark.parametrize("answer", ["Nothing queued.", "NOTHING QUEUED today", "I found NOTHING QUEUED"])
@@ -258,7 +285,53 @@ def test_a_real_run_with_nothing_to_do_completes(monkeypatch):
 
 # ── code writes the answer ───────────────────────────────────────────────────────────────────
 
-WRITES = {**REQUIRED, "write_answer": "public"}
+# The real shape, as the map's two readers want it (varoituskartta/extension/refresh.js cleanRecord and
+# varoituskartta.html sigOk): one object per signal, under the signal's name, and at least one signal,
+# because an empty set wipes that country's signals on the map.
+_SIGNAL = {
+    "type": "object",
+    "required": ["s", "q", "fi", "en", "part"],
+    "additionalProperties": False,
+    "properties": {
+        "s": {"enum": ["us", "uk", "ca", "de", "se"]},
+        "q": {"type": "string", "minLength": 1},
+        "fi": {"type": "string", "minLength": 1},
+        "en": {"type": "string", "minLength": 1},
+        "part": {"type": "boolean"},
+    },
+}
+COUNTRY = {
+    "type": "object",
+    "required": ["at", "sig", "sum"],
+    "additionalProperties": False,
+    "properties": {
+        "at": {"type": "string", "minLength": 1},
+        "sig": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": False,
+            "properties": {
+                k: {"$ref": "#/$defs/signal"} for k in ("border", "military", "prepare", "stock", "milinstr")
+            },
+        },
+        "sum": {
+            "type": "object",
+            "required": ["fi", "en"],
+            "additionalProperties": False,
+            "properties": {"fi": {"type": "string", "minLength": 1}, "en": {"type": "string", "minLength": 1}},
+        },
+        "se": {"type": "array", "minItems": 5, "maxItems": 5},
+    },
+    "$defs": {"signal": _SIGNAL},
+}
+WRITES = {**REQUIRED, "write_answer": "public", "value_schema": {"type": ["object", "integer"]}}
+THE_MAP = {**REQUIRED, "write_answer": "public", "value_schema": COUNTRY}
+SIGNAL = {"s": "ca", "q": "The border is closed.", "fi": "Raja suljettu", "en": "Border closed", "part": True}
+RIGHT = {"at": "2026-11-02T15:42:58.306Z", "sig": {"border": SIGNAL}, "sum": {"fi": "a", "en": "b"}}
+# What task 6b517c5c answered on 2026-11-02: the signals under the ministries' names.
+BY_MINISTRY = {**RIGHT, "sig": {"ca": [SIGNAL]}}
+# What the live record KE holds: a list per signal, which both of the map's readers drop.
+A_LIST_PER_SIGNAL = {**RIGHT, "sig": {"border": [SIGNAL]}}
 
 
 @pytest.fixture
@@ -319,12 +392,50 @@ def test_an_answer_that_is_not_the_list_writes_nothing_and_fails(writes, answer)
     assert failed is True and "not the JSON list" in message
 
 
-def test_a_key_outside_the_prefix_is_not_written_and_the_good_ones_are(writes):
+def test_a_right_record_passes_the_maps_schema(writes):
+    ro.write_answer("kartta", "t1", THE_MAP, json.dumps([{"key": "kartta.c.RU", "value": RIGHT}]))
+    assert [w["key"] for w in writes.made] == ["kartta.c.RU"]
+    assert lifecycle.take_outcome("t1") is None
+
+
+def test_the_measured_wrong_shape_stores_nothing_not_even_the_right_records_beside_it(writes):
+    answer = json.dumps([{"key": "kartta.c.RU", "value": RIGHT}, {"key": "kartta.c.KE", "value": BY_MINISTRY}])
+    ro.write_answer("kartta", "t1", THE_MAP, answer)
+    assert writes.made == [], "one wrong record refuses the whole list, before the first write"
+    failed, message = lifecycle.take_outcome("t1")
+    assert failed is True and "Nothing was written" in message
+    assert "kartta.c.KE" in message and "ca" in message, "the owner reads which record and what is wrong"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"at": "x", "sig": {}},  # no summary
+        {**RIGHT, "extra": 1},
+        {**RIGHT, "sig": {"border": {**SIGNAL, "part": "yes"}}},
+        {**RIGHT, "sig": {}},  # an empty set wipes the country's signals on the map
+        {**RIGHT, "se": [4]},
+        A_LIST_PER_SIGNAL,
+        "a text",
+    ],
+)
+def test_a_value_of_the_wrong_shape_is_refused(writes, value):
+    ro.write_answer("kartta", "t1", THE_MAP, json.dumps([{"key": "kartta.c.RU", "value": value}]))
+    assert writes.made == [] and lifecycle.take_outcome("t1")[0] is True
+
+
+def test_a_check_that_cannot_run_lets_nothing_through(writes):
+    required = {**WRITES, "value_schema": {"$ref": "https://schemas.invalid/x.json"}}  # no validator lets this in
+    ro.write_answer("kartta", "t1", required, '[{"key": "kartta.c.RU", "value": 1}]')
+    assert writes.made == [] and "could not be checked" in lifecycle.take_outcome("t1")[1]
+
+
+def test_a_key_outside_the_prefix_refuses_the_list(writes):
     answer = '[{"key": "kartta.c.RU", "value": 1}, {"key": "crews.registry.kartta", "value": {}}, {"key": "kartta.c.", "value": 2}]'
     ro.write_answer("kartta", "t1", WRITES, answer)
-    assert [w["key"] for w in writes.made] == ["kartta.c.RU"]
+    assert writes.made == []
     failed, message = lifecycle.take_outcome("t1")
-    assert failed is True and "crews.registry.kartta" in message and "1 record(s)" in message
+    assert failed is True and "crews.registry.kartta" in message and "Nothing was written" in message
 
 
 def test_a_key_the_node_refuses_fails_the_run_by_name_after_the_good_ones(writes):

@@ -25,9 +25,15 @@ THE WRITE ITSELF NEED NOT BE THE MODEL'S. Writing records is not judgement. Give
 "public"` (or "owner", the visibility the records get), the last task's answer is the JSON list
 [{"key", "value"}, ...] and code writes it: no tool, no model turn to get wrong. In the agent's run of
 2026-11-01 the list itself was right and the turn that was to save it answered with the list and made no
-call. A key outside `memory_prefix` is not written, whatever the answer says, because the answer is a
-model's and the prefix is what the owner approved. Written beats empty: every good record is written,
-and then anything that could not be, a refusal of a reserved key included, fails the run by name.
+call.
+
+A WRONG LIST STORES NOTHING. `write_answer` needs `value_schema`, a JSON Schema every record's value is
+held to, and the whole list is checked before the first write. Records go to a public map, and written
+does not beat empty there: the first real run's list had its signals under the ministries' names where
+the map reads them under the signals', and storing it would have put five broken records over good ones.
+A key outside `memory_prefix` refuses the list too, because the answer is a model's and the prefix is
+what the owner approved. Only what the node itself refuses at the write (a key it reserves) fails the
+run by name after the good records are written: that cannot be known before asking.
 
 WHEN IT CANNOT BE CHECKED the task completes and says so, as the refusal check does: failing a good run
 because the check failed would trade one silent lie for another. A refused read is not that case: the
@@ -44,6 +50,7 @@ from urllib.parse import quote
 # The agent's own memory. Another value is added when something needs it and the check can read it.
 NAMESPACES = ("agent",)
 VISIBILITIES = ("public", "owner")  # what the `memory` tool offers too
+_FIELDS = ("memory_prefix", "namespace", "none_when", "write_answer", "value_schema")
 # The scaffold itself writes under these on every run (the deliverable, offers, statistics), so a prefix
 # here would be satisfied by a run that did nothing.
 _SCAFFOLD_PREFIXES = ("crews.", "agents.")
@@ -54,9 +61,9 @@ def validation_errors(value: object) -> list[str]:
     if value is None:
         return []
     if not isinstance(value, dict):
-        return ['required_outcome: must be an object {"memory_prefix", "namespace", "none_when", "write_answer"}']
+        return [f"required_outcome: must be an object {{{', '.join(_FIELDS)}}}"]
     errors: list[str] = []
-    unknown = sorted(set(value) - {"memory_prefix", "namespace", "none_when", "write_answer"})
+    unknown = sorted(set(value) - set(_FIELDS))
     if unknown:
         errors.append(f"required_outcome: unknown field(s) {', '.join(unknown)}")
     prefix = value.get("memory_prefix")
@@ -74,7 +81,51 @@ def validation_errors(value: object) -> list[str]:
         errors.append("required_outcome.none_when: must be the exact words of a run with nothing to do")
     if value.get("write_answer") is not None and value["write_answer"] not in VISIBILITIES:
         errors.append(f"required_outcome.write_answer: must be the records' visibility, one of {VISIBILITIES}")
+    errors.extend(_schema_field_errors(value))
     return errors
+
+
+def _remote_refs(schema: object) -> list[str]:
+    """Every `$ref` in the schema that does not point inside it."""
+    if isinstance(schema, dict):
+        own = [schema["$ref"]] if isinstance(schema.get("$ref"), str) and not schema["$ref"].startswith("#") else []
+        return own + [r for v in schema.values() for r in _remote_refs(v)]
+    if isinstance(schema, list):
+        return [r for v in schema for r in _remote_refs(v)]
+    return []
+
+
+def _schema_field_errors(value: dict) -> list[str]:
+    schema = value.get("value_schema")
+    if value.get("write_answer") is None:
+        return [] if schema is None else ["required_outcome.value_schema: checks what `write_answer` writes; name both"]
+    if not isinstance(schema, dict) or not schema:
+        return ["required_outcome.value_schema: `write_answer` needs the JSON Schema each record's value must match"]
+    from jsonschema import Draft202012Validator
+    from jsonschema.exceptions import SchemaError
+
+    try:
+        Draft202012Validator.check_schema(schema)
+    except SchemaError as exc:
+        return [f"required_outcome.value_schema: not a valid JSON Schema: {exc.message}"]
+    # A definition's text must not make this computer fetch an address.
+    remote = _remote_refs(schema)
+    return [f"required_outcome.value_schema: $ref must stay inside the schema: {', '.join(remote)}"] if remote else []
+
+
+def _shape_problem(schema: dict, value: object) -> str | None:
+    """The first thing wrong with one record's value, or None. An empty registry: no $ref leaves the schema."""
+    from jsonschema import Draft202012Validator
+    from referencing import Registry
+
+    validator = Draft202012Validator(schema, registry=Registry())
+    try:
+        error = next(iter(sorted(validator.iter_errors(value), key=lambda e: list(map(str, e.absolute_path)))), None)
+    except Exception as exc:  # noqa: BLE001 — a check that cannot run must not let the record through
+        return f"the shape could not be checked ({type(exc).__name__})"
+    if error is None:
+        return None
+    return f"at {'/'.join(map(str, error.absolute_path)) or 'the top'}: {error.message:.200}"
 
 
 def record_versions(agent_name: str, prefix: str) -> dict[str, object] | None:
@@ -125,24 +176,39 @@ def write_answer(agent_name: str, task_id: str, required: dict, answer: str) -> 
             failed=True,
         )
         return
-    written: list[str] = []
-    problems: list[str] = []
+    wrong: list[str] = []
     for record in records:
         key = record.get("key") if isinstance(record, dict) else None
         if not isinstance(key, str) or "value" not in record:
-            problems.append(f'{record!r:.80} is not a {{"key", "value"}} object')
+            wrong.append(f'{record!r:.80} is not a {{"key", "value"}} object')
         elif not key.startswith(prefix) or key == prefix or any(c.isspace() for c in key):
-            problems.append(f"{key!r} is outside {prefix}")
+            wrong.append(f"{key!r} is outside {prefix}")
         else:
-            payload = {"key": key, "value": record["value"], "visibility": required["write_answer"]}
-            res = _aimeat_call(agent_name, "aimeat_memory_write", payload, return_error=True)
-            if res is None:
-                problems.append(f"{key}: the write got no answer")
-            elif isinstance(res, dict) and res.get("ok") is False:
-                err = res.get("error")
-                problems.append(f"{key}: the node answered {err.get('code') if isinstance(err, dict) else err}")
-            else:
-                written.append(key)
+            problem = _shape_problem(required["value_schema"], record["value"])
+            if problem:
+                wrong.append(f"{key} {problem}")
+    if wrong:
+        print(f"[{agent_name}] the run's list was refused, nothing written: {wrong}", file=sys.stderr)
+        note_outcome(
+            task_id,
+            f"Nothing was written under {prefix}, because the run's list is not what its definition asks for: "
+            + "; ".join(wrong),
+            failed=True,
+        )
+        return
+    written: list[str] = []
+    problems: list[str] = []
+    for record in records:
+        key = record["key"]
+        payload = {"key": key, "value": record["value"], "visibility": required["write_answer"]}
+        res = _aimeat_call(agent_name, "aimeat_memory_write", payload, return_error=True)
+        if res is None:
+            problems.append(f"{key}: the write got no answer")
+        elif isinstance(res, dict) and res.get("ok") is False:
+            err = res.get("error")
+            problems.append(f"{key}: the node answered {err.get('code') if isinstance(err, dict) else err}")
+        else:
+            written.append(key)
     print(f"[{agent_name}] wrote {len(written)} record(s) under {prefix} from the answer", file=sys.stderr)
     if problems:
         note_outcome(
@@ -161,7 +227,8 @@ def check(agent_name: str, task_id: str, required: dict, before: dict | None, an
         return
     prefix = required["memory_prefix"]
     none_when = required.get("none_when")
-    if none_when and answer == none_when.strip():
+    # The last line: the turn can carry working notes before its answer, as it does before a list.
+    if none_when and answer.strip().splitlines()[-1:] == [none_when.strip()]:
         print(f"[{agent_name}] required outcome: the run had nothing to do ({none_when})", file=sys.stderr)
         return
     if required.get("write_answer"):

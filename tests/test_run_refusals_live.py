@@ -535,12 +535,17 @@ def test_code_writes_a_runs_answer_and_a_reserved_key_fails_the_run(node, agent_
 
     monkeypatch.setattr("crewaimeat.aimeat_crew._aimeat_call", call)
 
-    def run(prefix: str, key: str) -> str:
-        required = {"memory_prefix": prefix, "namespace": "agent", "write_answer": "public"}
+    def run(prefix: str, key: str, value: str = '{"at": "x"}') -> str:
+        required = {
+            "memory_prefix": prefix,
+            "namespace": "agent",
+            "write_answer": "public",
+            "value_schema": {"type": "object", "required": ["at"]},
+        }
         tid = _active_task(node, name)
         since = lifecycle.run_started_iso()
         before = required_outcome.record_versions(name, prefix)
-        answer = type("Out", (), {"raw": f'[{{"key": "{key}", "value": {{"at": "x"}}}}]'})()
+        answer = type("Out", (), {"raw": f'[{{"key": "{key}", "value": {value}}}]'})()
         close = _callbacks(call).complete_callback(name, tid, since=since)
         required_outcome.checked_close(name, tid, required, before, type("T", (), {"output": answer})(), close)(None)
         return _task(node, name, tid)["status"]
@@ -548,6 +553,9 @@ def test_code_writes_a_runs_answer_and_a_reserved_key_fails_the_run(node, agent_
     assert run("kartta.c.", "kartta.c.RU") == "done"
     read = requests.get(f"{node.base}/v1/memory/kartta.c.RU", headers=headers, timeout=20).json()["data"]
     assert read["value"] == {"at": "x"} and read["visibility"] == "public"
+    assert run("kartta.d.", "kartta.d.RU", value='{"wrong": 1}') == "failed", "a wrong shape"
+    listed = required_outcome.record_versions(name, "kartta.d.")
+    assert listed == {}, "and nothing of it reached the node"
     # A key only the node itself writes (aimeat utils/reserved-keys.ts): RESERVED_KEY.
     assert run("__", "__redirect__") == "failed", "a key the node refuses is a failed run"
 
