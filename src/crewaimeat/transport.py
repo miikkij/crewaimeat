@@ -27,6 +27,13 @@ class NodeTransport:
     subprocess_call: Callable
     transient_error: Callable
     warn_provenance: Callable
+    # (agent_name, call, error) for each settled refusal-shaped answer: a run counts what it was refused
+    # itself (lifecycle.note_call_refused), because the node's list leaves some of it out.
+    note_refusal: Callable | None = None
+
+    def _note_refusal(self, agent_name: str, call: str, error: object) -> None:
+        if self.note_refusal is not None:
+            self.note_refusal(agent_name, call, error)
 
     def request(
         self,
@@ -99,6 +106,14 @@ class NodeTransport:
                 continue
             if response.status_code >= 400:
                 print(f"[{agent_name}] {method} {path}: HTTP {response.status_code}", file=sys.stderr)
+            if response.status_code == 403 and not kwargs.get("stream"):  # a streamed body stays the caller's
+                try:
+                    env = response.json()
+                except ValueError:
+                    env = None
+                self._note_refusal(
+                    agent_name, f"{method} {path.split('?', 1)[0]}", env.get("error") if isinstance(env, dict) else None
+                )
             return response
         raise RuntimeError("node request exhausted its attempts")
 
@@ -175,6 +190,7 @@ class NodeTransport:
                     continue
                 if not quiet:  # quiet=True for EXPECTED probe failures (e.g. listing an org you don't serve)
                     print(f"[{agent_name}] {tool} failed: {err or f'HTTP {r.status_code}'}", file=sys.stderr)
+                    self._note_refusal(agent_name, tool, err)
                 if return_error and isinstance(body, dict):
                     return dict(body, http_status=r.status_code)
                 return None
@@ -282,6 +298,7 @@ class NodeTransport:
                     time.sleep(backoff * (2**attempt))
                     continue
                 print(f"[{agent_name}] {method} {path} failed: HTTP {r.status_code} {err or ''}", file=sys.stderr)
+                self._note_refusal(agent_name, f"{method} {path.split('?', 1)[0]}", err)
                 if return_error and isinstance(env, dict):
                     return dict(env, http_status=r.status_code)
                 return None

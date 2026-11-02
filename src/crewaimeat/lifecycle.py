@@ -12,12 +12,20 @@ onboarding smoke test, inside the builder before any kickoff at all. By the time
 task was already done and its /fail was refused as an invalid state. So `complete_callback` asks first,
 and a refused run is FAILED with each call and permission named instead of being completed.
 
+THE NODE'S LIST IS NOT THE WHOLE COUNT, SO THE RUN KEEPS ITS OWN. The list leaves out a word the agent's
+record holds (aimeat-protocol services/agent-refusals.ts, deliberately: it stopped the owner being asked
+for 48 permissions the agent had). A token issued before the record got the word still answers 403, and
+such a run was closed as done: crew77's call_app_tool on 2026-11-02, and on this machine 48 runs of 1460
+between 2026-10-20 and 2026-10-29. So the transport reports every SCOPE_DENIED it is answered
+(`note_call_refused`), and `refusals_of_this_run` adds those to the node's list.
+
 A RUN THAT TURNED THE REQUEST DOWN IS NOT DONE EITHER. When the agent called `decline_request`
 (crewaimeat.decline), the task is failed with "Declined: <its reason>" instead of completed.
 """
 
 from __future__ import annotations
 
+import re
 import sys
 import threading
 import time
@@ -49,12 +57,20 @@ _LOCK = threading.Lock()
 _WORKER_RUN_START: dict[str, str | None] = {"at": None}
 # Tasks this process refused, task id -> the sentence that says why. run_once reads it for its exit code.
 _REFUSED: dict[str, str] = {}
+# The calls of this process the node answered SCOPE_DENIED: (agent, call, needed) -> when, last.
+_CALLS_REFUSED: dict[tuple[str, str, tuple[str, ...]], str] = {}
+# A scope as the node writes one into its message. A quoted word is the needed one, and the message may
+# go on to list what the agent holds after "Agent scopes:" (aimeat auth/middleware.ts).
+_SCOPE_WORD = r"[a-z][a-z0-9_-]*:[a-z0-9_*-]+"
+
+
+def _iso(moment: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(moment)) + f".{int((moment % 1) * 1000):03d}Z"
 
 
 def run_started_iso(now: float | None = None) -> str:
     """The `since` for a run starting now, in the ISO form the node parses (millisecond, Z)."""
-    started = (time.time() if now is None else now) - RUN_CLOCK_MARGIN_S
-    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(started)) + f".{int((started % 1) * 1000):03d}Z"
+    return _iso((time.time() if now is None else now) - RUN_CLOCK_MARGIN_S)
 
 
 def set_worker_run_start(iso: str) -> None:
@@ -85,6 +101,50 @@ def note_refused(task_id: str, reason: str) -> None:
 def refused_runs() -> dict[str, str]:
     with _LOCK:
         return dict(_REFUSED)
+
+
+def _needed_words(message: str) -> tuple[str, ...]:
+    """The permissions a refusal's message asks for; the node's body has no field for them."""
+    wanted = message.split("Agent scopes:", 1)[0]
+    words = re.findall(f'"({_SCOPE_WORD})"', wanted) or re.findall(_SCOPE_WORD, wanted)
+    return tuple(dict.fromkeys(words))
+
+
+def note_call_refused(agent_name: str, call: str, error: object) -> None:
+    """The transport's report of a settled error answer; only the node's SCOPE_DENIED is a refusal."""
+    if not isinstance(error, dict) or error.get("code") != "SCOPE_DENIED":
+        return
+    needed = _needed_words(str(error.get("message") or ""))
+    with _LOCK:
+        _CALLS_REFUSED[(str(agent_name), str(call), needed)] = _iso(time.time())
+
+
+def _same_agent(a: str, b: str) -> bool:
+    """A crew file's code calls by the bare name and the scaffold may hold the full identity. Two FULL
+    identities are the same agent only when equal: two owners' agents of one name can share a fleet host."""
+    if a == b:
+        return True
+    from crewaimeat.agent_manifest import agent_local_name
+
+    return ("#" not in a or "#" not in b) and agent_local_name(a) == agent_local_name(b)
+
+
+def refusals_of_this_run(node_says: list[dict] | None, agent_name: str, since: str) -> list[dict] | None:
+    """The node's answer (None: it could not be asked) plus this agent's calls refused at or after `since`,
+    in the node's shape. The window is the node's, per agent, so tasks running side by side share it there
+    and here alike. A permission the node already names is not listed a second time under another spelling
+    of the call: the node names the route pattern, the transport the concrete path."""
+    with _LOCK:
+        seen = [
+            {"needed": list(needed), "any_of": len(needed) > 1, "call": call, "unlisted": True}
+            for (who, call, needed), at in _CALLS_REFUSED.items()
+            if at >= since and _same_agent(who, str(agent_name))
+        ]
+    listed = {frozenset(str(s) for s in (r.get("needed") or [])) for r in node_says or []}
+    seen = [r for r in seen if frozenset(r["needed"]) not in listed]
+    if node_says is None and not seen:
+        return None
+    return [*(node_says or []), *seen]
 
 
 # A RUN THAT KNOWS HOW IT ENDED SAYS SO ITSELF. A deterministic handler (CrewSpec.on_task) does its
@@ -179,11 +239,19 @@ def refusal_summary(refusals: list[dict]) -> str:
         joined = (" or " if r.get("any_of") else " and ").join(needed)
         parts.append(f"{r.get('call') or 'a call'} needs {joined}")
     more = f" (and {len(refusals) - 5} more)" if len(refusals) > 5 else ""
+    # The owner who opens that page may find the word already ticked, and needs to be told what that means.
+    token = (
+        " If it already shows there as given, the credential this run used was issued without it, and the"
+        " agent needs a new one."
+        if any(r.get("unlisted") for r in refusals)
+        else ""
+    )
     return (
         "AIMEAT refused calls of this run for a missing permission: "
         + "; ".join(parts)
         + more
         + f". {_WHERE_THE_OWNER_GIVES_IT[0].upper()}{_WHERE_THE_OWNER_GIVES_IT[1:]}, and then the task can run again."
+        + token
     )
 
 

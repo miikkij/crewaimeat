@@ -11,6 +11,8 @@ What the offline tests cannot show, and these do:
   - the task ends FAILED on the node, with the call and the permission named, and not completed;
   - a run with nothing refused still completes -- the check does not turn good runs red;
   - once the owner gives the permission, the refusal closes, so "then the task can run again" is true;
+  - a token issued before the record got the word is refused while the node's list stays empty (it leaves
+    out what the record holds), and the run still ends FAILED, by its own count (crew77, 2026-11-02);
   - `--scopes` REPLACES the node default for a new agent. This is the claim the whole requested-scopes
     list is built around, and an agent that asks only for what it needs beyond the defaults is really
     approved WITHOUT memory access. Proven here against the node rather than read off its source.
@@ -150,7 +152,7 @@ class Node:
 
 # Every agent a test needs, registered up front with the node's defaults and nothing more. Up front because
 # signing an agent's token runs `node`, and conftest allows no process but Python inside a test body.
-AGENTS = ("concierge", "clean-agent", "granted-later")
+AGENTS = ("concierge", "clean-agent", "granted-later", "narrow-token")
 # Memory and its own tasks, and nothing else: no agent:write, and no agent:read either. The button's
 # basic agents hold agent:read (GET /v1/agents asks it from node 4.0.0), but six agents made through a
 # proposal do not, and a start must run to done without it (aimeat_crew._node_tags, 2026-11-01).
@@ -450,6 +452,40 @@ def test_once_the_owner_gives_the_permission_the_refusal_closes(node, agent_home
     )
     assert g.json().get("ok"), g.text
     assert _run_refusals(name, since) == []
+
+
+def test_a_token_narrower_than_its_record_fails_the_run_though_the_nodes_list_is_empty(node, agent_home):
+    from crewaimeat import lifecycle
+    from crewaimeat.aimeat_crew import _aimeat_rest, _node_refusals
+
+    name = "narrow-token"
+    _gaii, token = _agent(node, name, DEFAULTS)
+    tid = _active_task(node, name)
+    since = lifecycle.run_started_iso()
+
+    # The record gets the word; the token this run holds was issued before that.
+    g = requests.patch(
+        f"{node.base}/v1/agents/{name}/scopes",
+        headers=node.owner_headers,
+        json={"scopes": [*DEFAULTS, "agent:write"]},
+        timeout=20,
+    )
+    assert g.json().get("ok"), g.text
+
+    answer = _aimeat_rest(name, "PATCH", f"/v1/agents/{name}/mode", {"mode": "task-runner"}, return_error=True)
+    assert answer["http_status"] == 403 and answer["error"]["code"] == "SCOPE_DENIED", answer
+    time.sleep(2.0)  # the node writes a refusal just after answering the 403
+    assert _node_refusals(name, since) == [], "the node's list leaves out a word the record holds"
+
+    _callbacks(_as_agent_call(node, name, token)).complete_callback(name, tid, since=since)(None)
+
+    assert _task(node, name, tid)["status"] == "failed"
+    events = requests.get(
+        f"{node.base}/v1/agents/{name}/tasks/{tid}/events", headers=node.owner_headers, timeout=20
+    ).json()
+    said = str(events.get("data"))
+    assert "agent:write" in said and "issued without it" in said, said
+    assert tid in lifecycle.refused_runs()
 
 
 # ── what an agent asks for at approval ──────────────────────────────────────────────────────

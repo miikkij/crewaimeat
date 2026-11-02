@@ -372,6 +372,11 @@ def make_app_tools(agent_name: str, ctx: Any = None) -> list:
             out = _invoke_via_mcp(agent_name, tool_owner, app_id, str(entry.get("name")), payload)
         except Exception as exc:  # noqa: BLE001 — the crew needs the real cause, not a stack in a log
             return f"{entry.get('sku')}: the MCP door could not be reached ({type(exc).__name__}: {exc})."
+        if out["is_error"] and "SCOPE_DENIED" in out["text"]:
+            # This door is not the transport, and its refusal arrives as the tool's text.
+            from crewaimeat.lifecycle import note_call_refused
+
+            note_call_refused(agent_name, "aimeat_app_tool_invoke", {"code": "SCOPE_DENIED", "message": out["text"]})
         return out["text"] or ("(the door answered with no content)" if out["is_error"] else "(no content)")
 
     return [list_app_tools, call_app_tool, invoke_app_tool]

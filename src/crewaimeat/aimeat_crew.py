@@ -829,6 +829,7 @@ def _warn_if_provenance_dropped(agent_name: str, tool: str, data: object) -> Non
 
 
 def _node_transport():
+    from crewaimeat.lifecycle import note_call_refused
     from crewaimeat.transport import NodeTransport
 
     return NodeTransport(
@@ -839,6 +840,7 @@ def _node_transport():
         subprocess_call=_aimeat_call_subprocess,
         transient_error=_is_transient_error,
         warn_provenance=_warn_if_provenance_dropped,
+        note_refusal=note_call_refused,
     )
 
 
@@ -2000,6 +2002,13 @@ def _eval_ctx(eval_info: dict | None) -> dict:
 
 
 def _run_refusals(agent_name: str, since: str) -> list[dict] | None:
+    """What this agent was refused at or after `since`: the node's list plus its own calls' answers."""
+    from crewaimeat.lifecycle import refusals_of_this_run
+
+    return refusals_of_this_run(_node_refusals(agent_name, since), agent_name, since)
+
+
+def _node_refusals(agent_name: str, since: str) -> list[dict] | None:
     """What the node refused this agent for a missing permission at or after `since`, still unresolved.
 
     [] when there were none, and ALSO when the route answers 404: it arrived in aimeat-protocol

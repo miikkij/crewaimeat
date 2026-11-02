@@ -11,7 +11,9 @@ by then the task was already done. These tests hold the places where that is dec
   the node read tells "no route yet" (404, reads as none) from "could not ask" (completes, and says so);
   the window opens before the builder, and a spawn worker's first task inherits the worker's start so
     the start-up's refused identity push -- the actual sold-seat write -- counts against it;
-  run_once exits 3 for a refused run, and a token rejection keeps its own 2.
+  run_once exits 3 for a refused run, and a token rejection keeps its own 2;
+  a call the node answered SCOPE_DENIED counts even when the node's list leaves it out (crew77,
+    2026-11-02: the agent's record held the word, its token did not, and the task went green).
 
 No node, no network: the node read and the tool calls are replaced at the seam they are called through.
 """
@@ -37,9 +39,11 @@ REFUSAL = {
 def _clean_module_state():
     """The refused set and the worker start are process-wide; every test starts from nothing."""
     lifecycle._REFUSED.clear()
+    lifecycle._CALLS_REFUSED.clear()
     lifecycle._WORKER_RUN_START["at"] = None
     yield
     lifecycle._REFUSED.clear()
+    lifecycle._CALLS_REFUSED.clear()
     lifecycle._WORKER_RUN_START["at"] = None
 
 
@@ -319,3 +323,172 @@ def test_a_clean_run_keeps_its_code():
 
     assert _refused_exit("concierge", 0) == 0
     assert _refused_exit("concierge", 1) == 1
+
+
+# ── the run's own count: what the node's list leaves out ─────────────────────────────────────
+
+# The node's words, as auth/middleware.ts writes them; crew77's call_app_tool met this one on 2026-11-02.
+INVOKE_DENIED = {
+    "code": "SCOPE_DENIED",
+    "message": 'Scope "exchange:invoke" required. Agent scopes: [memory:read, ai:use]',
+}
+
+
+def test_a_refused_call_the_nodes_list_leaves_out_fails_the_run():
+    since = lifecycle.run_started_iso()
+    lifecycle.note_call_refused("crew77", "POST /v1/apps/o/a/webmcp/tools/t", INVOKE_DENIED)
+    call = _Recorder()
+
+    def refusals(agent, s):
+        return lifecycle.refusals_of_this_run([], agent, s)
+
+    _callbacks(call, refusals).complete_callback("crew77", "task-1", since=since)(None)
+    assert call.tools() == ["aimeat_task_fail"]
+    message = call.calls[0][1]["message"]
+    assert "POST /v1/apps/o/a/webmcp/tools/t" in message and "exchange:invoke" in message
+    assert "ai:use" not in message, "what the agent HOLDS is not what it needs"
+    assert "issued without it" in message, "the owner's page may show the word ticked; say what that means"
+    assert "task-1" in lifecycle.refused_runs()
+
+
+def test_a_call_refused_before_this_run_does_not_count():
+    lifecycle.note_call_refused("crew77", "POST /v1/x", INVOKE_DENIED)
+    assert lifecycle.refusals_of_this_run([], "crew77", "2999-01-01T00:00:00.000Z") == []
+
+
+def test_another_agents_refusal_does_not_count():
+    since = lifecycle.run_started_iso()
+    lifecycle.note_call_refused("other", "POST /v1/x", INVOKE_DENIED)
+    assert lifecycle.refusals_of_this_run([], "crew77", since) == []
+
+
+def test_two_owners_agents_of_one_name_stay_apart_and_a_bare_name_is_the_same_agent():
+    since = lifecycle.run_started_iso()
+    lifecycle.note_call_refused("a#one@node", "POST /v1/x", INVOKE_DENIED)
+    assert lifecycle.refusals_of_this_run([], "a#two@node", since) == []
+    assert lifecycle.refusals_of_this_run([], "a", since)
+    assert lifecycle.refusals_of_this_run([], "a#one@node", since)
+
+
+def test_a_permission_the_node_names_is_not_listed_twice():
+    since = lifecycle.run_started_iso()
+    node_says = [dict(REFUSAL, needed=["exchange:invoke"], call="POST /v1/apps/:owner/:file/webmcp/tools/:tool")]
+    lifecycle.note_call_refused("crew77", "POST /v1/apps/o/a/webmcp/tools/t", INVOKE_DENIED)
+    assert lifecycle.refusals_of_this_run(node_says, "crew77", since) == node_says
+
+
+def test_a_node_that_cannot_be_asked_does_not_hide_what_the_run_saw():
+    since = lifecycle.run_started_iso()
+    assert lifecycle.refusals_of_this_run(None, "crew77", since) is None, "nothing seen: still unknown"
+    lifecycle.note_call_refused("crew77", "POST /v1/x", INVOKE_DENIED)
+    assert [r["call"] for r in lifecycle.refusals_of_this_run(None, "crew77", since)] == ["POST /v1/x"]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        None,
+        "tunnel not connected",
+        {"code": "NOT_FOUND", "message": "no such key"},
+        {"code": "NOT_GRANTED", "message": "the owner has not granted this server"},
+    ],
+)
+def test_only_the_nodes_scope_refusal_counts(error):
+    lifecycle.note_call_refused("crew77", "aimeat_memory_read", error)
+    assert lifecycle._CALLS_REFUSED == {}
+
+
+@pytest.mark.parametrize(
+    ("message", "needed", "any_of"),
+    [
+        ('Scope "memory:write" required. Agent scopes: [memory:read, ai:use]', ["memory:write"], False),
+        (
+            'Scope "memory:write-as-owner" required to write into the owner\'s namespace.',
+            ["memory:write-as-owner"],
+            False,
+        ),
+        ("One of these scopes is required: a:x, b:y. Agent scopes: [memory:read]", ["a:x", "b:y"], True),
+        ("This needs ai:use.", ["ai:use"], False),
+        ("Forbidden.", [], False),
+    ],
+)
+def test_the_needed_words_come_from_the_nodes_message(message, needed, any_of):
+    since = lifecycle.run_started_iso()
+    lifecycle.note_call_refused("a", "c", {"code": "SCOPE_DENIED", "message": message})
+    got = lifecycle.refusals_of_this_run([], "a", since)
+    assert got[0]["needed"] == needed and got[0]["any_of"] is any_of
+
+
+class _Answer:
+    def __init__(self, status: int, body: dict):
+        self.status_code, self._body = status, body
+        self.headers: dict = {}
+        self.text = str(body)
+
+    def json(self):
+        return self._body
+
+
+class _Session:
+    def __init__(self, answer: _Answer):
+        self.answer = answer
+
+    def post(self, *_a, **_k):
+        return self.answer
+
+    def request(self, *_a, **_k):
+        return self.answer
+
+
+def _noop(*_a, **_k):
+    return None
+
+
+def _transport(answer: _Answer):
+    from crewaimeat.transport import NodeTransport
+
+    return NodeTransport(
+        serve_api=lambda: ("http://127.0.0.1:1", _Session(answer)),
+        reset=_noop,
+        identity_guard=lambda *_a: True,
+        read_token=None,
+        subprocess_call=_noop,
+        transient_error=lambda _e: False,
+        warn_provenance=_noop,
+        note_refusal=lifecycle.note_call_refused,
+    )
+
+
+DENIED_403 = {"ok": False, "error": INVOKE_DENIED}
+
+
+def _calls_seen() -> list[str]:
+    return [call for (_who, call, _needed) in lifecycle._CALLS_REFUSED]
+
+
+def test_all_three_doors_of_the_transport_report_a_refusal():
+    tx = _transport(_Answer(403, DENIED_403))
+    assert tx.call("a", "aimeat_memory_write", {}, return_error=True)["ok"] is False
+    assert tx.rest("a", "POST", "/v1/apps/o/a/webmcp/tools/t?x=1", {}) is None
+    assert tx.request("a", "POST", "/v1/storage?y=2").status_code == 403
+    assert _calls_seen() == ["aimeat_memory_write", "POST /v1/apps/o/a/webmcp/tools/t", "POST /v1/storage"]
+
+
+def test_a_probe_that_expects_a_refusal_does_not_count():
+    _transport(_Answer(403, DENIED_403)).call("a", "aimeat_organism_get", {}, quiet=True)
+    assert _calls_seen() == []
+
+
+def test_a_streamed_body_is_left_for_its_caller():
+    class Unreadable(_Answer):
+        def json(self):
+            raise AssertionError("a streamed body must not be read here")
+
+    _transport(Unreadable(403, {})).request("a", "GET", "/v1/storage/k", stream=True)
+    assert _calls_seen() == []
+
+
+def test_the_scaffolds_transport_reports_to_the_lifecycle():
+    from crewaimeat.aimeat_crew import _node_transport
+
+    assert _node_transport().note_refusal is lifecycle.note_call_refused
