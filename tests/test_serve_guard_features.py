@@ -25,7 +25,9 @@ def test_the_daemon_s_environment_names_the_features_crew_menu_answers(tmp_path,
     sg._name_this_install()
 
     _ok, menu = ci.handle("crew.menu", {}, agent_name="node-agent")
-    assert os.environ[FEATURES_ENV] == "record_spaces,record_backfill,task_scope,required_outcome"
+    assert (
+        os.environ[FEATURES_ENV] == "record_spaces,record_backfill,task_scope,required_outcome,required_outcome_write"
+    )
     assert os.environ[FEATURES_ENV].split(",") == menu["features"] == list(FEATURES)
 
 

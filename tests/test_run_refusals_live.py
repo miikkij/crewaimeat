@@ -154,7 +154,7 @@ class Node:
 
 # Every agent a test needs, registered up front with the node's defaults and nothing more. Up front because
 # signing an agent's token runs `node`, and conftest allows no process but Python inside a test body.
-AGENTS = ("concierge", "clean-agent", "granted-later", "narrow-token", "outcome-agent")
+AGENTS = ("concierge", "clean-agent", "granted-later", "narrow-token", "outcome-agent", "answer-writer")
 # Memory and its own tasks, and nothing else: no agent:write, and no agent:read either. The button's
 # basic agents hold agent:read (GET /v1/agents asks it from node 4.0.0), but six agents made through a
 # proposal do not, and a start must run to done without it (aimeat_crew._node_tags, 2026-11-01).
@@ -517,6 +517,55 @@ def test_a_required_outcome_is_read_from_the_node(node, agent_home):
     assert run(writes=True) == "done", "a new record"
     assert run(writes=True) == "done", "the same value again still moves the version"
     assert run(writes=False) == "failed", "an old record does not count for a new run"
+
+
+def test_code_writes_a_runs_answer_and_a_reserved_key_fails_the_run(node, agent_home, monkeypatch):
+    from crewaimeat import lifecycle, required_outcome
+
+    name = "answer-writer"
+    _gaii, token = _agent(node, name, DEFAULTS)
+    headers = {"Authorization": f"Bearer {token}"}
+    tool_call = _as_agent_call(node, name, token)
+
+    def call(agent, tool, payload, **kw):  # the connector's aimeat_memory_write is POST /v1/memory
+        if tool != "aimeat_memory_write":
+            return tool_call(agent, tool, payload, **kw)
+        r = requests.post(f"{node.base}/v1/memory", headers=headers, json=payload, timeout=20)
+        return r.json().get("data") if r.status_code < 300 else {**r.json(), "http_status": r.status_code}
+
+    monkeypatch.setattr("crewaimeat.aimeat_crew._aimeat_call", call)
+
+    def run(prefix: str, key: str) -> str:
+        required = {"memory_prefix": prefix, "namespace": "agent", "write_answer": "public"}
+        tid = _active_task(node, name)
+        since = lifecycle.run_started_iso()
+        before = required_outcome.record_versions(name, prefix)
+        answer = type("Out", (), {"raw": f'[{{"key": "{key}", "value": {{"at": "x"}}}}]'})()
+        close = _callbacks(call).complete_callback(name, tid, since=since)
+        required_outcome.checked_close(name, tid, required, before, type("T", (), {"output": answer})(), close)(None)
+        return _task(node, name, tid)["status"]
+
+    assert run("kartta.c.", "kartta.c.RU") == "done"
+    read = requests.get(f"{node.base}/v1/memory/kartta.c.RU", headers=headers, timeout=20).json()["data"]
+    assert read["value"] == {"at": "x"} and read["visibility"] == "public"
+    # A key only the node itself writes (aimeat utils/reserved-keys.ts): RESERVED_KEY.
+    assert run("__", "__redirect__") == "failed", "a key the node refuses is a failed run"
+
+
+def test_the_node_stores_a_definition_with_the_field_unchanged(node, agent_home):
+    name = "answer-writer"
+    doc = {
+        "agent_name": name,
+        "agents": [],
+        "tasks": [],
+        "required_outcome": {"memory_prefix": "kartta.c.", "namespace": "agent"},
+    }
+    r = requests.put(
+        f"{node.base}/v1/agents/{name}/crew/draft", headers=node.owner_headers, json={"doc": doc}, timeout=20
+    )
+    assert r.status_code < 300, r.text
+    back = requests.get(f"{node.base}/v1/agents/{name}/crew", headers=node.owner_headers, timeout=20).json()["data"]
+    assert back["draft"]["doc"]["required_outcome"] == doc["required_outcome"]
 
 
 # ── what an agent asks for at approval ──────────────────────────────────────────────────────

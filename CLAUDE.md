@@ -185,7 +185,10 @@ status cells, append decisions), so the two sides stay synced without drifting p
   under `crews.` or `agents.` is refused, because the scaffold writes there on every run. A run that came
   as a message is not checked. `crew.menu` names the feature `required_outcome`. An agent may publish its
   definition without the field and needs no owner for it (Jouni, 2026-11-02), unlike `browser_domains`:
-  the field grants nothing, it is the check of an agent that wants to be checked.
+  the field grants nothing, it is the check of an agent that wants to be checked. With `"write_answer":
+  "public"` (or `"owner"`, feature `required_outcome_write`) the last task answers with the list
+  `[{"key", "value"}]` and CODE writes it: writing is not model work. A key outside the prefix is not
+  written, and whatever could not be written fails the run by name, after every good record is written.
 - **A definition agent's browser is fenced by what the browser can do, not by what the model is
   told (2026-10-13).** The tool id `browser` needs the definition's top-level `browser_domains`, 1 to
   20 hostnames and nothing but hostnames; either one without the other is refused. It is

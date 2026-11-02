@@ -70,6 +70,7 @@ def test_a_definition_with_the_field_is_valid_and_one_without_stays_valid():
         ({"memory_prefix": "agents.kartta.", "namespace": "agent"}, "every run would pass"),
         ({"memory_prefix": "kartta.", "namespace": "agent", "none_when": " "}, "none_when"),
         ({"memory_prefix": "kartta.", "namespace": "agent", "must": 1}, "unknown field"),
+        ({"memory_prefix": "kartta.", "namespace": "agent", "write_answer": "private"}, "visibility"),
     ],
 )
 def test_a_wrong_field_is_refused_when_the_definition_is_read(value, says):
@@ -191,7 +192,7 @@ def test_a_check_that_raises_still_closes_the_task(monkeypatch):
 class _Run:
     """One task through `run_crew`'s real builder and a real kickoff; only the model and the node are stubs."""
 
-    def __init__(self, monkeypatch, answer: str, records: dict, *, source: str | None = None):
+    def __init__(self, monkeypatch, answer: str, records: dict, *, required: dict = REQUIRED):
         from crewai import Agent, BaseLLM
 
         from crewaimeat import aimeat_crew as ac
@@ -207,11 +208,17 @@ class _Run:
             def supports_stop_words(self):
                 return False
 
+        # CrewAI's panel about tracing goes past pytest's capture in the console's own encoding.
+        from crewai.events.listeners.tracing.utils import set_suppress_tracing_messages
+
+        set_suppress_tracing_messages(True)
         self.calls: list[tuple[str, dict]] = []
         model = _Model(model="stub")
 
         def call(agent, tool, payload, **_kw):
             self.calls.append((tool, payload))
+            if tool == "aimeat_memory_write" and payload["key"].startswith("kartta.c."):
+                records[payload["key"]] = records.get(payload["key"], 0) + 1
             return {"ok": True}
 
         def rest(agent, method, path, body=None, **_kw):
@@ -230,10 +237,8 @@ class _Run:
         monkeypatch.setattr(ac, "_serve_attach_bridge", lambda *_a: None)
         monkeypatch.setattr(ac, "ensure_serve", lambda **_k: {"port": 1})
         monkeypatch.setattr(ac, "_onboarding_state", lambda *_a: (True, 0))
-        ac.run_crew(crewspec_from_json(_doc(required_outcome=REQUIRED), owner="o"))
+        ac.run_crew(crewspec_from_json(_doc(required_outcome=required), owner="o"))
         task = {"id": "t1", "description": "do it", "title": "do it", "status": "active"}
-        if source:
-            task["_source"] = source
         liaison = Agent(role="l", goal="g", backstory="b", llm=model)
         captured["build_crew"](task, liaison).kickoff()
 
@@ -249,3 +254,85 @@ def test_a_real_run_that_only_said_it_wrote_ends_failed(monkeypatch):
 
 def test_a_real_run_with_nothing_to_do_completes(monkeypatch):
     assert _Run(monkeypatch, "NOTHING QUEUED", {}).tools() == ["aimeat_task_complete"]
+
+
+# ── code writes the answer ───────────────────────────────────────────────────────────────────
+
+WRITES = {**REQUIRED, "write_answer": "public"}
+
+
+@pytest.fixture
+def writes(monkeypatch):
+    """The memory writes that reached the node; `refuse` maps a key to the node's refusal of it."""
+    state = SimpleNamespace(made=[], refuse={})
+
+    def call(agent, tool, payload, **_kw):
+        assert tool == "aimeat_memory_write"
+        if payload["key"] in state.refuse:
+            return {"ok": False, "error": {"code": state.refuse[payload["key"]], "message": "no"}}
+        state.made.append(payload)
+        return {"key": payload["key"]}
+
+    monkeypatch.setattr("crewaimeat.aimeat_crew._aimeat_call", call)
+    return state
+
+
+def test_code_writes_each_record_at_the_visibility_the_definition_names(writes):
+    ro.write_answer(
+        "kartta", "t1", WRITES, '[{"key": "kartta.c.RU", "value": {"at": "x"}}, {"key": "kartta.c.SE", "value": 1}]'
+    )
+    assert writes.made == [
+        {"key": "kartta.c.RU", "value": {"at": "x"}, "visibility": "public"},
+        {"key": "kartta.c.SE", "value": 1, "visibility": "public"},
+    ]
+    assert lifecycle.take_outcome("t1") is None
+
+
+def test_a_code_fence_around_the_list_is_not_a_failure(writes):
+    ro.write_answer("kartta", "t1", WRITES, '```json\n[{"key": "kartta.c.RU", "value": 1}]\n```')
+    assert [w["key"] for w in writes.made] == ["kartta.c.RU"]
+
+
+@pytest.mark.parametrize(
+    "answer", ["I wrote them.", "[]", '{"key": "kartta.c.RU", "value": 1}', '[{"key": "kartta.c.R']
+)
+def test_an_answer_that_is_not_the_list_writes_nothing_and_fails(writes, answer):
+    ro.write_answer("kartta", "t1", WRITES, answer)
+    assert writes.made == []
+    failed, message = lifecycle.take_outcome("t1")
+    assert failed is True and "not the JSON list" in message
+
+
+def test_a_key_outside_the_prefix_is_not_written_and_the_good_ones_are(writes):
+    answer = '[{"key": "kartta.c.RU", "value": 1}, {"key": "crews.registry.kartta", "value": {}}, {"key": "kartta.c.", "value": 2}]'
+    ro.write_answer("kartta", "t1", WRITES, answer)
+    assert [w["key"] for w in writes.made] == ["kartta.c.RU"]
+    failed, message = lifecycle.take_outcome("t1")
+    assert failed is True and "crews.registry.kartta" in message and "1 record(s)" in message
+
+
+def test_a_key_the_node_refuses_fails_the_run_by_name_after_the_good_ones(writes):
+    writes.refuse["kartta.c.RU"] = "KEY_RESERVED"
+    ro.write_answer("kartta", "t1", WRITES, '[{"key": "kartta.c.RU", "value": 1}, {"key": "kartta.c.SE", "value": 2}]')
+    assert [w["key"] for w in writes.made] == ["kartta.c.SE"]
+    failed, message = lifecycle.take_outcome("t1")
+    assert failed is True and "kartta.c.RU" in message and "KEY_RESERVED" in message
+
+
+@pytest.mark.parametrize("record", ['"text"', '{"key": "kartta.c.RU"}', '{"value": 1}'])
+def test_a_malformed_record_is_named(writes, record):
+    ro.write_answer("kartta", "t1", WRITES, f"[{record}]")
+    assert writes.made == []
+    assert lifecycle.take_outcome("t1")[0] is True
+
+
+def test_none_when_writes_nothing(writes, node):
+    ro.check("kartta", "t1", WRITES, {}, "NOTHING QUEUED")
+    assert writes.made == [] and lifecycle.take_outcome("t1") is None
+
+
+def test_a_real_run_whose_answer_is_the_list_is_written_by_code_and_ends_done(monkeypatch):
+    answer = '[{"key": "kartta.c.RU", "value": {"at": "x"}}]'
+    run = _Run(monkeypatch, answer, {"kartta.c.RU": 3}, required=WRITES)
+    assert run.tools() == ["aimeat_task_complete"]
+    assert ("aimeat_memory_write", {"key": "kartta.c.RU", "value": {"at": "x"}, "visibility": "public"}) in run.calls

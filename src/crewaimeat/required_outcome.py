@@ -21,6 +21,14 @@ turns a real write into "no record" on a slow clock. A write adds one to the rec
 crew is built and again at the close, and any difference is a write. Tasks running side by side share
 the agent's memory, so one's write counts for both: the same per-agent reach as the refusal check.
 
+THE WRITE ITSELF NEED NOT BE THE MODEL'S. Writing records is not judgement. Given `"write_answer":
+"public"` (or "owner", the visibility the records get), the last task's answer is the JSON list
+[{"key", "value"}, ...] and code writes it: no tool, no model turn to get wrong. In the agent's run of
+2026-11-01 the list itself was right and the turn that was to save it answered with the list and made no
+call. A key outside `memory_prefix` is not written, whatever the answer says, because the answer is a
+model's and the prefix is what the owner approved. Written beats empty: every good record is written,
+and then anything that could not be, a refusal of a reserved key included, fails the run by name.
+
 WHEN IT CANNOT BE CHECKED the task completes and says so, as the refusal check does: failing a good run
 because the check failed would trade one silent lie for another. A refused read is not that case: the
 transport counted it, and the refusal check fails the run with the permission named.
@@ -28,12 +36,14 @@ transport counted it, and the refusal check fails the run with the permission na
 
 from __future__ import annotations
 
+import json
 import sys
 from collections.abc import Callable
 from urllib.parse import quote
 
 # The agent's own memory. Another value is added when something needs it and the check can read it.
 NAMESPACES = ("agent",)
+VISIBILITIES = ("public", "owner")  # what the `memory` tool offers too
 # The scaffold itself writes under these on every run (the deliverable, offers, statistics), so a prefix
 # here would be satisfied by a run that did nothing.
 _SCAFFOLD_PREFIXES = ("crews.", "agents.")
@@ -44,9 +54,9 @@ def validation_errors(value: object) -> list[str]:
     if value is None:
         return []
     if not isinstance(value, dict):
-        return ['required_outcome: must be an object {"memory_prefix", "namespace", "none_when"}']
+        return ['required_outcome: must be an object {"memory_prefix", "namespace", "none_when", "write_answer"}']
     errors: list[str] = []
-    unknown = sorted(set(value) - {"memory_prefix", "namespace", "none_when"})
+    unknown = sorted(set(value) - {"memory_prefix", "namespace", "none_when", "write_answer"})
     if unknown:
         errors.append(f"required_outcome: unknown field(s) {', '.join(unknown)}")
     prefix = value.get("memory_prefix")
@@ -62,6 +72,8 @@ def validation_errors(value: object) -> list[str]:
     none_when = value.get("none_when")
     if none_when is not None and (not isinstance(none_when, str) or not none_when.strip()):
         errors.append("required_outcome.none_when: must be the exact words of a run with nothing to do")
+    if value.get("write_answer") is not None and value["write_answer"] not in VISIBILITIES:
+        errors.append(f"required_outcome.write_answer: must be the records' visibility, one of {VISIBILITIES}")
     return errors
 
 
@@ -81,6 +93,61 @@ def _answer_of(task: object) -> str:
     return str(getattr(output, "raw", None) or output or "").strip()
 
 
+def _records_in(answer: str) -> list | None:
+    """The answer's JSON list, without the code fence a model may put around it; None when it is not one."""
+    text = answer.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1].rsplit("```", 1)[0]
+    try:
+        records = json.loads(text)
+    except ValueError:
+        return None
+    return records if isinstance(records, list) and records else None
+
+
+def write_answer(agent_name: str, task_id: str, required: dict, answer: str) -> None:
+    """Write the answer's records under the prefix, in code. Anything that could not be written fails the run."""
+    from crewaimeat.aimeat_crew import _aimeat_call
+    from crewaimeat.lifecycle import note_outcome
+
+    prefix = required["memory_prefix"]
+    records = _records_in(answer)
+    if records is None:
+        note_outcome(
+            task_id,
+            f'The run\'s answer was not the JSON list of {{"key", "value"}} objects its definition asks for, so '
+            f"nothing was written under {prefix}. What the model answered is the task's deliverable.",
+            failed=True,
+        )
+        return
+    written: list[str] = []
+    problems: list[str] = []
+    for record in records:
+        key = record.get("key") if isinstance(record, dict) else None
+        if not isinstance(key, str) or "value" not in record:
+            problems.append(f'{record!r:.80} is not a {{"key", "value"}} object')
+        elif not key.startswith(prefix) or key == prefix or any(c.isspace() for c in key):
+            problems.append(f"{key!r} is outside {prefix}")
+        else:
+            payload = {"key": key, "value": record["value"], "visibility": required["write_answer"]}
+            res = _aimeat_call(agent_name, "aimeat_memory_write", payload, return_error=True)
+            if res is None:
+                problems.append(f"{key}: the write got no answer")
+            elif isinstance(res, dict) and res.get("ok") is False:
+                err = res.get("error")
+                problems.append(f"{key}: the node answered {err.get('code') if isinstance(err, dict) else err}")
+            else:
+                written.append(key)
+    print(f"[{agent_name}] wrote {len(written)} record(s) under {prefix} from the answer", file=sys.stderr)
+    if problems:
+        note_outcome(
+            task_id,
+            f"{len(written)} record(s) of the run's answer were written under {prefix} and these were not: "
+            + "; ".join(problems),
+            failed=True,
+        )
+
+
 def check(agent_name: str, task_id: str, required: dict, before: dict | None, answer: str) -> None:
     """Record this run's outcome for the completion to act on, when it has something to say."""
     from crewaimeat.lifecycle import has_failed_outcome, note_outcome
@@ -92,6 +159,10 @@ def check(agent_name: str, task_id: str, required: dict, before: dict | None, an
     if none_when and answer == none_when.strip():
         print(f"[{agent_name}] required outcome: the run had nothing to do ({none_when})", file=sys.stderr)
         return
+    if required.get("write_answer"):
+        write_answer(agent_name, task_id, required, answer)
+        if has_failed_outcome(task_id):
+            return
     after = record_versions(agent_name, prefix)
     if before is None or after is None:
         print(f"[{agent_name}] required outcome under {prefix} could not be read; completing", file=sys.stderr)

@@ -29,6 +29,8 @@ FEATURES = (
     # A definition names what a run must write, and a run that wrote nothing there ends failed
     # (crewaimeat.required_outcome).
     "required_outcome",
+    # ... and code writes the last task's {key, value} list under that prefix: `"write_answer"`.
+    "required_outcome_write",
 )
 
 # The `browser` tool opens only the hostnames the definition names in `browser_domains`
