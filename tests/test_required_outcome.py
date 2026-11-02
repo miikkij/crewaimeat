@@ -293,6 +293,22 @@ def test_a_code_fence_around_the_list_is_not_a_failure(writes):
     assert [w["key"] for w in writes.made] == ["kartta.c.RU"]
 
 
+def test_working_notes_before_a_fenced_list_are_not_read(writes):
+    # The measured shape: task 6b517c5c, varoituskartta-vahti, 2026-11-02.
+    answer = (
+        'Let me write [{"key": "kartta.c.XX", "value": 0}] first.\n```text\nnotes\n```\nFinal answer.'
+        '```json\n[{"key": "kartta.c.RU", "value": 1}]\n```'
+    )
+    ro.write_answer("kartta", "t1", WRITES, answer)
+    assert [w["key"] for w in writes.made] == ["kartta.c.RU"]
+
+
+def test_a_list_in_the_notes_with_no_fence_ending_the_answer_is_not_taken(writes):
+    ro.write_answer("kartta", "t1", WRITES, 'Maybe [{"key": "kartta.c.RU", "value": 1}], or not.')
+    assert writes.made == []
+    assert lifecycle.take_outcome("t1")[0] is True
+
+
 @pytest.mark.parametrize(
     "answer", ["I wrote them.", "[]", '{"key": "kartta.c.RU", "value": 1}', '[{"key": "kartta.c.R']
 )

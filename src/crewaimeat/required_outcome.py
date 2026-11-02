@@ -94,10 +94,15 @@ def _answer_of(task: object) -> str:
 
 
 def _records_in(answer: str) -> list | None:
-    """The answer's JSON list, without the code fence a model may put around it; None when it is not one."""
+    """The answer's JSON list; None when it is not one. A model's turn can carry its working notes before
+    the list (measured on varoituskartta-vahti, 2026-11-02: several KB of notes, then the list in a code
+    fence), so a fenced block that ENDS the answer is taken and what comes before it is not read."""
     text = answer.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[-1].rsplit("```", 1)[0]
+    if text.endswith("```"):
+        body = text[:-3]
+        opening = body.rfind("```")
+        if opening >= 0:
+            text = body[opening + 3 :].split("\n", 1)[-1]
     try:
         records = json.loads(text)
     except ValueError:
