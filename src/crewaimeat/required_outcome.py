@@ -43,6 +43,7 @@ transport counted it, and the refusal check fails the run with the permission na
 from __future__ import annotations
 
 import json
+import re
 import sys
 from collections.abc import Callable
 from urllib.parse import quote
@@ -145,20 +146,21 @@ def _answer_of(task: object) -> str:
 
 
 def _records_in(answer: str) -> list | None:
-    """The answer's JSON list; None when it is not one. A model's turn can carry its working notes before
-    the list (measured on varoituskartta-vahti, 2026-11-02: several KB of notes, then the list in a code
-    fence), so a fenced block that ENDS the answer is taken and what comes before it is not read."""
-    text = answer.strip()
-    if text.endswith("```"):
-        body = text[:-3]
-        opening = body.rfind("```")
-        if opening >= 0:
-            text = body[opening + 3 :].split("\n", 1)[-1]
-    try:
-        records = json.loads(text)
-    except ValueError:
-        return None
-    return records if isinstance(records, list) and records else None
+    """The JSON list of objects that ENDS the answer, in a code fence or not; None when there is none.
+
+    A model's turn can carry its working notes before the list, and what comes before it is not read.
+    Measured on varoituskartta-vahti, 2026-11-02: several KB of notes, then the list in a fence on one
+    run, and `Let me final[{...}]` on the next. A list with anything after it is part of the notes."""
+    text = answer.strip().removesuffix("```").rstrip()
+    decoder = json.JSONDecoder()
+    for start in re.finditer(r"\[\s*\{", text):
+        try:
+            records, end = decoder.raw_decode(text, start.start())
+        except ValueError:
+            continue
+        if end == len(text):
+            return records
+    return None
 
 
 def write_answer(agent_name: str, task_id: str, required: dict, answer: str) -> None:

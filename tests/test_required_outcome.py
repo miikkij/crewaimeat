@@ -376,10 +376,30 @@ def test_working_notes_before_a_fenced_list_are_not_read(writes):
     assert [w["key"] for w in writes.made] == ["kartta.c.RU"]
 
 
-def test_a_list_in_the_notes_with_no_fence_ending_the_answer_is_not_taken(writes):
+def test_a_list_in_the_notes_with_text_after_it_is_not_taken(writes):
     ro.write_answer("kartta", "t1", WRITES, 'Maybe [{"key": "kartta.c.RU", "value": 1}], or not.')
     assert writes.made == []
     assert lifecycle.take_outcome("t1")[0] is True
+
+
+def test_the_measured_answer_with_no_fence_is_read_and_passes_the_maps_schema(writes):
+    # The real end of task 447f5e83's answer, 2026-11-02, with its signals shortened to two of CD's.
+    required = {**THE_MAP, "memory_prefix": "varoituskartta.c."}
+    answer = (
+        'CD se: [3, 4, sentence, date, url]. For a note like [{"key": "x"}] nothing is taken.\n\nLet me final'
+        '[{"key": "varoituskartta.c.CD", "value": {"at": "2026-11-02T15:42:58.306Z", "sig": {"border": '
+        '{"s": "ca", "q": "Land and water border crossings may also close without notice.", '
+        '"fi": "Raja-asemat voivat sulkeutua", "en": "Border crossings may close", "part": false}, '
+        '"stock": {"s": "ca", "q": "shelter in place and have adequate supplies, like food and water", '
+        '"fi": "Pysy suojassa ja varaa ruokaa ja vettä", "en": "Shelter in place with food and water", '
+        '"part": true}}, "sum": {"fi": "Vältä kaikkea matkustamista.", "en": "Avoid all travel."}, '
+        '"se": [3, 4, "Med anledning av säkerhetsläget avråder Utrikesdepartementet.", "2025-06-03", '
+        '"https://www.regeringen.se/ud-avrader/demokratiska-republiken-kongo/"]}}]'
+    )
+    ro.write_answer("kartta", "t1", required, answer)
+    assert lifecycle.take_outcome("t1") is None
+    assert [w["key"] for w in writes.made] == ["varoituskartta.c.CD"]
+    assert writes.made[0]["value"]["se"][3] == "2025-06-03"
 
 
 @pytest.mark.parametrize(
