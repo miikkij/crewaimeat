@@ -1014,7 +1014,11 @@ def member_workspaces(agent_name: str) -> list[tuple[str, str]]:
         # "not an active member" / "organism not found" — an EXPECTED outcome of scanning, not a fault
         # to spam every idle poll. A real problem still surfaces through the agent's own deliverable.
         wl = _aimeat_call(agent_name, "aimeat_workspace_list", {"organism_id": oid}, quiet=True) or {}
-        pairs.extend((oid, w["id"]) for w in (wl.get("workspaces") or []) if w.get("id"))
+        # Not an archived one: archiving takes its manifest away, so the node refuses both the read and
+        # the record subscription. Two of the four the connector logged as "rejected (access)" on every
+        # worker start were archived (2026-11-06); a scan read each of them in vain as well.
+        workspaces = wl.get("workspaces") or []
+        pairs.extend((oid, w["id"]) for w in workspaces if w.get("id") and not w.get("archived"))
     return pairs
 
 
