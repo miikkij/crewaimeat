@@ -117,6 +117,18 @@ def test_handle_dm_event_replies_and_dedups(monkeypatch):
     assert dm.handle_dm_event("wm", self_ev, lambda e: "yo") is False
 
 
+def test_a_message_the_agent_may_not_read_runs_nothing(monkeypatch, capsys):
+    """Node 4.2: without messages:read the agent is told only that a message arrived (readable false). No
+    responder runs and nothing is sent, even when the wake names a sender and a conversation."""
+    sent: list = []
+    ran: list = []
+    monkeypatch.setattr(dm, "dm_reply", lambda *a, **k: sent.append(a) or {"ok": True})
+    ev = {"id": "m9", "conversationId": "c9", "senderGhii": "alice@n", "readable": False}
+    assert dm.handle_dm_event("x", ev, lambda e: ran.append(e) or "yo") is False
+    assert ran == [] and sent == []
+    assert "needs messages:read" in capsys.readouterr().err
+
+
 def test_handle_dm_event_dict_result_carries_attachments(monkeypatch):
     """A responder may return {"text","attachments"} to hand back files; dm_reply gets the attachments."""
     sent: list[tuple] = []

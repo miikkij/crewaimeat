@@ -369,6 +369,16 @@ def handle_dm_event(agent: str, event: dict, responder, *, seen: set | None = No
     idle-quiet). Marks `seen` BEFORE running (runaway-safe). Returns True if it replied. The wake carries a
     PREVIEW; a responder needing the full body/attachments fetches them with dm_thread(agent, conversationId)."""
     seen = seen if seen is not None else set()
+    if event.get("readable") is False:
+        # Node 4.2: an agent without messages:read is told only that a message arrived, and its owner
+        # is asked to allow it. There is no sender or text to answer, so no crew runs; aimeat-crewai
+        # 0.40.0 says the same for its own DM crew and hands a caller's on_dm the event regardless.
+        print(
+            f"[{agent}] a direct message arrived that this agent may not read; its owner was asked to "
+            "allow it (needs messages:read)",
+            file=sys.stderr,
+        )
+        return False
     mid, conv, sender, _body, _subject = _inbound_fields(event)
     if not mid or mid in seen or not sender or not conv:
         return False
