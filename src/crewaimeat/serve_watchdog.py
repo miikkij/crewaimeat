@@ -21,7 +21,46 @@ import time
 from pathlib import Path
 
 INTERVAL = 20  # seconds between liveness checks
+MAX_BACKOFF = 300  # seconds: the longest wait between attempts after the daemon keeps failing to start
 _LOCK = Path("logs/.locks/serve-watchdog.lock")
+
+
+def has_agent_credential(home: Path) -> bool:
+    """True when the connector home holds at least one agent credential the serve daemon would serve:
+    a non-empty `tokens/{agent}@{owner}.token` or a `keys/{agent}@{owner}.key` (the two stores
+    `aimeat connect serve` reads through listAllTokens / listAllAgentKeys). Retired credentials live in
+    subdirectories and are not counted.
+
+    WHY: with no credential, `aimeat connect serve` prints "No agents configured" and exits 1. On an
+    empty fleet place (a pooled place, or a sold one before its first agent) the watchdog used to
+    respawn it every ~27 s for ever. Measured on pannu-01 2026-11-14: 133-157 failed starts an hour on
+    each of the five pooled places, each start a full Node boot at the tier's CPU cap, together about
+    0.7 of a core burned on places with nothing to serve."""
+    for sub, suffix in (("tokens", ".token"), ("keys", ".key")):
+        d = home / sub
+        try:
+            entries = list(d.iterdir())
+        except OSError:
+            continue
+        for p in entries:
+            if not p.name.endswith(suffix) or "@" not in p.name:
+                continue
+            try:
+                if p.is_file() and p.stat().st_size > 0:
+                    return True
+            except OSError:
+                continue
+    return False
+
+
+def retry_delay(failures: int) -> int:
+    """Seconds to wait after `failures` consecutive failed ticks: the plain INTERVAL for the first, then
+    doubling up to MAX_BACKOFF, so a daemon that cannot start (a bad credential, a broken install) is
+    retried a few times an hour instead of three times a minute. A crash of a daemon that WAS running
+    is the first failure, so its restart is not slowed."""
+    if failures <= 1:
+        return INTERVAL
+    return min(INTERVAL * 2 ** (failures - 1), MAX_BACKOFF)
 
 
 def _say(msg: str, *, err: bool = False) -> None:
@@ -66,13 +105,30 @@ def run() -> None:
         return
     from aimeat_crewai import serve_auth_headers  # ensure_single_serve loads the package anyway
 
+    from crewaimeat._home import aimeat_home
     from crewaimeat.wake_spin import MIN_STUCK_SECONDS, SpinSweeper
 
     _say(f"[serve-watchdog] supervising the shared serve daemon (every {INTERVAL}s)")
     last_pid = None
     sweeper = SpinSweeper()
+    waiting = False  # no agent credential yet: said once, then quiet until one appears
+    failures = 0
     try:
         while True:
+            home = aimeat_home()
+            if not has_agent_credential(home):
+                if not waiting:
+                    _say(
+                        f"[serve-watchdog] no agent credential in {home} yet — the serve daemon starts "
+                        f"when the first agent is enrolled (checking every {INTERVAL}s)"
+                    )
+                    waiting = True
+                failures = 0
+                time.sleep(INTERVAL)
+                continue
+            if waiting:
+                _say("[serve-watchdog] an agent credential appeared — starting the serve daemon")
+                waiting = False
             try:
                 doc = ensure_single_serve()  # idempotent: returns live, spawns only if dead, reaps duplicates
                 pid = doc.get("pid")
@@ -107,9 +163,15 @@ def run() -> None:
                             f"[serve-watchdog] cleared a wake-queue spin on {agent!r}: consumed {took} "
                             f"stale element(s) after it read hot for over {MIN_STUCK_SECONDS}s"
                         )
+                failures = 0
             except Exception as exc:  # noqa: BLE001 — a transient discover/spawn error must not kill the supervisor
-                _say(f"[serve-watchdog] ensure_serve failed (will retry): {exc!r}", err=True)
-            time.sleep(INTERVAL)
+                failures += 1
+                _say(
+                    f"[serve-watchdog] ensure_serve failed (attempt {failures}, next in "
+                    f"{retry_delay(failures)}s): {exc!r}",
+                    err=True,
+                )
+            time.sleep(retry_delay(failures))
     finally:
         try:
             lock_fh.close()  # releases the OS lock so a successor can take over
